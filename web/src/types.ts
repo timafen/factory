@@ -406,3 +406,14 @@ export interface PipelineConfig {
   _note?: string;
   stages: PipelineStage[];
 }
+
+export interface CardSummary {
+  repository_id: string;
+  repository_identity: string;
+  path: string;
+  name: string;
+  size: number;
+  status?: string;
+  next_action?: string;
+  github_url: string;
+}

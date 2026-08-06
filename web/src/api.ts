@@ -23,6 +23,7 @@ import type {
   LegacyPollerMigration,
   LegacyPollerSelection,
   PipelineConfig,
+  CardSummary,
 } from "./types";
 
 export class APIError extends Error {
@@ -253,6 +254,12 @@ export const api = {
     }>(`/api/v1/attempts/${encodeURIComponent(attemptID)}/events?${query}`);
     return { ...page, events: page.events ?? [] };
   },
+  cards: async () =>
+    (await request<{ cards: CardSummary[] | null }>("/api/v1/cards")).cards ?? [],
+  cardContent: (repositoryID: string, path: string) =>
+    request<{ content: string }>(
+      `/api/v1/cards/content?${new URLSearchParams({ repository_id: repositoryID, path })}`,
+    ),
   pipeline: () => request<PipelineConfig>("/api/v1/pipeline"),
   savePipeline: (config: PipelineConfig) =>
     request<PipelineConfig>("/api/v1/pipeline", { method: "PUT", body: JSON.stringify(config) }),

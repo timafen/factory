@@ -83,6 +83,8 @@ func NewHandlerWithAutomation(store *Store, logger *slog.Logger, automations *Au
 	mux.HandleFunc("PUT /api/v1/repositories/{repository_id}/enabled", api.setManagedRepositoryEnabled)
 	mux.HandleFunc("GET /api/v1/pipeline", api.getPipeline)
 	mux.HandleFunc("PUT /api/v1/pipeline", api.putPipeline)
+	mux.HandleFunc("GET /api/v1/cards", api.listCards)
+	mux.HandleFunc("GET /api/v1/cards/content", api.getCard)
 	mux.HandleFunc("GET /api/v1/workflows", api.listWorkflows)
 	mux.HandleFunc("POST /api/v1/workflows", api.createWorkflow)
 	mux.HandleFunc("GET /api/v1/workflows/{workflow_id}", api.getWorkflow)
