@@ -6,7 +6,6 @@ import type {
   MetricsWindow,
   ManagedRepository,
   ManagedRepositoryReadiness,
-  WorkerRepositoryOption,
   TaskPage,
   TaskDetail,
   Worker,
@@ -23,6 +22,7 @@ import type {
   TestAutomationResult,
   LegacyPollerMigration,
   LegacyPollerSelection,
+  PipelineConfig,
 } from "./types";
 
 export class APIError extends Error {
@@ -85,10 +85,6 @@ export const api = {
       .map(normalizeWorker),
   worker: async (id: string) =>
     normalizeWorker(await request<Worker>(`/api/v1/workers/${encodeURIComponent(id)}`)),
-  workerRepositoryOptions: async (id: string) =>
-    (await request<{ repositories: WorkerRepositoryOption[] | null }>(
-      `/api/v1/workers/${encodeURIComponent(id)}/repository-options`,
-    )).repositories ?? [],
   repositories: async () =>
     (await request<{ repositories: ManagedRepository[] | null }>("/api/v1/repositories"))
       .repositories ?? [],
@@ -257,6 +253,9 @@ export const api = {
     }>(`/api/v1/attempts/${encodeURIComponent(attemptID)}/events?${query}`);
     return { ...page, events: page.events ?? [] };
   },
+  pipeline: () => request<PipelineConfig>("/api/v1/pipeline"),
+  savePipeline: (config: PipelineConfig) =>
+    request<PipelineConfig>("/api/v1/pipeline", { method: "PUT", body: JSON.stringify(config) }),
   createTask: (input: CreateTaskInput) =>
     request<TaskDetail>("/api/v1/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: string) =>
