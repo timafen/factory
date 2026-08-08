@@ -838,9 +838,9 @@ describe("App", () => {
 
       expect(await screen.findByText("succeeded task")).toBeVisible();
       expect(screen.getAllByText("running task")).toHaveLength(1);
-      const refreshedTask = screen.getByText("running task").closest("button");
-      expect(refreshedTask).not.toBeNull();
-      expect(within(refreshedTask!).getByText("running task")).toBeVisible();
+      const succeededColumn = screen.getByRole("heading", { name: "Отработали" }).closest("section");
+      expect(succeededColumn).not.toBeNull();
+      expect(within(succeededColumn as HTMLElement).getByText("running task")).toBeVisible();
       const taskPaths = fetch.mock.calls
         .map(([input]) => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
         .filter((path) => path.startsWith("/api/v1/tasks?"));
