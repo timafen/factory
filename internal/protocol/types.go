@@ -774,35 +774,35 @@ type APIError struct {
 
 // PilotSettings is the complete, user-editable pilot configuration.
 type PilotSettings struct {
-	Note                string                       `json:"_note,omitempty"`
-	Enabled             bool                         `json:"enabled"`
-	PollSeconds         float64                      `json:"poll_seconds"`
-	TimeoutSeconds      float64                      `json:"timeout_seconds"`
-	AutoMerge           bool                         `json:"auto_merge"`
-	AutoAnswer          bool                         `json:"auto_answer"`
-	MaxStageAttempts    int                          `json:"max_stage_attempts"`
-	AllowAnyWorker      bool                         `json:"allow_any_worker"`
-	AllowedWorkers      []string                     `json:"allowed_workers"`
-	MaxParallelSubtasks int                          `json:"max_parallel_subtasks"`
-	DayCapUSD           float64                      `json:"day_cap_usd"`
-	DeployStagingCmd    string                       `json:"deploy_staging_cmd"`
-	OwnerChatURL        string                       `json:"owner_chat_url"`
-	OwnerUIURL          string                       `json:"owner_ui_url"`
-	Stages              []PilotStage                 `json:"stages"`
-	SkipStagesForLow    []string                     `json:"skip_stages_for_low"`
-	StoppedPipelines    []string                     `json:"stopped_pipelines"`
+	Note                string       `json:"_note,omitempty"`
+	Enabled             bool         `json:"enabled"`
+	PollSeconds         float64      `json:"poll_seconds"`
+	TimeoutSeconds      float64      `json:"timeout_seconds"`
+	AutoMerge           bool         `json:"auto_merge"`
+	AutoAnswer          bool         `json:"auto_answer"`
+	MaxStageAttempts    int          `json:"max_stage_attempts"`
+	AllowAnyWorker      bool         `json:"allow_any_worker"`
+	AllowedWorkers      []string     `json:"allowed_workers"`
+	MaxParallelSubtasks int          `json:"max_parallel_subtasks"`
+	DayCapUSD           float64      `json:"day_cap_usd"`
+	DeployStagingCmd    string       `json:"deploy_staging_cmd"`
+	OwnerChatURL        string       `json:"owner_chat_url"`
+	OwnerUIURL          string       `json:"owner_ui_url"`
+	Stages              []PilotStage `json:"stages"`
+	SkipStagesForLow    []string     `json:"skip_stages_for_low"`
+	StoppedPipelines    []string     `json:"stopped_pipelines"`
 	// Потолок кругов по одной работе и группы уведомлений: этим управляет
 	// пилот, но владелец должен видеть и править их на экране «Настройки».
-	MaxWorkRounds       int                          `json:"max_work_rounds,omitempty"`
-	MaxCapRescues       int                          `json:"max_cap_rescues,omitempty"`
-	NotifyGroups        map[string]bool              `json:"notify_groups,omitempty"`
-	StageBaseUSD        map[string]float64           `json:"stage_base_usd"`
-	ComplexityFactor    map[string]float64           `json:"complexity_factor"`
-	WorkCapUSD          map[string]float64           `json:"work_cap_usd"`
-	NtfyTopic           string                       `json:"ntfy_topic"`
-	NtfyServer          string                       `json:"ntfy_server"`
-	NtfyOwnerTopic      string                       `json:"ntfy_owner_topic"`
-	BrainChain          []PilotBrain                 `json:"brain_chain"`
+	MaxWorkRounds    int                `json:"max_work_rounds,omitempty"`
+	MaxCapRescues    int                `json:"max_cap_rescues,omitempty"`
+	NotifyGroups     map[string]bool    `json:"notify_groups,omitempty"`
+	StageBaseUSD     map[string]float64 `json:"stage_base_usd"`
+	ComplexityFactor map[string]float64 `json:"complexity_factor"`
+	WorkCapUSD       map[string]float64 `json:"work_cap_usd"`
+	NtfyTopic        string             `json:"ntfy_topic"`
+	NtfyServer       string             `json:"ntfy_server"`
+	NtfyOwnerTopic   string             `json:"ntfy_owner_topic"`
+	BrainChain       []PilotBrain       `json:"brain_chain"`
 }
 
 // Этапы конвейера идут списком, а не набором: порядок здесь и есть
@@ -853,7 +853,7 @@ func (request *UpdatePilotSettingsRequest) UnmarshalJSON(body []byte) error {
 	}
 	required := []string{
 		"enabled", "poll_seconds", "timeout_seconds", "auto_merge", "auto_answer",
-		"max_stage_attempts", "max_parallel_subtasks", "day_cap_usd", "deploy_staging_cmd",
+		"max_stage_attempts", "max_work_rounds", "max_cap_rescues", "notify_groups", "max_parallel_subtasks", "day_cap_usd", "deploy_staging_cmd",
 		"owner_chat_url", "owner_ui_url", "stages", "skip_stages_for_low", "stopped_pipelines",
 		"stage_base_usd", "complexity_factor", "work_cap_usd", "ntfy_topic", "ntfy_server",
 		"ntfy_owner_topic", "brain_chain",
