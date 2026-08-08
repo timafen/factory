@@ -1,6 +1,7 @@
 import { Coins, GitBranch, FileText, Loader2, Sparkles, GitPullRequest } from "lucide-react";
 import { useEffect, useState } from "react";
 import { SpeakButton } from "./Speak";
+import { whatChanged } from "./whatChanged";
 
 type Usage = {
   total_tokens: number; output: number; cache_read: number; cache_write: number;
@@ -71,6 +72,7 @@ export function TaskSummary({ taskId, result, error, title }: {
   };
   const verdictRu = VERDICT_RU[verdictWord] ?? verdictWord;
   const files = [...new Set(text.match(/[\w./-]+\.(?:py|ts|tsx|go|md|json|ya?ml|sh|txt)\b/g) ?? [])].slice(0, 8);
+  const changes = whatChanged(verdict, result, error);
 
   const num = (n: number) => n.toLocaleString("ru-RU");
   const hasArtefacts = branch || head || cards.length || prs.length || files.length || verdictWord;
@@ -79,7 +81,7 @@ export function TaskSummary({ taskId, result, error, title }: {
     <section className="panel" style={{ borderColor: "#2f5741" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <Sparkles size={16} color="#7ee2a8" />
-        <strong style={{ color: "#7ee2a8" }}>Итог</strong>
+        <strong style={{ color: "#7ee2a8" }}>Что изменилось</strong>
         {verdictWord && (
           <span style={{
             fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
@@ -104,8 +106,8 @@ export function TaskSummary({ taskId, result, error, title }: {
         )}
       </div>
 
-      {verdict
-        ? <p style={{ margin: "0 0 12px", fontSize: 15, lineHeight: 1.55 }}>{verdict}</p>
+      {changes
+        ? <p style={{ margin: "0 0 12px", fontSize: 15, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{changes}</p>
         : <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted, #8a94a6)" }}>
             Понятного объяснения пока нет — нажми «Объяснить по-русски».
           </p>}
