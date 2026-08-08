@@ -3,9 +3,20 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api, APIError } from "./api";
-import type { PilotSettings, PilotTier } from "./types";
+import type { PilotNotificationGroup, PilotSettings, PilotTier } from "./types";
 
 const tiers: PilotTier[] = ["low", "medium", "high"];
+const notificationGroups: Array<{key:PilotNotificationGroup;label:string;defaultEnabled:boolean}> = [
+  {key:"questions",label:"Вопросы ко мне",defaultEnabled:true},
+  {key:"stuck",label:"Работа встала",defaultEnabled:true},
+  {key:"money",label:"Деньги и лимиты",defaultEnabled:true},
+  {key:"done",label:"Завершения и запуски задач",defaultEnabled:true},
+  {key:"routine",label:"Рабочая рутина",defaultEnabled:false},
+];
+
+function withNotificationDefaults(settings:PilotSettings):PilotSettings {
+  return {...settings,notify_groups:Object.fromEntries(notificationGroups.map((group)=>[group.key,settings.notify_groups?.[group.key]??group.defaultEnabled]))};
+}
 
 export function Settings() {
   const query = useQuery({ queryKey: ["pilot-settings"], queryFn: api.pilotSettings, retry: false });
@@ -14,14 +25,14 @@ export function Settings() {
 }
 
 function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api.pilotSettings>>;refresh:()=>void}) {
-  const [settings, setSettings] = useState<PilotSettings>(() => structuredClone(initial.settings));
+  const [settings, setSettings] = useState<PilotSettings>(() => withNotificationDefaults(structuredClone(initial.settings)));
   const [version, setVersion] = useState(initial.version);
   const [warnings, setWarnings] = useState(initial.warnings);
   const [saved, setSaved] = useState(false);
   const errors = useMemo(() => validate(settings), [settings]);
   const save = useMutation({
     mutationFn: () => api.updatePilotSettings(version, settings),
-    onSuccess: (result) => { setSettings(structuredClone(result.settings)); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
+    onSuccess: (result) => { setSettings(withNotificationDefaults(structuredClone(result.settings))); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
   });
   const set = <K extends keyof PilotSettings>(key: K, value: PilotSettings[K]) => { setSaved(false); setSettings({ ...settings, [key]: value }); };
   const setStage = (stage: string, tier: PilotTier, value: string) => set("stages", settings.stages.map((row) => row.workflow === stage ? { ...row, workers: { ...row.workers, [tier]: value } } : row));
@@ -58,6 +69,7 @@ function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api
     </SettingsSection>
 
     <SettingsSection title="Notifications and owner links">
+      <div className="settings-full"><span>Уведомления на телефон</span>{notificationGroups.map((group)=><Check key={group.key} label={group.label} checked={settings.notify_groups?.[group.key]??group.defaultEnabled} onChange={(value)=>set("notify_groups",{...settings.notify_groups,[group.key]:value})}/>)}</div>
       <TextField label="ntfy server" value={settings.ntfy_server} onChange={(value) => set("ntfy_server", value)}/><TextField label="ntfy topic" value={settings.ntfy_topic} onChange={(value) => set("ntfy_topic", value)}/><TextField label="Owner ntfy topic" value={settings.ntfy_owner_topic} onChange={(value) => set("ntfy_owner_topic", value)}/><TextField label="Owner chat URL" value={settings.owner_chat_url} onChange={(value) => set("owner_chat_url", value)}/><TextField label="Owner UI URL" value={settings.owner_ui_url} onChange={(value) => set("owner_ui_url", value)}/>
     </SettingsSection>
 

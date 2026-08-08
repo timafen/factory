@@ -7,12 +7,47 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
-Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
-Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
+Status: Verified PASS — awaiting human merge. Branch: `factory/aa9fa343-b22-839eaa45-305`. Head commit: `4c6992e`.
+What changed: в Settings добавлены пять русских переключателей групп уведомлений с каноническими ключами и умолчаниями пилота.
+Evidence: чистая установка `npm ci`; `npm run typecheck`, `npm run build`, `go build ./...` и `npx vitest run src/Settings.test.tsx` (5/5) — PASS. Полный `npx vitest run`: 15 известных падений только в неизменённом `src/App.test.tsx`, 73/88 всего; `go test ./...` не компилирует старый `internal/controlplane/pilot_config_test.go`.
+Next action: человек проверяет и объединяет ветку в `main`; выпуск выполняется через `fx factory release` после merge.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `npx vitest run src/Settings.test.tsx` | PASS: найдены все пять русских переключателей |
+| Значения берутся из `notify_groups` и умолчаний | тест `uses pilot defaults when notification groups are absent` | PASS: первые четыре включены, `routine` выключена |
+| Сохранение сохраняет полный выбор | тест `shows every notification group in Russian and saves the changed selection` | PASS: PUT содержит `questions`, `stuck`, `money`, `done`, `routine` |
+| Сборка и типы | `npm run typecheck`; `npm run build`; `go build ./...` | PASS |
+| Смежные проверки | `npx vitest run`; `go test ./...`; `npm run test:browser` | 15 старых падений `App.test.tsx`; старый `pilot_config_test.go` не компилирует; Playwright падает на прежнем `Factory overview` до Settings |
+| Чистота предметного diff | `git diff --check`; `git diff --name-only 3a055d8...3ff898b` | PASS: семь файлов задачи, без пробельных ошибок |
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `npx vitest run src/Settings.test.tsx` | PASS: 5/5; тест находит «Вопросы ко мне», «Работа встала», «Деньги и лимиты», «Завершения и запуски задач», «Рабочая рутина» |
+| Значения берутся из `notify_groups` и умолчаний | тот же набор, тест `uses pilot defaults when notification groups are absent` | PASS: первые четыре группы включены, `routine` выключена |
+| Сохраняются пять канонических ключей без потери настроек | тот же набор, тест `shows every notification group in Russian and saves the changed selection` | PASS: PUT содержит `questions`, `stuck`, `money`, `done`, `routine`; существующие `_note` сохранены |
+| Типы и production build | `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build`; `go build ./...` | PASS |
+| Состав и качество диффа | `git diff --name-only origin/main...HEAD`; `git diff --check origin/main...HEAD` | PASS: ровно 8 заявленных файлов, пробелов/маркеров отладки нет |
+| Полный Vitest | `npx vitest run` | Известная база: 15 падений только в неизменённом `src/App.test.tsx`; 69 passed, не регрессия поставки |
+
+Смежные общие проверки: `go test ./...` падает на неизменённом `TestHTTPManagedRepositoryCatalog` (404 вместо 200); `npm run lint` — на 11 ошибках вне изменённых файлов; полный и settings Playwright — на прежних ожиданиях экрана/навигации. Эти сбои не затрагивают дифф из восьми файлов и не блокируют merge данной задачи.
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `src/Settings.test.tsx`: `shows every notification group in Russian...` | PASS: все пять русских подписей найдены |
+| Значения берутся из конфигурации и умолчаний | `src/Settings.test.tsx`: `uses pilot defaults when notification groups are absent`; сверка `/opt/factory-data/pilot/pilot.py` | PASS: `questions`, `stuck`, `money`, `done` включены, `routine` выключен; ключи и умолчания совпадают с пилотом |
+| Сохраняется полный канонический выбор | `src/Settings.test.tsx`: `shows every notification group in Russian...` | PASS: PUT содержит пять ключей `notify_groups`, изменён `stuck` |
+| Сборка frontend | `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build` | PASS |
+| Сборка сервера | `go build ./cmd/factory-server` | PASS |
+| Полный набор Vitest | `npx vitest run` | BLOCKED: 69/84, 15 падений только в неизменённом `src/App.test.tsx` (включая устаревший `Factory overview`) |
 
 ### 2026-08-08 — Verify
 
@@ -41,3 +76,17 @@ Next action: повторно проверить поставку с прави�
 Полный Vitest имеет 15 известных падений в неизменённом `App.test.tsx`, а Playwright ожидает устаревший английский заголовок `Factory overview` вместо «Главное»; по решению владельца они не входят в этап.
 Дополнительно текущий `go test ./...` не компилирует неизменённый `internal/controlplane/pilot_config_test.go` из-за рассинхронизации типа `PilotConfig.Stages`; предметный код карточки 0031 это не затрагивает.
 Риск: общие наборы останутся красными до отдельных исправлений тестовой инфраструктуры.
+
+### 2026-08-08 — Группы уведомлений на телефон
+На ветке `factory/669ce695-1fb-ea64ee84-688` экран Settings получил пять канонических групп и умолчания из pilot.py.
+Выбор сохраняется полным `notify_groups`; Vitest Settings 5/5, focused ESLint, typecheck, frontend build и `go build ./...` прошли.
+Открытый риск: общие Vitest/lint и `go test ./...` остаются красными на ранее существующих сбоях вне изменённых файлов.
+
+### 2026-08-08 — Чистая поставка групп уведомлений
+На ветке `factory/d6cf72b6-b10-192d4077-721` предметный коммит перенесён на свежий `origin/main` без изменений Work, API статуса, навигации и CARD-0031.
+Доказательство: Settings Vitest 5/5, typecheck, frontend build, `go build ./...` и `git diff --check origin/main` — PASS.
+Открытый риск: полные Vitest/lint и `go test ./...` сохраняют известные сбои в неизменённых файлах базы.
+
+### 2026-08-08 — Implement: доказан старый статус 15 падений Vitest
+По решению владельца перед merge требовалось доказать, что 15 падений полного Vitest — не поломка ветки. Установлены зависимости и прогнан `npx vitest run` на чистом `origin/main` (9e46f22, отдельный git worktree в `/tmp/main-check`): та же поставка — Test Files 1 failed | 5 passed, Tests 15 failed | 67 passed, все 15 в неизменённом `src/App.test.tsx`. Список названий упавших тестов на ветке (69/84) и на main (67/82) сверен построчно — совпадает побайтово (разница только в 2 добавленных Settings-тестах). Значит поломка старая, не от этой ветки; merge разрешён без дополнительной починки.
+Отдельная задача: завести починку `web/src/App.test.tsx` (15 падений, судя по названиям тестов — устаревшие ожидания после переработки экрана «Работа»/навигации) как самостоятельный тикет вне этого пайплайна.
