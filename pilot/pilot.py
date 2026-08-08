@@ -1114,6 +1114,68 @@ def pipeline_watch(conf, tasks, workflows, workers):
         log("work_status_error", repr(e))
 
 
+# ------------------------------------------------------ ворота перед Ревью ---
+# Разбор сорока решений показал: Ревью чаще всего отказывает не по сути,
+# а по гигиене — ветки нет в хранилище или в диффе чужие файлы. Проверять
+# это умеет машина за секунды. Дорогое Ревью получает уже проверенный факт.
+
+def gh_json(args, timeout=30):
+    env = dict(os.environ, HOME=HOME)
+    r = subprocess.run(["gh"] + args, capture_output=True, text=True,
+                       env=env, timeout=timeout)
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+
+def branch_report(repo_identity, branch):
+    """Что реально лежит в хранилище: ('нет'|'есть', [файлы диффа])."""
+    repo = repo_identity.split("github.com/")[-1]
+    if not repo or not branch:
+        return "", []
+    b = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+    if b is None:
+        return "нет", []
+    cmp_ = gh_json(["api", f"repos/{repo}/compare/main...{branch}"])
+    files = [f.get("filename") for f in (cmp_ or {}).get("files", [])][:80]
+    return "есть", files
+
+
+def review_gate(conf, base, branch, repo_identity):
+    """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
+    Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
+    не блокируют конвейер: тогда ворота просто молчат."""
+    try:
+        state_, files = branch_report(repo_identity, branch)
+    except Exception as e:
+        log("gate_error", repr(e))
+        return None
+    if state_ == "нет":
+        note_cap = cap_rescues(base, "GATE")
+        if note_cap >= 2:
+            return None  # дважды возвращали за то же — пусть решает Ревью
+        note_cap_rescue(base, "GATE")
+        log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
+        return {"back": True,
+                "note": (f"Машинная проверка перед Ревью: ветки {branch} НЕТ в хранилище. "
+                         "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
+                         "Сделай: git push -u origin " + (branch or "<ветка>") +
+                         " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
+    if state_ == "есть" and files:
+        listing = "\n".join("  - " + f for f in files)
+        return {"back": False,
+                "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
+                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}\n"
+                         "Сверяй записку с этим списком, а не с памятью. "
+                         "Возвращай работу только по правилам из инструкций: чужие файлы, "
+                         "нет заявленного поведения, сломано работавшее. "
+                         "Формулировки в записке — не повод для возврата.")}
+    return None
+
+
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch=""):
     """Try to resolve the question with the orchestrator; escalate if it's the
@@ -2898,9 +2960,34 @@ def cycle(conf, state):
         handoff = verdict.get("handoff", "")
         branch = extract_branch(result, detail.get("context", ""))
         branch_line = f"Branch: {branch}\n" if branch else ""
+
+        # Ворота: дешёвая машинная проверка вместо дорогого круга Ревью.
+        gate_note = ""
+        if next_stage == "Review" and branch:
+            rid_g = detail["task"].get("repository_id") or ""
+            g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""))
+            if g and g["back"]:
+                back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
+                try:
+                    create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                                 "context": (f"Pipeline: {base}\nPrevious stage: {wf}\n"
+                                             f"Branch: {branch}\n\n" + g["note"])[:20000],
+                                 "worker_id": worker["id"],
+                                 "repository_id": rid_g,
+                                 "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                 "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
+                                     or nw["revision_id"]}, conf)
+                    notify(conf, "Вернул без Ревью: ветка не запушена", base, tags="wrench")
+                    continue
+                except Exception as e:
+                    log("gate_return_error", repr(e))
+            elif g:
+                gate_note = "\n\n" + g["note"]
+
         context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}"
                    f"Orchestrator handoff: {handoff}\n\n"
-                   f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}")[:20000]
+                   f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
+                   + gate_note)[:20000]
         body = {
             "request_key": str(uuid.uuid4()),
             "title": next_title,
