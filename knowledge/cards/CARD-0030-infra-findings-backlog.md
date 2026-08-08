@@ -7,9 +7,10 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-BLOCKED: полный браузерный прогон имеет сбой в несвязанном сценарии Workers; новая проверка Settings изолированно проходит. Branch: `factory/16f498d1-b11-e78d8f37-f17`. Head commit: `ddd5f87`.
-Evidence: `go test ./...`, сборка `go build ./cmd/factory-server`, Vitest, ESLint, TypeScript и Vite прошли; HTTP-тесты проверили сохранение, валидацию и conflict; изолированный Playwright-сценарий Settings сохранил `poll_seconds=15` после перезагрузки.
-Next action: выяснить и устранить сбой E2E Workers, затем повторить полный `npm run test:browser`.
+READY: экран Settings и смежный Workers E2E проходят полностью. Branch: `factory/ddaa8de1-fa2-66c96daa-db5`. Head commit: `d39ae6e`.
+What changed: Workers-фикстура поддерживает lease синтетической активной задачи и обновляет регистрацию worker непосредственно перед проверкой экрана.
+Evidence: `npm run test:browser` — 18 passed; `go test ./...`, Go build, Vitest (74 tests), ESLint, TypeScript и Vite build — PASS.
+Next action: открыть `/settings` в среде проекта и принять изменение.
 
 ## LOG
 
@@ -22,3 +23,7 @@ Next action: выяснить и устранить сбой E2E Workers, зат
 | Некорректная политика worker отклоняется | `go test ./...` (`TestPilotConfigValidationWorkerPolicy`) и `npm test -- --run` | PASS: строгий неизвестный worker отклонён, UI блокирует сохранение |
 | Устаревшая версия не перезаписывает файл | `go test ./...` (`TestPilotConfigStorePreservesNotesAndRejectsConflict`) | PASS: conflict отклонён, содержимое файла не изменено |
 | Регрессии смежного UI | `npm run test:browser` | BLOCKED: Workers E2E не нашёл `Implement the modern control-plane UI` на `control-plane.spec.ts:563` |
+
+### 2026-08-08 — Implement
+
+Падение Workers оказалось временной гонкой фикстуры: 30-секундные online-окно worker и lease активной попытки истекали во время последовательного suite. Тест поддерживает lease до своего запуска и посылает свежую регистрацию `Build Mac` перед открытием `/workers`. Полный `npm run test:browser` прошёл: 18/18; Go tests/build и frontend test/lint/typecheck/build также прошли.
