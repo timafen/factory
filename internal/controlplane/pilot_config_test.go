@@ -22,12 +22,43 @@ func validPilotSettings() protocol.PilotSettings {
 	}
 	return protocol.PilotSettings{
 		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true,
-		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2,
+		MaxStageAttempts: 2, MaxWorkRounds: 3, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2,
 		DayCapUSD: 20, DeployStagingCmd: "deploy", OwnerChatURL: "https://example.test/chat", OwnerUIURL: "https://example.test/ui",
 		Stages: stages, SkipStagesForLow: []string{}, StoppedPipelines: []string{}, StageBaseUSD: costs,
 		ComplexityFactor: map[string]float64{"low": 1, "medium": 2, "high": 3}, WorkCapUSD: map[string]float64{"low": 2, "medium": 4, "high": 8},
 		NtfyTopic: "factory", NtfyServer: "https://ntfy.sh", NtfyOwnerTopic: "owner",
 		BrainChain: []protocol.PilotBrain{{CLI: "codex", Model: "gpt", Provider: "openai", Note: "preserve"}},
+	}
+}
+
+func TestPilotConfigStoreReadsAndWritesProductionStageShape(t *testing.T) {
+	settings := validPilotSettings()
+	body, err := encodePilotSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewPilotConfigStore(path)
+	read, err := store.Read()
+	if err != nil || read.Settings.Stages["Verify"].High != "worker-1" || read.Settings.MaxWorkRounds != 3 {
+		t.Fatalf("read production settings = %#v, %v", read.Settings, err)
+	}
+	read.Settings.MaxWorkRounds = 4
+	if _, err := store.Write(read.Version, read.Settings); err != nil {
+		t.Fatal(err)
+	}
+	var disk struct {
+		MaxWorkRounds int `json:"max_work_rounds"`
+		Stages        []struct {
+			Workflow string `json:"workflow"`
+		} `json:"stages"`
+	}
+	saved, _ := os.ReadFile(path)
+	if err := json.Unmarshal(saved, &disk); err != nil || disk.MaxWorkRounds != 4 || len(disk.Stages) != len(pilotStages) {
+		t.Fatalf("saved production settings = %#v, %v", disk, err)
 	}
 }
 
