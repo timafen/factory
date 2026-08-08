@@ -37,20 +37,40 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
     return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  expect(await screen.findByRole("heading",{name:"Pilot settings"})).toBeVisible();
-  expect(screen.getByText("Automation and budgets")).toBeVisible(); expect(screen.getByText("Notifications and owner links")).toBeVisible(); expect(screen.getByText("Brain chain")).toBeVisible();
+  expect(await screen.findByRole("heading",{name:"Настройки"})).toBeVisible();
+  expect(screen.getByText("Автоматизация и бюджеты")).toBeVisible(); expect(screen.getByText("Уведомления и ссылки владельца")).toBeVisible(); expect(screen.getByText("Цепочка моделей")).toBeVisible();
   expect(screen.getByText("Unknown worker: worker-new")).toBeVisible();
-  const poll=screen.getByLabelText("Poll interval (seconds)"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Save settings"}));
-  await screen.findByText(/Settings saved/);
+  const poll=screen.getByLabelText("Интервал проверки, секунд"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
   const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
+});
+
+it("shows Russian field names and a visible explanation for every settings group", async () => {
+  renderSettings(vi.fn(async()=>new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}})));
+  expect(await screen.findByLabelText("Пилот включён")).toBeVisible();
+  expect(screen.getByText("Разрешённые ID исполнителей")).toBeVisible();
+  expect(screen.getByLabelText("Triage: низкая сложность")).toBeVisible();
+  expect(screen.getByLabelText("Дневной лимит, USD")).toBeVisible();
+  expect(screen.getByLabelText("Коэффициент сложности: средняя")).toBeVisible();
+  expect(screen.getByLabelText("Сервер ntfy")).toBeVisible();
+  expect(screen.getAllByLabelText("Команда CLI")).toHaveLength(2);
+  expect(screen.getByLabelText("Заметка о конфигурации")).toBeVisible();
+  for (const explanation of [
+    "Как часто пилот проверяет очередь новых задач.",
+    "Выберите исполнителя отдельно для каждой сложности этапа.",
+    "Максимальные суммарные расходы пилота за день.",
+    "Адрес сервера, через который Factory отправляет уведомления.",
+    "Команда для запуска этого агента.",
+    "Свободный комментарий для владельца: зачем и когда менялись настройки.",
+  ]) expect(screen.getAllByText(explanation).length).toBeGreaterThan(0);
 });
 
 it("blocks strict routing to a worker outside the editable allow-list", async () => {
   const strict={...response,settings:{...response.settings,allow_any_worker:false}};
   renderSettings(vi.fn(async()=>new Response(JSON.stringify(strict),{status:200,headers:{"Content-Type":"application/json"}})));
   expect(await screen.findByText(/Every routed worker must be in the allowed list/)).toBeVisible();
-  expect(screen.getByRole("button",{name:"Save settings"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Сохранить настройки"})).toBeDisabled();
 });
 
 it("allows adding a configuration note when the API omits it", async () => {
@@ -61,9 +81,9 @@ it("allows adding a configuration note when the API omits it", async () => {
     return new Response(JSON.stringify(withoutNote),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  const note=await screen.findByLabelText("Configuration note"); expect(note).toHaveValue("");
-  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Save settings"}));
-  await screen.findByText(/Settings saved/);
+  const note=await screen.findByLabelText("Заметка о конфигурации"); expect(note).toHaveValue("");
+  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
 });
