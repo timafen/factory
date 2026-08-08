@@ -334,7 +334,11 @@ function ProgressEvent({ event, summary }: { event: AttemptEvent; summary: Event
   );
 }
 
+<<<<<<< HEAD
 function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean }) {
+=======
+function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean; taskId: string }) {
+>>>>>>> origin/factory-custom
   const [open, setOpen] = useState(current);
   return (
     <div className="attempt-row">

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useVisibleInterval } from "./polling";
 import { SpeakButton, unlockAudio } from "./Speak";
+import { ProjectTag, useProjectName } from "./project";
 
 type Question = {
   id: string;
@@ -13,6 +14,7 @@ type Question = {
   situation?: string;
   question?: string;
   options?: string[];
+  repository_id?: string;
   status: string;
   answer?: string;
   answered_by?: string;
@@ -37,6 +39,26 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
     },
     refetchInterval: interval,
   });
+
+  // Кто сейчас думает за оркестратора. Цепочка движков переключается сама,
+  // когда кончаются токены, — надпись обязана следовать за ней, а не врать.
+  const brain = useQuery({
+    queryKey: ["brain-now"],
+    queryFn: async (): Promise<string> => {
+      const r = await fetch("/api/v1/dashboard");
+      if (!r.ok) return "";
+      const d = (await r.json()) as {
+        brain?: { last?: { model?: string }; chain?: { model: string; blocked?: boolean }[] };
+      };
+      const b = d.brain;
+      if (!b) return "";
+      return b.last?.model || b.chain?.find((e) => !e.blocked)?.model || "";
+    },
+    refetchInterval: 60_000,
+  });
+  const engineName = brain.data || "оркестратор";
+
+  const projectName = useProjectName();
 
   const setDraft = (id: string, v: string) => setDrafts((d) => ({ ...d, [id]: v }));
   const setPhase = (id: string, v: string) =>
@@ -80,7 +102,12 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
       const r = await fetch("/intake/suggest-answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q.question, situation: q.situation, title: q.title, stage: q.stage }),
+        body: JSON.stringify({
+          question: q.question, situation: q.situation,
+          title: q.title, stage: q.stage,
+          // Без этого мозг берёт факты из общего контекста и путает проекты.
+          repository_id: q.repository_id ?? "",
+        }),
       });
       const data = (await r.json()) as { answer?: string };
       if (data.answer) setDraft(q.id, data.answer);
@@ -122,7 +149,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <p style={{ margin: 0, color: "var(--text-muted, #8a94a6)", flex: 1 }}>
           Здесь конвейер спрашивает тебя, когда сам решить не может. Ответь голосом или попроси
-          Fable предложить ответ — после отправки работа продолжится сама.
+          {" "}{engineName} предложить ответ — после отправки работа продолжится сама.
           {done > 0 && ` Уже отвечено: ${done}.`}
         </p>
         <button className="button" onClick={() => void questions.refetch()}><RefreshCw size={15} /></button>
@@ -143,6 +170,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
                 {q.stage}
               </span>
               <strong style={{ fontSize: 15 }}>{q.title}</strong>
+              <ProjectTag name={projectName(q.repository_id)} />
               <SpeakButton text={speech} label="Вслух" />
               <span style={{ flex: 1 }} />
               {onTask && (
@@ -194,7 +222,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
                 </button>
               )}
               <button className="button" onClick={() => void askFable(q)} disabled={Boolean(phase)}>
-                {phase === "think" ? <Loader2 size={15} className="spin" /> : <Brain size={15} />} Пусть решит Fable
+                {phase === "think" ? <Loader2 size={15} className="spin" /> : <Brain size={15} />} Пусть решит {engineName}
               </button>
               <button className="button button-primary" onClick={() => void send(q)} disabled={Boolean(phase) || !(drafts[q.id] || "").trim()}>
                 {phase === "send" ? <Loader2 size={15} className="spin" /> : <Send size={15} />} Отправить и продолжить

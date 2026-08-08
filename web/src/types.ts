@@ -386,10 +386,12 @@ export interface MetricsSummary {
   median_cycle_time_seconds: number | null;
   workers_online: number;
   workers_total: number;
-  weekly_limit?: {
-    used_percent: number;
-    resets_at: string;
-  };
+  weekly_limit?: WeeklyLimit;
+}
+
+export interface WeeklyLimit {
+  used_percent: number;
+  resets_at: string;
 }
 
 export interface AttemptEvent {

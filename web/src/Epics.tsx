@@ -2,6 +2,7 @@ import { Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useVisibleInterval } from "./polling";
+import { ProjectTag, useProjectName } from "./project";
 import { SpeakButton } from "./Speak";
 
 type EpicSubtask = { title: string; detail?: string; complexity?: string; status?: string; task_id?: string; started_at?: string; adopted?: boolean };
@@ -10,6 +11,7 @@ type Epic = {
   name: string;
   goal: string;
   status: string; // planned | start-requested | running
+  repository_id?: string;   // проект, к которому относится эпик
   subtasks: EpicSubtask[];
   children: { task_id: string; title: string; complexity?: string }[];
 };
@@ -30,7 +32,12 @@ function subtaskProgress(sub: EpicSubtask, tasks: TaskLite[]) {
     if (since && Date.parse(t.created_at) < since - 60_000) continue;
     const stage = parseInt(m[1], 10);
     const total = parseInt(m[2], 10);
-    if (!best || stage > best.stage) {
+    // Последняя по времени, а не самая дальняя по номеру: после возврата на
+    // доработку работа идёт назад, и «дальше» перестаёт значить «сейчас».
+    const newer = !best
+      || Date.parse(t.created_at) > Date.parse(best.createdAt)
+      || (t.created_at === best.createdAt && stage > best.stage);
+    if (newer) {
       best = { stage, total, stageName: m[3], state: t.state, taskId: t.id, workerId: t.worker_id || "", createdAt: t.created_at };
     }
   }
@@ -47,16 +54,6 @@ function elapsed(since?: string): string {
   return `${Math.floor(min / 60)} ч ${min % 60} мин`;
 }
 
-function stateRu(state?: string): string {
-  if (state === "succeeded") return "готово";
-  if (state === "failed") return "сбой";
-  if (state === "cancelled") return "отменено";
-  if (state === "running") return "выполняется";
-  if (state === "preparing") return "готовится";
-  if (state === "queued") return "в очереди";
-  return state || "";
-}
-
 function stateColor(state?: string): string {
   if (state === "succeeded") return "#7ee2a8";
   if (state === "failed" || state === "cancelled") return "#ff9d9d";
@@ -68,6 +65,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
   const interval = useVisibleInterval(10_000);
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState<string | null>(null);
+  const projectName = useProjectName();
 
   const epics = useQuery({
     queryKey: ["epics"],
@@ -95,6 +93,18 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
       const r = await fetch("/api/v1/questions");
       if (!r.ok) throw new Error("questions");
       return ((await r.json()).questions ?? []) as { id: string; task_id: string; status: string; question?: string }[];
+    },
+    refetchInterval: interval,
+  });
+
+  // Итог этапа. Успешно отработавший агент мог вернуть работу назад —
+  // без вердикта экран этого не знает и говорит «готово».
+  const verdicts = useQuery({
+    queryKey: ["epics-verdicts"],
+    queryFn: async (): Promise<Record<string, { action?: string; stage?: string }>> => {
+      const r = await fetch("/api/v1/verdicts");
+      if (!r.ok) throw new Error("verdicts");
+      return ((await r.json()).verdicts ?? {}) as Record<string, { action?: string; stage?: string }>;
     },
     refetchInterval: interval,
   });
@@ -127,6 +137,20 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
 
   const workerName = (id?: string) =>
     (workers.data ?? []).find((w) => w.id === id)?.name ?? "";
+  // Что этап значит для работы, человеческими словами.
+  const stageOutcome = (p: { stage: number; total: number; stageName: string; state: string; taskId: string }) => {
+    if (p.state === "running" || p.state === "preparing") return `${p.stageName} · идёт`;
+    if (p.state === "queued") return `${p.stageName} · ждёт исполнителя`;
+    if (p.state === "failed") return `${p.stageName} · сорвался`;
+    if (p.state === "cancelled") return `${p.stageName} · отменён`;
+    const v = (verdicts.data ?? {})[p.taskId];
+    if (!v) return `${p.stageName} · закончил, решение за оркестратором`;
+    if (v.action === "advance") return `${p.stageName} · пройден`;
+    return p.stageName === "Review"
+      ? `${p.stageName} · вернул на доработку`
+      : `${p.stageName} · остановлен`;
+  };
+
   const openQ = (taskId?: string) =>
     (questions.data ?? []).find((q) => q.task_id === taskId && q.status !== "resolved");
 
@@ -172,6 +196,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
           <div key={e.id} style={{ background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <strong style={{ fontSize: 16 }}>{e.name}</strong>
+              <ProjectTag name={projectName(e.repository_id)} />
               <span style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, background: "#22303f", color: stateColor(e.status === "running" ? "running" : undefined) }}>
                 {statusRu}
               </span>
@@ -216,7 +241,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
                                           : p ? stateColor(p.state) : "#8ec5ff" }}>
                         {st === "done" ? "✓ готово"
                           : st === "pending" ? (e.status === "planned" ? `сложность: ${s.complexity ?? "medium"}` : "⏳ ждёт очереди")
-                          : p ? `${p.stageName} · ${stateRu(p.state)}` : "запускается…"}
+                          : p ? stageOutcome(p) : "запускается…"}
                       </span>
                     </div>
                     {s.adopted && st === "running" && (
