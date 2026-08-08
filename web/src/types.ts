@@ -39,6 +39,13 @@ export interface Worker {
 export type PilotStage = "Triage" | "Specification" | "Implement + Test" | "Review" | "Verify";
 export type PilotTier = "low" | "medium" | "high";
 
+// Этапы приходят с сервера списком, а не словарём: порядок этапов —
+// это и есть конвейер, и его нельзя терять при сериализации.
+export interface PilotStageRoute {
+  workflow: string;
+  workers: Record<PilotTier, string>;
+}
+
 export interface PilotSettings {
   _note?: string;
   enabled: boolean;
@@ -54,10 +61,10 @@ export interface PilotSettings {
   deploy_staging_cmd: string;
   owner_chat_url: string;
   owner_ui_url: string;
-  stages: Record<PilotStage, Record<PilotTier, string>>;
+  stages: PilotStageRoute[];
   skip_stages_for_low: string[];
   stopped_pipelines: string[];
-  stage_base_usd: Record<PilotStage, number>;
+  stage_base_usd: Record<string, number>;
   complexity_factor: Record<PilotTier, number>;
   work_cap_usd: Record<PilotTier, number>;
   ntfy_topic: string;
