@@ -1104,18 +1104,18 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
 test("edits pilot settings from the Settings screen", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Pilot settings" })).toBeVisible();
-  await expect(page.getByText("Brain chain")).toBeVisible();
-  const poll = page.getByLabel("Poll interval (seconds)");
+  await expect(page.getByRole("heading", { name: "Настройки" })).toBeVisible();
+  await expect(page.getByText("Цепочка моделей")).toBeVisible();
+  const poll = page.getByLabel("Интервал проверки, секунд");
   await expect(poll).toHaveValue("10");
   await poll.fill("15");
   const response = page.waitForResponse((result) =>
     result.url().endsWith("/api/v1/settings/pilot") && result.request().method() === "PUT",
   );
-  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Сохранить настройки" }).click();
   expect((await response).ok()).toBe(true);
-  await expect(page.getByText(/Settings saved/)).toBeVisible();
+  await expect(page.getByText(/Настройки сохранены/)).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("Poll interval (seconds)")).toHaveValue("15");
+  await expect(page.getByLabel("Интервал проверки, секунд")).toHaveValue("15");
   browser.assertClean();
 });
