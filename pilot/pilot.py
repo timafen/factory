@@ -1656,6 +1656,7 @@ def advance_epics(conf, tasks, workflows, workers):
         # 1. Закрываем всё, что дошло до конца — сразу по всем идущим,
         #    а не только по первой: иначе параллельные висят до её финиша.
         finished = []
+        undone = False
         for i, sub in enumerate(subs):
             # Смотрим и на идущие, и на уже помеченные готовыми: отметка о
             # провале приходит соседним циклом, и раньше «готово» защёлкивалось
@@ -1671,9 +1672,13 @@ def advance_epics(conf, tasks, workflows, workers):
             elif sub.get("status") == "done":
                 # «Готово» больше не соответствует правде — разжимаем.
                 sub["status"] = "running"
+                undone = True
                 log("EPIC UNDONE подзадача " + repr(sub["title"][:50])
                     + ": состояние стало " + state_now + ", снимаю «готово»")
-        if finished:
+        if finished or undone:
+            # Снятое «готово» обязано доехать до диска: раньше оно жило только
+            # в памяти цикла, и каждые полминуты флаг щёлкал заново — вечный
+            # лог и вечно «готовый» на диске эпик, который готов не был.
             save(path, epic)
             for i in finished:
                 log(f"epic '{epic['name']}': подзадача {i+1}/{len(subs)} готова")
