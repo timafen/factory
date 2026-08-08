@@ -10,7 +10,7 @@ const response: PilotSettingsResponse = {
   warnings: ["Unknown worker: worker-new"],
   settings: {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
-    max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
+    max_stage_attempts: 2, max_work_rounds: 3, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
     day_cap_usd: 20, deploy_staging_cmd: "deploy", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
     stages: { "Triage":{low:"worker-1",medium:"worker-1",high:"worker-new"}, "Specification":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Implement + Test":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Review":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Verify":{low:"worker-1",medium:"worker-1",high:"worker-1"} },
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
@@ -33,6 +33,7 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   renderSettings(fetchMock); const user=userEvent.setup();
   expect(await screen.findByRole("heading",{name:"Pilot settings"})).toBeVisible();
   expect(screen.getByText("Automation and budgets")).toBeVisible(); expect(screen.getByText("Notifications and owner links")).toBeVisible(); expect(screen.getByText("Brain chain")).toBeVisible();
+  expect(screen.getByLabelText("Maximum work rounds")).toHaveValue(3);
   expect(screen.getByText("Unknown worker: worker-new")).toBeVisible();
   const poll=screen.getByLabelText("Poll interval (seconds)"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Save settings"}));
   await screen.findByText(/Settings saved/);
