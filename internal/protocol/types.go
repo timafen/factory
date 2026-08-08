@@ -781,7 +781,6 @@ type PilotSettings struct {
 	AutoMerge           bool                         `json:"auto_merge"`
 	AutoAnswer          bool                         `json:"auto_answer"`
 	MaxStageAttempts    int                          `json:"max_stage_attempts"`
-	MaxWorkRounds       int                          `json:"max_work_rounds"`
 	AllowAnyWorker      bool                         `json:"allow_any_worker"`
 	AllowedWorkers      []string                     `json:"allowed_workers"`
 	MaxParallelSubtasks int                          `json:"max_parallel_subtasks"`

@@ -103,26 +103,6 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config contains invalid JSON")
 	}
-	if raw, ok := fields["stages"]; ok && len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '[' {
-		var stages []struct {
-			Workflow string                     `json:"workflow"`
-			Workers  protocol.PilotStageWorkers `json:"workers"`
-		}
-		if err := json.Unmarshal(raw, &stages); err != nil {
-			return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config stages are invalid: %v", err)
-		}
-		normalized := make(map[string]protocol.PilotStageWorkers, len(stages))
-		for _, stage := range stages {
-			if stage.Workflow == "" {
-				return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config stage workflow is required")
-			}
-			if _, duplicate := normalized[stage.Workflow]; duplicate {
-				return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config stage %q is duplicated", stage.Workflow)
-			}
-			normalized[stage.Workflow] = stage.Workers
-		}
-		fields["stages"], _ = json.Marshal(normalized)
-	}
 	normalizedBody, err := json.Marshal(fields)
 	if err != nil {
 		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config schema is invalid: %v", err)
@@ -154,10 +134,8 @@ func encodePilotSettings(settings protocol.PilotSettings) ([]byte, error) {
 		Workers  protocol.PilotStageWorkers `json:"workers"`
 	}
 	stages := make([]diskStage, 0, len(settings.Stages))
-	for _, workflow := range pilotStages {
-		if workers, ok := settings.Stages[workflow]; ok {
-			stages = append(stages, diskStage{Workflow: workflow, Workers: workers})
-		}
+	for _, stage := range settings.Stages {
+		stages = append(stages, diskStage{Workflow: stage.Workflow, Workers: stage.Workers})
 	}
 	fields["stages"], err = json.Marshal(stages)
 	if err != nil {

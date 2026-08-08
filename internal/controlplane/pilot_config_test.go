@@ -14,10 +14,10 @@ import (
 )
 
 func validPilotSettings() protocol.PilotSettings {
-	stages := map[string]protocol.PilotStageWorkers{}
+	stages := []protocol.PilotStage{}
 	costs := map[string]float64{}
 	for _, stage := range pilotStages {
-		stages[stage] = protocol.PilotStageWorkers{Low: "worker-1", Medium: "worker-1", High: "worker-1"}
+		stages = append(stages, protocol.PilotStage{Workflow: stage, Workers: protocol.PilotStageWorkers{Low: "worker-1", Medium: "worker-1", High: "worker-1"}})
 		costs[stage] = 1
 	}
 	return protocol.PilotSettings{
@@ -43,7 +43,7 @@ func TestPilotConfigStoreReadsAndWritesProductionStageShape(t *testing.T) {
 	}
 	store := NewPilotConfigStore(path)
 	read, err := store.Read()
-	if err != nil || read.Settings.Stages["Verify"].High != "worker-1" || read.Settings.MaxWorkRounds != 3 {
+	if err != nil || read.Settings.Stages[0].Workers.High != "worker-1" || read.Settings.MaxWorkRounds != 3 {
 		t.Fatalf("read production settings = %#v, %v", read.Settings, err)
 	}
 	read.Settings.MaxWorkRounds = 4
@@ -101,7 +101,7 @@ func TestPilotConfigStorePreservesNotesAndRejectsConflict(t *testing.T) {
 
 func TestPilotConfigValidationWorkerPolicy(t *testing.T) {
 	settings := validPilotSettings()
-	settings.Stages["Review"] = protocol.PilotStageWorkers{Low: "unknown", Medium: "worker-1", High: "worker-1"}
+	settings.Stages[0].Workers.Low = "unknown"
 	if _, err := validatePilotSettings(settings); err == nil {
 		t.Fatal("strict unknown worker was accepted")
 	}

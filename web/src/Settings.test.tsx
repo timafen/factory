@@ -12,7 +12,10 @@ const response: PilotSettingsResponse = {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
     max_stage_attempts: 2, max_work_rounds: 3, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
     day_cap_usd: 20, deploy_staging_cmd: "deploy", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
-    stages: { "Triage":{low:"worker-1",medium:"worker-1",high:"worker-new"}, "Specification":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Implement + Test":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Review":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Verify":{low:"worker-1",medium:"worker-1",high:"worker-1"} },
+    stages: [
+      {workflow:"Triage",workers:{low:"worker-1",medium:"worker-1",high:"worker-new"}}, {workflow:"Specification",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}},
+      {workflow:"Implement + Test",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}}, {workflow:"Review",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}}, {workflow:"Verify",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}},
+    ],
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
     complexity_factor:{low:1,medium:2,high:3}, work_cap_usd:{low:2,medium:4,high:8}, ntfy_topic:"factory", ntfy_server:"https://ntfy.sh", ntfy_owner_topic:"owner",
     brain_chain:[{cli:"codex",model:"gpt",provider:"openai",note:"first"},{cli:"claude",model:"sonnet",provider:"anthropic",note:"second"}],

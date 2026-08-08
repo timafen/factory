@@ -55,7 +55,7 @@ export interface PilotSettings {
   deploy_staging_cmd: string;
   owner_chat_url: string;
   owner_ui_url: string;
-  stages: Record<PilotStage, Record<PilotTier, string>>;
+  stages: Array<{ workflow: PilotStage; workers: Record<PilotTier, string> }>;
   skip_stages_for_low: string[];
   stopped_pipelines: string[];
   stage_base_usd: Record<PilotStage, number>;
