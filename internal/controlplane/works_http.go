@@ -1,27 +1,28 @@
 package controlplane
 
 import (
-	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strings"
 )
 
-// Кто поставил работу и какие стадии ей не нужны. Пилот пишет это один раз при
-// заведении; экран читает готовое, чтобы ничего не додумывать за него.
-
-func worksPath() string {
-	home := os.Getenv("FACTORY_DATA_HOME")
-	if home == "" {
-		home = "/opt/factory-data"
+func (a *API) getWorks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := a.store.ActiveTasks(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
 	}
-	return filepath.Join(home, "pilot", "works.json")
+	works := make(map[string]workMetadata, len(tasks))
+	for _, task := range tasks {
+		origin := "owner"
+		if strings.HasPrefix(task.RequestKey, "automation:") {
+			origin = "orchestrator"
+		}
+		works[task.ID] = workMetadata{Origin: origin, Stage: task.Stage}
+	}
+	writeJSON(w, http.StatusOK, works)
 }
 
-func (a *API) getWorks(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{}
-	if data, err := os.ReadFile(worksPath()); err == nil {
-		_ = json.Unmarshal(data, &out)
-	}
-	writeJSON(w, http.StatusOK, out)
+type workMetadata struct {
+	Origin string `json:"origin"`
+	Stage  string `json:"stage,omitempty"`
 }

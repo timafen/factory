@@ -2275,6 +2275,36 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	return page, nil
 }
 
+func (s *Store) ActiveTasks(ctx context.Context) ([]protocol.Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
+		       e.assigned_worker_id, e.state, t.created_at, COALESCE(t.workflow_title, '')
+		FROM tasks t JOIN executions e ON e.task_id = t.id
+		WHERE e.state IN ('queued', 'preparing', 'running')
+		ORDER BY t.created_at DESC, t.id DESC
+	`)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	defer rows.Close()
+	tasks := make([]protocol.Task, 0)
+	for rows.Next() {
+		var task protocol.Task
+		var created int64
+		err := rows.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &created, &task.Stage)
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		task.CreatedAt = fromMillis(created)
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, unavailable(err)
+	}
+	return tasks, nil
+}
+
 func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var task protocol.Task
 	var created int64

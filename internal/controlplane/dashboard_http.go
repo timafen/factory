@@ -1,27 +1,23 @@
 package controlplane
 
 import (
-	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 )
 
-// The dashboard is computed by the pilot once per cycle and dropped as a single
-// file. Serving it is deliberately dumb: no fan-out of API calls per page load.
-
-func dashboardPath() string {
-	home := os.Getenv("FACTORY_DATA_HOME")
-	if home == "" {
-		home = "/opt/factory-data"
+func (a *API) getDashboard(w http.ResponseWriter, r *http.Request) {
+	tasks, err := a.store.ActiveTasks(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
 	}
-	return filepath.Join(home, "pilot", "dashboard.json")
+	running := make([]dashboardWork, 0, len(tasks))
+	for _, task := range tasks {
+		running = append(running, dashboardWork{ID: task.ID, Title: task.Title})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": map[string]any{"running": running}})
 }
 
-func (a *API) getDashboard(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{}
-	if data, err := os.ReadFile(dashboardPath()); err == nil {
-		_ = json.Unmarshal(data, &out)
-	}
-	writeJSON(w, http.StatusOK, out)
+type dashboardWork struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }

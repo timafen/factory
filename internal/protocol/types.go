@@ -206,6 +206,7 @@ type Task struct {
 	RepositoryID   string    `json:"repository_id"`
 	TimeoutSeconds int       `json:"timeout_seconds"`
 	State          string    `json:"state"`
+	Stage          string    `json:"stage,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
