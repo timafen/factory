@@ -2,6 +2,7 @@ import type {
   APIErrorBody,
   AttemptEventPage,
   CreateTaskInput,
+  DashboardSummary,
   MetricsSummary,
   MetricsWindow,
   ManagedRepository,
@@ -71,6 +72,7 @@ export const api = {
     request<MetricsSummary>(
       `/api/v1/metrics/summary?${new URLSearchParams({ window })}`,
     ),
+  dashboard: () => request<DashboardSummary>("/api/v1/dashboard"),
   tasks: async (cursor = "") => {
     const query = new URLSearchParams({ limit: "50" });
     if (cursor) query.set("cursor", cursor);

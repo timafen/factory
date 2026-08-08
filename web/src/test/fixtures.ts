@@ -1,4 +1,4 @@
-import type { AutomationDetail, AutomationOccurrence, LegacyPollerMigration, ManagedRepository, MetricsSummary, Task, Worker, Workflow, WorkflowDetail } from "../types";
+import type { AutomationDetail, AutomationOccurrence, LegacyPollerMigration, ManagedRepository, MetricsSummary, ReleaseInfo, Task, Worker, Workflow, WorkflowDetail } from "../types";
 import { vi } from "vitest";
 
 export const worker: Worker = {
@@ -94,6 +94,18 @@ export const metrics: MetricsSummary = {
   },
 };
 
+export const release: ReleaseInfo = {
+  main_head: "a1b2c3d4e5f6",
+  main_subject: "docs: define software factory direction (#226)",
+  staging_release: { commit: "a1b2c3d4e5f6", subject: "docs: define software factory direction (#226)" },
+  prod_release: { commit: "0451664fedcb", subject: "fix(worker): coordinate repositories independently (#204)" },
+  staging_health: true,
+  prod_health: true,
+  staging_in_main: true,
+  prod_in_main: true,
+  prod_commit_known: true,
+};
+
 const initialWorkflowDetail: WorkflowDetail = {
   workflow: {
     id: "workflow-implement",
@@ -163,6 +175,7 @@ export function mockControlPlane(
   options: {
     createFailures?: number;
     boundedLiveHead?: boolean;
+    dashboardRelease?: ReleaseInfo | null;
     commandOnlyMigration?: boolean;
     failedLegacyOccurrence?: boolean;
     eventFailuresAfter?: number;
@@ -301,6 +314,11 @@ export function mockControlPlane(
     if (path.startsWith("/api/v1/metrics/summary?window=")) {
       const window = new URL(path, "http://factory.test").searchParams.get("window");
       return Response.json({ ...metrics, window });
+    }
+    if (path === "/api/v1/dashboard") {
+      return Response.json({
+        release: options.dashboardRelease === undefined ? release : options.dashboardRelease,
+      });
     }
     if (path === "/api/v1/repositories") {
       if (init?.method === "POST") {

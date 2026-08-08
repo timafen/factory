@@ -1107,6 +1107,35 @@ button { color: inherit; }
 .repository-worker-row small { margin-top: 2px; color: var(--fg-3); font-size: 12px; }
 .repository-worker-facts { display: flex; align-items: center; justify-content: flex-end; gap: 5px; font-family: var(--mono); font-size: 11px; }
 
+/* ---------- releases ---------- */
+
+.release-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.release-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+.release-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.release-card-heading h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.release-commit { display: flex; flex-direction: column; gap: 4px; }
+.release-commit-hash { font-family: var(--mono); font-size: 13px; color: var(--fg); }
+.release-commit-subject { font-size: 13px; color: var(--fg-2); overflow-wrap: anywhere; }
+.release-comparison { margin: 0; color: var(--fg-3); font-size: 12px; line-height: 1.5; }
+.release-card-action { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+.release-action-caption { color: var(--fg-3); font-size: 12px; }
+
+@media (max-width: 980px) {
+  .release-grid { grid-template-columns: 1fr; }
+}
+
 /* ---------- overview ---------- */
 
 .metrics-toolbar {

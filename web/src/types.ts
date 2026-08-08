@@ -369,6 +369,27 @@ export interface MetricsSummary {
   weekly_limit?: WeeklyLimit;
 }
 
+export interface ReleaseCommit {
+  commit?: string | null;
+  subject?: string | null;
+}
+
+export interface ReleaseInfo {
+  main_head?: string | null;
+  main_subject?: string | null;
+  staging_release?: ReleaseCommit | null;
+  prod_release?: ReleaseCommit | null;
+  staging_health?: boolean | string | null;
+  prod_health?: boolean | string | null;
+  staging_in_main?: boolean | null;
+  prod_in_main?: boolean | null;
+  prod_commit_known?: boolean | null;
+}
+
+export interface DashboardSummary {
+  release?: ReleaseInfo | null;
+}
+
 export interface AttemptEvent {
   sequence: number;
   kind: string;

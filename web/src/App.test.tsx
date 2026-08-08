@@ -116,6 +116,39 @@ describe("App", () => {
     expect(navigation).not.toHaveAttribute("aria-current");
   });
 
+  it("shows the releases screen with main, staging, and prod comparisons", async () => {
+    window.history.replaceState({}, "", "/releases");
+    mockControlPlane();
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Главная ветка" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Стенд" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Прод" })).toBeVisible();
+    expect(screen.getAllByText("a1b2c3d4e", { exact: false }).length).toBeGreaterThan(0);
+    expect(screen.getByText("Стенд собран из главной ветки.")).toBeVisible();
+    expect(screen.getByText("Прод отстал от главной ветки.")).toBeVisible();
+    expect(screen.getAllByText("отвечает").length).toBe(2);
+
+    const deploy = screen.getByRole("button", { name: /Выкатить в прод/ });
+    expect(deploy).toBeDisabled();
+    expect(screen.getByText("доступ к записи в прод выключен")).toBeVisible();
+
+    const navigation = screen.getByRole("button", { name: /^Релизы$/ });
+    expect(navigation).toHaveClass("active");
+  });
+
+  it("does not crash the releases screen when release fields are missing", async () => {
+    window.history.replaceState({}, "", "/releases");
+    mockControlPlane({ dashboardRelease: {} });
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Главная ветка" })).toBeVisible();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Заголовок коммита неизвестен").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("нет данных").length).toBe(2);
+    expect(screen.getByRole("button", { name: /Выкатить в прод/ })).toBeDisabled();
+  });
+
   it("adds, disables, and enables a managed repository", async () => {
     window.history.replaceState({}, "", "/repositories");
     mockControlPlane();

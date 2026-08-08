@@ -1,10 +1,11 @@
-import { BookOpenText, Bot, Boxes, Gauge, GitBranch, ListChecks, Menu, Plus, Workflow as AutomationIcon, X } from "lucide-react";
+import { BookOpenText, Bot, Boxes, Gauge, GitBranch, ListChecks, Menu, Plus, Rocket, Workflow as AutomationIcon, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { invalidateControlPlane } from "./controlPlaneQueries";
 import { DelegateModal } from "./DelegateModal";
 import { Overview } from "./Overview";
+import { ReleasesView } from "./Releases";
 import { RepositoriesView, RepositoryDetail } from "./Repositories";
 import { TaskDetail } from "./TaskDetail";
 import { useVisibleInterval } from "./polling";
@@ -25,7 +26,8 @@ type Route =
   | { page: "workflows" }
   | { page: "workflow"; id: string }
   | { page: "automations" }
-  | { page: "automation"; id: string };
+  | { page: "automation"; id: string }
+  | { page: "releases" };
 
 function readRoute(): Route {
   const parts = window.location.pathname.split("/").filter(Boolean);
@@ -38,6 +40,7 @@ function readRoute(): Route {
   if (parts[0] === "workers") return { page: "workers" };
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
+  if (parts[0] === "releases") return { page: "releases" };
   if (parts[0] === "work") return { page: "work" };
   return { page: "overview" };
 }
@@ -52,6 +55,7 @@ function routePath(route: Route): string {
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
+  if (route.page === "releases") return "/releases";
   return route.page === "work" ? "/work" : "/";
 }
 
@@ -190,6 +194,13 @@ export function App() {
           >
             <GitBranch size={17} /> Repositories
           </button>
+          <button
+            className={`nav-item ${route.page === "releases" ? "active" : ""}`}
+            aria-current={route.page === "releases" ? "page" : undefined}
+            onClick={() => navigate({ page: "releases" })}
+          >
+            <Rocket size={17} /> Релизы
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="local-dot" aria-hidden="true" />
@@ -219,6 +230,7 @@ export function App() {
             {route.page === "workflow" && "Runbook detail"}
             {route.page === "automations" && "Automations"}
             {route.page === "automation" && "Automation detail"}
+            {route.page === "releases" && "Релизы"}
           </div>
           <button className="button button-primary" onClick={() => openDelegate()}>
             <Plus size={16} /> Delegate task
@@ -264,6 +276,7 @@ export function App() {
           {route.page === "repositories" && (
             <RepositoriesView onRepository={(id) => navigate({ page: "repository", id })} />
           )}
+          {route.page === "releases" && <ReleasesView />}
           {route.page === "task" && (
             <TaskDetail
               id={route.id}
