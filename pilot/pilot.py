@@ -1236,6 +1236,161 @@ def review_gate(conf, base, branch, repo_identity):
     return None
 
 
+# ------------------------------------------------- настоящие лимиты подписок ---
+# Кодекс пишет остаток лимита в журнал каждой сессии (used_percent, окно,
+# время сброса). Антропик отвечает на служебную точку, которой пользуется
+# сам Claude Code, но пускает не чаще раза в час. Пилот собирает обе цифры
+# в pilot/provider_limits.json и будит хозяина на 80% и 95%.
+PROVIDER_LIMITS_PATH = f"{HOME}/pilot/provider_limits.json"
+
+
+def codex_real_limits():
+    """Последний снимок лимита из журналов кодекса. Ничего не спрашивает
+    у сети — читает то, что кодекс уже записал сам."""
+    import glob
+    newest = None
+    for f in glob.glob(HOME + "/.codex-*/sessions/*/*/*/rollout-*.jsonl"):
+        m = os.path.getmtime(f)
+        if not newest or m > newest[0]:
+            newest = (m, f)
+    if not newest:
+        return None
+    hit = None
+    try:
+        for line in io.open(newest[1], encoding="utf-8", errors="ignore"):
+            if "rate_limit" in line:
+                hit = line
+    except Exception:
+        return None
+    if not hit:
+        return None
+
+    def find(o):
+        if isinstance(o, dict):
+            if "rate_limits" in o:
+                return o["rate_limits"]
+            for v in o.values():
+                r = find(v)
+                if r is not None:
+                    return r
+        if isinstance(o, list):
+            for v in o:
+                r = find(v)
+                if r is not None:
+                    return r
+        return None
+
+    try:
+        rl = find(json.loads(hit))
+    except Exception:
+        return None
+    if not rl:
+        return None
+    pri = rl.get("primary") or {}
+    return {"used_percent": pri.get("used_percent"),
+            "window_minutes": pri.get("window_minutes"),
+            "resets_at": pri.get("resets_at"),
+            "plan": rl.get("plan_type"),
+            "source": os.path.basename(newest[1])[:40],
+            "at": int(newest[0])}
+
+
+def claude_real_limits(prev):
+    """Остаток подписки Антропика. Точка пускает редко, поэтому не чаще
+    раза в 65 минут; между опросами живём на прошлом ответе."""
+    now = int(time.time())
+    if prev and now - int(prev.get("asked_at") or 0) < 3900:
+        return prev
+    tok, exp = "", 0
+    try:
+        cred = json.load(io.open(HOME + "/.claude/.credentials.json"))
+        o = cred.get("claudeAiOauth") or {}
+        if int(o.get("expiresAt") or 0) / 1000 > now + 60:
+            tok = o.get("accessToken") or ""
+    except Exception:
+        pass
+    if not tok:
+        try:
+            for line in io.open(HOME + "/.claude/oauth.env"):
+                if line.startswith("CLAUDE_CODE_OAUTH_TOKEN="):
+                    tok = line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    if not tok:
+        return {"error": "нет токена", "asked_at": now}
+    req = urllib.request.Request(
+        "https://api.anthropic.com/api/oauth/usage",
+        headers={"Authorization": "Bearer " + tok,
+                 "anthropic-beta": "oauth-2025-04-20"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = json.loads(r.read())
+    except Exception as e:
+        out = {"error": str(e)[:120], "asked_at": now}
+        if prev:
+            for k in ("percents", "raw"):
+                if prev.get(k) is not None:
+                    out[k] = prev[k]
+        return out
+    percents = {}
+
+    def dig(o, path=""):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                dig(v, (path + "." + str(k)).strip("."))
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                dig(v, path + "[%d]" % i)
+        elif isinstance(o, (int, float)):
+            low = path.lower()
+            if "util" in low or "percent" in low or "used" in low:
+                percents[path] = o
+
+    dig(raw)
+    return {"percents": percents, "raw": raw, "asked_at": now}
+
+
+def limits_alert(conf, name, used, resets_at):
+    """Один раз на уровень в окно: 80 — предупреждение, 95 — тревога."""
+    st = load(PROVIDER_LIMITS_PATH, {}) or {}
+    marks = st.get("alerted") or {}
+    key = "%s:%s" % (name, resets_at or "?")
+    level = 95 if used >= 95 else (80 if used >= 80 else 0)
+    if not level or marks.get(key, 0) >= level:
+        return marks
+    marks[key] = level
+    left = ""
+    if resets_at:
+        hours = max(0, int(resets_at) - int(time.time())) // 3600
+        left = " До сброса примерно %d ч." % hours
+    notify(conf,
+           ("Подписка почти сожжена: %s" % name) if level == 95
+           else ("Подписка %s: израсходовано %d%%" % (name, int(used))),
+           "Израсходовано %d%% лимита.%s" % (int(used), left),
+           priority="high" if level == 95 else "default",
+           tags="money_with_wings")
+    return marks
+
+
+def provider_limits_tick(conf):
+    st = load(PROVIDER_LIMITS_PATH, {}) or {}
+    cx = codex_real_limits()
+    if cx:
+        st["codex"] = cx
+        if isinstance(cx.get("used_percent"), (int, float)):
+            st["alerted"] = limits_alert(conf, "codex", cx["used_percent"],
+                                         cx.get("resets_at"))
+    cl = claude_real_limits(st.get("claude"))
+    if cl:
+        st["claude"] = cl
+        best = max([v for v in (cl.get("percents") or {}).values()
+                    if isinstance(v, (int, float)) and 0 <= v <= 100] or [0])
+        if best:
+            st["alerted"] = limits_alert(conf, "claude", best, None)
+    st["checked"] = int(time.time())
+    save(PROVIDER_LIMITS_PATH, st)
+
+
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch=""):
     """Try to resolve the question with the orchestrator; escalate if it's the
@@ -2766,6 +2921,12 @@ def cycle(conf, state):
         write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]})
     except Exception as e:
         log("dashboard_error", repr(e))
+
+    # Настоящие проценты подписок — в файл и в уведомления на 80/95.
+    try:
+        provider_limits_tick(conf)
+    except Exception as e:
+        log("provider_limits_error", repr(e))
 
     # Лимиты подписок: понять, свободны ли провайдеры, прежде чем раздавать работу.
     try:
