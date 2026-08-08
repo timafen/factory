@@ -7,12 +7,25 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: готово к объединению. Branch: `factory/d6cf72b6-b10-192d4077-721`. Head commit: `e6c3071`.
-What changed: подтверждено по решению владельца, что 15 падений полного Vitest — старая проблема `App.test.tsx`, не связанная с этой веткой.
-Evidence: чистый `origin/main` (9e46f22) прогнан через `npx vitest run` — та же поставка 15 падений (Test Files 1 failed | 5 passed, Tests 15 failed | 67 passed); список упавших тестов побайтово совпадает с веткой (69/84 из-за добавленных Settings-тестов). Дополнительно на ветке: `npx tsc -p tsconfig.app.json --noEmit`, `npx vite build`, `go build ./cmd/factory-server` — PASS.
-Next action: завести отдельную задачу на починку 15 падений `web/src/App.test.tsx` (см. запись ниже), это не блокирует merge текущей ветки.
+Status: Verified PASS — awaiting human merge. Branch: `factory/d6cf72b6-b10-192d4077-721`. Head commit: `ef43533`.
+What changed: в Settings добавлены пять русских переключателей групп уведомлений с каноническими ключами и умолчаниями пилота.
+Evidence: чистая установка `npm ci`; `npx tsc -p tsconfig.app.json --noEmit`, `npx vite build`, `go build ./...` и `npx vitest run src/Settings.test.tsx` (5/5) — PASS. Полный `npx vitest run`: 15 известных падений только в неизменённом `src/App.test.tsx`, 69/84 всего; они не блокируют эту поставку.
+Next action: человек проверяет и объединяет ветку в `main`; выпуск выполняется через `fx factory release` после merge.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `npx vitest run src/Settings.test.tsx` | PASS: 5/5; тест находит «Вопросы ко мне», «Работа встала», «Деньги и лимиты», «Завершения и запуски задач», «Рабочая рутина» |
+| Значения берутся из `notify_groups` и умолчаний | тот же набор, тест `uses pilot defaults when notification groups are absent` | PASS: первые четыре группы включены, `routine` выключена |
+| Сохраняются пять канонических ключей без потери настроек | тот же набор, тест `shows every notification group in Russian and saves the changed selection` | PASS: PUT содержит `questions`, `stuck`, `money`, `done`, `routine`; существующие `_note` сохранены |
+| Типы и production build | `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build`; `go build ./...` | PASS |
+| Состав и качество диффа | `git diff --name-only origin/main...HEAD`; `git diff --check origin/main...HEAD` | PASS: ровно 8 заявленных файлов, пробелов/маркеров отладки нет |
+| Полный Vitest | `npx vitest run` | Известная база: 15 падений только в неизменённом `src/App.test.tsx`; 69 passed, не регрессия поставки |
+
+Смежные общие проверки: `go test ./...` падает на неизменённом `TestHTTPManagedRepositoryCatalog` (404 вместо 200); `npm run lint` — на 11 ошибках вне изменённых файлов; полный и settings Playwright — на прежних ожиданиях экрана/навигации. Эти сбои не затрагивают дифф из восьми файлов и не блокируют merge данной задачи.
 
 ### 2026-08-08 — Verify
 
