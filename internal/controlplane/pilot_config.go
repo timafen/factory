@@ -50,7 +50,7 @@ func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings
 	if version == "" || version != pilotDigest(current) {
 		return protocol.PilotSettingsResponse{}, conflict("config_conflict", "pilot settings changed; refresh before saving")
 	}
-	body, err := json.MarshalIndent(settings, "", "  ")
+	body, err := encodePilotSettings(settings)
 	if err != nil {
 		return protocol.PilotSettingsResponse{}, unavailable(err)
 	}
@@ -103,7 +103,11 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config contains invalid JSON")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
+	normalizedBody, err := json.Marshal(fields)
+	if err != nil {
+		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config schema is invalid: %v", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(normalizedBody))
 	decoder.DisallowUnknownFields()
 	var settings protocol.PilotSettings
 	if err := decoder.Decode(&settings); err != nil {
@@ -114,6 +118,30 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 		present[key] = true
 	}
 	return settings, present, nil
+}
+
+func encodePilotSettings(settings protocol.PilotSettings) ([]byte, error) {
+	body, err := json.Marshal(settings)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	type diskStage struct {
+		Workflow string                     `json:"workflow"`
+		Workers  protocol.PilotStageWorkers `json:"workers"`
+	}
+	stages := make([]diskStage, 0, len(settings.Stages))
+	for _, stage := range settings.Stages {
+		stages = append(stages, diskStage{Workflow: stage.Workflow, Workers: stage.Workers})
+	}
+	fields["stages"], err = json.Marshal(stages)
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(fields, "", "  ")
 }
 
 func (s *PilotConfigStore) atomicWrite(body []byte) error {
@@ -162,7 +190,7 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 			return nil, invalid("invalid_pilot_settings", field.name+" must be positive")
 		}
 	}
-	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 {
+	if settings.MaxStageAttempts <= 0 || settings.MaxWorkRounds <= 0 || settings.MaxCapRescues <= 0 || settings.MaxParallelSubtasks <= 0 {
 		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
 	}
 	if len(settings.Stages) != len(pilotStages) || len(settings.StageBaseUSD) != len(pilotStages) {

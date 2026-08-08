@@ -73,6 +73,14 @@ func (a *API) initializeAllowedWorkers(ctx context.Context, settings *protocol.P
 	}
 	settings.AllowedWorkers = []string{}
 	seen := map[string]bool{}
+	for _, stage := range settings.Stages {
+		for _, workerID := range []string{stage.Workers.Low, stage.Workers.Medium, stage.Workers.High} {
+			if workerID != "" && !seen[workerID] {
+				settings.AllowedWorkers = append(settings.AllowedWorkers, workerID)
+				seen[workerID] = true
+			}
+		}
+	}
 	for _, worker := range workers {
 		if !seen[worker.ID] {
 			settings.AllowedWorkers = append(settings.AllowedWorkers, worker.ID)
