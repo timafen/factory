@@ -1,0 +1,20 @@
+[Unit]
+Description=Factory intake (voice front door: Whisper + Fable dispatcher)
+After=network.target factory.service
+
+[Service]
+User=factory
+Group=factory
+WorkingDirectory=/opt/factory-data/intake
+EnvironmentFile=/opt/factory-data/.claude/oauth.env
+Environment=HOME=/opt/factory-data
+Environment=WHISPER_MODEL=small
+Environment=WHISPER_BEAM=1
+Environment=INTAKE_MODEL=fable
+Environment=PATH=/opt/factory-data/intake/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/factory-data/intake/venv/bin/uvicorn app:app --host 127.0.0.1 --port 7338
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

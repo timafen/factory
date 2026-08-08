@@ -1,0 +1,566 @@
+#!/usr/bin/env bash
+# fx — единственный мост между агентами Factory и сервером.
+# Запускается только от root через sudo. Агент не может его переписать
+# (файл принадлежит root) и не может выполнить через него произвольную команду:
+# ниже жёсткий список разрешённых операций.
+#
+#   sudo -n /usr/local/bin/fx <scope> <verb> [args]
+#
+# Что разрешено — решают два файла:
+#   /etc/factory-access/policy.json      (только root) — что вообще разрешено включать
+#   /opt/factory-data/pilot/access.json  (интерфейс)   — что включено прямо сейчас
+set -uo pipefail
+
+# Если fx запустили не от root, он не сможет прочитать ни политику, ни ключи,
+# и вместо честного ответа посыплются «Permission denied» — агент прочитает это
+# как «нет доступа к GitHub». Поэтому либо поднимаемся сами, либо объясняем.
+if [ "$(id -u)" -ne 0 ]; then
+  if sudo -nl /usr/local/bin/fx >/dev/null 2>&1; then
+    exec sudo -n /usr/local/bin/fx "$@"
+  fi
+  echo "fx: меня нужно запускать через sudo: sudo -n /usr/local/bin/fx <область> <действие>" >&2
+  echo "fx: без root мне не видно ни политику доступов, ни ключи. Это не отказ GitHub и не поломка." >&2
+  exit 4
+fi
+
+POLICY=/etc/factory-access/policy.json
+GRANTS=/opt/factory-data/pilot/access.json
+LOG=/var/log/factory-access.log
+STAGING_ROOT=/srv/automation-ebay-operations/staging
+PROD_ROOT=/srv/automation-ebay-operations/production-readonly
+PROD_ROOT=/srv/automation-ebay-operations/production-readonly
+PROD_USER=automation-ebay-prod-ro
+PROD_ENV=/etc/automation-ebay-operations/production-readonly.env
+STAGING_ENV=/etc/automation-ebay-operations/staging.env
+STAGING_USER=automation-ebay-staging
+
+caller_attempt() {
+  local cwd
+  cwd=$(readlink -f "/proc/${PPID}/cwd" 2>/dev/null || echo "")
+  case "$cwd" in
+    */worktrees/*) basename "$cwd" ;;
+    *) echo "-" ;;
+  esac
+}
+
+say() { printf '%s attempt=%s scope=%s verb=%s %s\n' "$(date -Is)" "$(caller_attempt)" "${1:-}" "${2:-}" "${3:-}" >> "$LOG"; }
+
+die() { echo "fx: $*" >&2; exit 3; }
+
+allowed() {   # allowed <scope>
+  local scope="$1"
+  python3 - "$scope" "$POLICY" "$GRANTS" <<'PY'
+import json, sys
+scope, policy_path, grants_path = sys.argv[1], sys.argv[2], sys.argv[3]
+def load(p):
+    try:
+        with open(p) as f: return json.load(f)
+    except Exception: return {}
+pol = load(policy_path); gr = load(grants_path)
+ui_ok = scope in (pol.get("ui_toggleable") or [])
+danger_ok = scope in (pol.get("enabled_dangerous") or [])
+on = bool((gr.get(scope) or {}).get("enabled") if isinstance(gr.get(scope), dict) else gr.get(scope))
+# опасные области включаются ТОЛЬКО через policy.json, до которого интерфейс не дотягивается
+print("yes" if ((ui_ok and on) or danger_ok) else "no")
+PY
+}
+
+require() {
+  local scope="$1"
+  [ "$(allowed "$scope")" = "yes" ] || {
+    say "$scope" "${2:-?}" "DENIED"
+    die "доступ к «$scope» сейчас выключен. Включается в интерфейсе Factory, раздел «Доступы»."
+  }
+}
+
+
+# Голый код ответа агенты читают неправильно: 302 — это обычное
+# перенаправление на страницу входа, то есть приложение живо, а не «сервер
+# не отвечает». Поэтому переводим код на человеческий язык прямо здесь.
+say_health() {   # say_health <код> <время>
+  case "$1" in
+    200|204) echo "приложение отвечает нормально (HTTP $1, $2)" ;;
+    301|302|303|307|308)
+      echo "приложение живо и перенаправляет на вход (HTTP $1, $2) — это норма, не ошибка" ;;
+    401|403) echo "приложение живо, но закрыто паролем (HTTP $1, $2) — это норма, не ошибка" ;;
+    5??) echo "ПЛОХО: приложение отвечает ошибкой сервера (HTTP $1, $2)" ;;
+    000|"") echo "ПЛОХО: приложение не ответило совсем" ;;
+    *) echo "ответ HTTP $1 за $2" ;;
+  esac
+}
+
+usage() {
+  cat <<'U'
+fx — разрешённые операции:
+
+  fx whoami                       какие доступы открыты сейчас
+  fx staging status               состояние сервисов staging
+  fx staging health               проверка, отвечает ли приложение
+  fx staging logs [строк]         последние логи staging (по умолчанию 80)
+  fx staging restart [что]        gunicorn | worker | notifications | order-reconcile | all
+  fx staging manage <команда>     check | migrate | showmigrations | collectstatic
+  fx staging env-names            только ИМЕНА переменных окружения, без значений
+  fx staging release-info         какой релиз сейчас выкачен
+
+  fx prod status | health | logs [строк] | env-names | release-info    (только чтение)
+  fx prod release [sha]           выкатить прод из main (нужно разрешение production-write)
+  fx prod rollback                вернуть предыдущий релиз прода (код, не базу)
+
+  fx staging release [sha]        собрать релиз из main (или из указанного коммита)
+                                  и выкатить на стейдж: миграции, статика, перезапуск,
+                                  проверка здоровья, автоматический откат при неудаче
+  fx staging rollback             вернуться на предыдущий релиз
+
+  fx factory status               состояние самой Фабрики
+  fx factory health               отвечает ли интерфейс Фабрики
+  fx factory logs [строк]         последние логи Фабрики
+  fx factory restart              перезапустить Фабрику
+  fx factory release [точка]      собрать Фабрику из main (или из указанной
+                                  точки) и выкатить: проверка типов, сборка интерфейса
+                                  и сервера, установка, перезапуск, проверка здоровья,
+                                  автоматический откат при неудаче
+  fx factory rollback             вернуть предыдущую версию Фабрики
+  fx factory release-info         какая версия Фабрики сейчас выкачена
+
+  fx repo status                  есть ли доступ к GitHub и от чьего имени
+  fx repo head <ветка>            вершина ветки на origin (только чтение)
+  fx repo put <путь>              записать файл в main (только внутри knowledge/),
+                                  содержимое подаётся на вход команды
+
+Всё, что не в этом списке, невозможно. Выкат в прод делается не отсюда,
+а через подтверждение владельца.
+U
+}
+
+staging_units=(automation-ebay-staging-gunicorn.service
+               automation-ebay-staging-worker.service
+               automation-ebay-staging-notifications.timer
+               automation-ebay-staging-order-reconcile.timer)
+
+scope="${1:-help}"; verb="${2:-}"; arg="${3:-}"
+
+case "$scope" in
+  help|-h|--help|"") usage; exit 0 ;;
+
+  whoami)
+    echo "Открытые доступы:"
+    for s in staging production-readonly factory production-write root; do
+      printf '  %-20s %s\n' "$s" "$( [ "$(allowed "$s")" = yes ] && echo ДА || echo нет )"
+    done
+    ;;
+
+  staging)
+    require staging "$verb"
+    case "$verb" in
+      status)
+        say staging status OK
+        systemctl --no-pager --plain status "${staging_units[@]}" 2>&1 | grep -E 'Loaded:|Active:|●|^automation' | head -40
+        ;;
+      health)
+        say staging health OK
+        r=$(curl -sS --max-time 15 --unix-socket /run/automation-ebay-operations-staging/gunicorn.sock \
+             -H 'Host: staging-automation.tarser.net' -H 'X-Forwarded-Proto: https' \
+             -o /dev/null -w '%{http_code} %{time_total}s' http://localhost/ 2>/dev/null)
+        say_health ${r:-000 -}
+        ;;
+      logs)
+        n="${arg:-80}"; case "$n" in ''|*[!0-9]*) n=80 ;; esac
+        [ "$n" -gt 500 ] && n=500
+        say staging logs "n=$n"
+        journalctl -u automation-ebay-staging-gunicorn -u automation-ebay-staging-worker \
+                   -n "$n" --no-pager --output=cat 2>&1 | tail -n "$n"
+        ;;
+      restart)
+        what="${arg:-all}"
+        case "$what" in
+          gunicorn) units=(automation-ebay-staging-gunicorn.service) ;;
+          worker) units=(automation-ebay-staging-worker.service) ;;
+          notifications) units=(automation-ebay-staging-notifications.timer) ;;
+          order-reconcile) units=(automation-ebay-staging-order-reconcile.timer) ;;
+          all) units=("${staging_units[@]}") ;;
+          *) die "restart: можно gunicorn | worker | notifications | order-reconcile | all" ;;
+        esac
+        say staging restart "$what"
+        systemctl restart "${units[@]}" && echo "перезапущено: ${units[*]}"
+        sleep 3
+        systemctl is-active "${units[@]}"
+        ;;
+      manage)
+        case "$arg" in
+          check|migrate|showmigrations|collectstatic) ;;
+          *) die "manage: можно check | migrate | showmigrations | collectstatic" ;;
+        esac
+        say staging manage "$arg"
+        extra=""; [ "$arg" = collectstatic ] && extra="--noinput"
+        runuser -u "$STAGING_USER" -- /bin/bash -c "
+          set -a; . '$STAGING_ENV'; set +a
+          cd '$STAGING_ROOT/current/django' || exit 9
+          exec '$STAGING_ROOT/current/.venv/bin/python' manage.py $arg $extra
+        " 2>&1 | tail -60
+        ;;
+      env-names)
+        say staging env-names OK
+        grep -oE '^[A-Z_0-9]+=' "$STAGING_ENV" | tr -d '=' | sort
+        ;;
+      release)
+        TOKEN_FILE=/etc/factory-access/github-token
+        [ -s "$TOKEN_FILE" ] || die "нет токена GitHub — выкат невозможен"
+        TOK=$(tr -d '\r\n' < "$TOKEN_FILE")
+        REF="${arg:-origin/main}"
+        say staging release "ref=$REF"
+        echo "=== выкат на стейдж из ${REF} ==="
+
+        WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+        git clone --quiet "https://x-access-token:${TOK}@github.com/timafen/tarser-operations.git" "$WORK/src" 2>&1 \
+          | sed 's#//[^@]*@#//***@#' || die "не смог получить код"
+        if [ "$REF" != "origin/main" ]; then
+          git -C "$WORK/src" checkout --quiet "$REF" || die "нет такого коммита: $REF"
+        fi
+        SHA=$(git -C "$WORK/src" rev-parse --short=8 HEAD)
+        SUBJ=$(git -C "$WORK/src" log -1 --format=%s)
+        rm -rf "$WORK/src/.git"
+        echo "коммит: $SHA — $SUBJ"
+
+        NEW="$STAGING_ROOT/releases/$SHA"
+        PREV=$(readlink -f "$STAGING_ROOT/current" 2>/dev/null || echo "")
+        echo "предыдущий релиз: $(basename "${PREV:-нет}")"
+
+        rm -rf "$NEW"
+        mkdir -p "$NEW"
+        cp -a "$WORK/src/." "$NEW/"
+        ln -sfn ../../venv "$NEW/.venv"
+        chown -R "$STAGING_USER:$STAGING_USER" "$NEW"
+        chmod 750 "$NEW"
+
+        # Файл окружения читает только root и группа приложения. runuser сбрасывает
+        # группы, поэтому читаем его здесь, от root, и передаём окружение дальше.
+        set -a; . "$STAGING_ENV"; set +a
+        export HOME="$STAGING_ROOT"
+
+        run_app() {   # выполнить команду приложения от его пользователя
+          runuser -u "$STAGING_USER" --preserve-environment -- \
+            /bin/bash -c "cd '$NEW/django' && exec '$STAGING_ROOT/venv/bin/python' $1" 2>&1 | tail -20
+        }
+
+        echo "--- зависимости ---"
+        # requirements.txt — наследство старого проекта, там мёртвые пакеты вроде
+        # anyjson, которые не собираются на Python 3.12. Ставим только стендовый файл.
+        REQ=""
+        [ -f "$NEW/django/requirements-staging.txt" ] && REQ="$NEW/django/requirements-staging.txt"
+        if [ -n "$REQ" ]; then
+          runuser -u "$STAGING_USER" --preserve-environment -- \
+            "$STAGING_ROOT/venv/bin/pip" install -q -r "$REQ" 2>&1 | tail -5
+        else
+          echo "стендового файла зависимостей нет — оставляю окружение как есть"
+        fi
+
+        echo "--- проверка настроек ---"
+        run_app "manage.py check" || { echo "проверка настроек не прошла — выкат отменён"; rm -rf "$NEW"; exit 4; }
+
+        echo "--- миграции ---"
+        run_app "manage.py migrate --noinput" || { echo "миграции не прошли — выкат отменён"; rm -rf "$NEW"; exit 5; }
+
+        echo "--- статика ---"
+        run_app "manage.py collectstatic --noinput" | tail -3
+
+        echo "--- переключение ---"
+        ln -sfn "$NEW" "$STAGING_ROOT/current"
+        systemctl restart "${staging_units[@]}"
+        sleep 6
+
+        code=$(curl -sS --max-time 20 --unix-socket /run/automation-ebay-operations-staging/gunicorn.sock \
+               -H 'Host: staging-automation.tarser.net' -H 'X-Forwarded-Proto: https' \
+               -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null || echo 000)
+        echo "проверка здоровья: HTTP $code"
+        case "$code" in
+          2*|3*)
+            say staging release "OK sha=$SHA"
+            echo "ГОТОВО: стейдж работает на релизе $SHA ($SUBJ)"
+            ;;
+          *)
+            echo "проверка не прошла — откатываюсь на ${PREV:-предыдущий}"
+            if [ -n "$PREV" ]; then
+              ln -sfn "$PREV" "$STAGING_ROOT/current"
+              systemctl restart "${staging_units[@]}"
+              sleep 5
+              back=$(curl -sS --max-time 20 --unix-socket /run/automation-ebay-operations-staging/gunicorn.sock \
+                     -H 'Host: staging-automation.tarser.net' -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null || echo 000)
+              echo "после отката: HTTP $back"
+            fi
+            say staging release "FAILED sha=$SHA code=$code"
+            exit 6
+            ;;
+        esac
+        ;;
+      rollback)
+        prev=$(ls -1dt "$STAGING_ROOT"/releases/*/ 2>/dev/null | sed -n 2p)
+        [ -n "$prev" ] || die "предыдущего релиза не нашёл"
+        say staging rollback "$(basename "$prev")"
+        ln -sfn "${prev%/}" "$STAGING_ROOT/current"
+        systemctl restart "${staging_units[@]}"
+        sleep 5
+        echo "вернулся на $(basename "${prev%/}")"
+        curl -sS --max-time 15 --unix-socket /run/automation-ebay-operations-staging/gunicorn.sock \
+             -H 'Host: staging-automation.tarser.net' -o /dev/null -w 'HTTP %{http_code}\n' http://localhost/
+        ;;
+      release-info)
+        say staging release-info OK
+        echo "current -> $(readlink -f "$STAGING_ROOT/current")"
+        echo "релизов в истории: $(ls "$STAGING_ROOT/releases" 2>/dev/null | wc -l)"
+        ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+
+  prod|production|production-readonly)
+    require production-readonly "$verb"
+    case "$verb" in
+      status)
+        say prod status OK
+        systemctl --no-pager --plain status automation-ebay-production-readonly-gunicorn.service 2>&1 \
+          | grep -E 'Loaded:|Active:' ;;
+      health)
+        say prod health OK
+        r=$(curl -sS --max-time 15 --unix-socket /run/automation-ebay-operations-production-readonly/gunicorn.sock \
+             -H 'Host: automation.tarser.net' -H 'X-Forwarded-Proto: https' \
+             -o /dev/null -w '%{http_code} %{time_total}s' http://localhost/ 2>/dev/null)
+        say_health ${r:-000 -} ;;
+      logs)
+        n="${arg:-80}"; case "$n" in ''|*[!0-9]*) n=80 ;; esac
+        [ "$n" -gt 500 ] && n=500
+        say prod logs "n=$n"
+        journalctl -u automation-ebay-production-readonly-gunicorn -n "$n" --no-pager --output=cat | tail -n "$n" ;;
+      env-names)
+        say prod env-names OK
+        grep -oE '^[A-Z_0-9]+=' /etc/automation-ebay-operations/production-readonly.env | tr -d '=' | sort ;;
+      release-info)
+        say prod release-info OK
+        echo "current -> $(readlink -f "$PROD_ROOT/current")"
+        echo "релизов в истории: $(ls "$PROD_ROOT/releases" 2>/dev/null | wc -l)" ;;
+      release)
+        allowed production-write >/dev/null 2>&1 || true
+        if [ "$(allowed production-write)" != "yes" ]; then
+          die "запись в прод выключена. Включает владелец на сервере:
+    sudo /usr/local/bin/fx-policy allow production-write"
+        fi
+        TOKEN_FILE=/etc/factory-access/github-token
+        [ -s "$TOKEN_FILE" ] || die "нет токена GitHub — выкат невозможен"
+        TOK=$(tr -d '\r\n' < "$TOKEN_FILE")
+        REF="${arg:-origin/main}"
+        say prod release "ref=$REF"
+        echo "=== выкат на ПРОД из ${REF} ==="
+        echo "внимание: откат вернёт код, но не базу — миграции необратимы"
+
+        WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+        git clone --quiet "https://x-access-token:${TOK}@github.com/timafen/tarser-operations.git" "$WORK/src" 2>&1 \
+          | sed 's#//[^@]*@#//***@#' || die "не смог получить код"
+        if [ "$REF" != "origin/main" ]; then
+          git -C "$WORK/src" checkout --quiet "$REF" || die "нет такого коммита: $REF"
+        fi
+        SHA=$(git -C "$WORK/src" rev-parse --short=8 HEAD)
+        SUBJ=$(git -C "$WORK/src" log -1 --format=%s)
+        rm -rf "$WORK/src/.git"
+        echo "коммит: $SHA — $SUBJ"
+
+        NEW="$PROD_ROOT/releases/$SHA"
+        PREV=$(readlink -f "$PROD_ROOT/current" 2>/dev/null || echo "")
+        echo "предыдущий релиз: $(basename "${PREV:-нет}")"
+
+        rm -rf "$NEW"
+        mkdir -p "$NEW"
+        cp -a "$WORK/src/." "$NEW/"
+        ln -sfn ../../venv "$NEW/.venv"
+        chown -R "$PROD_USER:$PROD_USER" "$NEW"
+        chmod 750 "$NEW"
+
+        set -a; . "$PROD_ENV"; set +a
+        export HOME="$PROD_ROOT"
+
+        run_prod() {
+          runuser -u "$PROD_USER" --preserve-environment -- \
+            /bin/bash -c "cd '$NEW/django' && exec '$PROD_ROOT/venv/bin/python' $1" 2>&1 | tail -20
+        }
+
+        echo "--- зависимости ---"
+        REQ=""
+        [ -f "$NEW/django/requirements-staging.txt" ] && REQ="$NEW/django/requirements-staging.txt"
+        if [ -n "$REQ" ]; then
+          runuser -u "$PROD_USER" --preserve-environment -- \
+            "$PROD_ROOT/venv/bin/pip" install -q -r "$REQ" 2>&1 | tail -5
+        fi
+
+        echo "--- проверка настроек ---"
+        run_prod "manage.py check" || { echo "проверка настроек не прошла — выкат отменён"; rm -rf "$NEW"; exit 4; }
+
+        echo "--- миграции ---"
+        run_prod "manage.py migrate --noinput" || { echo "миграции не прошли — выкат отменён"; rm -rf "$NEW"; exit 5; }
+
+        echo "--- статика ---"
+        run_prod "manage.py collectstatic --noinput" | tail -3
+
+        echo "--- переключение ---"
+        ln -sfn "$NEW" "$PROD_ROOT/current"
+        systemctl restart automation-ebay-production-readonly-gunicorn.socket
+        systemctl restart automation-ebay-production-readonly-gunicorn.service
+        sleep 8
+
+        code=$(curl -sS --max-time 20 --unix-socket /run/automation-ebay-operations-production-readonly/gunicorn.sock \
+               -H 'Host: automation.tarser.net' -H 'X-Forwarded-Proto: https' \
+               -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null || echo 000)
+        echo "проверка здоровья: HTTP $code"
+        case "$code" in
+          2*|3*)
+            say prod release "OK sha=$SHA"
+            echo "ГОТОВО: прод работает на релизе $SHA ($SUBJ)"
+            ;;
+          *)
+            echo "проверка не прошла — откатываюсь на ${PREV:-предыдущий}"
+            if [ -n "$PREV" ]; then
+              ln -sfn "$PREV" "$PROD_ROOT/current"
+              systemctl restart automation-ebay-production-readonly-gunicorn.socket
+              systemctl restart automation-ebay-production-readonly-gunicorn.service
+              sleep 6
+              back=$(curl -sS --max-time 20 --unix-socket /run/automation-ebay-operations-production-readonly/gunicorn.sock \
+                     -H 'Host: automation.tarser.net' -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null || echo 000)
+              echo "после отката: HTTP $back"
+            fi
+            say prod release "FAILED sha=$SHA code=$code"
+            exit 6
+            ;;
+        esac
+        ;;
+      rollback)
+        if [ "$(allowed production-write)" != "yes" ]; then
+          die "запись в прод выключена. Включает владелец на сервере:
+    sudo /usr/local/bin/fx-policy allow production-write"
+        fi
+        cur=$(readlink -f "$PROD_ROOT/current")
+        prev=$(ls -dt "$PROD_ROOT"/releases/*/ 2>/dev/null | grep -v "^$cur/\?$" | head -1)
+        [ -n "$prev" ] || die "предыдущего релиза не нашёл"
+        say prod rollback "$(basename "$prev")"
+        echo "внимание: возвращается только код. База остаётся с применёнными миграциями."
+        ln -sfn "${prev%/}" "$PROD_ROOT/current"
+        systemctl restart automation-ebay-production-readonly-gunicorn.socket
+        systemctl restart automation-ebay-production-readonly-gunicorn.service
+        sleep 6
+        echo "вернулся на $(basename "${prev%/}")"
+        curl -sS --max-time 15 --unix-socket /run/automation-ebay-operations-production-readonly/gunicorn.sock \
+             -H 'Host: automation.tarser.net' -o /dev/null -w 'HTTP %{http_code}\n' http://localhost/
+        ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+
+  factory)
+    # Фабрика выкатывает саму себя. Без этого её собственные изменения
+    # приходится ставить руками, и она перестаёт быть самостоятельной.
+    require factory "$verb"
+    FBIN=/opt/factory-data/bin/factory-server
+    FINFO=/opt/factory-data/releases/factory-current.json
+    case "$verb" in
+      status)
+        say factory status OK
+        systemctl --no-pager --plain status factory-server.service 2>&1 \
+          | grep -E 'Loaded:|Active:|Main PID:'
+        ;;
+      health)
+        say factory health OK
+        curl -sS --max-time 15 -o /dev/null -w 'интерфейс: HTTP %{http_code} за %{time_total}s\n' \
+             http://127.0.0.1:7337/ 2>&1
+        curl -sS --max-time 15 -o /dev/null -w 'данные:    HTTP %{http_code}\n' \
+             http://127.0.0.1:7337/api/v1/dashboard 2>&1
+        ;;
+      logs)
+        n="${arg:-80}"; case "$n" in ''|*[!0-9]*) n=80 ;; esac
+        [ "$n" -gt 500 ] && n=500
+        say factory logs "n=$n"
+        journalctl -u factory-server -n "$n" --no-pager --output=cat 2>&1 | tail -n "$n"
+        ;;
+      restart)
+        say factory restart OK
+        systemctl restart factory-server.service
+        sleep 4
+        systemctl is-active factory-server.service
+        curl -sS --max-time 15 -o /dev/null -w 'интерфейс: HTTP %{http_code}\n' http://127.0.0.1:7337/
+        ;;
+      release-info)
+        say factory release-info OK
+        if [ -s "$FINFO" ]; then
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name','?')); print('точка сборки: '+d.get('sha','?'))" "$FINFO"
+        else
+          echo "через fx Фабрику ещё ни разу не выкатывали"
+        fi
+        ;;
+      release)
+        ref="${arg:-main}"
+        case "$ref" in *' '*|*'`'*|*'$'*|*';'*|*'&'*|*'|'*) die "недопустимая точка сборки" ;; esac
+        say factory release "$ref"
+        /usr/local/lib/fx-factory-release "$ref"
+        ;;
+      rollback)
+        say factory rollback OK
+        [ -s "$FBIN.prev" ] || die "предыдущей версии нет — откатывать не на что"
+        cp -f "$FBIN.prev" "$FBIN.new" && chown factory:factory "$FBIN.new" \
+          && chmod 755 "$FBIN.new" && mv -f "$FBIN.new" "$FBIN" || die "не смог вернуть бинарь"
+        systemctl restart factory-server.service
+        sleep 5
+        curl -sS --max-time 20 -o /dev/null -w 'после отката: HTTP %{http_code}\n' \
+             http://127.0.0.1:7337/api/v1/dashboard
+        ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+
+  repo)
+    TOKEN_FILE=/etc/factory-access/github-token
+    REPO=timafen/tarser-operations
+    [ -s "$TOKEN_FILE" ] || die "токен GitHub не установлен. Владелец кладёт его в $TOKEN_FILE"
+    TOKEN=$(tr -d '\r\n' < "$TOKEN_FILE")
+    case "$verb" in
+      status)
+        say repo status OK
+        who=$(curl -sS -m 15 -H "Authorization: Bearer $TOKEN" https://api.github.com/user \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('login','?'))" 2>/dev/null)
+        echo "GitHub: доступ от имени ${who:-неизвестно}, репозиторий $REPO"
+        ;;
+      put)
+        path="$arg"
+        [ -n "$path" ] || die "укажи путь внутри knowledge/"
+        case "$path" in
+          knowledge/*) ;;
+          *) die "через посредника можно писать только в knowledge/ — код так не протолкнуть" ;;
+        esac
+        case "$path" in *..*) die "в пути не должно быть .." ;; esac
+        tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+        cat > "$tmp/content" || die "не прочитал содержимое со входа"
+        [ -s "$tmp/content" ] || die "пустое содержимое"
+        git -c safe.directory='*' clone --quiet --depth 1 \
+            "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$tmp/repo" 2>&1 \
+            | sed "s#//[^@]*@#//***@#" || die "не смог клонировать"
+        mkdir -p "$tmp/repo/$(dirname "$path")"
+        cp "$tmp/content" "$tmp/repo/$path"
+        ( cd "$tmp/repo" \
+          && git add "$path" \
+          && git -c user.name=factory-pilot -c user.email=pilot@tarser.net \
+                 commit -q -m "knowledge: обновление $(basename "$path")" \
+          && git push --quiet 2>&1 | sed "s#//[^@]*@#//***@#" ) \
+          && { say repo put "$path"; echo "записано в main: $path"; } \
+          || echo "нечего записывать: содержимое не отличается от того, что уже в main"
+        ;;
+      head)
+        # Вершина ветки на origin. Нужна пилоту, чтобы отличить работу,
+        # которая движется, от агента, крутящегося на месте.
+        br="$arg"
+        [ -n "$br" ] || die "укажи имя ветки"
+        case "$br" in *' '*|*'`'*|*'$'*) die "недопустимое имя ветки" ;; esac
+        say repo head "$br"
+        git ls-remote --heads \
+            "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$br" 2>/dev/null \
+          | awk '{print $1}' | head -1
+        ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+
+  *) usage; exit 2 ;;
+esac

@@ -1,0 +1,19 @@
+[Unit]
+Description=Factory pilot (automatic pipeline orchestrator)
+After=factory-server.service
+Wants=factory-server.service
+
+[Service]
+EnvironmentFile=/opt/factory-data/.claude/oauth.env
+Type=simple
+User=factory
+Group=factory
+Environment=HOME=/opt/factory-data
+WorkingDirectory=/opt/factory-data/pilot
+ExecStart=/usr/bin/python3 /opt/factory-data/pilot/pilot.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
