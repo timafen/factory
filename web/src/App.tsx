@@ -1,4 +1,4 @@
-import { BookOpenText, Bot, Boxes, Gauge, GitBranch, ListChecks, Menu, Plus, Settings as SettingsIcon, Workflow as AutomationIcon, X } from "lucide-react";
+import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Settings as SettingsIcon, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
@@ -12,11 +12,21 @@ import type { Task, TaskPage } from "./types";
 import { WorkersView, WorkerDetail } from "./Workers";
 import { WorkView } from "./Work";
 import { WorkflowDetail, WorkflowsView } from "./Workflows";
+import { PipelineView } from "./Pipeline";
+import { CardsView } from "./Cards";
+import { SayView } from "./Say";
+import { EpicsView } from "./Epics";
+import { AnswerView } from "./Answer";
+import { AccessView } from "./Access";
 import { AutomationDetail, AutomationsView } from "./Automations";
 import { Settings } from "./Settings";
 
 type Route =
   | { page: "overview" }
+  | { page: "say" }
+  | { page: "epics" }
+  | { page: "answer" }
+  | { page: "access" }
   | { page: "work" }
   | { page: "workers" }
   | { page: "repositories" }
@@ -25,6 +35,8 @@ type Route =
   | { page: "repository"; id: string }
   | { page: "workflows" }
   | { page: "workflow"; id: string }
+  | { page: "pipeline" }
+  | { page: "cards" }
   | { page: "automations" }
   | { page: "settings" }
   | { page: "automation"; id: string };
@@ -35,6 +47,8 @@ function readRoute(): Route {
   if (parts[0] === "workers" && parts[1]) return { page: "worker", id: parts[1] };
   if (parts[0] === "workflows" && parts[1]) return { page: "workflow", id: parts[1] };
   if (parts[0] === "workflows") return { page: "workflows" };
+  if (parts[0] === "pipeline") return { page: "pipeline" };
+  if (parts[0] === "cards") return { page: "cards" };
   if (parts[0] === "automations" && parts[1]) return { page: "automation", id: parts[1] };
   if (parts[0] === "automations") return { page: "automations" };
   if (parts[0] === "settings") return { page: "settings" };
@@ -42,6 +56,10 @@ function readRoute(): Route {
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
   if (parts[0] === "work") return { page: "work" };
+  if (parts[0] === "say") return { page: "say" };
+  if (parts[0] === "epics") return { page: "epics" };
+  if (parts[0] === "answer") return { page: "answer" };
+  if (parts[0] === "access") return { page: "access" };
   return { page: "overview" };
 }
 
@@ -50,12 +68,18 @@ function routePath(route: Route): string {
   if (route.page === "worker") return `/workers/${route.id}`;
   if (route.page === "workflow") return `/workflows/${route.id}`;
   if (route.page === "workflows") return "/workflows";
+  if (route.page === "pipeline") return "/pipeline";
+  if (route.page === "cards") return "/cards";
   if (route.page === "automation") return `/automations/${route.id}`;
   if (route.page === "automations") return "/automations";
   if (route.page === "settings") return "/settings";
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
+  if (route.page === "say") return "/say";
+  if (route.page === "epics") return "/epics";
+  if (route.page === "answer") return "/answer";
+  if (route.page === "access") return "/access";
   return route.page === "work" ? "/work" : "/";
 }
 
@@ -63,6 +87,7 @@ export function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [delegateRequest, setDelegateRequest] = useState<{ workerID?: string } | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const pendingAnswers = usePendingAnswers();
   const [taskHistory, setTaskHistory] = useState<Task[]>([]);
   const [taskHistoryCursor, setTaskHistoryCursor] = useState<string | null>();
   const previousTaskHeadCursor = useRef<string | null | undefined>(undefined);
@@ -142,7 +167,15 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
-        <div className="brand">
+        <div
+          className="brand"
+          role="button"
+          tabIndex={0}
+          title="На главную"
+          style={{ cursor: "pointer" }}
+          onClick={() => navigate({ page: "overview" })}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate({ page: "overview" }); }}
+        >
           <div className="brand-mark" aria-hidden="true">
             <Boxes size={18} strokeWidth={2.2} />
           </div>
@@ -153,11 +186,52 @@ export function App() {
         </div>
         <nav aria-label="Primary navigation">
           <button
+            className={`nav-item ${route.page === "say" ? "active" : ""}`}
+            aria-current={route.page === "say" ? "page" : undefined}
+            onClick={() => navigate({ page: "say" })}
+          >
+            <Mic size={17} /> Say
+          </button>
+          <button
+            className={`nav-item ${route.page === "epics" ? "active" : ""}`}
+            aria-current={route.page === "epics" ? "page" : undefined}
+            onClick={() => navigate({ page: "epics" })}
+          >
+            <ListChecks size={17} /> Epics
+          </button>
+          <button
+            className={`nav-item ${route.page === "answer" ? "active" : ""}`}
+            aria-current={route.page === "answer" ? "page" : undefined}
+            onClick={() => navigate({ page: "answer" })}
+          >
+            <MessageCircleQuestion size={17} /> Нужен ответ
+            {pendingAnswers > 0 && (
+              <span
+                title={`${pendingAnswers} вопрос(ов) ждут твоего ответа`}
+                style={{
+                  marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px",
+                  borderRadius: 999, background: "#c0392b", color: "#fff",
+                  fontSize: 12, fontWeight: 700, lineHeight: "20px",
+                  textAlign: "center", fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {pendingAnswers}
+              </span>
+            )}
+          </button>
+          <button
+            className={`nav-item ${route.page === "access" ? "active" : ""}`}
+            aria-current={route.page === "access" ? "page" : undefined}
+            onClick={() => navigate({ page: "access" })}
+          >
+            <KeyRound size={17} /> Доступы
+          </button>
+          <button
             className={`nav-item ${route.page === "overview" ? "active" : ""}`}
             aria-current={route.page === "overview" ? "page" : undefined}
             onClick={() => navigate({ page: "overview" })}
           >
-            <Gauge size={17} /> Overview
+            <Gauge size={17} /> Главное
           </button>
           <button
             className={`nav-item ${route.page === "work" || route.page === "task" ? "active" : ""}`}
@@ -171,7 +245,21 @@ export function App() {
             aria-current={route.page === "workflows" ? "page" : undefined}
             onClick={() => navigate({ page: "workflows" })}
           >
-            <BookOpenText size={17} /> Runbooks
+            <BookOpenText size={17} /> Workflows
+          </button>
+          <button
+            className={`nav-item ${route.page === "pipeline" ? "active" : ""}`}
+            aria-current={route.page === "pipeline" ? "page" : undefined}
+            onClick={() => navigate({ page: "pipeline" })}
+          >
+            <Waypoints size={17} /> Pipeline
+          </button>
+          <button
+            className={`nav-item ${route.page === "cards" ? "active" : ""}`}
+            aria-current={route.page === "cards" ? "page" : undefined}
+            onClick={() => navigate({ page: "cards" })}
+          >
+            <FileText size={17} /> Cards
           </button>
           <button
             className={`nav-item ${route.page === "automations" || route.page === "automation" ? "active" : ""}`}
@@ -219,15 +307,20 @@ export function App() {
             {mobileNavOpen ? <X size={19} /> : <Menu size={19} />}
           </button>
           <div className="topbar-title">
-            {route.page === "overview" && "Overview"}
+            {route.page === "overview" && "Главное"}
+            {route.page === "say" && "Say"}
+            {route.page === "epics" && "Epics"}
+            {route.page === "answer" && "Нужен ответ"}
             {route.page === "work" && "Work"}
             {route.page === "workers" && "Workers"}
             {route.page === "task" && "Task detail"}
             {route.page === "worker" && "Worker detail"}
             {route.page === "repositories" && "Repositories"}
             {route.page === "repository" && "Repository detail"}
-            {route.page === "workflows" && "Runbooks"}
-            {route.page === "workflow" && "Runbook detail"}
+            {route.page === "workflows" && "Workflows"}
+            {route.page === "workflow" && "Workflow detail"}
+            {route.page === "pipeline" && "Pipeline"}
+            {route.page === "cards" && "Cards"}
             {route.page === "automations" && "Automations"}
             {route.page === "automation" && "Automation detail"}
             {route.page === "settings" && "Settings"}
@@ -238,7 +331,11 @@ export function App() {
         </header>
 
         <main>
-          {route.page === "overview" && <Overview />}
+          {route.page === "say" && <SayView />}
+          {route.page === "epics" && <EpicsView onTask={(id) => navigate({ page: "task", id })} onAnswer={() => navigate({ page: "answer" })} />}
+          {route.page === "answer" && <AnswerView onTask={(id) => navigate({ page: "task", id })} />}
+          {route.page === "access" && <AccessView />}
+          {route.page === "overview" && <Overview onNav={(p) => navigate({ page: p } as Route)} />}
           {route.page === "work" && (
             <WorkView
               tasks={taskItems}
@@ -312,6 +409,11 @@ export function App() {
           {route.page === "workflow" && (
             <WorkflowDetail id={route.id} onBack={() => navigate({ page: "workflows" })} />
           )}
+          {route.page === "pipeline" && (
+            <PipelineView onWorkflow={(id) => navigate({ page: "workflow", id })} />
+          )}
+          {route.page === "cards" && <CardsView />}
+          {route.page === "settings" && <Settings />}
           {route.page === "automations" && (
             <AutomationsView onAutomation={(id) => navigate({ page: "automation", id })} />
           )}
@@ -322,7 +424,6 @@ export function App() {
               onTask={(taskID) => navigate({ page: "task", id: taskID })}
             />
           )}
-          {route.page === "settings" && <Settings />}
         </main>
       </div>
 
@@ -369,4 +470,35 @@ function withoutDeletedTasks(page: TaskPage, deletedTaskIDs: Set<string>): TaskP
     ...page,
     tasks: page.tasks.filter((task) => !deletedTaskIDs.has(task.id)),
   };
+}
+
+/** Сколько вопросов ждёт владельца. Опрашивается редко и только когда вкладка
+ *  видима — цифра нужна живая, но не ценой лишней нагрузки. */
+function usePendingAnswers(): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetch("/api/v1/questions");
+        if (!r.ok) return;
+        const d = (await r.json()) as { questions?: { status?: string }[] };
+        const open = (d.questions ?? []).filter(
+          (q) => q.status === "open" || q.status === "stuck",
+        ).length;
+        if (alive) setN(open);
+      } catch { /* тихо: цифра не критична */ }
+    };
+    void pull();
+    const h = window.setInterval(() => void pull(), 15000);
+    const onVis = () => void pull();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      alive = false;
+      window.clearInterval(h);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+  return n;
 }

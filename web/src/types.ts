@@ -94,17 +94,6 @@ export interface ManagedRepositoryReadiness {
   workers: ManagedRepositoryWorkerReadiness[];
 }
 
-export interface WorkerRepositoryOption {
-  id: string;
-  key?: string;
-  remote_identity: string;
-  enabled: boolean;
-  cached: boolean;
-  advertised: boolean;
-  ready: boolean;
-  reason: string;
-}
-
 export interface Task {
   id: string;
   request_key: string;
@@ -382,11 +371,6 @@ export interface TestAutomationResult {
 
 export type MetricsWindow = "24h" | "7d" | "30d" | "all";
 
-export interface WeeklyLimit {
-  used_percent: number;
-  resets_at: string;
-}
-
 export interface MetricsSummary {
   window: MetricsWindow;
   generated_at: string;
@@ -402,7 +386,10 @@ export interface MetricsSummary {
   median_cycle_time_seconds: number | null;
   workers_online: number;
   workers_total: number;
-  weekly_limit?: WeeklyLimit;
+  weekly_limit?: {
+    used_percent: number;
+    resets_at: string;
+  };
 }
 
 export interface AttemptEvent {
@@ -425,25 +412,12 @@ export interface APIErrorBody {
 interface CreateTaskBaseInput {
   request_key: string;
   title: string;
+  worker_id: string;
+  repository_id: string;
   timeout_seconds: number;
 }
 
-type CreateTaskAssignment =
-  | {
-      worker_id: string;
-      repository_id: string;
-      route?: never;
-    }
-  | {
-      worker_id?: string;
-      repository_id?: never;
-      route: {
-        repository_remote_identity: string;
-        source_access: { provider: string; hostname: string };
-      };
-    };
-
-export type CreateTaskInput = CreateTaskBaseInput & CreateTaskAssignment & (
+export type CreateTaskInput = CreateTaskBaseInput & (
   | { description: string; context?: never; workflow_revision_id?: never }
   | { description?: never; context: string; workflow_revision_id: string }
 );
@@ -457,4 +431,30 @@ export interface CreateWorkflowInput {
 
 export interface CreateWorkflowRevisionInput extends CreateWorkflowInput {
   expected_revision_id: string;
+}
+
+export interface PipelineStage {
+  workflow: string;
+  worker?: string;
+  workers?: Record<string, string>;
+}
+
+export interface PipelineConfig {
+  enabled: boolean;
+  decision_model: string;
+  poll_seconds?: number;
+  timeout_seconds?: number;
+  _note?: string;
+  stages: PipelineStage[];
+}
+
+export interface CardSummary {
+  repository_id: string;
+  repository_identity: string;
+  path: string;
+  name: string;
+  size: number;
+  status?: string;
+  next_action?: string;
+  github_url: string;
 }
