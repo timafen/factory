@@ -73,8 +73,9 @@ type Group = {
   meta?: WorkMeta;
 };
 
-function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
-               works: Record<string, WorkMeta> = {}): Group[] {
+// eslint-disable-next-line react-refresh/only-export-components
+export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
+                      works: Record<string, WorkMeta> = {}): Group[] {
   const openQ = new Set(
     questions.filter((q) => q.status === "open" || q.status === "stuck").map((q) => q.task_id),
   );
@@ -145,13 +146,11 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
 
     if (live) {
       g.currentStage = live.stage;
-      // Стадии ПРАВЕЕ текущей уже проходились, но будут проходиться снова.
-      // Зелёный тут — обман: человек читает его как «этот шаг уже позади».
-      const liveIdx = live.stage ? STAGE_ORDER.indexOf(live.stage) : -1;
-      if (liveIdx >= 0) {
-        for (const st of STAGE_ORDER.slice(liveIdx + 1)) {
-          if (g.reached[st] === "done") g.reached[st] = "again";
-        }
+      // «Заново» относится к повторно запущенной текущей стадии, а не к
+      // уже пройденным шагам справа: они остаются историей прошлого круга.
+      const liveIndex = g.items.indexOf(live);
+      if (live.stage && g.items.slice(0, liveIndex).some((it) => it.stage === live.stage)) {
+        g.reached[live.stage] = "again";
       }
       g.status = { label: live.task.state === "queued" ? "ждёт исполнителя" : "идёт", tone: "live" };
     } else if (waiting) {
