@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/c38668e1-00f-7f51cdfb-e3e`
-- Head commit: `ea7faf3` (предметная реализация на `origin/main`; последующие коммиты меняют только эту карточку)
+- Head commit: `358f531` (проверенная предметная реализация на `origin/main`; следующий коммит добавит только результат верификации)
 - What changed: метка «заново» ставится на повторно запущенной текущей стадии; пройденные стадии сохраняют исторический статус.
 - What changed: обзор объясняет загрузку процессора числом активных работ и фактическими слотами, не выдумывая занятые места при отсутствии данных API.
-- Evidence: `tsc` — passed; целевой Vitest — 7 passed; production build — passed; diff к `origin/main` — ровно 5 файлов.
-- Next action: открыть `/work` с повторно запущенной стадией для визуальной приёмки.
+- Evidence: `go test ./...`, `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых Vitest-тестов и production build — passed; diff к `origin/main` — ровно 5 предметных файлов.
+- Next action: слить проверенную ветку в `main` и выполнить релиз, затем открыть `/work` для визуальной приёмки на production.
 
 ## LOG
 
@@ -19,3 +19,14 @@
 ### 2026-08-08 — Implement
 
 Четыре предметных файла без изменения логики и карточка перенесены на актуальный `origin/main` (`406f985`) в ветку `factory/c38668e1-00f-7f51cdfb-e3e`. `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых тестов и production build прошли; полный Vitest дал 67 passed и 15 известных падений только в `App.test.tsx`. Diff к `origin/main` подтверждён ровно из пяти файлов.
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| «заново» только на текущем повторном этапе | `npx vitest run src/Work.test.ts src/Overview.test.ts` | 7 passed; повторный текущий этап — `again`, исторические — `done` |
+| Объяснение CPU использует реальные данные | те же 7 целевых тестов | Передаются число активных работ и API-слоты; при отсутствии слотов текст честно сообщает об этом |
+| Сборка и backend-регрессии | `go test ./...`; `npx tsc -p tsconfig.app.json --noEmit`; `npm run build` | passed |
+| Чистота доставки | `git diff --check origin/main...HEAD` | passed; 5 предметных файлов до записи этого результата |
+
+Полный `npx vitest run`: 67 passed, 15 известных падений только в неизменённом `App.test.tsx`. Полный Playwright-набор остановился на неизменённом тесте, который ищет английский заголовок `Factory overview`, тогда как уже в `origin/main` интерфейс показывает «Главное»; 17 тестов не запускались. Это не связано с предметным diff карточки.
