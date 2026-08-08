@@ -41,6 +41,26 @@ type Dash = {
   janitor?: string;
 };
 
+type WorkMetadata = Record<string, { origin?: "owner" | "assistant" | "orchestrator"; stage?: string }>;
+
+const stageLabels: Record<string, string> = {
+  Triage: "Разбор",
+  Specification: "Спецификация",
+  "Implement + Test": "Разработка и тесты",
+  Review: "Ревью",
+  Verify: "Проверка",
+};
+
+const originLabels: Record<string, string> = {
+  owner: "поставил владелец",
+  assistant: "поставила Фабрика (управляющий)",
+  orchestrator: "поставила Фабрика (управляющий)",
+};
+
+function cleanActiveWorkTitle(title: string) {
+  return title.replace(/^\[auto\]\s*/, "").replace(/^\[\d+\/\d+\s+[^\]]+\]\s*/, "").trim();
+}
+
 const card: React.CSSProperties = {
   background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
   borderRadius: 12, padding: 16,
@@ -59,12 +79,25 @@ function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "bad" | "mut
 /** Главный экран отвечает на один вопрос: всё ли идёт, и если нет — что мешает. */
 export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   const [d, setD] = useState<Dash>({});
+  const [works, setWorks] = useState<WorkMetadata>({});
+  const [worksUnavailable, setWorksUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const pull = async () => {
     try {
-      const r = await fetch("/api/v1/dashboard");
-      if (r.ok) setD((await r.json()) as Dash);
+      const [dashboardResult, worksResult] = await Promise.allSettled([
+        fetch("/api/v1/dashboard"),
+        fetch("/api/v1/works"),
+      ]);
+      if (dashboardResult.status === "fulfilled" && dashboardResult.value.ok) {
+        setD((await dashboardResult.value.json()) as Dash);
+      }
+      if (worksResult.status === "fulfilled" && worksResult.value.ok) {
+        setWorks((await worksResult.value.json()) as WorkMetadata);
+        setWorksUnavailable(false);
+      } else {
+        setWorksUnavailable(true);
+      }
     } catch { /* тихо */ } finally { setLoading(false); }
   };
   useEffect(() => {
@@ -74,7 +107,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   }, []);
 
   const q = d.now?.questions_count ?? 0;
-  const running = d.now?.running_count ?? 0;
+  const running = d.now?.running_count ?? d.now?.running?.length ?? 0;
   const queued = d.now?.queued_count ?? 0;
 
   const headline = q > 0
@@ -127,16 +160,23 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <span style={{ fontSize: 12, color: muted }}>нажми, чтобы ответить ›</span>
           </div>
         )}
-        {(d.now?.running ?? []).length > 0 && (
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div role="region" aria-label="Сейчас в работе" style={{ marginTop: 10 }}>
+          {(d.now?.running ?? []).length === 0 ? (
+            <div style={{ fontSize: 13, color: muted }}>Сейчас активной работы нет.</div>
+          ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {(d.now?.running ?? []).map((t) => (
               <div key={t.id} style={{ fontSize: 13, color: muted, cursor: "pointer" }}
                    onClick={(e) => { e.stopPropagation(); onNav?.("work"); }}>
-                ▸ {t.title}
+                <strong style={{ color: "var(--text, #f2f4f8)" }}>▸ {cleanActiveWorkTitle(t.title) || "Работа без названия"}</strong>
+                <div>{works[t.id]?.origin ? originLabels[works[t.id].origin!] : "постановщик не указан"}</div>
+                <div>Этап: {works[t.id]?.stage ? stageLabels[works[t.id].stage!] ?? works[t.id].stage : "не указан"}</div>
               </div>
             ))}
           </div>
-        )}
+          )}
+          {worksUnavailable && <div style={{ marginTop: 6, fontSize: 12, color: "#e0cf9f" }}>Данные о постановщике или этапе могут быть неполными.</div>}
+        </div>
       </section>
 
       {/* 2. Продукт: что где живёт */}
