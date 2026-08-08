@@ -791,6 +791,11 @@ type PilotSettings struct {
 	Stages              map[string]PilotStageWorkers `json:"stages"`
 	SkipStagesForLow    []string                     `json:"skip_stages_for_low"`
 	StoppedPipelines    []string                     `json:"stopped_pipelines"`
+	// Потолок кругов по одной работе и группы уведомлений: этим управляет
+	// пилот, но владелец должен видеть и править их на экране «Настройки».
+	MaxWorkRounds       int                          `json:"max_work_rounds,omitempty"`
+	MaxCapRescues       int                          `json:"max_cap_rescues,omitempty"`
+	NotifyGroups        map[string]bool              `json:"notify_groups,omitempty"`
 	StageBaseUSD        map[string]float64           `json:"stage_base_usd"`
 	ComplexityFactor    map[string]float64           `json:"complexity_factor"`
 	WorkCapUSD          map[string]float64           `json:"work_cap_usd"`
