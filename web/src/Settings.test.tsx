@@ -46,3 +46,18 @@ it("blocks strict routing to a worker outside the editable allow-list", async ()
   expect(await screen.findByText(/Every routed worker must be in the allowed list/)).toBeVisible();
   expect(screen.getByRole("button",{name:"Save settings"})).toBeDisabled();
 });
+
+it("allows adding a configuration note when the API omits it", async () => {
+  const settingsWithoutNote={...response.settings}; delete settingsWithoutNote._note;
+  const withoutNote={...response,settings:settingsWithoutNote};
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({...withoutNote,settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(withoutNote),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  const note=await screen.findByLabelText("Configuration note"); expect(note).toHaveValue("");
+  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Save settings"}));
+  await screen.findByText(/Settings saved/);
+  const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
+  expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
+});
