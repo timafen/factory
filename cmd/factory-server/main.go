@@ -170,7 +170,8 @@ func run() (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	handler := factoryweb.NewHandler(controlplane.NewHandlerWithAutomation(store, logger, automationService))
+	pilotConfig := controlplane.NewPilotConfigStore(filepath.Join(dataRoot, "pilot", "config.json"))
+	handler := factoryweb.NewHandler(controlplane.NewHandlerWithPilotConfig(store, logger, automationService, pilotConfig))
 	server := controlplane.NewHTTPServer(*listen, handler)
 	serverErrors := make(chan error, 1)
 	go func() {

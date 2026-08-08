@@ -36,6 +36,42 @@ export interface Worker {
   current_task_title?: string;
 }
 
+export type PilotStage = "Triage" | "Specification" | "Implement + Test" | "Review" | "Verify";
+export type PilotTier = "low" | "medium" | "high";
+
+export interface PilotSettings {
+  _note?: string;
+  enabled: boolean;
+  poll_seconds: number;
+  timeout_seconds: number;
+  auto_merge: boolean;
+  auto_answer: boolean;
+  max_stage_attempts: number;
+  allow_any_worker: boolean;
+  allowed_workers: string[];
+  max_parallel_subtasks: number;
+  day_cap_usd: number;
+  deploy_staging_cmd: string;
+  owner_chat_url: string;
+  owner_ui_url: string;
+  stages: Record<PilotStage, Record<PilotTier, string>>;
+  skip_stages_for_low: string[];
+  stopped_pipelines: string[];
+  stage_base_usd: Record<PilotStage, number>;
+  complexity_factor: Record<PilotTier, number>;
+  work_cap_usd: Record<PilotTier, number>;
+  ntfy_topic: string;
+  ntfy_server: string;
+  ntfy_owner_topic: string;
+  brain_chain: Array<{ cli: string; model: string; provider: string; note?: string }>;
+}
+
+export interface PilotSettingsResponse {
+  settings: PilotSettings;
+  version: string;
+  warnings: string[];
+}
+
 export interface ManagedRepository {
   id: string;
   remote_identity: string;

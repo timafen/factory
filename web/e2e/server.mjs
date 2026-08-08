@@ -229,6 +229,30 @@ const [factoryRepository, handbookRepository] = await Promise.all([
 ]);
 
 await mkdir(workerData, { recursive: true });
+await mkdir(join(temporary, "pilot"), { recursive: true });
+const pilotStages = ["Triage", "Specification", "Implement + Test", "Review", "Verify"];
+await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
+  _note: "browser fixture",
+  enabled: true,
+  poll_seconds: 10,
+  timeout_seconds: 60,
+  auto_merge: true,
+  auto_answer: false,
+  max_stage_attempts: 2,
+  max_parallel_subtasks: 2,
+  day_cap_usd: 20,
+  deploy_staging_cmd: "deploy",
+  owner_chat_url: "https://example.test/chat",
+  owner_ui_url: "https://example.test/ui",
+  stages: Object.fromEntries(pilotStages.map((stage) => [stage, { low: workerID, medium: workerID, high: workerID }])),
+  skip_stages_for_low: ["Review"],
+  stopped_pipelines: [],
+  stage_base_usd: Object.fromEntries(pilotStages.map((stage) => [stage, 1])),
+  complexity_factor: { low: 1, medium: 2, high: 3 },
+  work_cap_usd: { low: 2, medium: 4, high: 8 },
+  ntfy_topic: "factory", ntfy_server: "https://ntfy.sh", ntfy_owner_topic: "owner",
+  brain_chain: [{ cli: "codex", model: "gpt", provider: "openai", note: "first" }],
+}, null, 2));
 await writeFile(join(workerData, "worker-id"), `${workerID}\n`, { mode: 0o600 });
 await writeFile(
   workerConfig,
