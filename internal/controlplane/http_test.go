@@ -211,6 +211,54 @@ func TestHTTPMetricsUseABoundedWindowContract(t *testing.T) {
 	}
 }
 
+func TestHTTPDashboardAndWorksDescribeActiveTasksByStableID(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	worker := registerTestWorker(t, fixture.store, "dashboard-worker", 3, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/factory",
+	})
+	owner := createTestTask(t, fixture.store, "dashboard-owner", worker.ID, worker.Repositories[0].ID)
+	automated := createTestTask(t, fixture.store, "dashboard-automation", worker.ID, worker.Repositories[0].ID)
+	completed := createTestTask(t, fixture.store, "dashboard-completed", worker.ID, worker.Repositories[0].ID)
+	if _, err := fixture.store.db.Exec(`UPDATE tasks SET request_key = ? WHERE id = ?`,
+		"automation:test:github_issue:1", automated.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE executions SET state = 'succeeded' WHERE task_id = ?`, completed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.request(http.MethodGet, "/api/v1/dashboard", "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	dashboard := decodeResponse[struct {
+		Now struct {
+			Running []dashboardWork `json:"running"`
+		} `json:"now"`
+	}](t, response)
+	if len(dashboard.Now.Running) != 2 {
+		t.Fatalf("active works = %#v", dashboard.Now.Running)
+	}
+	seen := map[string]string{}
+	for _, work := range dashboard.Now.Running {
+		seen[work.ID] = work.Title
+	}
+	if seen[owner.Task.ID] != "Test task" || seen[automated.Task.ID] != "Test task" {
+		t.Fatalf("dashboard is not keyed by task identity: %#v", seen)
+	}
+	if _, exists := seen[completed.Task.ID]; exists {
+		t.Fatal("completed task appeared in active dashboard")
+	}
+
+	response = fixture.request(http.MethodGet, "/api/v1/works", "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	works := decodeResponse[map[string]workMetadata](t, response)
+	if works[owner.Task.ID].Origin != "owner" || works[automated.Task.ID].Origin != "orchestrator" {
+		t.Fatalf("work origins = %#v", works)
+	}
+	if _, exists := works[completed.Task.ID]; exists {
+		t.Fatal("completed task appeared in work metadata")
+	}
+}
+
 func TestHTTPWorkerRegistrationSupportsLegacyAndRuntimeAwareContracts(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	type legacyWorker struct {

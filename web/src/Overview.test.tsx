@@ -22,8 +22,8 @@ describe("Overview active work", () => {
       { id: "one", title: "[auto] [3/5 Implement + Test] Экран Обзор" },
       { id: "two", title: "[auto] [4/5 Review] Вторая работа" },
     ] } }, {
-      "Экран Обзор": { origin: "owner" },
-      "Вторая работа": { origin: "orchestrator" },
+      one: { origin: "owner" },
+      two: { origin: "orchestrator" },
     });
 
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
@@ -33,6 +33,20 @@ describe("Overview active work", () => {
     expect(within(section).getByText("Этап: 3/5 · Разработка и тесты")).toBeVisible();
     expect(within(section).getByText("Поставил: оркестратор")).toBeVisible();
     expect(within(section).getByText("Этап: 4/5 · Ревью")).toBeVisible();
+  });
+
+  it("keeps origin metadata separate for works with identical titles", async () => {
+    renderOverview({ now: { running: [
+      { id: "owner-work", title: "Одинаковая работа" },
+      { id: "automated-work", title: "Одинаковая работа" },
+    ] } }, {
+      "owner-work": { origin: "owner" },
+      "automated-work": { origin: "orchestrator" },
+    });
+
+    const section = await screen.findByRole("region", { name: "Сейчас в работе" });
+    expect(within(section).getByText("Поставил: владелец")).toBeVisible();
+    expect(within(section).getByText("Поставил: оркестратор")).toBeVisible();
   });
 
   it("does not invent a person or stage when metadata is absent", async () => {

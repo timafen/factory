@@ -129,7 +129,7 @@ function ActiveWork({
         <div className="active-work-list">
           {running.map((item) => {
             const parsed = parseActiveWorkTitle(item.title);
-            const metadata = works?.[parsed.title];
+            const metadata = works?.[item.id];
             const stage = parsed.stage ? (stageLabels[parsed.stage] ?? parsed.stage) : null;
             return (
               <article className="active-work-item" key={item.id}>

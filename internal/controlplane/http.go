@@ -109,6 +109,8 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/resume", api.resumeLegacyPollerOccurrence)
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/skip", api.skipLegacyPollerOccurrence)
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
+	mux.HandleFunc("GET /api/v1/dashboard", api.getDashboard)
+	mux.HandleFunc("GET /api/v1/works", api.getWorks)
 	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
@@ -124,6 +126,49 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/attempts/{attempt_id}/events", api.appendEvents)
 	mux.HandleFunc("POST /api/v1/attempts/{attempt_id}/complete", api.completeAttempt)
 	return api.requestLog(mux)
+}
+
+type dashboardWork struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type workMetadata struct {
+	Origin string `json:"origin"`
+}
+
+func (a *API) activeWorks(r *http.Request) ([]protocol.Task, error) {
+	return a.store.ActiveTasks(r.Context())
+}
+
+func (a *API) getDashboard(w http.ResponseWriter, r *http.Request) {
+	tasks, err := a.activeWorks(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	running := make([]dashboardWork, 0, len(tasks))
+	for _, task := range tasks {
+		running = append(running, dashboardWork{ID: task.ID, Title: task.Title})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": map[string]any{"running": running}})
+}
+
+func (a *API) getWorks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := a.activeWorks(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	works := make(map[string]workMetadata, len(tasks))
+	for _, task := range tasks {
+		origin := "owner"
+		if strings.HasPrefix(task.RequestKey, "automation:") {
+			origin = "orchestrator"
+		}
+		works[task.ID] = workMetadata{Origin: origin}
+	}
+	writeJSON(w, http.StatusOK, works)
 }
 
 func (a *API) listWorkflows(w http.ResponseWriter, r *http.Request) {
