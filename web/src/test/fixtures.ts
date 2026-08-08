@@ -668,7 +668,7 @@ export function mockControlPlane(
       }
       return Response.json(automationDetail);
     }
-    if (path === `/api/v1/automations/${automationDetail.automation.id}/occurrences?limit=50`) {
+    if (path === `/api/v1/automations/${automationDetail.automation.id}/occurrences?limit=200`) {
       return Response.json({
         occurrences: options.paginatedAutomationOccurrences
           ? [automationOccurrence("occurrence-head", 184, "2026-08-01T08:00:00Z")]
@@ -676,7 +676,7 @@ export function mockControlPlane(
         next_cursor: options.paginatedAutomationOccurrences ? "occurrence-history" : null,
       });
     }
-    if (path === `/api/v1/automations/${automationDetail.automation.id}/occurrences?limit=50&cursor=occurrence-history`) {
+    if (path === `/api/v1/automations/${automationDetail.automation.id}/occurrences?limit=200&cursor=occurrence-history`) {
       return Response.json({
         occurrences: [automationOccurrence("occurrence-history", 183, "2026-07-01T08:00:00Z")],
         next_cursor: null,
@@ -790,7 +790,7 @@ export function mockControlPlane(
         }, { status: 201 });
       }
     }
-    if (path === "/api/v1/tasks?limit=50") {
+    if (path === "/api/v1/tasks?limit=200") {
       taskHeadRequests += 1;
       if (options.boundedLiveHead) {
         const newHead = {
@@ -831,19 +831,19 @@ export function mockControlPlane(
             : null,
       });
     }
-    if (path === "/api/v1/tasks?limit=50&cursor=stale-page") {
+    if (path === "/api/v1/tasks?limit=200&cursor=stale-page") {
       await new Promise<void>((resolve) => {
         resolveStaleHistory = resolve;
       });
       return Response.json({ tasks: [tasks[2]], next_cursor: null });
     }
-    if (path === "/api/v1/tasks?limit=50&cursor=next-page") {
+    if (path === "/api/v1/tasks?limit=200&cursor=next-page") {
       return Response.json({ tasks: tasks.slice(1), next_cursor: null });
     }
-    if (path === "/api/v1/tasks?limit=50&cursor=old-boundary") {
+    if (path === "/api/v1/tasks?limit=200&cursor=old-boundary") {
       return Response.json({ tasks: tasks.slice(1, 2), next_cursor: null });
     }
-    if (path === "/api/v1/tasks?limit=50&cursor=new-boundary") {
+    if (path === "/api/v1/tasks?limit=200&cursor=new-boundary") {
       return Response.json({
         tasks: [tasks[2], { ...tasks[1], state: "succeeded" }],
         next_cursor: null,

@@ -47,6 +47,7 @@ export interface PilotSettings {
   auto_merge: boolean;
   auto_answer: boolean;
   max_stage_attempts: number;
+  max_work_rounds: number;
   allow_any_worker: boolean;
   allowed_workers: string[];
   max_parallel_subtasks: number;
