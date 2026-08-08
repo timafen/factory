@@ -82,6 +82,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/workers/{worker_id}/claims", api.claim)
 	mux.HandleFunc("GET /api/v1/workers", api.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{worker_id}", api.getWorker)
+	mux.HandleFunc("GET /api/v1/workers/{worker_id}/repository-options", api.getWorkerRepositoryOptions)
 	mux.HandleFunc("GET /api/v1/repositories", api.listManagedRepositories)
 	mux.HandleFunc("POST /api/v1/repositories", api.createManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}", api.getManagedRepository)
@@ -499,6 +500,15 @@ func (a *API) getWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, worker)
+}
+
+func (a *API) getWorkerRepositoryOptions(w http.ResponseWriter, r *http.Request) {
+	options, err := a.store.WorkerRepositoryOptions(r.Context(), r.PathValue("worker_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repositories": options})
 }
 
 func (a *API) listManagedRepositories(w http.ResponseWriter, r *http.Request) {
