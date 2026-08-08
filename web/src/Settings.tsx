@@ -15,14 +15,14 @@ export function Settings() {
 }
 
 function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api.pilotSettings>>;refresh:()=>void}) {
-  const [settings, setSettings] = useState<PilotSettings>(() => structuredClone(initial.settings));
+  const [settings, setSettings] = useState<PilotSettings>(() => withSafeDefaults(structuredClone(initial.settings)));
   const [version, setVersion] = useState(initial.version);
   const [warnings, setWarnings] = useState(initial.warnings);
   const [saved, setSaved] = useState(false);
   const errors = useMemo(() => validate(settings), [settings]);
   const save = useMutation({
     mutationFn: () => api.updatePilotSettings(version, settings),
-    onSuccess: (result) => { setSettings(structuredClone(result.settings)); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
+    onSuccess: (result) => { setSettings(withSafeDefaults(structuredClone(result.settings))); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
   });
   const set = <K extends keyof PilotSettings>(key: K, value: PilotSettings[K]) => { setSaved(false); setSettings({ ...settings, [key]: value }); };
   const stageWorkers = (stage: PilotStage) => settings.stages.find((entry) => entry.workflow === stage)!.workers;
@@ -84,5 +84,6 @@ function Check({label,checked,onChange}:{label:string;checked:boolean;onChange:(
 function TextField({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}) { return <label className="field"><span>{label}</span><input value={value} onChange={(event)=>onChange(event.target.value)}/></label>; }
 function NumberField({label,value,onChange}:{label:string;value:number;onChange:(value:number)=>void}) { return <label className="field"><span>{label}</span><input type="number" step="any" value={value} onChange={(event)=>onChange(Number(event.target.value))}/></label>; }
 function splitList(value:string) { return value.split(",").map((item)=>item.trim()).filter(Boolean); }
+function withSafeDefaults(settings:PilotSettings):PilotSettings { return {...settings,max_work_rounds:settings.max_work_rounds??3,max_cap_rescues:settings.max_cap_rescues??2,notify_groups:settings.notify_groups??{owner:true,progress:false}}; }
 function validate(settings:PilotSettings) { const errors:string[]=[]; const numbers=[settings.poll_seconds,settings.timeout_seconds,settings.max_stage_attempts,settings.max_work_rounds,settings.max_cap_rescues,settings.max_parallel_subtasks,settings.day_cap_usd,...Object.values(settings.stage_base_usd),...Object.values(settings.complexity_factor),...Object.values(settings.work_cap_usd)]; if(numbers.some((value)=>!Number.isFinite(value)||value<=0)) errors.push("All durations, limits, factors, and budgets must be positive."); for(const [label,value] of [["ntfy server",settings.ntfy_server],["owner chat",settings.owner_chat_url],["owner UI",settings.owner_ui_url]]) { try { const url=new URL(value); if(!["http:","https:"].includes(url.protocol)) throw new Error(); } catch { errors.push(`${label} must be a valid http(s) URL.`); } } if(settings.brain_chain.some((entry)=>!entry.cli.trim()||!entry.model.trim()||!entry.provider.trim())) errors.push("Every brain-chain row needs CLI, model, and provider."); if(!settings.allow_any_worker && settings.stages.some((stage)=>tiers.some((tier)=>!settings.allowed_workers.includes(stage.workers[tier])))) errors.push("Every routed worker must be in the allowed list while unrestricted workers are disabled."); return errors; }
 function ErrorMessage({error,conflictAction}:{error:unknown;conflictAction?:()=>void}) { const conflict=error instanceof APIError&&error.status===409; return <div className="settings-errors"><span>{error instanceof Error?error.message:"Unable to load settings."}</span>{conflict&&conflictAction&&<button className="button" onClick={conflictAction}>Refresh latest settings</button>}</div>; }

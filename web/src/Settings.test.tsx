@@ -71,3 +71,14 @@ it("allows adding a configuration note when the API omits it", async () => {
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
 });
+
+it("uses safe defaults when an older API response omits new controls", async () => {
+  const oldSettings = {...response.settings} as Partial<typeof response.settings>;
+  delete oldSettings.max_work_rounds; delete oldSettings.max_cap_rescues; delete oldSettings.notify_groups;
+  const oldResponse = {...response,settings:oldSettings};
+  renderSettings(vi.fn(async()=>new Response(JSON.stringify(oldResponse),{status:200,headers:{"Content-Type":"application/json"}})));
+  expect(await screen.findByLabelText("Maximum work rounds")).toHaveValue(3);
+  expect(screen.getByLabelText("Maximum cap rescues")).toHaveValue(2);
+  expect(screen.getByLabelText("Notify group: owner")).toBeChecked();
+  expect(screen.getByRole("button",{name:"Save settings"})).toBeEnabled();
+});

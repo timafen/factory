@@ -21,6 +21,11 @@ import (
 
 const maxPilotConfigBytes = 1 << 20
 
+const (
+	defaultMaxWorkRounds = 3
+	defaultMaxCapRescues = 2
+)
+
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
 
 type PilotConfigStore struct {
@@ -95,6 +100,17 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["allow_any_worker"] {
 		settings.AllowAnyWorker = true
 	}
+	// Older files were written before these controls became editable. Keep the
+	// pilot's established values until the owner explicitly saves a change.
+	if !present["max_work_rounds"] {
+		settings.MaxWorkRounds = defaultMaxWorkRounds
+	}
+	if !present["max_cap_rescues"] {
+		settings.MaxCapRescues = defaultMaxCapRescues
+	}
+	if !present["notify_groups"] || settings.NotifyGroups == nil {
+		settings.NotifyGroups = map[string]bool{"owner": true, "progress": false}
+	}
 	return settings, body, nil
 }
 
@@ -102,6 +118,26 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config contains invalid JSON")
+	}
+	if rawStages, ok := fields["stages"]; ok {
+		var stageMap map[string]protocol.PilotStageWorkers
+		if err := json.Unmarshal(rawStages, &stageMap); err == nil && stageMap != nil {
+			stages := make([]protocol.PilotStage, 0, len(stageMap))
+			for _, workflow := range pilotStages {
+				if workers, exists := stageMap[workflow]; exists {
+					stages = append(stages, protocol.PilotStage{Workflow: workflow, Workers: workers})
+					delete(stageMap, workflow)
+				}
+			}
+			for workflow, workers := range stageMap {
+				stages = append(stages, protocol.PilotStage{Workflow: workflow, Workers: workers})
+			}
+			normalizedStages, marshalErr := json.Marshal(stages)
+			if marshalErr != nil {
+				return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config schema is invalid: %v", marshalErr)
+			}
+			fields["stages"] = normalizedStages
+		}
 	}
 	normalizedBody, err := json.Marshal(fields)
 	if err != nil {
