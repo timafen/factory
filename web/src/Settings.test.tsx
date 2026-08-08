@@ -25,17 +25,20 @@ function renderSettings(fetchImpl: ReturnType<typeof vi.fn>) {
   return render(<QueryClientProvider client={client}><Settings/></QueryClientProvider>);
 }
 
-it("shows all pilot sections, warnings, and saves an edited value without losing notes", async () => {
+it("показывает четыре русских раздела, пояснения и сохраняет значение без потери заметок", async () => {
   const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
     if(init?.method==="PUT") return new Response(JSON.stringify({...response,version:"version-two",settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
     return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  expect(await screen.findByRole("heading",{name:"Pilot settings"})).toBeVisible();
-  expect(screen.getByText("Automation and budgets")).toBeVisible(); expect(screen.getByText("Notifications and owner links")).toBeVisible(); expect(screen.getByText("Brain chain")).toBeVisible();
+  expect(await screen.findByRole("heading",{name:"Настройки"})).toBeVisible();
+  for (const title of ["Работа пилота","Маршрутизация этапов","Автоматизация и бюджеты","Уведомления и модели"]) expect(screen.getByRole("heading",{name:title})).toBeVisible();
+  expect(screen.getAllByRole("heading",{level:2})).toHaveLength(4);
+  expect(screen.getByText("Как часто пилот проверяет, не появилась ли новая работа.")).toBeVisible();
+  expect(screen.getAllByText("Технический идентификатор модели.")).toHaveLength(2);
   expect(screen.getByText("Unknown worker: worker-new")).toBeVisible();
-  const poll=screen.getByLabelText("Poll interval (seconds)"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Save settings"}));
-  await screen.findByText(/Settings saved/);
+  const poll=screen.getByRole("spinbutton",{name:/^Интервал проверки, секунд/}); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
   const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
 });
@@ -44,7 +47,7 @@ it("blocks strict routing to a worker outside the editable allow-list", async ()
   const strict={...response,settings:{...response.settings,allow_any_worker:false}};
   renderSettings(vi.fn(async()=>new Response(JSON.stringify(strict),{status:200,headers:{"Content-Type":"application/json"}})));
   expect(await screen.findByText(/Every routed worker must be in the allowed list/)).toBeVisible();
-  expect(screen.getByRole("button",{name:"Save settings"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Сохранить настройки"})).toBeDisabled();
 });
 
 it("allows adding a configuration note when the API omits it", async () => {
@@ -55,9 +58,16 @@ it("allows adding a configuration note when the API omits it", async () => {
     return new Response(JSON.stringify(withoutNote),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  const note=await screen.findByLabelText("Configuration note"); expect(note).toHaveValue("");
-  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Save settings"}));
-  await screen.findByText(/Settings saved/);
+  const note=await screen.findByRole("textbox",{name:/^Примечание к конфигурации/}); expect(note).toHaveValue("");
+  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
+});
+
+it("сохраняет технические названия этапов, уровней и исполнителей", async () => {
+  renderSettings(vi.fn(async()=>new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}})));
+  expect(await screen.findByText("Triage")).toBeVisible();
+  expect(screen.getByText("low")).toBeVisible();
+  expect(screen.getByLabelText("Исполнитель: Triage, high")).toHaveValue("worker-new");
 });
