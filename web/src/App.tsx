@@ -1,4 +1,4 @@
-import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Settings as SettingsIcon, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
+import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, Lightbulb, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Settings as SettingsIcon, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
@@ -219,6 +219,9 @@ export function App() {
               </span>
             )}
           </button>
+          <a className="nav-item" href="/intake/plan">
+            <Lightbulb size={17} /> План
+          </a>
           <button
             className={`nav-item ${route.page === "access" ? "active" : ""}`}
             aria-current={route.page === "access" ? "page" : undefined}
