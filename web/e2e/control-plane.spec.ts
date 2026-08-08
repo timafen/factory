@@ -362,6 +362,17 @@ test.afterAll(async () => {
   await fixtureAPI?.dispose();
 });
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/v1/dashboard", (route) => route.fulfill({
+    json: { now: { running: [
+      { id: "overview-active-work", title: "[auto] [3/5 Implement + Test] Show active work" },
+    ] } },
+  }));
+  await page.route("**/api/v1/works", (route) => route.fulfill({
+    json: { "Show active work": { origin: "owner", start_stage: "Triage" } },
+  }));
+});
+
 test("shows retained Factory metrics and saves the overview", async ({ page }) => {
   const browser = observeBrowser(page);
   const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
@@ -375,6 +386,10 @@ test("shows retained Factory metrics and saves the overview", async ({ page }) =
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Factory overview" })).toBeVisible();
+  const activeWork = page.getByRole("region", { name: "Сейчас в работе" });
+  await expect(activeWork.getByText("Show active work")).toBeVisible();
+  await expect(activeWork.getByText("Поставил: владелец")).toBeVisible();
+  await expect(activeWork.getByText("Этап: 3/5 · Разработка и тесты")).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
