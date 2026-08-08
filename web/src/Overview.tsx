@@ -13,6 +13,12 @@ const windows: Array<{ value: MetricsWindow; label: string }> = [
   { value: "all", label: "All retained" },
 ];
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function cpuLoadExplanation(running: number, slots?: { busy: number; capacity: number }) {
+  const occupied = slots ? `${slots.busy} из ${slots.capacity} мест` : "число занятых мест неизвестно";
+  return `Сейчас активно работ: ${running}; занято ${occupied}. Данных о нагрузке отдельных процессов нет.`;
+}
+
 export function Overview() {
   const [window, setWindow] = useState<MetricsWindow>("7d");
   const interval = useVisibleInterval(10_000);
@@ -154,6 +160,9 @@ function Metrics({ data }: { data: MetricsSummary }) {
               value={`${data.workers_online} / ${data.workers_total}`}
             />
           </dl>
+          <p className="metrics-note" data-testid="cpu-explanation">
+            Причина загрузки процессора: {cpuLoadExplanation(data.running)}
+          </p>
         </section>
       </div>
 
