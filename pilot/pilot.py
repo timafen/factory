@@ -1799,9 +1799,11 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base_title(q.get("title", ""))))
         branch_line = (
-            f"Branch: {br}\n"
-            "РАБОТАЙ В ЭТОЙ ЖЕ ВЕТКЕ: сделай `git fetch origin` и продолжай поверх неё. "
-            "Новую пустую ветку не создавай — иначе следующая стадия увидит пустой diff.\n\n"
+            f"Прошлая работа лежит в ветке: {br}\n"
+            "ВЕТКУ В РАБОЧЕЙ КОПИИ НЕ ПЕРЕКЛЮЧАЙ — checkout чужой ветки ломает "
+            "рабочую копию воркера. Оставайся на своей ветке и забери прошлую "
+            f"работу так: `git fetch origin {br} && git reset --hard FETCH_HEAD`. "
+            "Продолжай поверх и запушь СВОЮ текущую ветку: `git push -u origin HEAD`.\n\n"
         ) if br else ""
         context = (
             f"Pipeline: {q['title']}\n"
@@ -3124,10 +3126,12 @@ def cycle(conf, state):
                                         "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
                                         "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n\n"
                                             "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
-                                            "пока работа шла, main уехал вперёд. Сделай ровно это: "
-                                            "git fetch origin; git rebase origin/main; разреши конфликты, "
-                                            "сохранив и свою работу, и то, что уже в main; "
-                                            "git push --force-with-lease; больше ничего не меняй.")[:20000],
+                                            "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
+                                            "оставайся на своей. Сделай ровно это: "
+                                            f"git fetch origin {branch} && git reset --hard FETCH_HEAD; "
+                                            "git rebase origin/main; разреши конфликты, сохранив и свою "
+                                            "работу, и то, что уже в main; git push -u origin HEAD; "
+                                            "больше ничего не меняй.")[:20000],
                                         "worker_id": bw["id"], "repository_id": rid,
                                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                                         "workflow_revision_id": bnw["revision_id"]}, conf)
