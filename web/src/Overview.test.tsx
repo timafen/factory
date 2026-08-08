@@ -24,8 +24,8 @@ describe("Overview active work", () => {
       { id: "one", title: "[auto] [3/5 Implement + Test] Экран Обзор" },
       { id: "two", title: "[auto] [4/5 Review] Проверить Обзор" },
     ] } }, {
-      one: { origin: "owner", stage: "Implement + Test" },
-      two: { origin: "orchestrator", stage: "Review" },
+      "Экран Обзор": { origin: "owner", start_stage: "Triage" },
+      "Проверить Обзор": { origin: "orchestrator", start_stage: "Specification" },
     });
 
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });

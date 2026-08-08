@@ -41,7 +41,7 @@ type Dash = {
   janitor?: string;
 };
 
-type WorkMetadata = Record<string, { origin?: "owner" | "assistant" | "orchestrator"; stage?: string }>;
+type WorkMetadata = Record<string, { origin?: "owner" | "assistant" | "orchestrator"; start_stage?: string }>;
 
 const stageLabels: Record<string, string> = {
   Triage: "Разбор",
@@ -57,8 +57,12 @@ const originLabels: Record<string, string> = {
   orchestrator: "поставила Фабрика (управляющий)",
 };
 
-function cleanActiveWorkTitle(title: string) {
-  return title.replace(/^\[auto\]\s*/, "").replace(/^\[\d+\/\d+\s+[^\]]+\]\s*/, "").trim();
+/** Keep work identity and stage parsing identical to the Work screen. */
+function parseActiveWorkTitle(raw: string): { base: string; stage: string | null } {
+  const m = /^\[auto\]\s*\[(\d+)\/(\d+)\s+([^\]]+)\]\s*(.*)$/.exec(raw || "");
+  if (m) return { base: m[4].trim(), stage: m[3].trim() };
+  const plain = /^\[auto\]\s*(.*)$/.exec(raw || "");
+  return { base: (plain ? plain[1] : raw || "").trim(), stage: null };
 }
 
 const card: React.CSSProperties = {
@@ -179,14 +183,18 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <div style={{ fontSize: 13, color: muted }}>Сейчас активной работы нет.</div>
           ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(d.now?.running ?? []).map((t) => (
-              <div key={t.id} style={{ fontSize: 13, color: muted, cursor: "pointer" }}
-                   onClick={(e) => { e.stopPropagation(); onNav?.("work"); }}>
-                <strong style={{ color: "var(--text, #f2f4f8)" }}>▸ {cleanActiveWorkTitle(t.title) || "Работа без названия"}</strong>
-                <div>{works[t.id]?.origin ? originLabels[works[t.id].origin!] : "постановщик не указан"}</div>
-                <div>Этап: {works[t.id]?.stage ? stageLabels[works[t.id].stage!] ?? works[t.id].stage : "не указан"}</div>
-              </div>
-            ))}
+            {(d.now?.running ?? []).map((t) => {
+              const { base, stage } = parseActiveWorkTitle(t.title);
+              const work = works[base];
+              return (
+                <div key={t.id} style={{ fontSize: 13, color: muted, cursor: "pointer" }}
+                     onClick={(e) => { e.stopPropagation(); onNav?.("work"); }}>
+                  <strong style={{ color: "var(--text, #f2f4f8)" }}>▸ {base || "Работа без названия"}</strong>
+                  <div>{work?.origin ? originLabels[work.origin] : "постановщик не указан"}</div>
+                  <div>Этап: {stage ? stageLabels[stage] ?? stage : "не указан"}</div>
+                </div>
+              );
+            })}
           </div>
           )}
           {worksUnavailable && <div style={{ marginTop: 6, fontSize: 12, color: "#e0cf9f" }}>Данные о постановщике или этапе могут быть неполными.</div>}
