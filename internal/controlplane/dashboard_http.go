@@ -23,5 +23,10 @@ func (a *API) getDashboard(w http.ResponseWriter, r *http.Request) {
 	if data, err := os.ReadFile(dashboardPath()); err == nil {
 		_ = json.Unmarshal(data, &out)
 	}
+	if now, ok := out["now"].(map[string]any); ok {
+		if running, ok := now["running"].([]any); ok {
+			now["running_count"] = len(running)
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
