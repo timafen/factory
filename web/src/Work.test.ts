@@ -32,4 +32,28 @@ describe("build", () => {
 
     expect(group.reached["Implement + Test"]).toBe("live");
   });
+
+  it("marks a repeated first stage as again", () => {
+    const group = build([
+      task("triage-1", "Triage", "succeeded", 1),
+      task("specification", "Specification", "succeeded", 2),
+      task("triage-2", "Triage", "running", 3),
+    ], {}, [])[0];
+
+    expect(group.currentStage).toBe("Triage");
+    expect(group.reached.Triage).toBe("again");
+    expect(group.reached.Specification).toBe("done");
+  });
+
+  it("marks a repeated last stage as again", () => {
+    const group = build([
+      task("verify-1", "Verify", "succeeded", 1),
+      task("review", "Review", "succeeded", 2),
+      task("verify-2", "Verify", "running", 3),
+    ], {}, [])[0];
+
+    expect(group.currentStage).toBe("Verify");
+    expect(group.reached.Verify).toBe("again");
+    expect(group.reached.Review).toBe("done");
+  });
 });
