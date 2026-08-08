@@ -10,9 +10,12 @@ const response: PilotSettingsResponse = {
   warnings: ["Unknown worker: worker-new"],
   settings: {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
-    max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
+    max_stage_attempts: 2, max_work_rounds: 3, max_cap_rescues: 4, notify_groups: {owner:true,progress:false}, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
     day_cap_usd: 20, deploy_staging_cmd: "deploy", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
-    stages: { "Triage":{low:"worker-1",medium:"worker-1",high:"worker-new"}, "Specification":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Implement + Test":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Review":{low:"worker-1",medium:"worker-1",high:"worker-1"}, "Verify":{low:"worker-1",medium:"worker-1",high:"worker-1"} },
+    stages: [
+      {workflow:"Triage",workers:{low:"worker-1",medium:"worker-1",high:"worker-new"}}, {workflow:"Specification",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}},
+      {workflow:"Implement + Test",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}}, {workflow:"Review",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}}, {workflow:"Verify",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}},
+    ],
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
     complexity_factor:{low:1,medium:2,high:3}, work_cap_usd:{low:2,medium:4,high:8}, ntfy_topic:"factory", ntfy_server:"https://ntfy.sh", ntfy_owner_topic:"owner",
     brain_chain:[{cli:"codex",model:"gpt",provider:"openai",note:"first"},{cli:"claude",model:"sonnet",provider:"anthropic",note:"second"}],
@@ -33,11 +36,18 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   renderSettings(fetchMock); const user=userEvent.setup();
   expect(await screen.findByRole("heading",{name:"Pilot settings"})).toBeVisible();
   expect(screen.getByText("Automation and budgets")).toBeVisible(); expect(screen.getByText("Notifications and owner links")).toBeVisible(); expect(screen.getByText("Brain chain")).toBeVisible();
+  expect(screen.getByLabelText("Maximum work rounds")).toHaveValue(3);
+  expect(screen.getByLabelText("Maximum cap rescues")).toHaveValue(4);
+  expect(screen.getByText("Notification groups (notify_groups)")).toBeVisible();
+  expect(screen.getByLabelText("Notify group: owner")).toBeChecked();
+  expect(screen.getByLabelText("Notify group: progress")).not.toBeChecked();
   expect(screen.getByText("Unknown worker: worker-new")).toBeVisible();
-  const poll=screen.getByLabelText("Poll interval (seconds)"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Save settings"}));
+  const poll=screen.getByLabelText("Poll interval (seconds)"); await user.clear(poll); await user.type(poll,"15");
+  const rescues=screen.getByLabelText("Maximum cap rescues"); await user.clear(rescues); await user.type(rescues,"6");
+  await user.click(screen.getByLabelText("Notify group: progress")); await user.click(screen.getByRole("button",{name:"Save settings"}));
   await screen.findByText(/Settings saved/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
-  const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
+  const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings.max_cap_rescues).toBe(6); expect(body.settings.notify_groups).toEqual({owner:true,progress:true}); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
 });
 
 it("blocks strict routing to a worker outside the editable allow-list", async () => {
