@@ -378,7 +378,7 @@ test("shows retained Factory metrics and saves the overview", async ({ page }) =
   const activeWork = page.getByRole("region", { name: "Сейчас в работе" });
   const runningWork = activeWork.locator("article").filter({ hasText: "Implement the modern control-plane UI" });
   await expect(runningWork.getByText("Implement the modern control-plane UI")).toBeVisible();
-  await expect(runningWork.getByText("Поставил: владелец")).toBeVisible();
+  await expect(runningWork.getByText("поставил владелец")).toBeVisible();
   await expect(runningWork.getByText("Этап: не указан")).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute(
     "aria-current",

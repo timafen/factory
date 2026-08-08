@@ -21,10 +21,10 @@ const stageLabels: Record<string, string> = {
   Verify: "Проверка",
 };
 
-const originLabels: Record<string, string> = {
-  owner: "владелец",
-  assistant: "ассистент",
-  orchestrator: "оркестратор",
+const originDescriptions: Record<string, string> = {
+  owner: "поставил владелец",
+  assistant: "поставила Фабрика (управляющий)",
+  orchestrator: "поставила Фабрика (управляющий)",
 };
 
 function parseActiveWorkTitle(title: string) {
@@ -135,7 +135,7 @@ function ActiveWork({
               <article className="active-work-item" key={item.id}>
                 <strong>{parsed.title || "Работа без названия"}</strong>
                 <div className="active-work-facts">
-                  <span><UserRound size={13} /> Поставил: {metadata?.origin ? (originLabels[metadata.origin] ?? metadata.origin) : "не указано"}</span>
+                  <span><UserRound size={13} /> {metadata?.origin ? (originDescriptions[metadata.origin] ?? "постановщик не указан") : "постановщик не указан"}</span>
                   <span><CircleDot size={13} /> Этап: {stage ? `${parsed.progress ? `${parsed.progress} · ` : ""}${stage}` : "не указан"}</span>
                 </div>
               </article>

@@ -29,9 +29,9 @@ describe("Overview active work", () => {
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
     expect(within(section).getByText("Экран Обзор")).toBeVisible();
     expect(within(section).queryByText(/\[auto\]/)).not.toBeInTheDocument();
-    expect(within(section).getByText("Поставил: владелец")).toBeVisible();
+    expect(within(section).getByText("поставил владелец")).toBeVisible();
     expect(within(section).getByText("Этап: 3/5 · Разработка и тесты")).toBeVisible();
-    expect(within(section).getByText("Поставил: оркестратор")).toBeVisible();
+    expect(within(section).getByText("поставила Фабрика (управляющий)")).toBeVisible();
     expect(within(section).getByText("Этап: 4/5 · Ревью")).toBeVisible();
   });
 
@@ -45,15 +45,15 @@ describe("Overview active work", () => {
     });
 
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
-    expect(within(section).getByText("Поставил: владелец")).toBeVisible();
-    expect(within(section).getByText("Поставил: оркестратор")).toBeVisible();
+    expect(within(section).getByText("поставил владелец")).toBeVisible();
+    expect(within(section).getByText("поставила Фабрика (управляющий)")).toBeVisible();
   });
 
   it("does not invent a person or stage when metadata is absent", async () => {
     renderOverview({ now: { running: [{ id: "one", title: "Обычная работа" }] } }, {});
 
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
-    expect(within(section).getByText("Поставил: не указано")).toBeVisible();
+    expect(within(section).getByText("постановщик не указан")).toBeVisible();
     expect(within(section).getByText("Этап: не указан")).toBeVisible();
   });
 
