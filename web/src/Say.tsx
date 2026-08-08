@@ -209,7 +209,7 @@ export function SayView() {
         body: JSON.stringify({ text: said, proposal, intent: refineIntent.current }),
       });
       if (!r2.ok) throw new Error(`refine ${r2.status}`);
-      const data = await r2.json() as (Proposal & { answer?: string; mode: string });
+      const data = await r2.json() as (Proposal | { mode: "answer"; answer?: string });
       if (data.mode === "answer") {
         setAnswer(data.answer || "");
         speak(data.answer || "");
