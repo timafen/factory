@@ -166,7 +166,67 @@ def _http_err(e):
         return str(e)
 
 
+# ------------------------------------------------- денежный предохранитель ---
+# 8 августа кодекс сжёг НЕДЕЛЬНЫЙ лимит подписки за один день: ~200 задач за
+# сутки, из них 42 на одну работу. Счётчик долларов не видит кодекс, поэтому
+# защита считает то, что видит всегда: сколько задач создано за 24 часа.
+DAYFLAG_PATH = f"{HOME}/pilot/day_cap_flag.json"
+
+
+def _recent_tasks():
+    try:
+        ts = api("/tasks?limit=200").get("tasks") or []
+    except Exception:
+        return []
+    seen, out, now = set(), [], time.time()
+    for t in ts:
+        if t["id"] in seen:
+            continue
+        seen.add(t["id"])
+        c = (t.get("created_at") or "")[:19]
+        try:
+            age = now - calendar.timegm(time.strptime(c, "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            continue
+        if 0 <= age < 86400:
+            out.append(t)
+    return out
+
+
+def money_guard(conf, title):
+    """Бросает исключение, если создание задачи прожжёт лимиты подписок.
+    Работает по числу задач, а не по долларам: доллары кодекса мы пока
+    не видим, а число задач видим всегда и для всех провайдеров."""
+    base = base_title(title)
+    rec = _recent_tasks()
+    wcap = int(conf.get("work_day_cap", 12))
+    dcap = int(conf.get("day_task_cap", 120))
+    mine = sum(1 for t in rec if base_title(t.get("title", "")) == base)
+    if mine >= wcap:
+        if not is_stopped(conf, base):
+            pause_pipeline(conf, base)
+            notify(conf, "Остановил работу: сожгла дневной запас",
+                   base + "\n" + str(mine) + " задач за сутки при потолке "
+                   + str(wcap) + ". Это горящие деньги, а не прогресс. "
+                   "Продолжить можно, сняв работу с паузы в настройках.",
+                   priority="high", tags="money_with_wings")
+        raise RuntimeError("work_day_cap: %r %d/%d" % (base[:40], mine, wcap))
+    if len(rec) >= dcap:
+        flag = load(DAYFLAG_PATH, {}) or {}
+        day = time.strftime("%Y-%m-%d")
+        if flag.get("day") != day:
+            save(DAYFLAG_PATH, {"day": day})
+            notify(conf, "Дневной потолок задач исчерпан",
+                   str(len(rec)) + " задач за сутки при потолке " + str(dcap) +
+                   ". Новые этапы не создаю, пока окно не освободится. "
+                   "Потолок правится в настройках: day_task_cap.",
+                   priority="high", tags="money_with_wings")
+        raise RuntimeError("day_task_cap: %d/%d" % (len(rec), dcap))
+
+
 def create_task(body, conf=None):
+    if conf and str(body.get("title", "")).startswith(PREFIX):
+        money_guard(conf, body["title"])
     """Create a task robustly. Attempt chain:
     1. exact worker + repository (fast path when already advertised);
     2. route + same worker (lets the worker acquire the repo dynamically);

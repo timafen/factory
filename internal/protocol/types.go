@@ -796,6 +796,8 @@ type PilotSettings struct {
 	MaxWorkRounds       int                          `json:"max_work_rounds,omitempty"`
 	MaxCapRescues       int                          `json:"max_cap_rescues,omitempty"`
 	MaxLoopRescues      int                          `json:"max_loop_rescues,omitempty"`
+	WorkDayCap          int                          `json:"work_day_cap,omitempty"`
+	DayTaskCap          int                          `json:"day_task_cap,omitempty"`
 	NotifyGroups        map[string]bool              `json:"notify_groups,omitempty"`
 	StageBaseUSD        map[string]float64           `json:"stage_base_usd"`
 	ComplexityFactor    map[string]float64           `json:"complexity_factor"`
