@@ -78,7 +78,12 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
                       works: Record<string, WorkMeta> = {},
                       statuses: Record<string, { state: string; text: string }> = {}): Group[] {
   const openQ = new Set(
-    questions.filter((q) => q.status === "open" || q.status === "stuck").map((q) => q.task_id),
+    questions.filter((q) => q.status === "open").map((q) => q.task_id),
+  );
+  // Ответ уже есть, но исполнителя нет (лимит подписки): это не вопрос
+  // к хозяину, и подписывать это «ждёт твоего ответа» — врать.
+  const noWorkerQ = new Set(
+    questions.filter((q) => q.status === "no_worker" || q.status === "stuck").map((q) => q.task_id),
   );
   // Состояние вопроса по каждой задаче: открыт — ход владельца, отвечен —
   // ход оркестратора, нет вопроса — ещё никто не разбирался.
@@ -137,6 +142,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     }
     const live = g.items.find((i) => LIVE.includes(i.task.state));
     const waiting = g.items.find((i) => openQ.has(i.task.id));
+    const noWorker = g.items.find((i) => noWorkerQ.has(i.task.id));
     const passed = g.items.some((i) => i.verdict?.final_pass === true);
     const rework = g.items.some((i) => i.verdict?.final_pass === false);
     // Сорвалась — только если сорвалась ПОСЛЕДНЯЯ попытка. Одна упавшая
@@ -156,6 +162,8 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       g.status = { label: live.task.state === "queued" ? "ждёт исполнителя" : "идёт", tone: "live" };
     } else if (waiting) {
       g.status = { label: "ждёт твоего ответа", tone: "warn" };
+    } else if (noWorker) {
+      g.status = { label: "ответ есть, ждёт свободного исполнителя", tone: "warn" };
     } else if (passed) {
       g.status = { label: "работа принята", tone: "ok" };
     } else if (rework) {

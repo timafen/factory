@@ -489,7 +489,7 @@ function usePendingAnswers(): number {
         if (!r.ok) return;
         const d = (await r.json()) as { questions?: { status?: string }[] };
         const open = (d.questions ?? []).filter(
-          (q) => q.status === "open" || q.status === "stuck",
+          (q) => q.status === "open",
         ).length;
         if (alive) setN(open);
       } catch { /* тихо: цифра не критична */ }

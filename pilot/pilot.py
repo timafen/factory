@@ -1776,12 +1776,13 @@ def handle_answers(conf, workflows, workers, tasks):
     """An answered question resumes its pipeline from resume_stage."""
     stages = [s["workflow"] for s in conf["stages"]]
     for q in load_questions():
-        if q.get("status") != "answered" or not q.get("answer"):
+        if q.get("status") not in ("answered", "no_worker") or not q.get("answer"):
             continue
         # re-read right before acting: an external writer (UI, one-off script)
         # may have changed the record since the listing was taken.
         fresh = load(f"{QUESTION_DIR}/{q['id']}.json", None)
-        if not fresh or fresh.get("status") != "answered" or fresh.get("resumed_task_id"):
+        if (not fresh or fresh.get("status") not in ("answered", "no_worker")
+                or fresh.get("resumed_task_id")):
             continue
         q = fresh
         stage = q.get("resume_stage")
@@ -1841,16 +1842,23 @@ def handle_answers(conf, workflows, workers, tasks):
 
         tries = int(q.get("resume_tries", 0))
         if tries >= 5:
-            if q.get("status") != "stuck":
-                q["status"] = "stuck"
-                q["escalation_reason"] = ("не удаётся продолжить: нет здорового воркера "
-                                          "для стадии — исправь воркеров и ответь заново")
+            # Ответ уже есть — хозяин тут ни при чём. Исполнителей нет чаще
+            # всего из-за лимита подписки, а он проходит сам. Поэтому не
+            # сдаёмся навсегда, а пробуем раз в десять минут, честно
+            # подписав состояние: «жду свободного исполнителя».
+            if q.get("status") != "no_worker":
+                q["status"] = "no_worker"
+                q["escalation_reason"] = ("ответ есть; жду свободного исполнителя "
+                                          "(лимит подписки или воркеры недоступны)")
                 save(f"{QUESTION_DIR}/{q['id']}.json", q)
-                log(f"answer resume gave up for {q['id']} after {tries} tries")
-                notify(conf, "Не могу продолжить работу",
-                       f"{q['title']}\nНет здорового исполнителя для стадии {stage}.",
-                       priority="high", tags="warning", click=f"{UI_BASE}/answer")
-            continue
+                log(f"answer resume: {q['id']} ждёт свободного исполнителя (после {tries} попыток)")
+                notify(conf, "Ответ есть, исполнителей нет — жду",
+                       f"{q['title']}\nПродолжу сам, как только освободится исполнитель для {stage}.",
+                       tags="hourglass", click=f"{UI_BASE}/work")
+            if time.time() - float(q.get("last_resume_try") or 0) < 600:
+                continue
+            q["last_resume_try"] = time.time()
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
         try:
             r = create_task(body, conf)
             tid = r.get("task", {}).get("id")
