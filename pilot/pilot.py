@@ -3107,8 +3107,41 @@ def cycle(conf, state):
                         notify(conf, "Задача завершена и влита в main", base_title(title), tags="white_check_mark",
                                click=f"{UI_BASE}/tasks/{tid}")
                     else:
-                        notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{out[:300]}",
-                               priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
+                        # Конфликт слияния — рабочий случай, а не тупик: пока эта
+                        # работа шла, в main влилась соседняя. Возвращаем в
+                        # разработку с прямым наказом перебазироваться. Один раз:
+                        # если и после этого не влилось — зовём хозяина.
+                        if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
+                            note_cap_rescue(base_title(title), "MERGE")
+                            try:
+                                stages_all = [x["workflow"] for x in conf["stages"]]
+                                back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
+                                bidx = stages_all.index(back_st)
+                                bw = workers.get(stage_worker(conf, back_st, "medium", workers))
+                                bnw = workflows.get(back_st)
+                                if bw and bnw and bnw.get("enabled"):
+                                    create_task({"request_key": str(uuid.uuid4()),
+                                        "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
+                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n\n"
+                                            "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
+                                            "пока работа шла, main уехал вперёд. Сделай ровно это: "
+                                            "git fetch origin; git rebase origin/main; разреши конфликты, "
+                                            "сохранив и свою работу, и то, что уже в main; "
+                                            "git push --force-with-lease; больше ничего не меняй.")[:20000],
+                                        "worker_id": bw["id"], "repository_id": rid,
+                                        "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                        "workflow_revision_id": bnw["revision_id"]}, conf)
+                                    notify(conf, "Мёрж-конфликт: отправил на перебазирование",
+                                           base_title(title), tags="wrench")
+                                else:
+                                    raise RuntimeError("нет воркера/сценария")
+                            except Exception as e:
+                                log("merge_conflict_return_error", repr(e))
+                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{out[:300]}",
+                                       priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
+                        else:
+                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{out[:300]}",
+                                   priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     cmd = conf.get("deploy_staging_cmd")
                     if ok and cmd:
                         rc, dout = run_shell(cmd)
