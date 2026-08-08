@@ -21,6 +21,7 @@ const response: PilotSettingsResponse = {
     ],
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
     complexity_factor:{low:1,medium:2,high:3}, work_cap_usd:{low:2,medium:4,high:8}, ntfy_topic:"factory", ntfy_server:"https://ntfy.sh", ntfy_owner_topic:"owner",
+    notify_groups:{questions:true,stuck:false,money:true,done:true,routine:false},
     brain_chain:[{cli:"codex",model:"gpt",provider:"openai",note:"first"},{cli:"claude",model:"sonnet",provider:"anthropic",note:"second"}],
   },
 };
@@ -44,6 +45,27 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   await screen.findByText(/Settings saved/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
   const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
+});
+
+it("shows every notification group in Russian and saves the changed selection", async () => {
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({...response,settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
+  expect(screen.getByLabelText("Работа встала")).not.toBeChecked();
+  await user.click(screen.getByLabelText("Работа встала")); await user.click(screen.getByRole("button",{name:"Save settings"}));
+  await screen.findByText(/Settings saved/);
+  const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
+  expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,routine:false});
+});
+
+it("uses pilot defaults when notification groups are absent", async () => {
+  const settingsWithoutGroups={...response.settings}; delete settingsWithoutGroups.notify_groups;
+  renderSettings(vi.fn(async()=>new Response(JSON.stringify({...response,settings:settingsWithoutGroups}),{status:200,headers:{"Content-Type":"application/json"}})));
+  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач"]) expect(await screen.findByLabelText(label)).toBeChecked();
+  expect(screen.getByLabelText("Рабочая рутина")).not.toBeChecked();
 });
 
 it("blocks strict routing to a worker outside the editable allow-list", async () => {

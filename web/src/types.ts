@@ -38,6 +38,7 @@ export interface Worker {
 
 export type PilotStage = "Triage" | "Specification" | "Implement + Test" | "Review" | "Verify";
 export type PilotTier = "low" | "medium" | "high";
+export type PilotNotificationGroup = "questions" | "stuck" | "money" | "done" | "routine";
 
 // Этапы приходят с сервера списком, а не словарём: порядок этапов —
 // это и есть конвейер, и его нельзя терять при сериализации.
@@ -70,6 +71,7 @@ export interface PilotSettings {
   ntfy_topic: string;
   ntfy_server: string;
   ntfy_owner_topic: string;
+  notify_groups?: Partial<Record<PilotNotificationGroup, boolean>>;
   brain_chain: Array<{ cli: string; model: string; provider: string; note?: string }>;
 }
 
