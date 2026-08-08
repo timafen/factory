@@ -2,13 +2,11 @@
 
 ## HEAD
 
-- Status: Implemented — готово к ревью.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/50ff8605-428-478cd5f2-921`.
-- Head commit: смотри `git rev-parse --short HEAD` после этого коммита.
-- Что изменилось: страница принятой задачи показывает человеческую часть Verify-отчёта; если её нет — результат последней попытки, вместо пустого «Итог».
-- Что изменилось: служебные строки отчёта (`BRANCH:`, `HEAD:`, `PUSHED:`, `TRY:`, одиночные `PASS`/`APPROVE`/`REQUEST CHANGES`) скрываются из текста; неизвестные строки остаются видимыми.
-- Evidence: `npx tsc -p tsconfig.app.json --noEmit` → PASS; `npx vitest run src/Summary.test.tsx` → 4/4 PASS; `npx eslint src/Summary.tsx src/Summary.test.tsx src/whatChanged.ts` → PASS; `npm run build` → PASS.
-- One next action: открыть принятую задачу в `/tasks/<task-id>` и подтвердить блок на реальном отчёте.
+- Head commit: `41cc81c` (проверенная реализация).
+- Evidence: `npm ci`; `npx vitest run src/Summary.test.tsx` → 4/4 PASS; `npm run typecheck`, `npm run lint`, `npm run build` → PASS; `go build ./...` → PASS. Полный `npm test`: 71 PASS, 15 известных падений только в неизменённом `src/App.test.tsx`; `go test ./...` блокируется теми же неизменёнными ошибками компиляции `internal/controlplane/pilot_config_test.go`.
+- One next action: человек сливает ветку в `main`, развёртывает и визуально открывает принятую задачу.
 
 ## LOG
 
@@ -19,3 +17,16 @@
 Целевые 4 теста прошли, TypeScript и eslint изменённых файлов чистые, production build прошёл. Полный `vitest run`: 71 passed, 15 известных падений — все в неизменённом `src/App.test.tsx`, не связаны с этим diff. `go build ./...` — чисто (Go-код не менялся).
 
 Ветка запушена на `origin` и подтверждена через `git ls-remote`.
+
+### 2026-08-08 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| «Что изменилось» показывает человеческий текст Verify-отчёта | `npx vitest run src/Summary.test.tsx` | PASS: строка с описанием показана, служебные поля удалены. |
+| При отсутствии Verify берётся последняя попытка | тот же тест | PASS: fallback на результат попытки. |
+| Служебный отчёт не оставляет пустой блок | тот же тест | PASS: показан безопасный текст `EMPTY_CHANGELOG`. |
+| Неизвестные строки не теряются | тот же тест | PASS: обе неизвестные строки сохранены. |
+| Сборка и типы не регрессировали | `npm run typecheck`; `npm run lint`; `npm run build` | PASS. |
+| Смежный Go-код собирается | `go build ./...` | PASS. |
+
+Полный `npm test` воспроизводит 71 PASS и 15 падений только в `src/App.test.tsx`; это известная базовая проблема, не затронутая этим коммитом. Полный `go test ./...` не стартует для `internal/controlplane` из-за неизменённого `pilot_config_test.go`, тогда как `go build ./...` проходит. `git diff --check origin/main...HEAD` — чисто.
