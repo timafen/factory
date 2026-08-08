@@ -7,11 +7,11 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-- Status: READY — чистая поставка экрана «Обзор» реализована и проверена.
+- Status: READY — ветка пересобрана от актуального `origin/main`, поставка экрана «Обзор» проверена.
 - Branch: `factory/2ea139c6-a73-e5b02bb1-28d`.
-- Head commit: `085f673` (содержательная реализация; следом только эта запись карточки).
+- Head commit: `7dd226c` (фактическая вершина перед этой итоговой записью).
 - What changed: активная работа показывает название, постановщика и локализованный этап; некорректный JSON `/works` явно помечает метаданные неполными.
-- Evidence: Go target PASS; Overview Vitest 5/5 PASS; changed-files ESLint PASS; typecheck/build PASS; `git diff origin/main --stat` содержит только 7 файлов задачи.
+- Evidence: Go target PASS; Overview Vitest 5/5 PASS; changed-files ESLint PASS; typecheck/build PASS; diff содержит ровно 7 файлов: `dashboard_http.go`, `dashboard_http_test.go`, CARD-0030, `web/dist/index.html`, один bundle, `Overview.tsx`, `Overview.test.tsx`.
 - One next action: проверить чистую поставку и влить её в `main`.
 
 ## LOG
@@ -41,3 +41,7 @@
 ### 2026-08-08 — Implement
 
 Изменение экрана «Обзор» перенесено на чистую ветку от свежего `main`: в поставке остались только серверный счётчик, UI, тесты, собранный bundle и эта карточка. Ошибка `json()` ответа `/works` теперь выставляет предупреждение о неполных метаданных; сценарий закреплён отдельным Vitest-тестом. Точечные Go/Vitest/ESLint, TypeScript и production build прошли; полные проверки сохраняют известные несвязанные сбои свежего `main` (catalog route, старые UI-ожидания и lint других экранов).
+
+### 2026-08-08 — Implement
+
+Ветка повторно собрана поверх актуального `origin/main` переносом двух коммитов задачи. Diff подтверждает ровно 7 файлов задачи; целевые Go/Vitest/ESLint, TypeScript, Go build и production build прошли. Полные наборы воспроизводят только базовые сбои в неизменённых `TestHTTPManagedRepositoryCatalog`, `App.test.tsx` и lint других экранов.
