@@ -159,7 +159,8 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
     } else if (passed) {
       g.status = { label: "работа принята", tone: "ok" };
     } else if (rework) {
-      g.status = { label: "на доработку", tone: "warn" };
+      // Ревью вернуло работу — это ход конвейера, а не владельца.
+      g.status = { label: "вернули на доработку, продолжаем", tone: "live" };
     } else if (allCancelled) {
       g.status = { label: "отменена", tone: "muted" };
     } else {
@@ -204,7 +205,7 @@ function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
   // от него по ней ничего не ждут и ждать не будут.
   if (g.meta?.closed) return "archive";
   if (g.status.label === "ждёт твоего ответа") return "waiting";
-  if (g.status.tone === "bad" || g.status.label === "на доработку") return "waiting";
+  if (g.status.tone === "bad") return "waiting";
   // Пока ход оркестратора — это не дело владельца, ему туда смотреть незачем.
   if (g.status.label === "оркестратор ответил, продолжаем") return "live";
   if (g.status.label.includes("оркестратор")) return "live";
