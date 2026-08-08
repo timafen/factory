@@ -7,12 +7,23 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — awaiting human merge. Branch: `factory/d6cf72b6-b10-192d4077-721`. Head commit: `ef43533`.
+Status: Verified PASS — awaiting human merge. Branch: `factory/aa9fa343-b22-839eaa45-305`. Head commit: `4c6992e`.
 What changed: в Settings добавлены пять русских переключателей групп уведомлений с каноническими ключами и умолчаниями пилота.
-Evidence: чистая установка `npm ci`; `npx tsc -p tsconfig.app.json --noEmit`, `npx vite build`, `go build ./...` и `npx vitest run src/Settings.test.tsx` (5/5) — PASS. Полный `npx vitest run`: 15 известных падений только в неизменённом `src/App.test.tsx`, 69/84 всего; они не блокируют эту поставку.
+Evidence: чистая установка `npm ci`; `npm run typecheck`, `npm run build`, `go build ./...` и `npx vitest run src/Settings.test.tsx` (5/5) — PASS. Полный `npx vitest run`: 15 известных падений только в неизменённом `src/App.test.tsx`, 73/88 всего; `go test ./...` не компилирует старый `internal/controlplane/pilot_config_test.go`.
 Next action: человек проверяет и объединяет ветку в `main`; выпуск выполняется через `fx factory release` после merge.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `npx vitest run src/Settings.test.tsx` | PASS: найдены все пять русских переключателей |
+| Значения берутся из `notify_groups` и умолчаний | тест `uses pilot defaults when notification groups are absent` | PASS: первые четыре включены, `routine` выключена |
+| Сохранение сохраняет полный выбор | тест `shows every notification group in Russian and saves the changed selection` | PASS: PUT содержит `questions`, `stuck`, `money`, `done`, `routine` |
+| Сборка и типы | `npm run typecheck`; `npm run build`; `go build ./...` | PASS |
+| Смежные проверки | `npx vitest run`; `go test ./...`; `npm run test:browser` | 15 старых падений `App.test.tsx`; старый `pilot_config_test.go` не компилирует; Playwright падает на прежнем `Factory overview` до Settings |
+| Чистота предметного diff | `git diff --check`; `git diff --name-only 3a055d8...3ff898b` | PASS: семь файлов задачи, без пробельных ошибок |
 
 ### 2026-08-08 — Verify
 
