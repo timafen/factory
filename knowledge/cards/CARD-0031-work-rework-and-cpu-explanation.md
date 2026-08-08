@@ -3,14 +3,24 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge
-- Branch: `factory/c38668e1-00f-7f51cdfb-e3e`
-- Head commit: `358f531` (проверенная предметная реализация на `origin/main`; следующий коммит добавит только результат верификации)
+- Branch: `factory/15b971af-c84-e1765036-dbe`
+- Head commit: `3710ca0` (перед записью результатов Verify)
 - What changed: метка «заново» ставится на повторно запущенной текущей стадии; пройденные стадии сохраняют исторический статус.
 - What changed: обзор объясняет загрузку процессора числом активных работ и фактическими слотами, не выдумывая занятые места при отсутствии данных API.
-- Evidence: `go test ./...`, `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых Vitest-тестов и production build — passed; diff к `origin/main` — ровно 5 предметных файлов.
-- Next action: слить проверенную ветку в `main` и выполнить релиз, затем открыть `/work` для визуальной приёмки на production.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых Vitest-тестов и production build — PASS; полный Vitest и Playwright воспроизвели известные внешние сбои, не затрагивающие предметный diff.
+- Next action: человеку проверить evidence ниже и принять решение о слиянии.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| «заново» только на текущем повторном этапе | `cd web && npx vitest run src/Work.test.ts src/Overview.test.ts` | PASS: 7/7; текущая повторная стадия — `again`, пройденные справа — `done` |
+| Причина CPU отражает работу и реальные слоты | те же целевые тесты | PASS: число активных работ и `busy/capacity` передаются; без slots текст не придумывает занятые места |
+| Типы и production build | `cd web && npx tsc -p tsconfig.app.json --noEmit && npm run build` | PASS |
+| Полные регрессии | `cd web && npx vitest run`; `npx playwright test`; `go test ./...` | Известные внешние сбои: Vitest 67 passed, 15 failed только в неизменённом `App.test.tsx`; Playwright ожидает `Factory overview` и не запускает 17 остальных; Go не компилирует неизменённый `internal/controlplane/pilot_config_test.go` из-за `PilotConfig.Stages` |
+| Чистота поставки | `git diff --check origin/main...HEAD`; `git diff --name-only origin/main...HEAD` | PASS: только CARD-0030, CARD-0031, `Work`/`Overview` и их тесты |
 
 ### 2026-08-08 — Implement
 
@@ -30,3 +40,7 @@
 | Чистота доставки | `git diff --check origin/main...HEAD` | passed; 5 предметных файлов до записи этого результата |
 
 Полный `npx vitest run`: 67 passed, 15 известных падений только в неизменённом `App.test.tsx`. Полный Playwright-набор остановился на неизменённом тесте, который ищет английский заголовок `Factory overview`, тогда как уже в `origin/main` интерфейс показывает «Главное»; 17 тестов не запускались. Это не связано с предметным diff карточки.
+
+### 2026-08-08 — Implement
+
+Этап закрыт по утверждённой владельцем совокупности автоматических доказательств: merge `a721b1f` штатно выпущен через `fx factory release` с health-check панели. Повторный запуск подтвердил 7/7 предметных тестов, typecheck и production build. Визуальный вход в production не является воротами этапа, поскольку учётные данные есть только у владельца; известные внешние падения вынесены в `CARD-0030`.
