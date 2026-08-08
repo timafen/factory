@@ -334,7 +334,7 @@ function ProgressEvent({ event, summary }: { event: AttemptEvent; summary: Event
   );
 }
 
-function AttemptRow({ attempt, current, taskId }: { attempt: Attempt; current: boolean; taskId: string }) {
+function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean; taskId: string }) {
   const [open, setOpen] = useState(current);
   return (
     <div className="attempt-row">
