@@ -19,6 +19,7 @@ Planner layer (epics):
   the same mechanism later.
 """
 import calendar
+import io
 import json, re, subprocess, time, urllib.request, urllib.error, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
