@@ -81,12 +81,29 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/workers/{worker_id}/claims", api.claim)
 	mux.HandleFunc("GET /api/v1/workers", api.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{worker_id}", api.getWorker)
-	mux.HandleFunc("GET /api/v1/workers/{worker_id}/repository-options", api.getWorkerRepositoryOptions)
 	mux.HandleFunc("GET /api/v1/repositories", api.listManagedRepositories)
 	mux.HandleFunc("POST /api/v1/repositories", api.createManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}", api.getManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}/readiness", api.getManagedRepositoryReadiness)
 	mux.HandleFunc("PUT /api/v1/repositories/{repository_id}/enabled", api.setManagedRepositoryEnabled)
+	mux.HandleFunc("GET /api/v1/pipeline", api.getPipeline)
+	mux.HandleFunc("PUT /api/v1/pipeline", api.putPipeline)
+	mux.HandleFunc("GET /api/v1/cards", api.listCards)
+	mux.HandleFunc("GET /api/v1/epics", api.listEpics)
+	mux.HandleFunc("POST /api/v1/epics/{epic_id}/start", api.startEpic)
+	mux.HandleFunc("DELETE /api/v1/epics/{epic_id}", api.deleteEpic)
+	mux.HandleFunc("GET /api/v1/dashboard", api.getDashboard)
+	mux.HandleFunc("GET /api/v1/works", api.getWorks)
+	mux.HandleFunc("GET /api/v1/limits", api.getLimits)
+	mux.HandleFunc("POST /api/v1/limits/{provider}", api.setProvider)
+	mux.HandleFunc("GET /api/v1/access", api.listAccess)
+	mux.HandleFunc("POST /api/v1/access/{scope}", api.setAccess)
+	mux.HandleFunc("GET /api/v1/questions", api.listQuestions)
+	mux.HandleFunc("GET /api/v1/verdicts", api.listVerdicts)
+	mux.HandleFunc("GET /api/v1/verdicts/{task_id}", api.getVerdict)
+	mux.HandleFunc("POST /api/v1/questions/{question_id}/answer", api.answerQuestion)
+	mux.HandleFunc("DELETE /api/v1/questions/{question_id}", api.dismissQuestion)
+	mux.HandleFunc("GET /api/v1/cards/content", api.getCard)
 	mux.HandleFunc("GET /api/v1/workflows", api.listWorkflows)
 	mux.HandleFunc("POST /api/v1/workflows", api.createWorkflow)
 	mux.HandleFunc("GET /api/v1/workflows/{workflow_id}", api.getWorkflow)
@@ -422,15 +439,6 @@ func (a *API) getWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, worker)
-}
-
-func (a *API) getWorkerRepositoryOptions(w http.ResponseWriter, r *http.Request) {
-	options, err := a.store.WorkerRepositoryOptions(r.Context(), r.PathValue("worker_id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"repositories": options})
 }
 
 func (a *API) listManagedRepositories(w http.ResponseWriter, r *http.Request) {

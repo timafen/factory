@@ -22,3 +22,12 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+// Ярлык на домашнем экране: телефон считает сайт приложением только если есть
+// служебный работник. Регистрируем отсюда, а не из страницы — политика
+// безопасности запрещает встроенные скрипты, и правильно делает.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

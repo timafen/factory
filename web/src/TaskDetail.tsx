@@ -11,6 +11,9 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { SpeakButton } from "./Speak";
+import { TaskSummary } from "./Summary";
+import { LiveActivity } from "./Live";
 import { invalidateControlPlane } from "./controlPlaneQueries";
 import { duration, eventSummary, runtimeLabel, type EventSummary } from "./format";
 import { useVisibleInterval } from "./polling";
@@ -227,10 +230,23 @@ export function TaskDetail({
         <div className="warning-banner"><Clock3 size={17} /> Cancellation requested. The worker will stop this task on its next heartbeat.</div>
       )}
 
+      <TaskSummary
+        taskId={id}
+        title={data.task.title}
+        result={(data.attempts ?? []).slice().reverse().find((a) => a.result)?.result}
+        error={(data.attempts ?? []).slice().reverse().find((a) => a.error)?.error}
+      />
+
+      <LiveActivity attemptId={latestAttempt?.id} running={data.task.state === "running"} />
+
       <div className="detail-grid">
         <section className="panel detail-main">
-          <PanelHeading title="Context" />
-          <div className="long-copy">{data.context}</div>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 600, padding: "4px 0" }}>
+              Задание агенту (техническое) — развернуть
+            </summary>
+            <div className="long-copy" style={{ marginTop: 8 }}>{data.context}</div>
+          </details>
         </section>
         <section className="panel">
           <PanelHeading title="Assignment" />
@@ -247,8 +263,12 @@ export function TaskDetail({
       </div>
 
       <section className="panel">
-        <PanelHeading title="Resolved prompt" aside={data.workflow ? `${data.workflow.title} · revision ${data.workflow.revision_number}` : "Blank task"} />
-        <div className="long-copy">{data.resolved_prompt}</div>
+        <details>
+          <summary style={{ cursor: "pointer", fontWeight: 600, padding: "4px 0" }}>
+            Полный промпт (инструкция + контекст) — развернуть
+          </summary>
+          <div className="long-copy" style={{ marginTop: 8 }}>{data.resolved_prompt}</div>
+        </details>
       </section>
 
       <section className="panel progress-panel">
@@ -273,7 +293,7 @@ export function TaskDetail({
         <section className="panel attempts-panel">
           <PanelHeading title="Attempts" aside={`${data.attempts?.length ?? 0} total`} />
           {[...(data.attempts ?? [])].reverse().map((attempt, index) => (
-            <AttemptRow key={attempt.id} attempt={attempt} current={index === 0} />
+            <AttemptRow key={attempt.id} attempt={attempt} current={index === 0} taskId={id} />
           ))}
         </section>
       )}
@@ -314,7 +334,7 @@ function ProgressEvent({ event, summary }: { event: AttemptEvent; summary: Event
   );
 }
 
-function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean }) {
+function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean; taskId: string }) {
   const [open, setOpen] = useState(current);
   return (
     <div className="attempt-row">
@@ -328,8 +348,8 @@ function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean }
             <div><dt>Started</dt><dd>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "Not started"}</dd></div>
             <div><dt>Duration</dt><dd>{duration(attempt.started_at ?? attempt.created_at, attempt.completed_at)}</dd></div>
           </dl>
-          {attempt.result && <div className="attempt-output success-output"><strong>Result</strong><pre>{attempt.result}</pre></div>}
-          {attempt.error && <div className="attempt-output error-output"><strong>Error</strong><pre>{attempt.error}</pre></div>}
+                    {attempt.result && <div className="attempt-output success-output"><strong>Технический отчёт</strong><SpeakButton text={attempt.result} /><pre>{attempt.result}</pre></div>}
+                    {attempt.error && <div className="attempt-output error-output"><strong>Техническая ошибка</strong><SpeakButton text={attempt.error} /><pre>{attempt.error}</pre></div>}
           {!attempt.result && !attempt.error && <div className="quiet-empty">No result or error recorded yet.</div>}
         </div>
       )}
