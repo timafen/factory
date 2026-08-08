@@ -239,6 +239,7 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   auto_merge: true,
   auto_answer: false,
   max_stage_attempts: 2,
+  max_work_rounds: 3,
   max_parallel_subtasks: 2,
   day_cap_usd: 20,
   deploy_staging_cmd: "deploy",
