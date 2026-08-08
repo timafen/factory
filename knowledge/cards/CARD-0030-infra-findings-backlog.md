@@ -7,14 +7,18 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-- Status: READY — этап активной работы передаётся структурированным полем.
-- Branch: `factory/3644cbcb-9f6-ff940316-b1b`.
-- Head commit: `cffd2fc` (содержательная реализация; следующий коммит обновляет только карточку).
-- What changed: `/api/v1/works` берёт этап из сохранённого workflow задачи; «Обзор» не разбирает заголовок для показа этапа.
-- Evidence: `go test ./...`, Go build, Vitest 5/5, TypeScript/Vite build — PASS.
-- One next action: Review проверяет ровно два пункта из записи Implement ниже.
+- Status: READY — данные активной работы сохраняются при сетевом отказе метаданных.
+- Branch: `factory/c27c6f88-465-5fb6cfc7-9bb`.
+- Head commit: `69af0d4` (содержательная реализация; следующий коммит обновляет только карточку).
+- What changed: dashboard и `/api/v1/works` обрабатываются независимо; при rejected `/works` экран показывает dashboard и предупреждает о неполных сведениях.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, Vitest 6/6, `npm run build` — PASS; lint блокируют прежние ошибки вне изменения.
+- One next action: Review повторно проверяет только сетевой отказ `/api/v1/works`.
 
 ## LOG
+
+### 2026-08-08 — Implement
+
+`Promise.all` заменён на независимую обработку результатов через `Promise.allSettled`: успешный `/api/v1/dashboard` больше не теряется при rejected fetch `/api/v1/works`, а интерфейс показывает предупреждение о неполных сведениях. Регрессионный тест моделирует именно `TypeError` сетевого запроса. Доказательство: TypeScript — PASS, `Overview.test.tsx` — 6/6 PASS, Vite build — PASS. Общий lint остаётся красным на прежних ошибках, включая старый вызов `pull()` в `useEffect`.
 
 ### 2026-08-08 — Verify
 
