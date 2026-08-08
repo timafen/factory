@@ -66,6 +66,45 @@ func TestPilotConfigStoreReadsAndWritesProductionStageShape(t *testing.T) {
 	}
 }
 
+func TestPilotConfigStoreReadsCurrentMainFormatWithDefaults(t *testing.T) {
+	settings := validPilotSettings()
+	legacyStages := make(map[string]protocol.PilotStageWorkers, len(settings.Stages))
+	for _, stage := range settings.Stages {
+		legacyStages[stage.Workflow] = stage.Workers
+	}
+	body, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["stages"], _ = json.Marshal(legacyStages)
+	delete(fields, "max_work_rounds")
+	delete(fields, "max_cap_rescues")
+	delete(fields, "notify_groups")
+	body, _ = json.Marshal(fields)
+	path := filepath.Join(t.TempDir(), "config-from-main.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := NewPilotConfigStore(path).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read.Settings.Stages) != len(pilotStages) || read.Settings.Stages[0].Workflow != "Triage" {
+		t.Fatalf("normalized stages = %#v", read.Settings.Stages)
+	}
+	if read.Settings.MaxWorkRounds != defaultMaxWorkRounds || read.Settings.MaxCapRescues != defaultMaxCapRescues {
+		t.Fatalf("defaults = rounds %d, rescues %d", read.Settings.MaxWorkRounds, read.Settings.MaxCapRescues)
+	}
+	if !read.Settings.NotifyGroups["owner"] || read.Settings.NotifyGroups["progress"] {
+		t.Fatalf("notify defaults = %#v", read.Settings.NotifyGroups)
+	}
+}
+
 func writePilotFixture(t *testing.T, settings protocol.PilotSettings) (*PilotConfigStore, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
