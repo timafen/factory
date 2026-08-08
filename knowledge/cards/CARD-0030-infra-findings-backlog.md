@@ -7,10 +7,10 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: ветка пересобрана с нуля от актуального `origin/main`, замечание проверки о посторонних 24 файлах устранено. Branch: `factory/af1ffd51-c1e-39c7a04a-7d9`. Head commit: `2a6530b` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: перенесены только правки экрана Settings — `web/src/Settings.tsx` и `web/src/Settings.test.tsx` (русские названия полей и подсказка-пояснение к каждому); больше в diff к `origin/main` ничего нет.
-Evidence: `git diff --name-only origin/main` → ровно 2 файла; `npx tsc -p tsconfig.app.json --noEmit` — PASS; `npx vitest run src/Settings.test.tsx` — 4/4 PASS; `npx eslint src/Settings.tsx src/Settings.test.tsx` — PASS; `npm run build` — PASS. Полный `npx vitest run` даёт те же 15 известных падений в неизменённом `App.test.tsx`, что и на `origin/main` (см. ниже) — не связаны с этой правкой.
-Next action: слить ветку в `main`.
+BLOCKED: full suite не проходит; ветка содержит незаявленные изменения помимо Settings. Branch: `factory/af1ffd51-c1e-39c7a04a-7d9`. Head commit: `089c270`.
+What changed: относительно `origin/main` изменены 6 файлов, включая `pilot/pilot.py`, `web/src/App.tsx` и `web/src/Work.tsx`; это противоречит заявлению о двух файлах Settings.
+Evidence: `npx vitest run src/Settings.test.tsx` — PASS (4/4); typecheck, lint и build — PASS. `go test ./...` — FAIL: `internal/controlplane/pilot_config_test.go` не компилируется. Целевой Playwright — FAIL: `e2e/control-plane.spec.ts:1107` ожидает устаревший заголовок `Pilot settings`.
+Next action: вернуть поставку к изолированным Settings-изменениям и обновить e2e-проверку русских текстов, затем повторить verify.
 
 ## LOG
 
@@ -19,6 +19,17 @@ Next action: слить ветку в `main`.
 Прошлая поставка (`factory/b2ac3700-bbb-471a9799-086`, HEAD `4725a7e`) была основана на устаревшем `main` и тянула 24 несвязанных файла (intake, pilot, ops, экраны Work/Overview, навигация). По решению владельца ветку пересобрали с нуля: `git fetch origin`, новая ветка от свежего `origin/main` (`9e46f22`), затем `git checkout 4725a7e -- web/src/Settings.tsx web/src/Settings.test.tsx` — только эти два файла, без merge/rebase старой ветки. `git diff --name-only origin/main` подтверждает ровно 2 файла. Проверки: `npx tsc -p tsconfig.app.json --noEmit`, `npx vitest run src/Settings.test.tsx` (4/4), `npx eslint`, `npm run build` — все PASS.
 
 ### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Русские названия полей Settings | `npx vitest run src/Settings.test.tsx` | PASS: 4/4, включая русские labels |
+| Пояснение к каждой группе и полю | тот же тест и typecheck | PASS: тест проверяет пояснения; обязательный `hint` в типах компонентов не допускает поле без него |
+| Сохранение настроек | тот же тест | PASS: PUT содержит изменённый `poll_seconds` и `_note` |
+| Полный Go-suite | `go clean -testcache && go test ./...` | FAIL: `pilot_config_test.go` использует несовместимый тип `PilotConfig.Stages` |
+| Browser-проверка Settings | `npx playwright test -g 'edits pilot settings from the Settings screen'` | FAIL: сценарий ожидает английский `Pilot settings` в строке 1107 |
+| Состав поставки | `git diff --name-only origin/main...HEAD` | FAIL: 6 файлов вместо заявленных 2; добавлены несвязанные `pilot/pilot.py`, `App.tsx`, `Work.tsx` |
+
+Статус: BLOCKED — релиз и слияние не выполнялись.
 
 | Критерий | Проверка | Результат |
 | --- | --- | --- |
