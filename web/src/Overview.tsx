@@ -47,6 +47,14 @@ const card: React.CSSProperties = {
 };
 const muted = "var(--text-muted, #8a94a6)";
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function cpuLoadExplanation(running: number, slots?: { busy: number; capacity: number }) {
+  if (slots) {
+    return `Причина загрузки процессора: активно работ ${running}; занято мест ${slots.busy} из ${slots.capacity}.`;
+  }
+  return `Причина загрузки процессора: активно работ ${running}. Данных о занятых местах нет.`;
+}
+
 function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "bad" | "muted" }) {
   const c = { ok: ["#16341f", "#7ee2a8"], warn: ["#3a2f16", "#e0cf9f"],
               bad: ["#3b1d1d", "#ffb4b4"], muted: ["#22262f", "#8a94a6"] }[tone];
@@ -234,6 +242,11 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                 </div>
                 {h.cpu && bar("Процессор", h.cpu.percent, h.cpu.state,
                               h.cpu.load1 + " из " + h.cpu.cores + " ядер")}
+                {h.cpu && (
+                  <div style={{ fontSize: 12, color: muted, marginTop: 5 }}>
+                    {cpuLoadExplanation(running, h.slots)}
+                  </div>
+                )}
                 {h.memory && bar("Память", h.memory.percent, h.memory.state,
                                  "свободно " + h.memory.available_gb + " ГБ")}
                 {h.disk && bar("Диск", h.disk.percent, h.disk.state,
