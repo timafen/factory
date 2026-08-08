@@ -1,16 +1,16 @@
 # Infrastructure findings backlog
 
 ### 2026-08-08 — Экран настроек pilot
-На ветке `factory/16f498d1-b11-e78d8f37-f17` добавлены безопасный API и `/settings` для `pilot/config.json`.
+На ветке `factory/ddaa8de1-fa2-66c96daa-db5` (проверенный HEAD `b279e48`) добавлены безопасный API и `/settings` для `pilot/config.json`.
 Список worker ID впервые берётся из уже известных control-plane исполнителей и дальше хранится в настройках; default остаётся `allow_any_worker=true`.
 Доказательство: `go test ./...`, `npm test`, `npm run lint`, `npm run build` (результаты зафиксированы в delivery report).
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: экран Settings и смежный Workers E2E проходят полностью. Branch: `factory/ddaa8de1-fa2-66c96daa-db5`. Head commit: `d39ae6e`.
-What changed: Workers-фикстура поддерживает lease синтетической активной задачи и обновляет регистрацию worker непосредственно перед проверкой экрана.
-Evidence: `npm run test:browser` — 18 passed; `go test ./...`, Go build, Vitest (74 tests), ESLint, TypeScript и Vite build — PASS.
-Next action: открыть `/settings` в среде проекта и принять изменение.
+READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
+What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
+Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
+Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
 
 ## LOG
 
@@ -27,3 +27,11 @@ Next action: открыть `/settings` в среде проекта и прин
 ### 2026-08-08 — Implement
 
 Падение Workers оказалось временной гонкой фикстуры: 30-секундные online-окно worker и lease активной попытки истекали во время последовательного suite. Тест поддерживает lease до своего запуска и посылает свежую регистрацию `Build Mac` перед открытием `/workers`. Полный `npm run test:browser` прошёл: 18/18; Go tests/build и frontend test/lint/typecheck/build также прошли.
+
+### 2026-08-08 — Implement
+
+Поле Configuration note теперь всегда видно и позволяет создать отсутствующий `_note`; регрессионный Vitest проверяет пустое поле и отправку новой заметки. Исправлены фактические branch/HEAD исходной реализации. Доказательство: `go test ./...`, `go build ./...`, `npm test -- --run` (75), `npm run lint`, `npm run typecheck`, `npm run build` и `npm run test:browser` (18) — PASS.
+
+### 2026-08-08 — Implement
+
+В HEAD записан последний содержательный коммит `5d49ada`. Верхний коммит поставки является служебной правкой только этой карточки; при проверке HEAD допустим как родитель вершины ветки. Содержательная реализация и результаты её проверок не изменялись.

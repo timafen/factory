@@ -6,7 +6,6 @@ import type {
   MetricsWindow,
   ManagedRepository,
   ManagedRepositoryReadiness,
-  WorkerRepositoryOption,
   TaskPage,
   TaskDetail,
   Worker,
@@ -23,6 +22,8 @@ import type {
   TestAutomationResult,
   LegacyPollerMigration,
   LegacyPollerSelection,
+  PipelineConfig,
+  CardSummary,
   PilotSettings,
   PilotSettingsResponse,
 } from "./types";
@@ -80,7 +81,7 @@ export const api = {
       `/api/v1/metrics/summary?${new URLSearchParams({ window })}`,
     ),
   tasks: async (cursor = "") => {
-    const query = new URLSearchParams({ limit: "50" });
+    const query = new URLSearchParams({ limit: "200" });
     if (cursor) query.set("cursor", cursor);
     const page = await request<{ tasks: TaskPage["tasks"] | null; next_cursor: string | null }>(
       `/api/v1/tasks?${query}`,
@@ -93,10 +94,6 @@ export const api = {
       .map(normalizeWorker),
   worker: async (id: string) =>
     normalizeWorker(await request<Worker>(`/api/v1/workers/${encodeURIComponent(id)}`)),
-  workerRepositoryOptions: async (id: string) =>
-    (await request<{ repositories: WorkerRepositoryOption[] | null }>(
-      `/api/v1/workers/${encodeURIComponent(id)}/repository-options`,
-    )).repositories ?? [],
   repositories: async () =>
     (await request<{ repositories: ManagedRepository[] | null }>("/api/v1/repositories"))
       .repositories ?? [],
@@ -173,7 +170,7 @@ export const api = {
   automation: (id: string) =>
     request<AutomationDetail>(`/api/v1/automations/${encodeURIComponent(id)}`),
   automationOccurrences: async (id: string, cursor = "") => {
-    const query = new URLSearchParams({ limit: "50" });
+    const query = new URLSearchParams({ limit: "200" });
     if (cursor) query.set("cursor", cursor);
     const page = await request<{
       occurrences: AutomationOccurrencePage["occurrences"] | null;
@@ -265,6 +262,15 @@ export const api = {
     }>(`/api/v1/attempts/${encodeURIComponent(attemptID)}/events?${query}`);
     return { ...page, events: page.events ?? [] };
   },
+  cards: async () =>
+    (await request<{ cards: CardSummary[] | null }>("/api/v1/cards")).cards ?? [],
+  cardContent: (repositoryID: string, path: string) =>
+    request<{ content: string }>(
+      `/api/v1/cards/content?${new URLSearchParams({ repository_id: repositoryID, path })}`,
+    ),
+  pipeline: () => request<PipelineConfig>("/api/v1/pipeline"),
+  savePipeline: (config: PipelineConfig) =>
+    request<PipelineConfig>("/api/v1/pipeline", { method: "PUT", body: JSON.stringify(config) }),
   createTask: (input: CreateTaskInput) =>
     request<TaskDetail>("/api/v1/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelTask: (id: string) =>
