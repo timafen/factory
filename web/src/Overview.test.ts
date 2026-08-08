@@ -11,4 +11,9 @@ describe("cpuLoadExplanation", () => {
     expect(cpuLoadExplanation(1))
       .toBe("Причина загрузки процессора: активно работ 1. Данных о занятых местах нет.");
   });
+
+  it("reports zero running work without hiding slot data", () => {
+    expect(cpuLoadExplanation(0, { busy: 0, capacity: 4 }))
+      .toBe("Причина загрузки процессора: активно работ 0; занято мест 0 из 4.");
+  });
 });
