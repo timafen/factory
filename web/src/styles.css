@@ -1128,6 +1128,8 @@ button { color: inherit; }
 .settings-full { grid-column: 1 / -1; }
 .settings-check { display: flex; align-items: center; gap: 9px; min-height: 34px; font-size: 14px; }
 .settings-check input { accent-color: var(--accent); }
+.settings-field-title { display: block; margin: 0; font-size: 14px; color: var(--fg); }
+.settings-full > .settings-stage-table { margin-top: 8px; }
 .settings-warning, .settings-errors { display: flex; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--warning); border-radius: var(--radius); background: color-mix(in srgb, var(--warning) 9%, var(--panel)); }
 .settings-warning div, .settings-errors { flex-direction: column; }
 .settings-warning span, .settings-errors span { display: block; margin-top: 3px; font-size: 13px; }
