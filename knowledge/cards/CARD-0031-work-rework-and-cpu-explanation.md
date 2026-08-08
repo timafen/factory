@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge
-- Branch: `factory/c38668e1-00f-7f51cdfb-e3e`
-- Head commit: `358f531` (проверенная предметная реализация на `origin/main`; следующий коммит добавит только результат верификации)
+- Status: DONE — merged, released and accepted by automated evidence
+- Branch: `factory/15b971af-c84-e1765036-dbe`
+- Head commit: `a721b1f` (merge-коммит выпущенной реализации; следующий коммит документирует закрытие этапа)
 - What changed: метка «заново» ставится на повторно запущенной текущей стадии; пройденные стадии сохраняют исторический статус.
 - What changed: обзор объясняет загрузку процессора числом активных работ и фактическими слотами, не выдумывая занятые места при отсутствии данных API.
-- Evidence: `go test ./...`, `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых Vitest-тестов и production build — passed; diff к `origin/main` — ровно 5 предметных файлов.
-- Next action: слить проверенную ветку в `main` и выполнить релиз, затем открыть `/work` для визуальной приёмки на production.
+- Evidence: релиз `a721b1f` через `fx factory release` прошёл health-check; 7 целевых Vitest-тестов, typecheck и production build — passed.
+- Next action: владельцу наблюдать `/work` при обычной работе; при неверной метке или причине нагрузки выполнить `fx factory rollback`.
 
 ## LOG
 
@@ -30,3 +30,7 @@
 | Чистота доставки | `git diff --check origin/main...HEAD` | passed; 5 предметных файлов до записи этого результата |
 
 Полный `npx vitest run`: 67 passed, 15 известных падений только в неизменённом `App.test.tsx`. Полный Playwright-набор остановился на неизменённом тесте, который ищет английский заголовок `Factory overview`, тогда как уже в `origin/main` интерфейс показывает «Главное»; 17 тестов не запускались. Это не связано с предметным diff карточки.
+
+### 2026-08-08 — Implement
+
+Этап закрыт по утверждённой владельцем совокупности автоматических доказательств: merge `a721b1f` штатно выпущен через `fx factory release` с health-check панели. Повторный запуск подтвердил 7/7 предметных тестов, typecheck и production build. Визуальный вход в production не является воротами этапа, поскольку учётные данные есть только у владельца; известные внешние падения вынесены в `CARD-0030`.
