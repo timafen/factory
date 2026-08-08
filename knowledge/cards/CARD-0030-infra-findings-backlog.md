@@ -7,10 +7,10 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-BLOCKED: полный Vitest содержит 15 падений в неизменённом `web/src/App.test.tsx`. Branch: `factory/fb37937b-774-1bec0524-355`. Head commit: `ffc9dc0` до записи результатов проверки.
-What changed: проверена поставка выбора пяти групп телефонных уведомлений и её соответствие `NOTIFY_GROUPS`/`NOTIFY_DEFAULTS` пилота.
-Evidence: `npx tsc -p tsconfig.app.json --noEmit`, Settings Vitest 5/5, `npx vite build` и `go build ./cmd/factory-server` — PASS; полный Vitest — 69/84, 15 FAIL в `App.test.tsx`.
-Next action: исправить или подтвердить как допустимые 15 падений полного Vitest, затем повторить Verify.
+Status: готово к объединению. Branch: `factory/d6cf72b6-b10-192d4077-721`. Head commit: `e6c3071`.
+What changed: подтверждено по решению владельца, что 15 падений полного Vitest — старая проблема `App.test.tsx`, не связанная с этой веткой.
+Evidence: чистый `origin/main` (9e46f22) прогнан через `npx vitest run` — та же поставка 15 падений (Test Files 1 failed | 5 passed, Tests 15 failed | 67 passed); список упавших тестов побайтово совпадает с веткой (69/84 из-за добавленных Settings-тестов). Дополнительно на ветке: `npx tsc -p tsconfig.app.json --noEmit`, `npx vite build`, `go build ./cmd/factory-server` — PASS.
+Next action: завести отдельную задачу на починку 15 падений `web/src/App.test.tsx` (см. запись ниже), это не блокирует merge текущей ветки.
 
 ## LOG
 
@@ -62,3 +62,7 @@ Next action: исправить или подтвердить как допус�
 На ветке `factory/d6cf72b6-b10-192d4077-721` предметный коммит перенесён на свежий `origin/main` без изменений Work, API статуса, навигации и CARD-0031.
 Доказательство: Settings Vitest 5/5, typecheck, frontend build, `go build ./...` и `git diff --check origin/main` — PASS.
 Открытый риск: полные Vitest/lint и `go test ./...` сохраняют известные сбои в неизменённых файлах базы.
+
+### 2026-08-08 — Implement: доказан старый статус 15 падений Vitest
+По решению владельца перед merge требовалось доказать, что 15 падений полного Vitest — не поломка ветки. Установлены зависимости и прогнан `npx vitest run` на чистом `origin/main` (9e46f22, отдельный git worktree в `/tmp/main-check`): та же поставка — Test Files 1 failed | 5 passed, Tests 15 failed | 67 passed, все 15 в неизменённом `src/App.test.tsx`. Список названий упавших тестов на ветке (69/84) и на main (67/82) сверен построчно — совпадает побайтово (разница только в 2 добавленных Settings-тестах). Значит поломка старая, не от этой ветки; merge разрешён без дополнительной починки.
+Отдельная задача: завести починку `web/src/App.test.tsx` (15 падений, судя по названиям тестов — устаревшие ожидания после переработки экрана «Работа»/навигации) как самостоятельный тикет вне этого пайплайна.
