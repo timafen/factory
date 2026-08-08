@@ -781,6 +781,7 @@ type PilotSettings struct {
 	AutoMerge           bool                         `json:"auto_merge"`
 	AutoAnswer          bool                         `json:"auto_answer"`
 	MaxStageAttempts    int                          `json:"max_stage_attempts"`
+	MaxWorkRounds       int                          `json:"max_work_rounds"`
 	AllowAnyWorker      bool                         `json:"allow_any_worker"`
 	AllowedWorkers      []string                     `json:"allowed_workers"`
 	MaxParallelSubtasks int                          `json:"max_parallel_subtasks"`
@@ -841,7 +842,7 @@ func (request *UpdatePilotSettingsRequest) UnmarshalJSON(body []byte) error {
 	}
 	required := []string{
 		"enabled", "poll_seconds", "timeout_seconds", "auto_merge", "auto_answer",
-		"max_stage_attempts", "max_parallel_subtasks", "day_cap_usd", "deploy_staging_cmd",
+		"max_stage_attempts", "max_work_rounds", "max_parallel_subtasks", "day_cap_usd", "deploy_staging_cmd",
 		"owner_chat_url", "owner_ui_url", "stages", "skip_stages_for_low", "stopped_pipelines",
 		"stage_base_usd", "complexity_factor", "work_cap_usd", "ntfy_topic", "ntfy_server",
 		"ntfy_owner_topic", "brain_chain",
