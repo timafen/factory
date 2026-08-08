@@ -2,15 +2,25 @@
 
 ## HEAD
 
-- Status: DONE — merged, released and accepted by automated evidence
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/15b971af-c84-e1765036-dbe`
-- Head commit: `a721b1f` (merge-коммит выпущенной реализации; следующий коммит документирует закрытие этапа)
+- Head commit: `3710ca0` (перед записью результатов Verify)
 - What changed: метка «заново» ставится на повторно запущенной текущей стадии; пройденные стадии сохраняют исторический статус.
 - What changed: обзор объясняет загрузку процессора числом активных работ и фактическими слотами, не выдумывая занятые места при отсутствии данных API.
-- Evidence: релиз `a721b1f` через `fx factory release` прошёл health-check; 7 целевых Vitest-тестов, typecheck и production build — passed.
-- Next action: владельцу наблюдать `/work` при обычной работе; при неверной метке или причине нагрузки выполнить `fx factory rollback`.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, 7 целевых Vitest-тестов и production build — PASS; полный Vitest и Playwright воспроизвели известные внешние сбои, не затрагивающие предметный diff.
+- Next action: человеку проверить evidence ниже и принять решение о слиянии.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| «заново» только на текущем повторном этапе | `cd web && npx vitest run src/Work.test.ts src/Overview.test.ts` | PASS: 7/7; текущая повторная стадия — `again`, пройденные справа — `done` |
+| Причина CPU отражает работу и реальные слоты | те же целевые тесты | PASS: число активных работ и `busy/capacity` передаются; без slots текст не придумывает занятые места |
+| Типы и production build | `cd web && npx tsc -p tsconfig.app.json --noEmit && npm run build` | PASS |
+| Полные регрессии | `cd web && npx vitest run`; `npx playwright test`; `go test ./...` | Известные внешние сбои: Vitest 67 passed, 15 failed только в неизменённом `App.test.tsx`; Playwright ожидает `Factory overview` и не запускает 17 остальных; Go не компилирует неизменённый `internal/controlplane/pilot_config_test.go` из-за `PilotConfig.Stages` |
+| Чистота поставки | `git diff --check origin/main...HEAD`; `git diff --name-only origin/main...HEAD` | PASS: только CARD-0030, CARD-0031, `Work`/`Overview` и их тесты |
 
 ### 2026-08-08 — Implement
 
