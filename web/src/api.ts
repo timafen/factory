@@ -23,6 +23,8 @@ import type {
   TestAutomationResult,
   LegacyPollerMigration,
   LegacyPollerSelection,
+  PilotSettings,
+  PilotSettingsResponse,
 } from "./types";
 
 export class APIError extends Error {
@@ -67,6 +69,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
+  updatePilotSettings: (version: string, settings: PilotSettings) =>
+    request<PilotSettingsResponse>("/api/v1/settings/pilot", {
+      method: "PUT",
+      body: JSON.stringify({ version, settings }),
+    }),
   metrics: (window: MetricsWindow) =>
     request<MetricsSummary>(
       `/api/v1/metrics/summary?${new URLSearchParams({ window })}`,

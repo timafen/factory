@@ -23,6 +23,7 @@ type API struct {
 	store       *Store
 	logger      *slog.Logger
 	automations *AutomationService
+	pilotConfig *PilotConfigStore
 }
 
 type workerRegistrationRequest struct {
@@ -66,10 +67,14 @@ func NewHandler(store *Store, logger *slog.Logger) http.Handler {
 }
 
 func NewHandlerWithAutomation(store *Store, logger *slog.Logger, automations *AutomationService) http.Handler {
+	return NewHandlerWithPilotConfig(store, logger, automations, nil)
+}
+
+func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *AutomationService, pilotConfig *PilotConfigStore) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -104,6 +109,8 @@ func NewHandlerWithAutomation(store *Store, logger *slog.Logger, automations *Au
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/resume", api.resumeLegacyPollerOccurrence)
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/skip", api.skipLegacyPollerOccurrence)
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
+	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
+	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
 	mux.HandleFunc("GET /api/v1/tasks/{task_id}", api.getTask)
