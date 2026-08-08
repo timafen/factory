@@ -7,12 +7,25 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — awaiting human merge. Branch: `factory/aa9fa343-b22-839eaa45-305`. Head commit: `4c6992e`.
-What changed: в Settings добавлены пять русских переключателей групп уведомлений с каноническими ключами и умолчаниями пилота.
-Evidence: чистая установка `npm ci`; `npm run typecheck`, `npm run build`, `go build ./...` и `npx vitest run src/Settings.test.tsx` (5/5) — PASS. Полный `npx vitest run`: 15 известных падений только в неизменённом `src/App.test.tsx`, 73/88 всего; `go test ./...` не компилирует старый `internal/controlplane/pilot_config_test.go`.
-Next action: человек проверяет и объединяет ветку в `main`; выпуск выполняется через `fx factory release` после merge.
+Status: Verified PASS — ожидает слияния человеком. Branch: `factory/94811040-165-c6a8ffc6-85d`. Head commit: `f43d944`.
+What changed: экран Settings — русские названия всех полей и видимое пояснение под каждым (включая группы уведомлений, таблицу маршрутизации этапов и заметку конфигурации); e2e-сценарий `control-plane.spec.ts` обновлён под новый текст; узкая доставка поверх свежего `origin/main` — семь файлов задачи, включая собранный UI и карточку.
+Evidence: чистый `npm ci`; `npx vitest run src/Settings.test.tsx` (6/6, включая цикл по всем ~43 полям); `npm run typecheck`; `npm run build`; focused ESLint — PASS. Полные Vitest, ESLint, Go test и Settings E2E имеют известные независимые сбои, описанные в записи Verify ниже.
+One next action: влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Русские названия всех полей и пояснение к каждому | `cd web && npx vitest run src/Settings.test.tsx --reporter=verbose` | PASS: 6/6; специальный тест проходит цикл по всем ~43 полям, проверяя русскую подпись и непустое пояснение. |
+| Маршрутизация и уведомления не потеряли настройку | те же Settings-тесты | PASS: проверены таблица маршрутизации, пять групп уведомлений, умолчания и PUT с пятью каноническими ключами. |
+| Сборка поставляемого UI | чистый `cd web && npm ci`; `npm run typecheck`; `npm run build` | PASS: TypeScript без ошибок, production-сборка Vite за 5.38 s. |
+| Регрессии изменённых файлов | `npx eslint src/Settings.tsx src/Settings.test.tsx`; `git diff --check origin/main...HEAD` | PASS: ESLint без замечаний, пробельных ошибок нет. |
+| Полный Vitest | `cd web && npx vitest run --reporter=dot` | Известная база: 79 passed, 15 failed — только неизменённый `src/App.test.tsx`. |
+| Полные ESLint и Go tests | `npm run lint`; `go build ./cmd/factory-server && go test ./...` | Известная база: ESLint — 10 ошибок вне диффа (`Access`, `Live`, `Pipeline`, `Say`); Go test не компилирует неизменённый `internal/controlplane/pilot_config_test.go` из-за старого формата `stages`. |
+| Browser Settings E2E | `npx playwright test -g 'edits pilot settings from the Settings screen'` | BLOCKED известной базой: API возвращает `pilot config schema is invalid` (старый object-формат `stages` вместо `[]PilotStage`), поэтому экран не загружается до действий сценария. |
+
 
 ### 2026-08-08 — Verify
 
@@ -90,3 +103,9 @@ Next action: человек проверяет и объединяет ветк�
 ### 2026-08-08 — Implement: доказан старый статус 15 падений Vitest
 По решению владельца перед merge требовалось доказать, что 15 падений полного Vitest — не поломка ветки. Установлены зависимости и прогнан `npx vitest run` на чистом `origin/main` (9e46f22, отдельный git worktree в `/tmp/main-check`): та же поставка — Test Files 1 failed | 5 passed, Tests 15 failed | 67 passed, все 15 в неизменённом `src/App.test.tsx`. Список названий упавших тестов на ветке (69/84) и на main (67/82) сверен построчно — совпадает побайтово (разница только в 2 добавленных Settings-тестах). Значит поломка старая, не от этой ветки; merge разрешён без дополнительной починки.
 Отдельная задача: завести починку `web/src/App.test.tsx` (15 падений, судя по названиям тестов — устаревшие ожидания после переработки экрана «Работа»/навигации) как самостоятельный тикет вне этого пайплайна.
+
+### 2026-08-08 — Implement: узкая пересборка «русские названия полей и пояснение к каждому»
+Предыдущая доставка (`factory/b996395e-1f0-d4c22b55-af4`) вернулась на доработку: Ревью нашло в дифф-е против `origin/main` лишние файлы и слишком выборочный тест пояснений. По решению владельца пересобрано заново от свежего `origin/main` (без rebase/мёржа старой ветки): перенесены только `web/src/Settings.tsx`, `web/src/Settings.test.tsx`, `web/e2e/control-plane.spec.ts`, пересобран `web/dist`. Файлы `internal/controlplane/pilot_config_test.go` и `web/e2e/server.mjs` из старой ветки НЕ перенесены — это несвязанная правка формата `stages` (map → list) в тестовой инфраструктуре, к переводу экрана отношения не имеет; `go vet ./internal/controlplane/...` на чистом `origin/main` уже не собирается по этой же причине — старый известный риск, не входит в эту задачу.
+Замечание про тест закрыто: тест `gives every settings field a Russian name and a non-empty explanation` в цикле проверяет все ~43 подписанных поля экрана (aria-label на русском) и наличие непустого `.field-hint` у каждого, плюс отдельно 15 селектов таблицы маршрутизации и оба групповых пояснения.
+Доказательство: `npx vitest run src/Settings.test.tsx` (6/6); `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build`; `npx eslint src/Settings.tsx src/Settings.test.tsx`; `go build ./...`; `npx vitest run` — 15 известных падений только в неизменённом `App.test.tsx`, остальное PASS; `git diff --name-only origin/main` — ровно 6 файлов задачи (два — сборка `web/dist`).
+Открытый риск: несвязанная поломка `go vet ./internal/controlplane/...` (рассинхронизация `PilotConfig.Stages` map/list в `pilot_config_test.go` и `web/e2e/server.mjs`) остаётся не починенной — уже неоднократно отмечена как отдельная задача вне этого пайплайна.
