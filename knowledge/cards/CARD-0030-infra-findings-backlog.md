@@ -7,12 +7,16 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
-Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
-Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
+READY: ветка пересобрана с нуля от актуального `origin/main`, замечание проверки о посторонних 24 файлах устранено. Branch: `factory/af1ffd51-c1e-39c7a04a-7d9`. Head commit: `2a6530b` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
+What changed: перенесены только правки экрана Settings — `web/src/Settings.tsx` и `web/src/Settings.test.tsx` (русские названия полей и подсказка-пояснение к каждому); больше в diff к `origin/main` ничего нет.
+Evidence: `git diff --name-only origin/main` → ровно 2 файла; `npx tsc -p tsconfig.app.json --noEmit` — PASS; `npx vitest run src/Settings.test.tsx` — 4/4 PASS; `npx eslint src/Settings.tsx src/Settings.test.tsx` — PASS; `npm run build` — PASS. Полный `npx vitest run` даёт те же 15 известных падений в неизменённом `App.test.tsx`, что и на `origin/main` (см. ниже) — не связаны с этой правкой.
+Next action: слить ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Implement (пересборка ветки)
+
+Прошлая поставка (`factory/b2ac3700-bbb-471a9799-086`, HEAD `4725a7e`) была основана на устаревшем `main` и тянула 24 несвязанных файла (intake, pilot, ops, экраны Work/Overview, навигация). По решению владельца ветку пересобрали с нуля: `git fetch origin`, новая ветка от свежего `origin/main` (`9e46f22`), затем `git checkout 4725a7e -- web/src/Settings.tsx web/src/Settings.test.tsx` — только эти два файла, без merge/rebase старой ветки. `git diff --name-only origin/main` подтверждает ровно 2 файла. Проверки: `npx tsc -p tsconfig.app.json --noEmit`, `npx vitest run src/Settings.test.tsx` (4/4), `npx eslint`, `npm run build` — все PASS.
 
 ### 2026-08-08 — Verify
 
