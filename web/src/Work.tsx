@@ -75,7 +75,8 @@ type Group = {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
-                      works: Record<string, WorkMeta> = {}): Group[] {
+                      works: Record<string, WorkMeta> = {},
+                      statuses: Record<string, { state: string; text: string }> = {}): Group[] {
   const openQ = new Set(
     questions.filter((q) => q.status === "open" || q.status === "stuck").map((q) => q.task_id),
   );
@@ -185,6 +186,16 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     }
   }
 
+  // Правда о том, почему работа стоит. «Вернули на доработку, продолжаем»
+  // — ложь, если конвейер по этой работе на паузе или встал совсем.
+  for (const g of map.values()) {
+    const ws = statuses[g.base];
+    if (!ws) continue;
+    if (g.items.some((it) => LIVE.includes(it.task.state))) continue;
+    if (ws.state === "stopped_owner") g.status = { label: "остановлена: конвейер на паузе", tone: "muted" };
+    else if (ws.state === "stuck") g.status = { label: "застряла: сама не двигается", tone: "bad" };
+  }
+
   // Внутри раздела всё сортируется одинаково — по времени, новое сверху.
   // Срочность выражается разделом, а не хитрым весом внутри общего списка:
   // именно из-за такого веса позавчерашняя остановленная работа оказывалась
@@ -231,6 +242,7 @@ export function WorkView({
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const [works, setWorks] = useState<Record<string, WorkMeta>>({});
+  const [statuses, setStatuses] = useState<Record<string, { state: string; text: string }>>({});
   const [showArchive, setShowArchive] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [byStage, setByStage] = useState(false);
@@ -240,9 +252,11 @@ export function WorkView({
     let alive = true;
     const pull = async () => {
       try {
-        const [v, q, wk] = await Promise.all([
+        const [v, q, wk, ws] = await Promise.all([
           fetch("/api/v1/verdicts"), fetch("/api/v1/questions"), fetch("/api/v1/works"),
+          fetch("/api/v1/work-status"),
         ]);
+        if (ws.ok && alive) setStatuses((await ws.json()) as Record<string, { state: string; text: string }>);
         if (wk.ok && alive) setWorks((await wk.json()) as Record<string, WorkMeta>);
         if (v.ok && alive) setVerdicts(((await v.json()) as { verdicts?: Record<string, Verdict> }).verdicts ?? {});
         if (q.ok && alive) setQuestions(((await q.json()) as { questions?: Question[] }).questions ?? []);
@@ -261,7 +275,7 @@ export function WorkView({
   if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
 
   const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
-  const groups = build(tasks ?? [], verdicts, questions, works);
+  const groups = build(tasks ?? [], verdicts, questions, works, statuses);
 
   return (
     <div className="page page-work">
