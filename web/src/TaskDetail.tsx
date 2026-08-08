@@ -293,7 +293,7 @@ export function TaskDetail({
         <section className="panel attempts-panel">
           <PanelHeading title="Attempts" aside={`${data.attempts?.length ?? 0} total`} />
           {[...(data.attempts ?? [])].reverse().map((attempt, index) => (
-            <AttemptRow key={attempt.id} attempt={attempt} current={index === 0} taskId={id} />
+        <AttemptRow key={attempt.id} attempt={attempt} current={index === 0} />
           ))}
         </section>
       )}
@@ -334,7 +334,11 @@ function ProgressEvent({ event, summary }: { event: AttemptEvent; summary: Event
   );
 }
 
+<<<<<<< HEAD
+function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean }) {
+=======
 function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean; taskId: string }) {
+>>>>>>> origin/factory-custom
   const [open, setOpen] = useState(current);
   return (
     <div className="attempt-row">

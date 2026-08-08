@@ -1,0 +1,233 @@
+package controlplane
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/owainlewis/factory/internal/protocol"
+)
+
+const maxPilotConfigBytes = 1 << 20
+
+var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
+
+type PilotConfigStore struct {
+	path string
+	mu   sync.Mutex
+}
+
+func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
+
+func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, body, err := s.read()
+	if err != nil {
+		return protocol.PilotSettingsResponse{}, err
+	}
+	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings) (protocol.PilotSettingsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, current, err := s.read()
+	if err != nil {
+		return protocol.PilotSettingsResponse{}, err
+	}
+	if version == "" || version != pilotDigest(current) {
+		return protocol.PilotSettingsResponse{}, conflict("config_conflict", "pilot settings changed; refresh before saving")
+	}
+	body, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return protocol.PilotSettingsResponse{}, unavailable(err)
+	}
+	body = append(body, '\n')
+	if err := s.atomicWrite(body); err != nil {
+		return protocol.PilotSettingsResponse{}, err
+	}
+	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
+	info, err := os.Lstat(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return protocol.PilotSettings{}, nil, &ServiceError{Code: "pilot_config_missing", Message: "pilot config file is missing", Status: 404}
+	}
+	if err != nil {
+		return protocol.PilotSettings{}, nil, unavailable(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return protocol.PilotSettings{}, nil, &ServiceError{Code: "pilot_config_unsafe", Message: "pilot config must be a regular file, not a symlink", Status: 503}
+	}
+	if info.Size() > maxPilotConfigBytes {
+		return protocol.PilotSettings{}, nil, &ServiceError{Code: "pilot_config_too_large", Message: "pilot config exceeds 1 MiB", Status: 503}
+	}
+	f, err := os.Open(s.path)
+	if err != nil {
+		return protocol.PilotSettings{}, nil, unavailable(err)
+	}
+	defer f.Close()
+	body, err := io.ReadAll(io.LimitReader(f, maxPilotConfigBytes+1))
+	if err != nil {
+		return protocol.PilotSettings{}, nil, unavailable(err)
+	}
+	if len(body) > maxPilotConfigBytes {
+		return protocol.PilotSettings{}, nil, &ServiceError{Code: "pilot_config_too_large", Message: "pilot config exceeds 1 MiB", Status: 503}
+	}
+	settings, present, err := decodePilotSettings(body)
+	if err != nil {
+		return protocol.PilotSettings{}, nil, &ServiceError{Code: "pilot_config_invalid", Message: err.Error(), Status: 503}
+	}
+	// Compatibility default: older pilot files predate worker policy settings.
+	if !present["allow_any_worker"] {
+		settings.AllowAnyWorker = true
+	}
+	return settings, body, nil
+}
+
+func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return protocol.PilotSettings{}, nil, fmt.Errorf("pilot config contains invalid JSON")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var settings protocol.PilotSettings
+	if err := decoder.Decode(&settings); err != nil {
+		return settings, nil, fmt.Errorf("pilot config schema is invalid: %v", err)
+	}
+	present := make(map[string]bool, len(fields))
+	for key := range fields {
+		present[key] = true
+	}
+	return settings, present, nil
+}
+
+func (s *PilotConfigStore) atomicWrite(body []byte) error {
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".pilot-config-*")
+	if err != nil {
+		return unavailable(err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err == nil {
+		_, err = tmp.Write(body)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, s.path)
+	}
+	if err == nil {
+		if d, openErr := os.Open(dir); openErr == nil {
+			err = d.Sync()
+			_ = d.Close()
+		} else {
+			err = openErr
+		}
+	}
+	if err != nil {
+		return unavailable(err)
+	}
+	return nil
+}
+
+func pilotDigest(body []byte) string { sum := sha256.Sum256(body); return hex.EncodeToString(sum[:]) }
+
+func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
+	positive := []struct {
+		name  string
+		value float64
+	}{{"poll_seconds", settings.PollSeconds}, {"timeout_seconds", settings.TimeoutSeconds}, {"day_cap_usd", settings.DayCapUSD}}
+	for _, field := range positive {
+		if math.IsNaN(field.value) || math.IsInf(field.value, 0) || field.value <= 0 {
+			return nil, invalid("invalid_pilot_settings", field.name+" must be positive")
+		}
+	}
+	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 {
+		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
+	}
+	if len(settings.Stages) != len(pilotStages) || len(settings.StageBaseUSD) != len(pilotStages) {
+		return nil, invalid("invalid_pilot_settings", "stages and stage_base_usd must contain exactly the five pilot stages")
+	}
+	allowed := map[string]bool{}
+	for _, id := range settings.AllowedWorkers {
+		if strings.TrimSpace(id) == "" {
+			return nil, invalid("invalid_pilot_settings", "allowed_workers cannot contain an empty ID")
+		}
+		allowed[id] = true
+	}
+	warnings := []string{}
+	warningSeen := map[string]bool{}
+	for _, stage := range pilotStages {
+		workers, ok := settings.Stages[stage]
+		if !ok {
+			return nil, invalid("invalid_pilot_settings", "missing stage: "+stage)
+		}
+		if workers.Low == "" || workers.Medium == "" || workers.High == "" {
+			return nil, invalid("invalid_pilot_settings", "each stage requires low, medium, and high workers")
+		}
+		if cost, ok := settings.StageBaseUSD[stage]; !ok || cost <= 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
+			return nil, invalid("invalid_pilot_settings", "stage_base_usd values must be positive")
+		}
+		for _, worker := range []string{workers.Low, workers.Medium, workers.High} {
+			if !allowed[worker] {
+				if !settings.AllowAnyWorker {
+					return nil, invalid("unknown_worker", "worker "+worker+" is not in allowed_workers")
+				}
+				warning := "Unknown worker: " + worker
+				if !warningSeen[warning] {
+					warnings = append(warnings, warning)
+					warningSeen[warning] = true
+				}
+			}
+		}
+	}
+	for _, values := range []map[string]float64{settings.ComplexityFactor, settings.WorkCapUSD} {
+		if len(values) != 3 {
+			return nil, invalid("invalid_pilot_settings", "complexity_factor and work_cap_usd require low, medium, and high")
+		}
+		for _, tier := range []string{"low", "medium", "high"} {
+			if value, ok := values[tier]; !ok || value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, invalid("invalid_pilot_settings", "tier values must be positive")
+			}
+		}
+	}
+	for name, raw := range map[string]string{"owner_chat_url": settings.OwnerChatURL, "owner_ui_url": settings.OwnerUIURL, "ntfy_server": settings.NtfyServer} {
+		parsed, err := url.ParseRequestURI(raw)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return nil, invalid("invalid_pilot_settings", name+" must be an http or https URL")
+		}
+	}
+	if settings.NtfyTopic == "" || settings.NtfyOwnerTopic == "" {
+		return nil, invalid("invalid_pilot_settings", "notification topics are required")
+	}
+	if len(settings.BrainChain) == 0 {
+		return nil, invalid("invalid_pilot_settings", "brain_chain must not be empty")
+	}
+	for _, entry := range settings.BrainChain {
+		if entry.CLI == "" || entry.Model == "" || entry.Provider == "" {
+			return nil, invalid("invalid_pilot_settings", "each brain_chain entry requires cli, model, and provider")
+		}
+	}
+	sort.Strings(warnings)
+	return warnings, nil
+}

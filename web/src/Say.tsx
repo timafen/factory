@@ -5,7 +5,7 @@ import { SpeakButton, speakText, cancelSpeech, cleanForSpeech, unlockAudio } fro
 
 type Subtask = { title: string; detail?: string; complexity?: string };
 type Proposal = {
-  mode: "task" | "epic";
+  mode: "task" | "epic" | "answer";
   repository_id: string;
   title?: string;
   summary?: string;

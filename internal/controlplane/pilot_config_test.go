@@ -1,0 +1,165 @@
+package controlplane
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/owainlewis/factory/internal/protocol"
+)
+
+func validPilotSettings() protocol.PilotSettings {
+	stages := map[string]protocol.PilotStageWorkers{}
+	costs := map[string]float64{}
+	for _, stage := range pilotStages {
+		stages[stage] = protocol.PilotStageWorkers{Low: "worker-1", Medium: "worker-1", High: "worker-1"}
+		costs[stage] = 1
+	}
+	return protocol.PilotSettings{
+		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true,
+		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2,
+		DayCapUSD: 20, DeployStagingCmd: "deploy", OwnerChatURL: "https://example.test/chat", OwnerUIURL: "https://example.test/ui",
+		Stages: stages, SkipStagesForLow: []string{}, StoppedPipelines: []string{}, StageBaseUSD: costs,
+		ComplexityFactor: map[string]float64{"low": 1, "medium": 2, "high": 3}, WorkCapUSD: map[string]float64{"low": 2, "medium": 4, "high": 8},
+		NtfyTopic: "factory", NtfyServer: "https://ntfy.sh", NtfyOwnerTopic: "owner",
+		BrainChain: []protocol.PilotBrain{{CLI: "codex", Model: "gpt", Provider: "openai", Note: "preserve"}},
+	}
+}
+
+func writePilotFixture(t *testing.T, settings protocol.PilotSettings) (*PilotConfigStore, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	body, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return NewPilotConfigStore(path), path
+}
+
+func TestPilotConfigStorePreservesNotesAndRejectsConflict(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	first, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Settings.PollSeconds = 15
+	saved, err := store.Write(first.Version, first.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Version == first.Version || saved.Settings.Note != "keep this" || saved.Settings.BrainChain[0].Note != "preserve" {
+		t.Fatalf("saved response = %#v", saved)
+	}
+	before, _ := os.ReadFile(path)
+	if _, err := store.Write(first.Version, first.Settings); err == nil {
+		t.Fatal("stale version was accepted")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("conflict changed config")
+	}
+}
+
+func TestPilotConfigValidationWorkerPolicy(t *testing.T) {
+	settings := validPilotSettings()
+	settings.Stages["Review"] = protocol.PilotStageWorkers{Low: "unknown", Medium: "worker-1", High: "worker-1"}
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("strict unknown worker was accepted")
+	}
+	settings.AllowAnyWorker = true
+	warnings, err := validatePilotSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0] != "Unknown worker: unknown" {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestUpdatePilotSettingsRequiresCompleteSchema(t *testing.T) {
+	body := []byte(`{"version":"v","settings":{"enabled":true}}`)
+	var request protocol.UpdatePilotSettingsRequest
+	if err := json.Unmarshal(body, &request); err == nil {
+		t.Fatal("incomplete settings schema was accepted")
+	}
+}
+
+func TestPilotConfigStoreRejectsSymlinkAndInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPilotConfigStore(link).Read(); err == nil {
+		t.Fatal("symlink was accepted")
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPilotConfigStore(link).Read(); err == nil {
+		t.Fatal("invalid JSON was accepted")
+	}
+}
+
+func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
+	settings := validPilotSettings()
+	settings.AllowAnyWorker = true
+	settings.AllowedWorkers = nil
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+	register := protocol.WorkerRegistration{Name: "Known", WorkerVersion: "test", RuntimeVersion: "test", Capacity: 1, Health: "healthy"}
+	body, _ := json.Marshal(register)
+	request, _ := http.NewRequest(http.MethodPut, server.URL+"/api/v1/workers/worker-1", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("register status %d", response.StatusCode)
+	}
+	response.Body.Close()
+	response, err = server.Client().Get(server.URL + "/api/v1/settings/pilot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET status %d", response.StatusCode)
+	}
+	var got protocol.PilotSettingsResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(got.Settings.AllowedWorkers) != 1 || got.Settings.AllowedWorkers[0] != "worker-1" || !got.Settings.AllowAnyWorker {
+		t.Fatalf("settings = %#v", got.Settings)
+	}
+	put, _ := json.Marshal(protocol.UpdatePilotSettingsRequest{Version: "stale", Settings: got.Settings})
+	request, _ = http.NewRequest(http.MethodPut, server.URL+"/api/v1/settings/pilot", bytes.NewReader(put))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("PUT status %d", response.StatusCode)
+	}
+	response.Body.Close()
+}

@@ -22,6 +22,8 @@ const offlineRepositories = [
   { key: "archive", remote_identity: "github.com/example/archive", retained_count: 0 },
 ];
 const identifiers: Record<string, string> = {};
+let fixtureAPI: APIRequestContext | undefined;
+let runningHeartbeat: ReturnType<typeof setInterval> | undefined;
 
 interface TaskDetail {
   task: { id: string; title: string; description?: string; state?: string };
@@ -188,6 +190,7 @@ function observeBrowser(page: Page) {
 
 test.beforeAll(async () => {
   const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  fixtureAPI = api;
   const real = await waitForRealWorker(api);
   identifiers.realFactoryRepository = real.repositories.find(
     (repository) => repository.key === "factory-demo",
@@ -337,6 +340,12 @@ test.beforeAll(async () => {
   });
   identifiers.runningTask = running.task.id;
   identifiers.runningAttempt = active.attempt.id;
+  identifiers.runningLeaseToken = active.token;
+  runningHeartbeat = setInterval(() => {
+    void api.put(`/api/v1/attempts/${active.attempt.id}/heartbeat`, {
+      data: { lease_token: active.token },
+    });
+  }, 5_000);
 
   await registerWorker(
     api,
@@ -346,7 +355,11 @@ test.beforeAll(async () => {
     1,
     [succeededAttempt.attempt.id, failedAttempt.attempt.id],
   );
-  await api.dispose();
+});
+
+test.afterAll(async () => {
+  if (runningHeartbeat) clearInterval(runningHeartbeat);
+  await fixtureAPI?.dispose();
 });
 
 test("shows retained Factory metrics and saves the overview", async ({ page }) => {
@@ -556,6 +569,23 @@ test("confirms and deletes terminal task history", async ({ page }) => {
 
 test("shows worker capacity, current work, retained cleanup, and saves Workers", async ({ page }) => {
   const browser = observeBrowser(page);
+  if (runningHeartbeat) clearInterval(runningHeartbeat);
+  const heartbeat = await fixtureAPI!.put(
+    `/api/v1/attempts/${identifiers.runningAttempt}/heartbeat`,
+    { data: { lease_token: identifiers.runningLeaseToken } },
+  );
+  expect(heartbeat.ok()).toBe(true);
+  await fixtureAPI!.dispose();
+  fixtureAPI = undefined;
+  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  await registerWorker(
+    api,
+    workerOnline,
+    "Build Mac",
+    onlineRepositories,
+    1,
+  );
+  await api.dispose();
   await page.goto("/workers");
   await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
   const workersNavigation = page.getByRole("button", { name: "Workers", exact: true });
@@ -1068,5 +1098,24 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
   expect(tasks.tasks.filter((task) => task.request_key === "legacy-browser-request-187")).toHaveLength(1);
   await expect(migration.getByRole("button", { name: "Review E2E imported legacy issues" })).toBeVisible();
   await api.dispose();
+  browser.assertClean();
+});
+
+test("edits pilot settings from the Settings screen", async ({ page }) => {
+  const browser = observeBrowser(page);
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Pilot settings" })).toBeVisible();
+  await expect(page.getByText("Brain chain")).toBeVisible();
+  const poll = page.getByLabel("Poll interval (seconds)");
+  await expect(poll).toHaveValue("10");
+  await poll.fill("15");
+  const response = page.waitForResponse((result) =>
+    result.url().endsWith("/api/v1/settings/pilot") && result.request().method() === "PUT",
+  );
+  await page.getByRole("button", { name: "Save settings" }).click();
+  expect((await response).ok()).toBe(true);
+  await expect(page.getByText(/Settings saved/)).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Poll interval (seconds)")).toHaveValue("15");
   browser.assertClean();
 });

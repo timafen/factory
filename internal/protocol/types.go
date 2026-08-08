@@ -771,3 +771,97 @@ type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// PilotSettings is the complete, user-editable pilot configuration.
+type PilotSettings struct {
+	Note                string                       `json:"_note,omitempty"`
+	Enabled             bool                         `json:"enabled"`
+	PollSeconds         float64                      `json:"poll_seconds"`
+	TimeoutSeconds      float64                      `json:"timeout_seconds"`
+	AutoMerge           bool                         `json:"auto_merge"`
+	AutoAnswer          bool                         `json:"auto_answer"`
+	MaxStageAttempts    int                          `json:"max_stage_attempts"`
+	AllowAnyWorker      bool                         `json:"allow_any_worker"`
+	AllowedWorkers      []string                     `json:"allowed_workers"`
+	MaxParallelSubtasks int                          `json:"max_parallel_subtasks"`
+	DayCapUSD           float64                      `json:"day_cap_usd"`
+	DeployStagingCmd    string                       `json:"deploy_staging_cmd"`
+	OwnerChatURL        string                       `json:"owner_chat_url"`
+	OwnerUIURL          string                       `json:"owner_ui_url"`
+	Stages              map[string]PilotStageWorkers `json:"stages"`
+	SkipStagesForLow    []string                     `json:"skip_stages_for_low"`
+	StoppedPipelines    []string                     `json:"stopped_pipelines"`
+	StageBaseUSD        map[string]float64           `json:"stage_base_usd"`
+	ComplexityFactor    map[string]float64           `json:"complexity_factor"`
+	WorkCapUSD          map[string]float64           `json:"work_cap_usd"`
+	NtfyTopic           string                       `json:"ntfy_topic"`
+	NtfyServer          string                       `json:"ntfy_server"`
+	NtfyOwnerTopic      string                       `json:"ntfy_owner_topic"`
+	BrainChain          []PilotBrain                 `json:"brain_chain"`
+}
+
+type PilotStageWorkers struct {
+	Low    string `json:"low"`
+	Medium string `json:"medium"`
+	High   string `json:"high"`
+}
+
+type PilotBrain struct {
+	CLI      string `json:"cli"`
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+	Note     string `json:"note,omitempty"`
+}
+
+type PilotSettingsResponse struct {
+	Settings PilotSettings `json:"settings"`
+	Version  string        `json:"version"`
+	Warnings []string      `json:"warnings"`
+}
+
+type UpdatePilotSettingsRequest struct {
+	Version  string        `json:"version"`
+	Settings PilotSettings `json:"settings"`
+}
+
+func (request *UpdatePilotSettingsRequest) UnmarshalJSON(body []byte) error {
+	type requestShape struct {
+		Version  string          `json:"version"`
+		Settings json.RawMessage `json:"settings"`
+	}
+	var shape requestShape
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&shape); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(shape.Settings, &fields); err != nil {
+		return fmt.Errorf("settings must be an object")
+	}
+	required := []string{
+		"enabled", "poll_seconds", "timeout_seconds", "auto_merge", "auto_answer",
+		"max_stage_attempts", "max_parallel_subtasks", "day_cap_usd", "deploy_staging_cmd",
+		"owner_chat_url", "owner_ui_url", "stages", "skip_stages_for_low", "stopped_pipelines",
+		"stage_base_usd", "complexity_factor", "work_cap_usd", "ntfy_topic", "ntfy_server",
+		"ntfy_owner_topic", "brain_chain",
+	}
+	for _, field := range required {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("settings.%s is required", field)
+		}
+	}
+	type settingsAlias PilotSettings
+	var settings settingsAlias
+	decoder = json.NewDecoder(bytes.NewReader(shape.Settings))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
+		return err
+	}
+	if _, ok := fields["allow_any_worker"]; !ok {
+		settings.AllowAnyWorker = true
+	}
+	request.Version = shape.Version
+	request.Settings = PilotSettings(settings)
+	return nil
+}

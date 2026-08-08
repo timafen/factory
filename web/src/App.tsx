@@ -1,4 +1,4 @@
-import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
+import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Settings as SettingsIcon, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
@@ -19,6 +19,7 @@ import { EpicsView } from "./Epics";
 import { AnswerView } from "./Answer";
 import { AccessView } from "./Access";
 import { AutomationDetail, AutomationsView } from "./Automations";
+import { Settings } from "./Settings";
 
 type Route =
   | { page: "overview" }
@@ -37,6 +38,7 @@ type Route =
   | { page: "pipeline" }
   | { page: "cards" }
   | { page: "automations" }
+  | { page: "settings" }
   | { page: "automation"; id: string };
 
 function readRoute(): Route {
@@ -49,6 +51,7 @@ function readRoute(): Route {
   if (parts[0] === "cards") return { page: "cards" };
   if (parts[0] === "automations" && parts[1]) return { page: "automation", id: parts[1] };
   if (parts[0] === "automations") return { page: "automations" };
+  if (parts[0] === "settings") return { page: "settings" };
   if (parts[0] === "workers") return { page: "workers" };
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
@@ -69,6 +72,7 @@ function routePath(route: Route): string {
   if (route.page === "cards") return "/cards";
   if (route.page === "automation") return `/automations/${route.id}`;
   if (route.page === "automations") return "/automations";
+  if (route.page === "settings") return "/settings";
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
@@ -278,6 +282,13 @@ export function App() {
           >
             <GitBranch size={17} /> Repositories
           </button>
+          <button
+            className={`nav-item ${route.page === "settings" ? "active" : ""}`}
+            aria-current={route.page === "settings" ? "page" : undefined}
+            onClick={() => navigate({ page: "settings" })}
+          >
+            <SettingsIcon size={17} /> Settings
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="local-dot" aria-hidden="true" />
@@ -312,6 +323,7 @@ export function App() {
             {route.page === "cards" && "Cards"}
             {route.page === "automations" && "Automations"}
             {route.page === "automation" && "Automation detail"}
+            {route.page === "settings" && "Settings"}
           </div>
           <button className="button button-primary" onClick={() => openDelegate()}>
             <Plus size={16} /> Delegate task
@@ -402,6 +414,7 @@ export function App() {
             <PipelineView onWorkflow={(id) => navigate({ page: "workflow", id })} />
           )}
           {route.page === "cards" && <CardsView />}
+          {route.page === "settings" && <Settings />}
           {route.page === "automations" && (
             <AutomationsView onAutomation={(id) => navigate({ page: "automation", id })} />
           )}
