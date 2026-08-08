@@ -15,18 +15,19 @@ export function Settings() {
 }
 
 function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api.pilotSettings>>;refresh:()=>void}) {
-  const [settings, setSettings] = useState<PilotSettings>(() => structuredClone(initial.settings));
+  const [settings, setSettings] = useState<PilotSettings>(() => withSafeDefaults(structuredClone(initial.settings)));
   const [version, setVersion] = useState(initial.version);
   const [warnings, setWarnings] = useState(initial.warnings);
   const [saved, setSaved] = useState(false);
   const errors = useMemo(() => validate(settings), [settings]);
   const save = useMutation({
     mutationFn: () => api.updatePilotSettings(version, settings),
-    onSuccess: (result) => { setSettings(structuredClone(result.settings)); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
+    onSuccess: (result) => { setSettings(withSafeDefaults(structuredClone(result.settings))); setVersion(result.version); setWarnings(result.warnings); setSaved(true); },
   });
   const set = <K extends keyof PilotSettings>(key: K, value: PilotSettings[K]) => { setSaved(false); setSettings({ ...settings, [key]: value }); };
-  const setStage = (stage: PilotStage, tier: PilotTier, value: string) => set("stages", { ...settings.stages, [stage]: { ...settings.stages[stage], [tier]: value } });
-  const workerOptions = [...new Set([...settings.allowed_workers, ...stages.flatMap((stage) => tiers.map((tier) => settings.stages[stage][tier]))])].filter(Boolean).sort();
+  const stageWorkers = (stage: PilotStage) => settings.stages.find((entry) => entry.workflow === stage)!.workers;
+  const setStage = (stage: PilotStage, tier: PilotTier, value: string) => set("stages", settings.stages.map((entry) => entry.workflow === stage ? { ...entry, workers: { ...entry.workers, [tier]: value } } : entry));
+  const workerOptions = [...new Set([...settings.allowed_workers, ...stages.flatMap((stage) => tiers.map((tier) => stageWorkers(stage)[tier]))])].filter(Boolean).sort();
   return <div className="page settings-page">
     <div className="view-header"><div><h1>Pilot settings</h1><p>Changes apply when pilot starts its next polling cycle.</p></div><button className="button" onClick={refresh}><RefreshCw size={15}/> Refresh</button></div>
     {(warnings.length > 0) && <div className="settings-warning"><AlertTriangle size={17}/><div><strong>Saved with warnings</strong>{warnings.map((warning) => <span key={warning}>{warning}</span>)}</div></div>}
@@ -38,13 +39,15 @@ function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api
       <NumberField label="Poll interval (seconds)" value={settings.poll_seconds} onChange={(value) => set("poll_seconds", value)}/>
       <NumberField label="Stage timeout (seconds)" value={settings.timeout_seconds} onChange={(value) => set("timeout_seconds", value)}/>
       <NumberField label="Maximum stage attempts" value={settings.max_stage_attempts} onChange={(value) => set("max_stage_attempts", value)}/>
+      <NumberField label="Maximum work rounds" value={settings.max_work_rounds} onChange={(value) => set("max_work_rounds", value)}/>
+      <NumberField label="Maximum cap rescues" value={settings.max_cap_rescues} onChange={(value) => set("max_cap_rescues", value)}/>
       <NumberField label="Maximum parallel subtasks" value={settings.max_parallel_subtasks} onChange={(value) => set("max_parallel_subtasks", value)}/>
     </SettingsSection>
 
     <SettingsSection title="Stage routing" wide>
       <Check label="Allow workers outside the list" checked={settings.allow_any_worker} onChange={(value) => set("allow_any_worker", value)}/>
       <label className="field settings-full"><span>Allowed worker IDs</span><input value={settings.allowed_workers.join(", ")} onChange={(event) => set("allowed_workers", splitList(event.target.value))}/><small className="field-hint">Initialized from workers known to Factory; comma-separated and editable.</small></label>
-      <div className="settings-stage-table settings-full"><div className="settings-stage-head"><span>Stage</span>{tiers.map((tier) => <span key={tier}>{tier}</span>)}</div>{stages.map((stage) => <div className="settings-stage-row" key={stage}><strong>{stage}</strong>{tiers.map((tier) => <select aria-label={`${stage} ${tier} worker`} key={tier} value={settings.stages[stage][tier]} onChange={(event) => setStage(stage, tier, event.target.value)}>{workerOptions.map((worker) => <option key={worker}>{worker}</option>)}</select>)}</div>)}</div>
+      <div className="settings-stage-table settings-full"><div className="settings-stage-head"><span>Stage</span>{tiers.map((tier) => <span key={tier}>{tier}</span>)}</div>{stages.map((stage) => <div className="settings-stage-row" key={stage}><strong>{stage}</strong>{tiers.map((tier) => <select aria-label={`${stage} ${tier} worker`} key={tier} value={stageWorkers(stage)[tier]} onChange={(event) => setStage(stage, tier, event.target.value)}>{workerOptions.map((worker) => <option key={worker}>{worker}</option>)}</select>)}</div>)}</div>
       <label className="field settings-full"><span>Skip for low complexity</span><input value={settings.skip_stages_for_low.join(", ")} onChange={(event) => set("skip_stages_for_low", splitList(event.target.value))}/></label>
       <label className="field settings-full"><span>Stopped pipelines</span><input value={settings.stopped_pipelines.join(", ")} onChange={(event) => set("stopped_pipelines", splitList(event.target.value))}/></label>
     </SettingsSection>
@@ -60,6 +63,7 @@ function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api
 
     <SettingsSection title="Notifications and owner links">
       <TextField label="ntfy server" value={settings.ntfy_server} onChange={(value) => set("ntfy_server", value)}/><TextField label="ntfy topic" value={settings.ntfy_topic} onChange={(value) => set("ntfy_topic", value)}/><TextField label="Owner ntfy topic" value={settings.ntfy_owner_topic} onChange={(value) => set("ntfy_owner_topic", value)}/><TextField label="Owner chat URL" value={settings.owner_chat_url} onChange={(value) => set("owner_chat_url", value)}/><TextField label="Owner UI URL" value={settings.owner_ui_url} onChange={(value) => set("owner_ui_url", value)}/>
+      <div className="settings-full"><span>Notification groups (notify_groups)</span>{Object.entries(settings.notify_groups).sort(([left],[right]) => left.localeCompare(right)).map(([group, enabled]) => <Check key={group} label={`Notify group: ${group}`} checked={enabled} onChange={(value) => set("notify_groups", {...settings.notify_groups,[group]:value})}/>)}</div>
     </SettingsSection>
 
     <SettingsSection title="Brain chain" wide>
@@ -80,5 +84,6 @@ function Check({label,checked,onChange}:{label:string;checked:boolean;onChange:(
 function TextField({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}) { return <label className="field"><span>{label}</span><input value={value} onChange={(event)=>onChange(event.target.value)}/></label>; }
 function NumberField({label,value,onChange}:{label:string;value:number;onChange:(value:number)=>void}) { return <label className="field"><span>{label}</span><input type="number" step="any" value={value} onChange={(event)=>onChange(Number(event.target.value))}/></label>; }
 function splitList(value:string) { return value.split(",").map((item)=>item.trim()).filter(Boolean); }
-function validate(settings:PilotSettings) { const errors:string[]=[]; const numbers=[settings.poll_seconds,settings.timeout_seconds,settings.max_stage_attempts,settings.max_parallel_subtasks,settings.day_cap_usd,...Object.values(settings.stage_base_usd),...Object.values(settings.complexity_factor),...Object.values(settings.work_cap_usd)]; if(numbers.some((value)=>!Number.isFinite(value)||value<=0)) errors.push("All durations, limits, factors, and budgets must be positive."); for(const [label,value] of [["ntfy server",settings.ntfy_server],["owner chat",settings.owner_chat_url],["owner UI",settings.owner_ui_url]]) { try { const url=new URL(value); if(!["http:","https:"].includes(url.protocol)) throw new Error(); } catch { errors.push(`${label} must be a valid http(s) URL.`); } } if(settings.brain_chain.some((entry)=>!entry.cli.trim()||!entry.model.trim()||!entry.provider.trim())) errors.push("Every brain-chain row needs CLI, model, and provider."); if(!settings.allow_any_worker && stages.some((stage)=>tiers.some((tier)=>!settings.allowed_workers.includes(settings.stages[stage][tier])))) errors.push("Every routed worker must be in the allowed list while unrestricted workers are disabled."); return errors; }
+function withSafeDefaults(settings:PilotSettings):PilotSettings { return {...settings,max_work_rounds:settings.max_work_rounds??3,max_cap_rescues:settings.max_cap_rescues??2,notify_groups:settings.notify_groups??{owner:true,progress:false}}; }
+function validate(settings:PilotSettings) { const errors:string[]=[]; const numbers=[settings.poll_seconds,settings.timeout_seconds,settings.max_stage_attempts,settings.max_work_rounds,settings.max_cap_rescues,settings.max_parallel_subtasks,settings.day_cap_usd,...Object.values(settings.stage_base_usd),...Object.values(settings.complexity_factor),...Object.values(settings.work_cap_usd)]; if(numbers.some((value)=>!Number.isFinite(value)||value<=0)) errors.push("All durations, limits, factors, and budgets must be positive."); for(const [label,value] of [["ntfy server",settings.ntfy_server],["owner chat",settings.owner_chat_url],["owner UI",settings.owner_ui_url]]) { try { const url=new URL(value); if(!["http:","https:"].includes(url.protocol)) throw new Error(); } catch { errors.push(`${label} must be a valid http(s) URL.`); } } if(settings.brain_chain.some((entry)=>!entry.cli.trim()||!entry.model.trim()||!entry.provider.trim())) errors.push("Every brain-chain row needs CLI, model, and provider."); if(!settings.allow_any_worker && settings.stages.some((stage)=>tiers.some((tier)=>!settings.allowed_workers.includes(stage.workers[tier])))) errors.push("Every routed worker must be in the allowed list while unrestricted workers are disabled."); return errors; }
 function ErrorMessage({error,conflictAction}:{error:unknown;conflictAction?:()=>void}) { const conflict=error instanceof APIError&&error.status===409; return <div className="settings-errors"><span>{error instanceof Error?error.message:"Unable to load settings."}</span>{conflict&&conflictAction&&<button className="button" onClick={conflictAction}>Refresh latest settings</button>}</div>; }
