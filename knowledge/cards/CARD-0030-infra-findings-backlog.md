@@ -7,12 +7,22 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
-Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
-Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
+BLOCKED: ветка Settings содержит несвязанные изменения относительно `origin/main`. Branch: `factory/bf4e3ba5-e10-5789a27b-505`. Head commit: `58f3142`.
+What changed: предметная реализация русских названий и пояснений проверена, но вместе с ней в поставку попали `Overview`, `Summary`, `pilot.py` и карточка CARD-0032.
+Evidence: `npm test` (32 PASS), `npm run typecheck`, `npm run build`, `go test ./...` и предметный Playwright — PASS; `npm run lint` — FAIL (10 существующих ошибок вне Settings); `git diff --name-only origin/main...HEAD` показывает 16 файлов вместо объёма задачи.
+Next action: доставить чистую ветку, содержащую только изменения Settings и необходимые тестовые/сборочные артефакты.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Русские названия и пояснения полей Settings | `npm test` | PASS: 32 теста, включая 4/4 `Settings.test.tsx` и проверку русских названий/пояснений |
+| Изменение Settings сохраняется | `npx playwright test -g 'edits pilot settings from the Settings screen'` | PASS: `.last-run.json` содержит `status: passed` |
+| Сборка и серверный код | `npm run typecheck`, `npm run build`, `go test ./...` | PASS |
+| Смежные регрессии | `npm run lint` | FAIL: 10 ошибок в `Access.tsx`, `Live.tsx`, `Pipeline.tsx`, `Say.tsx`, не относящихся к Settings |
+| Чистота поставки | `git diff --name-only origin/main...HEAD`, `git diff --check origin/main...HEAD` | BLOCKED: формат чист, но 16 изменённых файлов включают несвязанные `Overview`, `Summary`, `pilot.py`, CARD-0032 |
 
 ### 2026-08-08 — Verify
 
