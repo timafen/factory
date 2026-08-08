@@ -7,12 +7,23 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
-Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
-Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
+BLOCKED: полный Vitest содержит 15 падений в неизменённом `web/src/App.test.tsx`. Branch: `factory/fb37937b-774-1bec0524-355`. Head commit: `ffc9dc0` до записи результатов проверки.
+What changed: проверена поставка выбора пяти групп телефонных уведомлений и её соответствие `NOTIFY_GROUPS`/`NOTIFY_DEFAULTS` пилота.
+Evidence: `npx tsc -p tsconfig.app.json --noEmit`, Settings Vitest 5/5, `npx vite build` и `go build ./cmd/factory-server` — PASS; полный Vitest — 69/84, 15 FAIL в `App.test.tsx`.
+Next action: исправить или подтвердить как допустимые 15 падений полного Vitest, затем повторить Verify.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Всегда видны пять групп | `src/Settings.test.tsx`: `shows every notification group in Russian...` | PASS: все пять русских подписей найдены |
+| Значения берутся из конфигурации и умолчаний | `src/Settings.test.tsx`: `uses pilot defaults when notification groups are absent`; сверка `/opt/factory-data/pilot/pilot.py` | PASS: `questions`, `stuck`, `money`, `done` включены, `routine` выключен; ключи и умолчания совпадают с пилотом |
+| Сохраняется полный канонический выбор | `src/Settings.test.tsx`: `shows every notification group in Russian...` | PASS: PUT содержит пять ключей `notify_groups`, изменён `stuck` |
+| Сборка frontend | `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build` | PASS |
+| Сборка сервера | `go build ./cmd/factory-server` | PASS |
+| Полный набор Vitest | `npx vitest run` | BLOCKED: 69/84, 15 падений только в неизменённом `src/App.test.tsx` (включая устаревший `Factory overview`) |
 
 ### 2026-08-08 — Verify
 
