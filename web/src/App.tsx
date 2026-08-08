@@ -1,4 +1,4 @@
-import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, ListChecks, Menu, Plus, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
+import { BookOpenText, Bot, Boxes, FileText, Gauge, GitBranch, KeyRound, ListChecks, Menu, MessageCircleQuestion, Mic, Plus, Waypoints, Workflow as AutomationIcon, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
@@ -14,10 +14,18 @@ import { WorkView } from "./Work";
 import { WorkflowDetail, WorkflowsView } from "./Workflows";
 import { PipelineView } from "./Pipeline";
 import { CardsView } from "./Cards";
+import { SayView } from "./Say";
+import { EpicsView } from "./Epics";
+import { AnswerView } from "./Answer";
+import { AccessView } from "./Access";
 import { AutomationDetail, AutomationsView } from "./Automations";
 
 type Route =
   | { page: "overview" }
+  | { page: "say" }
+  | { page: "epics" }
+  | { page: "answer" }
+  | { page: "access" }
   | { page: "work" }
   | { page: "workers" }
   | { page: "repositories" }
@@ -45,6 +53,10 @@ function readRoute(): Route {
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
   if (parts[0] === "work") return { page: "work" };
+  if (parts[0] === "say") return { page: "say" };
+  if (parts[0] === "epics") return { page: "epics" };
+  if (parts[0] === "answer") return { page: "answer" };
+  if (parts[0] === "access") return { page: "access" };
   return { page: "overview" };
 }
 
@@ -60,6 +72,10 @@ function routePath(route: Route): string {
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
+  if (route.page === "say") return "/say";
+  if (route.page === "epics") return "/epics";
+  if (route.page === "answer") return "/answer";
+  if (route.page === "access") return "/access";
   return route.page === "work" ? "/work" : "/";
 }
 
@@ -67,6 +83,7 @@ export function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [delegateRequest, setDelegateRequest] = useState<{ workerID?: string } | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const pendingAnswers = usePendingAnswers();
   const [taskHistory, setTaskHistory] = useState<Task[]>([]);
   const [taskHistoryCursor, setTaskHistoryCursor] = useState<string | null>();
   const previousTaskHeadCursor = useRef<string | null | undefined>(undefined);
@@ -146,7 +163,15 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
-        <div className="brand">
+        <div
+          className="brand"
+          role="button"
+          tabIndex={0}
+          title="На главную"
+          style={{ cursor: "pointer" }}
+          onClick={() => navigate({ page: "overview" })}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate({ page: "overview" }); }}
+        >
           <div className="brand-mark" aria-hidden="true">
             <Boxes size={18} strokeWidth={2.2} />
           </div>
@@ -157,11 +182,52 @@ export function App() {
         </div>
         <nav aria-label="Primary navigation">
           <button
+            className={`nav-item ${route.page === "say" ? "active" : ""}`}
+            aria-current={route.page === "say" ? "page" : undefined}
+            onClick={() => navigate({ page: "say" })}
+          >
+            <Mic size={17} /> Say
+          </button>
+          <button
+            className={`nav-item ${route.page === "epics" ? "active" : ""}`}
+            aria-current={route.page === "epics" ? "page" : undefined}
+            onClick={() => navigate({ page: "epics" })}
+          >
+            <ListChecks size={17} /> Epics
+          </button>
+          <button
+            className={`nav-item ${route.page === "answer" ? "active" : ""}`}
+            aria-current={route.page === "answer" ? "page" : undefined}
+            onClick={() => navigate({ page: "answer" })}
+          >
+            <MessageCircleQuestion size={17} /> Нужен ответ
+            {pendingAnswers > 0 && (
+              <span
+                title={`${pendingAnswers} вопрос(ов) ждут твоего ответа`}
+                style={{
+                  marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px",
+                  borderRadius: 999, background: "#c0392b", color: "#fff",
+                  fontSize: 12, fontWeight: 700, lineHeight: "20px",
+                  textAlign: "center", fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {pendingAnswers}
+              </span>
+            )}
+          </button>
+          <button
+            className={`nav-item ${route.page === "access" ? "active" : ""}`}
+            aria-current={route.page === "access" ? "page" : undefined}
+            onClick={() => navigate({ page: "access" })}
+          >
+            <KeyRound size={17} /> Доступы
+          </button>
+          <button
             className={`nav-item ${route.page === "overview" ? "active" : ""}`}
             aria-current={route.page === "overview" ? "page" : undefined}
             onClick={() => navigate({ page: "overview" })}
           >
-            <Gauge size={17} /> Overview
+            <Gauge size={17} /> Главное
           </button>
           <button
             className={`nav-item ${route.page === "work" || route.page === "task" ? "active" : ""}`}
@@ -230,7 +296,10 @@ export function App() {
             {mobileNavOpen ? <X size={19} /> : <Menu size={19} />}
           </button>
           <div className="topbar-title">
-            {route.page === "overview" && "Overview"}
+            {route.page === "overview" && "Главное"}
+            {route.page === "say" && "Say"}
+            {route.page === "epics" && "Epics"}
+            {route.page === "answer" && "Нужен ответ"}
             {route.page === "work" && "Work"}
             {route.page === "workers" && "Workers"}
             {route.page === "task" && "Task detail"}
@@ -250,7 +319,11 @@ export function App() {
         </header>
 
         <main>
-          {route.page === "overview" && <Overview />}
+          {route.page === "say" && <SayView />}
+          {route.page === "epics" && <EpicsView onTask={(id) => navigate({ page: "task", id })} onAnswer={() => navigate({ page: "answer" })} />}
+          {route.page === "answer" && <AnswerView onTask={(id) => navigate({ page: "task", id })} />}
+          {route.page === "access" && <AccessView />}
+          {route.page === "overview" && <Overview onNav={(p) => navigate({ page: p } as Route)} />}
           {route.page === "work" && (
             <WorkView
               tasks={taskItems}
@@ -384,4 +457,35 @@ function withoutDeletedTasks(page: TaskPage, deletedTaskIDs: Set<string>): TaskP
     ...page,
     tasks: page.tasks.filter((task) => !deletedTaskIDs.has(task.id)),
   };
+}
+
+/** Сколько вопросов ждёт владельца. Опрашивается редко и только когда вкладка
+ *  видима — цифра нужна живая, но не ценой лишней нагрузки. */
+function usePendingAnswers(): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetch("/api/v1/questions");
+        if (!r.ok) return;
+        const d = (await r.json()) as { questions?: { status?: string }[] };
+        const open = (d.questions ?? []).filter(
+          (q) => q.status === "open" || q.status === "stuck",
+        ).length;
+        if (alive) setN(open);
+      } catch { /* тихо: цифра не критична */ }
+    };
+    void pull();
+    const h = window.setInterval(() => void pull(), 15000);
+    const onVis = () => void pull();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      alive = false;
+      window.clearInterval(h);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+  return n;
 }

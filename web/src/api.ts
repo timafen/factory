@@ -73,7 +73,7 @@ export const api = {
       `/api/v1/metrics/summary?${new URLSearchParams({ window })}`,
     ),
   tasks: async (cursor = "") => {
-    const query = new URLSearchParams({ limit: "50" });
+    const query = new URLSearchParams({ limit: "200" });
     if (cursor) query.set("cursor", cursor);
     const page = await request<{ tasks: TaskPage["tasks"] | null; next_cursor: string | null }>(
       `/api/v1/tasks?${query}`,
@@ -162,7 +162,7 @@ export const api = {
   automation: (id: string) =>
     request<AutomationDetail>(`/api/v1/automations/${encodeURIComponent(id)}`),
   automationOccurrences: async (id: string, cursor = "") => {
-    const query = new URLSearchParams({ limit: "50" });
+    const query = new URLSearchParams({ limit: "200" });
     if (cursor) query.set("cursor", cursor);
     const page = await request<{
       occurrences: AutomationOccurrencePage["occurrences"] | null;

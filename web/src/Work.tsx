@@ -1,99 +1,298 @@
-import { ChevronRight, ListChecks, Plus } from "lucide-react";
-import { runtimeLabel, stateLabel, taskStates, timeAgo } from "./format";
+import { ChevronRight, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { runtimeLabel, taskStates, timeAgo } from "./format";
 import type { Task, TaskState, Worker } from "./types";
 import {
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  StaleBanner,
-  StatusBadge,
-  ViewHeader,
-  type ViewStateProps,
+  EmptyState, ErrorState, LoadingState, StaleBanner, ViewHeader, type ViewStateProps,
 } from "./ui";
 
+const STAGE_ORDER = ["Triage", "Specification", "Implement + Test", "Review", "Verify"];
+const STAGE_RU: Record<string, string> = {
+  "Triage": "Разбор", "Specification": "Спецификация", "Implement + Test": "Разработка",
+  "Review": "Ревью", "Verify": "Проверка",
+};
+
+type Verdict = { action?: string; final_pass?: boolean; stage?: string };
+type Question = { task_id?: string; status?: string; question?: string };
+type WorkMeta = {
+  origin?: "owner" | "assistant" | "orchestrator";
+  start_stage?: string;
+  skipped?: string[];
+  reason?: string;
+  closed?: string;
+  closed_reason?: string;
+};
+const ORIGIN_RU: Record<string, string> = {
+  owner: "поставил ты",
+  assistant: "поставил Клод",
+  orchestrator: "развернулось из эпика",
+};
+
+const TONE: Record<string, { bg: string; fg: string }> = {
+  ok:    { bg: "#16341f", fg: "#7ee2a8" },
+  warn:  { bg: "#3a2f16", fg: "#e0cf9f" },
+  bad:   { bg: "#3b1d1d", fg: "#ffb4b4" },
+  live:  { bg: "#16283a", fg: "#8ec5ff" },
+  muted: { bg: "#22262f", fg: "#8a94a6" },
+};
+const muted = "var(--text-muted, #8a94a6)";
+
+function Pill({ text, tone }: { text: string; tone: keyof typeof TONE }) {
+  const c = TONE[tone];
+  return (
+    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 999,
+                   background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>{text}</span>
+  );
+}
+
+/** Метка стадии спрятана внутри заголовка: «[auto] [3/5 Review] название».
+ *  Разбираем её на части: работа отдельно, стадия отдельно. */
+function parse(raw: string): { base: string; stage: string | null } {
+  const m = /^\[auto\]\s*\[(\d+)\/(\d+)\s+([^\]]+)\]\s*(.*)$/.exec(raw || "");
+  if (m) return { base: m[4].trim(), stage: m[3].trim() };
+  const plain = /^\[auto\]\s*(.*)$/.exec(raw || "");
+  return { base: (plain ? plain[1] : raw || "").trim(), stage: null };
+}
+
+const LIVE = ["running", "queued", "preparing"];
+// Сколько задач старше начала работы должно быть загружено, чтобы мы имели
+// право сказать «этой стадии не было», а не «я её не вижу».
+const OLDER_ENOUGH = 30;
+
+type Group = {
+  base: string;
+  items: { task: Task; stage: string | null; verdict?: Verdict }[];
+  latest: Task;
+  status: { label: string; tone: keyof typeof TONE };
+  currentStage: string | null;
+  reached: Record<string, "done" | "live" | "bad" | "skipped">;
+  meta?: WorkMeta;
+};
+
+function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
+               works: Record<string, WorkMeta> = {}): Group[] {
+  const openQ = new Set(
+    questions.filter((q) => q.status === "open" || q.status === "stuck").map((q) => q.task_id),
+  );
+  const map = new Map<string, Group>();
+  for (const t of tasks) {
+    const { base, stage } = parse(t.title);
+    const v = verdicts[t.id];
+    const g = map.get(base) ?? {
+      base, items: [], latest: t,
+      status: { label: "", tone: "muted" as const }, currentStage: null, reached: {},
+    };
+    g.items.push({ task: t, stage: stage ?? v?.stage ?? null, verdict: v });
+    if ((t.created_at ?? "") > (g.latest.created_at ?? "")) g.latest = t;
+    map.set(base, g);
+  }
+
+  for (const g of map.values()) {
+    g.items.sort((a, b) => (a.task.created_at ?? "").localeCompare(b.task.created_at ?? ""));
+    for (const it of g.items) {
+      if (!it.stage) continue;
+      if (LIVE.includes(it.task.state)) g.reached[it.stage] = "live";
+      else if (it.task.state === "failed") g.reached[it.stage] = g.reached[it.stage] ?? "bad";
+      else if (it.task.state === "succeeded") g.reached[it.stage] = "done";
+    }
+    // Работу могли завести сразу с середины конвейера: разбор и спецификацию
+    // человек уже сделал руками. Такие стадии не «не дошли», а «не нужны».
+    // Но помечать так можно, только если мы уверены, что начало работы попало
+    // в загруженное окно — иначе выдадим «не было» за «не загрузили».
+    g.meta = works[g.base];
+    const recorded = g.meta?.skipped;
+    if (recorded && recorded.length) {
+      // Записано при заведении работы — гадать не нужно.
+      for (const st of recorded) if (!g.reached[st]) g.reached[st] = "skipped";
+    } else {
+      const firstItem = g.items.find((i) => i.stage);
+      const firstAt = firstItem?.task.created_at ?? "";
+      const olderLoaded = tasks.filter((t) => (t.created_at ?? "") < firstAt).length;
+      if (firstItem?.stage && olderLoaded >= OLDER_ENOUGH) {
+        for (const st of STAGE_ORDER) {
+          if (st === firstItem.stage) break;
+          if (!g.reached[st]) g.reached[st] = "skipped";
+        }
+      }
+    }
+    const live = g.items.find((i) => LIVE.includes(i.task.state));
+    const waiting = g.items.find((i) => openQ.has(i.task.id));
+    const passed = g.items.some((i) => i.verdict?.final_pass === true);
+    const rework = g.items.some((i) => i.verdict?.final_pass === false);
+    // Сорвалась — только если сорвалась ПОСЛЕДНЯЯ попытка. Одна упавшая
+    // стадия в середине истории не делает всю работу проваленной:
+    // её могли перезапустить и довести.
+    const failed = g.items[g.items.length - 1]?.task.state === "failed";
+    const allCancelled = g.items.every((i) => i.task.state === "cancelled");
+
+    if (live) {
+      g.currentStage = live.stage;
+      g.status = { label: live.task.state === "queued" ? "ждёт исполнителя" : "идёт", tone: "live" };
+    } else if (waiting) {
+      g.status = { label: "ждёт твоего ответа", tone: "warn" };
+    } else if (passed) {
+      g.status = { label: "работа принята", tone: "ok" };
+    } else if (rework) {
+      g.status = { label: "на доработку", tone: "warn" };
+    } else if (allCancelled) {
+      g.status = { label: "отменена", tone: "muted" };
+    } else if (failed) {
+      g.status = { label: "сорвалась", tone: "bad" };
+    } else {
+      g.status = { label: "остановлена", tone: "warn" };
+    }
+  }
+
+  // Внутри раздела всё сортируется одинаково — по времени, новое сверху.
+  // Срочность выражается разделом, а не хитрым весом внутри общего списка:
+  // именно из-за такого веса позавчерашняя остановленная работа оказывалась
+  // выше вчерашней принятой.
+  return [...map.values()].sort(
+    (a, b) => (b.latest.created_at ?? "").localeCompare(a.latest.created_at ?? ""),
+  );
+}
+
+// Возраст, после которого работа уходит в архив, если от неё ничего не ждут.
+const FRESH_DAYS = 2;
+
+/** Куда попадёт работа. Порядок разделов — это порядок срочности:
+ *  сначала то, что стоит без человека, потом живое, потом свежий итог. */
+function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
+  // Закрытую работу владелец видеть в делах не должен, даже если она свежая:
+  // от него по ней ничего не ждут и ждать не будут.
+  if (g.meta?.closed) return "archive";
+  if (g.status.label === "ждёт твоего ответа") return "waiting";
+  if (g.status.tone === "bad" || g.status.label === "на доработку") return "waiting";
+  if (g.status.tone === "live") return "live";
+  const age = Date.now() - Date.parse(g.latest.created_at ?? "");
+  const fresh = Number.isFinite(age) && age < FRESH_DAYS * 864e5;
+  if (g.status.label === "остановлена" && fresh) return "waiting";
+  return fresh ? "done" : "archive";
+}
+
+const SECTIONS: { key: "waiting" | "live" | "done"; title: string; hint: string }[] = [
+  { key: "waiting", title: "Нужен ты", hint: "Стоит и само не сдвинется" },
+  { key: "live", title: "Идёт сейчас", hint: "Работает прямо в эту минуту" },
+  { key: "done", title: "Свежие итоги", hint: "Закончено за последние два дня" },
+];
+
 export function WorkView({
-  tasks,
-  workers,
-  pending,
-  error,
-  fetching,
-  updatedAt,
-  onTask,
-  onDelegate,
-  onRefresh,
-  hasMore,
-  loadingMore,
-  onLoadMore,
+  tasks, workers, pending, error, fetching, updatedAt,
+  onTask, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
 }: ViewStateProps & {
-  tasks?: Task[];
-  workers?: Worker[];
-  pending: boolean;
-  error: Error | null;
-  onTask: (id: string) => void;
-  onDelegate: () => void;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
+  tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
+  onTask: (id: string) => void; onDelegate: () => void;
+  hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
 }) {
-  if (pending) return <LoadingState label="Loading work" />;
+  const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
+  const [works, setWorks] = useState<Record<string, WorkMeta>>({});
+  const [showArchive, setShowArchive] = useState(false);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [byStage, setByStage] = useState(false);
+  const [open, setOpen] = useState<string>("");
+
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      try {
+        const [v, q, wk] = await Promise.all([
+          fetch("/api/v1/verdicts"), fetch("/api/v1/questions"), fetch("/api/v1/works"),
+        ]);
+        if (wk.ok && alive) setWorks((await wk.json()) as Record<string, WorkMeta>);
+        if (v.ok && alive) setVerdicts(((await v.json()) as { verdicts?: Record<string, Verdict> }).verdicts ?? {});
+        if (q.ok && alive) setQuestions(((await q.json()) as { questions?: Question[] }).questions ?? []);
+      } catch { /* без вердиктов покажем нейтрально */ }
+    };
+    void pull();
+    const h = window.setInterval(() => void pull(), 20000);
+    return () => { alive = false; window.clearInterval(h); };
+  }, []);
+
+  if (pending) return <LoadingState label="Загружаю работу" />;
   if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
 
-  const grouped = Object.fromEntries(
-    taskStates.map((state) => [state, (tasks ?? []).filter((task) => task.state === state)]),
-  ) as Record<TaskState, Task[]>;
-  const workerMap = new Map((workers ?? []).map((worker) => [worker.id, worker]));
+  const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
+  const groups = build(tasks ?? [], verdicts, questions, works);
 
   return (
     <div className="page page-work">
-      <ViewHeader
-        title="Agent work"
-        fetching={fetching}
-        updatedAt={updatedAt}
-        onRefresh={onRefresh}
-      />
+      <ViewHeader title="Работа агентов" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
       {error && <StaleBanner error={error} />}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, color: muted }}>
+          {byStage ? "Каждая карточка — отдельный этап." : "Сверху то, что стоит без тебя. Ниже — что идёт и что уже сделано. Старое в архиве."}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button className="button" onClick={() => setByStage((v) => !v)}>
+          {byStage ? <><Rows3 size={14} /> Показать по работам</> : <><LayoutGrid size={14} /> Показать по этапам</>}
+        </button>
+      </div>
+
       {(tasks ?? []).length === 0 ? (
         <EmptyState
           icon={<ListChecks size={22} />}
-          title="No work yet"
-          description="Delegate the first task to a registered worker. It will stay here through restarts."
-          action={<button className="button button-primary" onClick={onDelegate}><Plus size={16} /> Delegate task</button>}
+          title="Работы пока нет"
+          description="Поставь первую задачу — она останется здесь даже после перезапуска."
+          action={<button className="button button-primary" onClick={onDelegate}><Plus size={16} /> Поставить задачу</button>}
         />
+      ) : byStage ? (
+        <StageBoard tasks={tasks ?? []} verdicts={verdicts} workerMap={workerMap} onTask={onTask} />
       ) : (
-        <div className="work-board" data-testid="work-board">
-          {taskStates.map((state) => (
-            <section className="work-column" key={state} aria-labelledby={`heading-${state}`}>
-              <div className="column-heading">
-                <span className={`status-dot status-${state}`} aria-hidden="true" />
-                <h2 id={`heading-${state}`}>{stateLabel(state)}</h2>
-                <span className="count">{grouped[state].length}</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+          {SECTIONS.map((sec) => {
+            const rows = groups.filter((g) => sectionOf(g) === sec.key);
+            if (!rows.length) return null;
+            return (
+              <div key={sec.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                  <h2 style={{ fontSize: 15, margin: 0 }}>{sec.title}</h2>
+                  <span style={{
+                    fontSize: 11, color: muted, border: "1px solid var(--border, #262c38)",
+                    borderRadius: 999, padding: "1px 8px",
+                  }}>{rows.length}</span>
+                  <span style={{ fontSize: 12.5, color: muted }}>{sec.hint}</span>
+                </div>
+                {rows.map((g) => (
+                  <GroupRow key={g.base} g={g} workerMap={workerMap}
+                            expanded={open === g.base}
+                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                            onTask={onTask} />
+                ))}
               </div>
-              <div className="task-stack">
-                {grouped[state].length === 0 ? (
-                  <div className="column-empty">No {state} work</div>
-                ) : (
-                  grouped[state].map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      worker={workerMap.get(task.worker_id)}
-                      onClick={() => onTask(task.id)}
-                    />
-                  ))
+            );
+          })}
+
+          {(() => {
+            const old = groups.filter((g) => sectionOf(g) === "archive");
+            if (!old.length) return null;
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <button className="button" onClick={() => setShowArchive((v) => !v)}
+                        style={{ alignSelf: "flex-start" }}>
+                  {showArchive ? "Свернуть архив" : `Архив · ${old.length}`}
+                </button>
+                {!showArchive && (
+                  <span style={{ fontSize: 12.5, color: muted }}>
+                    Закрытые работы и всё, что старше двух дней и никого не ждёт.
+                  </span>
                 )}
+                {showArchive && old.map((g) => (
+                  <GroupRow key={g.base} g={g} workerMap={workerMap}
+                            expanded={open === g.base}
+                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                            onTask={onTask} />
+                ))}
               </div>
-            </section>
-          ))}
+            );
+          })()}
         </div>
       )}
+
       {hasMore && (
         <div className="load-more">
-          <button
-            className="button button-secondary"
-            onClick={onLoadMore}
-            disabled={loadingMore}
-          >
-            {loadingMore ? "Loading more…" : "Load more work"}
+          <button className="button button-secondary" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore ? "Загружаю…" : "Показать ещё"}
           </button>
         </div>
       )}
@@ -101,26 +300,166 @@ export function WorkView({
   );
 }
 
-function TaskCard({ task, worker, onClick }: { task: Task; worker?: Worker; onClick: () => void }) {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
+  g: Group; workerMap: Map<string, Worker>; expanded: boolean;
+  onToggle: () => void; onTask: (id: string) => void;
+}) {
+  const worker = workerMap.get(g.latest.worker_id);
   return (
-    <button className="task-card" onClick={onClick}>
-      <div className="task-card-top">
-        <StatusBadge state={task.state} />
-        <ChevronRight size={14} aria-hidden="true" />
-      </div>
-      <span className="task-title">{task.title}</span>
-      {task.description && <span className="task-description">{task.description}</span>}
-      <div className="task-meta">
-        <span className="task-worker">{worker?.name ?? "Unknown worker"}</span>
-        <span aria-hidden="true">·</span>
-        {worker && (
-          <>
-            <span>{runtimeLabel(worker.runtime)}</span>
-            <span aria-hidden="true">·</span>
-          </>
+    <section style={{
+      background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
+      borderColor: g.status.tone === "live" ? "#2a4560" : g.status.tone === "warn" ? "#4a3f22" : "var(--border, #262c38)",
+      borderRadius: 12, padding: "12px 16px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
+           onClick={onToggle}>
+        <Pill text={g.meta?.closed ? "закрыта" : g.status.label}
+              tone={g.meta?.closed ? "muted" : g.status.tone} />
+        {g.meta?.origin && (
+          <span
+            title={g.meta.reason || undefined}
+            style={{
+              fontSize: 11, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap",
+              border: "1px solid",
+              borderColor: g.meta.origin === "owner" ? "#3d6a92" : "#4a4160",
+              color: g.meta.origin === "owner" ? "#8ec5ff" : "#c3aef0",
+              background: "transparent",
+            }}>{ORIGIN_RU[g.meta.origin] ?? g.meta.origin}</span>
         )}
-        <span>{timeAgo(task.created_at)}</span>
+        <strong style={{ fontSize: 15, opacity: g.meta?.closed ? 0.65 : 1 }}>{g.base}</strong>
+        {g.meta?.closed_reason && (
+          <span style={{ fontSize: 12, color: muted }}>· {g.meta.closed_reason}</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: muted }}>
+          {worker?.name ?? ""} · {timeAgo(g.latest.created_at)}
+        </span>
+        <ChevronRight size={14} style={{ transform: expanded ? "rotate(90deg)" : undefined, color: muted }} />
       </div>
-    </button>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        {STAGE_ORDER.map((st) => {
+          const s = g.reached[st];
+          const isNow = g.currentStage === st;
+          const bg = s === "done" ? "#2f5741" : s === "bad" ? "#5a2b2b"
+                   : isNow ? "#2a4560" : "#232833";
+          const fg = s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
+                   : isNow ? "#8ec5ff" : "#5a6270";
+          const skipped = s === "skipped";
+          return (
+            <span key={st}
+              title={skipped ? "Стадию не проводили: работу завели сразу с более позднего шага"
+                             : (s ? undefined : "Стадия ещё не пройдена")}
+              style={{
+                fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
+                background: skipped ? "transparent" : bg,
+                color: skipped ? "#4a515e" : (s || isNow ? fg : "#5a6270"),
+                border: isNow ? "1px solid #3d6a92"
+                      : skipped ? "1px dashed #363d4a" : "1px solid transparent",
+              }}>{skipped ? `${STAGE_RU[st]} — не нужна` : STAGE_RU[st]}</span>
+          );
+        })}
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #262c38)", paddingTop: 10,
+                      display: "flex", flexDirection: "column", gap: 6 }}>
+          {g.items.map(({ task, stage, verdict }) => (
+            <div key={task.id}
+                 onClick={() => onTask(task.id)}
+                 style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+                          fontSize: 12.5, cursor: "pointer", padding: "3px 0" }}>
+              <span style={{ minWidth: 110, color: "#8ec5ff" }}>
+                {stage ? STAGE_RU[stage] ?? stage : "—"}
+              </span>
+              <Pill
+                text={
+                  LIVE.includes(task.state) ? "идёт"
+                  : task.state === "failed" ? "сорвалась"
+                  : task.state === "cancelled" ? "отменена"
+                  : verdict?.final_pass === true ? "проверка пройдена"
+                  : verdict?.final_pass === false ? "на доработку"
+                  : verdict?.action === "advance" ? "этап пройден"
+                  : verdict?.action === "stop" ? "остановлена"
+                  : "отработала"
+                }
+                tone={
+                  LIVE.includes(task.state) ? "live"
+                  : task.state === "failed" ? "bad"
+                  : task.state === "cancelled" ? "muted"
+                  : verdict?.final_pass === false ? "warn"
+                  : verdict?.final_pass === true || verdict?.action === "advance" ? "ok"
+                  : verdict?.action === "stop" ? "warn" : "muted"
+                }
+              />
+              <span style={{ color: muted }}>
+                {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgo(task.created_at)}
+              </span>
+              <span style={{ flex: 1 }} />
+              <span style={{ color: muted }}>открыть ›</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Старый вид: по этапам. Оставлен как второй режим — иногда нужно именно так. */
+function StageBoard({ tasks, verdicts, workerMap, onTask }: {
+  tasks: Task[]; verdicts: Record<string, Verdict>;
+  workerMap: Map<string, Worker>; onTask: (id: string) => void;
+}) {
+  const COLUMNS: Record<string, { title: string; empty: string }> = {
+    queued:    { title: "В очереди",  empty: "Очередь пуста" },
+    running:   { title: "В работе",   empty: "Сейчас никто не работает" },
+    succeeded: { title: "Отработали", empty: "Пока пусто" },
+    failed:    { title: "Сорвались",  empty: "Срывов нет" },
+    cancelled: { title: "Отменены",   empty: "Отменённых нет" },
+  };
+  const grouped = Object.fromEntries(
+    taskStates.map((s) => [s, tasks.filter((t) => t.state === s)]),
+  ) as Record<TaskState, Task[]>;
+
+  return (
+    <div className="work-board" data-testid="work-board">
+      {taskStates.map((state) => {
+        const col = COLUMNS[state] ?? { title: state, empty: "Пусто" };
+        return (
+          <section className="work-column" key={state}>
+            <div className="column-heading">
+              <span className={`status-dot status-${state}`} aria-hidden="true" />
+              <h2>{col.title}</h2>
+              <span className="count">{grouped[state].length}</span>
+            </div>
+            <div className="task-stack">
+              {grouped[state].length === 0 ? <div className="column-empty">{col.empty}</div> : (
+                grouped[state].map((task) => {
+                  const { base, stage } = parse(task.title);
+                  const v = verdicts[task.id];
+                  const st = stage ?? v?.stage ?? null;
+                  const i = st ? STAGE_ORDER.indexOf(st) : -1;
+                  const w = workerMap.get(task.worker_id);
+                  return (
+                    <button className="task-card" key={task.id} onClick={() => onTask(task.id)}>
+                      <span style={{ fontSize: 11, color: "#8ec5ff", marginBottom: 4 }}>
+                        {i >= 0 ? `${i + 1} из ${STAGE_ORDER.length} · ${STAGE_RU[st!]}` : "поставлена вручную"}
+                      </span>
+                      <span className="task-title">{base}</span>
+                      <div className="task-meta">
+                        <span>{w?.name ?? "—"}</span>
+                        <span aria-hidden="true">·</span>
+                        {w && <><span>{runtimeLabel(w.runtime)}</span><span aria-hidden="true">·</span></>}
+                        <span>{timeAgo(task.created_at)}</span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }

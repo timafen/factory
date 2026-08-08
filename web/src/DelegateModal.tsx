@@ -27,6 +27,15 @@ export function DelegateModal({
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  // Порядок стадий конвейера и человеческие названия. Держим здесь же,
+  // чтобы заголовок задачи собирался ровно так, как его читает пилот.
+  const PIPELINE = [
+    { wf: "Triage", ru: "Разбор" },
+    { wf: "Specification", ru: "Спецификация" },
+    { wf: "Implement + Test", ru: "Разработка" },
+    { wf: "Review", ru: "Ревью" },
+    { wf: "Verify", ru: "Проверка" },
+  ];
   const queryClient = useQueryClient();
   const titleID = useId();
   const descriptionID = useId();
@@ -39,6 +48,7 @@ export function DelegateModal({
   const [timeout, setTimeout] = useState("7200");
   const [workflowRevisionID, setWorkflowRevisionID] = useState("");
   const [mode, setMode] = useState<"manual" | "auto">("manual");
+  const [startStage, setStartStage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const selectedWorker = workers.find((worker) => worker.id === workerID);
   const repositories = selectedWorker?.repositories ?? [];
@@ -86,7 +96,10 @@ export function DelegateModal({
     const form = new FormData(event.currentTarget);
     const rawTitle = String(form.get("title") ?? "").trim();
     const cleanedTitle = rawTitle.replace(/^\[auto\]\s*/i, "");
-    const title = mode === "auto" ? `[auto] ${cleanedTitle}` : cleanedTitle;
+    const stageTag = mode === "auto" && startStage > 0
+      ? `[${startStage + 1}/${PIPELINE.length} ${PIPELINE[startStage].wf}] `
+      : "";
+    const title = mode === "auto" ? `[auto] ${stageTag}${cleanedTitle}` : cleanedTitle;
     const context = String(form.get("description") ?? "");
     const nextErrors: Record<string, string> = {};
     if (!cleanedTitle) nextErrors.title = "Enter a task title.";
@@ -147,6 +160,34 @@ export function DelegateModal({
                 <option value="auto">Automatic — pilot runs the full pipeline</option>
               </select>
             </Field>
+            {mode === "auto" && (
+              <Field
+                label="С какого шага начать"
+                htmlFor="delegate-start-stage"
+                hint={startStage === 0
+                  ? "С начала: конвейер сам разберёт задачу и напишет спецификацию."
+                  : `Шаги ${PIPELINE.slice(0, startStage).map((p) => p.ru).join(", ")} будут помечены как не нужные — считаем, что ты сделал их сам. Не забудь описать задачу подробно в контексте.`}
+              >
+                <select
+                  id="delegate-start-stage"
+                  value={startStage}
+                  onChange={(event) => {
+                    const i = Number(event.target.value);
+                    setStartStage(i);
+                    const wanted = PIPELINE[i].wf;
+                    const wf = (workflows.data ?? []).find(
+                      (w) => w.current_revision.title === wanted);
+                    if (wf) setWorkflowRevisionID(wf.current_revision.id);
+                  }}
+                >
+                  {PIPELINE.map((p, i) => (
+                    <option key={p.wf} value={i}>
+                      {i === 0 ? `С начала — ${p.ru}` : `Сразу с шага ${i + 1} — ${p.ru}`}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field
               label="Workflow"
               htmlFor={workflowID}
