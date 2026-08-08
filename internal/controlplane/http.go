@@ -104,6 +104,8 @@ func NewHandlerWithAutomation(store *Store, logger *slog.Logger, automations *Au
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/resume", api.resumeLegacyPollerOccurrence)
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/skip", api.skipLegacyPollerOccurrence)
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
+	mux.HandleFunc("GET /api/v1/dashboard", api.getDashboard)
+	mux.HandleFunc("GET /api/v1/version", api.getVersion)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
 	mux.HandleFunc("GET /api/v1/tasks/{task_id}", api.getTask)

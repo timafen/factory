@@ -710,6 +710,32 @@ type MetricsSummary struct {
 	WeeklyLimit            *WeeklyLimit `json:"weekly_limit,omitempty"`
 }
 
+type ReleaseCommit struct {
+	Commit  *string `json:"commit"`
+	Subject *string `json:"subject"`
+}
+
+type ReleaseInfo struct {
+	MainHead        *string        `json:"main_head"`
+	MainSubject     *string        `json:"main_subject"`
+	StagingRelease  *ReleaseCommit `json:"staging_release"`
+	ProdRelease     *ReleaseCommit `json:"prod_release"`
+	StagingHealth   *bool          `json:"staging_health"`
+	ProdHealth      *bool          `json:"prod_health"`
+	StagingInMain   *bool          `json:"staging_in_main"`
+	ProdInMain      *bool          `json:"prod_in_main"`
+	ProdCommitKnown *bool          `json:"prod_commit_known"`
+}
+
+type DashboardSummary struct {
+	Release ReleaseInfo `json:"release"`
+}
+
+type VersionInfo struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
 type ClaimRequest struct {
 	RequestID  string `json:"request_id"`
 	LeaseToken string `json:"lease_token"`
