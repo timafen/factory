@@ -33,6 +33,7 @@ type Dash = {
   access?: Record<string, { enabled?: boolean } | boolean>;
   release?: {
     staging_release?: string; prod_release?: string;
+    staging_release_human?: string; prod_release_human?: string;
     main_head?: string; main_subject?: string;
     staging_commit_known?: boolean; prod_commit_known?: boolean;
     staging_in_main?: boolean; prod_in_main?: boolean;
@@ -249,8 +250,8 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           {rel.main_head && <span style={{ fontSize: 12, color: muted }}>main: {rel.main_head}</span>}
         </div>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-          {([["Стейдж", rel.staging_release, rel.staging_health, rel.staging_in_main, rel.staging_commit_known],
-             ["Прод", rel.prod_release, rel.prod_health, rel.prod_in_main, rel.prod_commit_known]] as const).map(
+          {([["Стейдж", rel.staging_release_human || rel.staging_release, rel.staging_health, rel.staging_in_main, rel.staging_commit_known],
+             ["Прод", rel.prod_release_human || rel.prod_release, rel.prod_health, rel.prod_in_main, rel.prod_commit_known]] as const).map(
             ([name, release, health, inMain, known]) => (
               <div key={name} style={{ minWidth: 240, flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>

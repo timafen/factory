@@ -2491,6 +2491,16 @@ def detect_limits(conf, tasks, workers_by_id):
                         for a in atts[-2:])
         if not text or not LIMIT_SIGNS.search(text):
             continue
+        # Слова «rate limit» в чужом отчёте или в диффе — не лимит подписки.
+        # Если настоящий счётчик говорит, что запас есть, а слова нашлись
+        # только в тексте отчёта (не в ошибке запуска), — не верим словам.
+        err_only = " ".join(str(a.get("error") or "") for a in atts[-2:])
+        real = (load(PROVIDER_LIMITS_PATH, {}) or {}).get(prov) or {}
+        up = real.get("used_percent")
+        fresh = time.time() - (real.get("at") or 0) < 10800
+        if (isinstance(up, (int, float)) and up < 80 and fresh
+                and not LIMIT_SIGNS.search(err_only)):
+            continue
         m = RESET_AT.search(text)
         note_limit(conf, prov, text, m.group(1) if m else "")
 
@@ -2539,6 +2549,19 @@ def dashboard_slow():
                 continue
             known = _sh(f"{g} cat-file -e {sha}^{{commit}} && echo yes || echo no").endswith("yes")
             out[f"{key}_commit_known"] = known
+            if known:
+                # Голый хеш ничего не говорит хозяину. Имя релиза — это дата
+                # и что в нём сделано, тем же языком, что у fx factory.
+                subj = _sh(f"{g} log -1 --format=%s {sha}")[:80]
+                iso = _sh(f"{g} log -1 --format=%cI {sha}")[:16]
+                human = ""
+                try:
+                    M = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                         "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                    human = "от %d %s, %s" % (int(iso[8:10]), M[int(iso[5:7]) - 1], iso[11:16])
+                except Exception:
+                    pass
+                out[f"{key}_release_human"] = (human + (" — " + subj if subj else "")).strip()
             out[f"{key}_in_main"] = (
                 known and _sh(f"{g} merge-base --is-ancestor {sha} origin/main && echo yes || echo no").endswith("yes"))
     out["staging_health"] = _sh("sudo -n /usr/local/bin/fx staging health")[:60]
@@ -2704,12 +2727,30 @@ def write_dashboard(conf, tasks, workers):
         "brain": brain_block(conf),
         "host": host_block(workers),
         "workers": prov,
-        "limits": load_limits(),
+        "limits": limits_view(),
         "access": load(f"{HOME}/pilot/access.json", {}),
         "release": dashboard_slow(),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],
     }
     save(DASH_PATH, data)
+
+
+def limits_view():
+    """Экран получает правду: блок гаснет по сроку сам, а рядом — настоящий
+    процент подписки из provider_limits.json, а не догадка по словам."""
+    limits = load_limits()
+    real = load(PROVIDER_LIMITS_PATH, {}) or {}
+    out = {}
+    for prov, rec in limits.items():
+        rec = dict(rec or {})
+        if rec.get("state") in ("exhausted", "throttled") and not limit_active(prov, limits):
+            clear_limit(prov)
+            rec = {"state": "ok", "manual_off": bool(rec.get("manual_off"))}
+        r = real.get(prov) or {}
+        if isinstance(r.get("used_percent"), (int, float)):
+            rec["used_percent"] = r["used_percent"]
+        out[prov] = rec
+    return out
 
 
 def is_stopped(conf, base):
