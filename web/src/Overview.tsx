@@ -85,13 +85,15 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
 
   const pull = async () => {
     try {
-      const [dashboardResponse, worksResponse] = await Promise.all([
+      const [dashboardResult, worksResult] = await Promise.allSettled([
         fetch("/api/v1/dashboard"),
         fetch("/api/v1/works"),
       ]);
-      if (dashboardResponse.ok) setD((await dashboardResponse.json()) as Dash);
-      if (worksResponse.ok) {
-        setWorks((await worksResponse.json()) as WorkMetadata);
+      if (dashboardResult.status === "fulfilled" && dashboardResult.value.ok) {
+        setD((await dashboardResult.value.json()) as Dash);
+      }
+      if (worksResult.status === "fulfilled" && worksResult.value.ok) {
+        setWorks((await worksResult.value.json()) as WorkMetadata);
         setWorksUnavailable(false);
       } else {
         setWorksUnavailable(true);
