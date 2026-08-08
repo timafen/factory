@@ -7,12 +7,19 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-READY: замечания проверки экрана Settings исправлены. Branch: `factory/7ce70e06-806-c495dda7-644`. Head commit: `5d49ada` (последний содержательный коммит; вершина ветки — служебная правка только этой карточки).
-What changed: поле заметки показывается и сохраняется даже при отсутствии `_note` в ответе API; факты исходной реализации исправлены на branch `factory/ddaa8de1-fa2-66c96daa-db5`, HEAD `b279e48`.
-Evidence: `go test ./...`, `go build ./...`, Vitest (75), ESLint, TypeScript/Vite build — PASS; Playwright — 18 passed.
-Next action: повторно проверить поставку с правилом приёмки служебного коммита карточки.
+Status: READY — экран «Обзор» пересобран чисто от актуального `origin/main`.
+Branch: `factory/35b1cddd-88e-f65eeedb-184`.
+Head commit: `25218e1` (содержательная вершина перед служебным коммитом карточки).
+What changed: активная работа показывает очищенное название, постановщика и локализованный этап; API считает фактические элементы `running`.
+Evidence: `go test ./...`; Overview Vitest 5/5; TypeScript; production build; ESLint изменённых файлов — PASS. Общий ESLint: 10 прежних ошибок вне diff.
+Scope: `git diff origin/main...25218e1` — ровно 6 файлов реализации, тестов и собранного интерфейса.
+Next action: проверить экран `/` и принять чистую поставку.
 
 ## LOG
+
+### 2026-08-08 — Implement
+
+Ветка заново отведена от `origin/main` (`406f985`), перенесён только содержательный коммит экрана «Обзор»; diff содержит 6 целевых файлов. `go test ./...`, `npx vitest run src/Overview.test.tsx`, `npx tsc -p tsconfig.app.json --noEmit`, `npm run build` и ESLint изменённых файлов прошли. Общий `npm run lint` остаётся красным на 10 существовавших ошибках в несвязанных файлах; открытый риск ограничен этим базовым долгом.
 
 ### 2026-08-08 — Verify
 
