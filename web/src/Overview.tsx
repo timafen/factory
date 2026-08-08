@@ -18,6 +18,17 @@ type Dash = {
     worst?: { usd: number; title: string; id: string } | null;
   };
   workers?: Record<string, { total: number; healthy: number }>;
+  host?: {
+    state?: string;
+    cpu?: { load1: number; cores: number; percent: number; state: string };
+    memory?: { total_gb: number; available_gb: number; percent: number; state: string };
+    disk?: { total_gb: number; free_gb: number; percent: number; state: string };
+    slots?: { busy: number; capacity: number; percent: number; state: string };
+  };
+  brain?: {
+    chain?: { cli: string; model: string; provider: string; note?: string; blocked?: boolean }[];
+    last?: { cli?: string; model?: string; provider?: string; fallback?: boolean; at?: string };
+  };
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
   release?: {
@@ -190,6 +201,89 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
               самая дорогая за сутки: ${d.spend.worst.usd} — {d.spend.worst.title}
             </div>
           )}
+        </section>
+
+        <section style={{ ...card, flex: 1, minWidth: 280 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <HeartPulse size={16} color="#7ee2a8" /><strong>Нагрузка сервера</strong>
+          </div>
+          {(() => {
+            const h = d.host;
+            if (!h) return <div style={{ opacity: 0.6 }}>нет данных</div>;
+            const colour = (st?: string) =>
+              st === "over" ? "#ff9d9d" : st === "tight" ? "#e0cf9f" : "#7ee2a8";
+            const verdict = h.state === "over" ? "перегружен — новую работу не беру"
+              : h.state === "tight" ? "плотно, но справляется"
+              : "есть запас";
+            const bar = (label: string, pct: number, st: string | undefined, detail: string) => (
+              <div key={label} style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <span>{label}</span>
+                  <span style={{ color: colour(st) }}>{pct}% · {detail}</span>
+                </div>
+                <div style={{ height: 5, borderRadius: 3, background: "#232833", marginTop: 3 }}>
+                  <div style={{ height: 5, borderRadius: 3, width: Math.min(100, pct) + "%",
+                                background: colour(st) }} />
+                </div>
+              </div>
+            );
+            return (
+              <>
+                <div style={{ fontSize: 15, marginBottom: 10, color: colour(h.state) }}>
+                  {verdict}
+                </div>
+                {h.cpu && bar("Процессор", h.cpu.percent, h.cpu.state,
+                              h.cpu.load1 + " из " + h.cpu.cores + " ядер")}
+                {h.memory && bar("Память", h.memory.percent, h.memory.state,
+                                 "свободно " + h.memory.available_gb + " ГБ")}
+                {h.disk && bar("Диск", h.disk.percent, h.disk.state,
+                               "свободно " + h.disk.free_gb + " ГБ")}
+                {h.slots && bar("Занято мест", h.slots.percent, h.slots.state,
+                                h.slots.busy + " из " + h.slots.capacity)}
+              </>
+            );
+          })()}
+        </section>
+
+        <section style={{ ...card, flex: 1, minWidth: 280 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <HeartPulse size={16} color="#c3aef0" /><strong>Чем думает Фабрика</strong>
+          </div>
+          {(() => {
+            const b = d.brain;
+            if (!b?.chain?.length) return <div style={{ opacity: 0.6 }}>нет данных</div>;
+            const last = b.last;
+            const now = last?.model
+              ? b.chain.find((e) => e.model === last.model)
+              : b.chain.find((e) => !e.blocked);
+            return (
+              <>
+                <div style={{ fontSize: 15, marginBottom: 2 }}>
+                  {now ? now.model + " · " + now.provider : "все движки недоступны"}
+                </div>
+                {last?.fallback && (
+                  <div style={{ fontSize: 12.5, color: "#e0cf9f", marginBottom: 6 }}>
+                    работает запасной: основной не ответил
+                  </div>
+                )}
+                <div style={{ fontSize: 12.5, opacity: 0.6, margin: "6px 0 4px" }}>
+                  Порядок замены, если основной недоступен:
+                </div>
+                {b.chain.map((e, i) => (
+                  <div key={e.model} style={{
+                    display: "flex", gap: 8, alignItems: "baseline", fontSize: 13,
+                    opacity: e.blocked ? 0.45 : 1,
+                  }}>
+                    <span style={{ opacity: 0.6, minWidth: 14 }}>{i + 1}.</span>
+                    <span style={{ color: now && e.model === now.model ? "#c3aef0" : undefined }}>
+                      {e.model}
+                    </span>
+                    {e.blocked && <span style={{ opacity: 0.6, fontSize: 12 }}>· недоступен</span>}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </section>
 
         <section style={{ ...card, flex: 1, minWidth: 280 }}>

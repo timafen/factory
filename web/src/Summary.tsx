@@ -12,6 +12,8 @@ export function TaskSummary({ taskId, result, error, title }: {
   taskId: string; result?: string; error?: string; title?: string;
 }) {
   const [verdict, setVerdict] = useState("");
+  // Адрес, где владелец увидит сделанное своими глазами.
+  const [tryUrl, setTryUrl] = useState("");
   const [usage, setUsage] = useState<Usage | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -21,8 +23,9 @@ export function TaskSummary({ taskId, result, error, title }: {
       try {
         const r = await fetch(`/api/v1/verdicts/${taskId}`);
         if (r.ok) {
-          const d = (await r.json()) as { verdict?: string };
+          const d = (await r.json()) as { verdict?: string; try_url?: string };
           if (live && d.verdict) setVerdict(d.verdict);
+          if (live && d.try_url) setTryUrl(d.try_url);
         }
       } catch { /* ignore */ }
       try {
@@ -59,6 +62,14 @@ export function TaskSummary({ taskId, result, error, title }: {
   const cards = [...new Set(text.match(/CARD-\d{3,4}/g) ?? [])];
   const prs = [...new Set(text.match(/https:\/\/github\.com\/[^\s)]+\/pull\/\d+/g) ?? [])];
   const verdictWord = (text.match(/\b(PASS|BLOCKED|APPROVE|REQUEST CHANGES)\b/) || [])[0] ?? "";
+  // Владелец не обязан знать эти слова. Они означают судьбу работы.
+  const VERDICT_RU: Record<string, string> = {
+    "PASS": "проверка пройдена",
+    "APPROVE": "ревью одобрило",
+    "REQUEST CHANGES": "ревью вернуло на доработку",
+    "BLOCKED": "работа застряла",
+  };
+  const verdictRu = VERDICT_RU[verdictWord] ?? verdictWord;
   const files = [...new Set(text.match(/[\w./-]+\.(?:py|ts|tsx|go|md|json|ya?ml|sh|txt)\b/g) ?? [])].slice(0, 8);
 
   const num = (n: number) => n.toLocaleString("ru-RU");
@@ -74,9 +85,16 @@ export function TaskSummary({ taskId, result, error, title }: {
             fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
             background: /PASS|APPROVE/.test(verdictWord) ? "#16341f" : "#3b1d1d",
             color: /PASS|APPROVE/.test(verdictWord) ? "#7ee2a8" : "#ffb4b4",
-          }}>{verdictWord}</span>
+          }}>{verdictRu}</span>
         )}
         {verdict && <SpeakButton text={verdict} label="Вслух" />}
+        {tryUrl && (
+          // «Сделано» ничего не значит, пока это нельзя открыть и потрогать.
+          <a href={tryUrl} target="_blank" rel="noreferrer" className="button"
+             style={{ fontSize: 12, padding: "2px 10px", textDecoration: "none" }}>
+            Посмотреть →
+          </a>
+        )}
         <span style={{ flex: 1 }} />
         {!verdict && (result || error) && (
           <button className="button" style={{ fontSize: 12, padding: "2px 10px" }}

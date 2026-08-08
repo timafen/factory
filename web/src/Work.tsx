@@ -1,6 +1,7 @@
 import { ChevronRight, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { runtimeLabel, taskStates, timeAgo } from "./format";
+import { ProjectTag, useProjectName } from "./project";
 import type { Task, TaskState, Worker } from "./types";
 import {
   EmptyState, ErrorState, LoadingState, StaleBanner, ViewHeader, type ViewStateProps,
@@ -12,7 +13,9 @@ const STAGE_RU: Record<string, string> = {
   "Review": "Ревью", "Verify": "Проверка",
 };
 
-type Verdict = { action?: string; final_pass?: boolean; stage?: string };
+type Verdict = { action?: string; final_pass?: boolean; stage?: string;
+                 // Где владельцу открыть сделанное и посмотреть.
+                 try_url?: string };
 type Question = { task_id?: string; status?: string; question?: string };
 type WorkMeta = {
   origin?: "owner" | "assistant" | "orchestrator";
@@ -65,7 +68,8 @@ type Group = {
   latest: Task;
   status: { label: string; tone: keyof typeof TONE };
   currentStage: string | null;
-  reached: Record<string, "done" | "live" | "bad" | "skipped">;
+  reached: Record<string, "done" | "live" | "bad" | "skipped" | "again">;
+  lap?: number;
   meta?: WorkMeta;
 };
 
@@ -74,6 +78,9 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
   const openQ = new Set(
     questions.filter((q) => q.status === "open" || q.status === "stuck").map((q) => q.task_id),
   );
+  // Состояние вопроса по каждой задаче: открыт — ход владельца, отвечен —
+  // ход оркестратора, нет вопроса — ещё никто не разбирался.
+  const qState = new Map(questions.map((q) => [q.task_id ?? "", q.status ?? ""]));
   const map = new Map<string, Group>();
   for (const t of tasks) {
     const { base, stage } = parse(t.title);
@@ -99,6 +106,17 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
     // человек уже сделал руками. Такие стадии не «не дошли», а «не нужны».
     // Но помечать так можно, только если мы уверены, что начало работы попало
     // в загруженное окно — иначе выдадим «не было» за «не загрузили».
+    // Сколько раз работа возвращалась на доработку: считаем по повторам
+    // одной и той же стадии.
+    const seenStages = new Set<string>();
+    let lap = 1;
+    for (const it of g.items) {
+      if (!it.stage) continue;
+      if (seenStages.has(it.stage)) { lap += 1; seenStages.clear(); }
+      seenStages.add(it.stage);
+    }
+    g.lap = lap;
+
     g.meta = works[g.base];
     const recorded = g.meta?.skipped;
     if (recorded && recorded.length) {
@@ -127,6 +145,14 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
 
     if (live) {
       g.currentStage = live.stage;
+      // Стадии ПРАВЕЕ текущей уже проходились, но будут проходиться снова.
+      // Зелёный тут — обман: человек читает его как «этот шаг уже позади».
+      const liveIdx = live.stage ? STAGE_ORDER.indexOf(live.stage) : -1;
+      if (liveIdx >= 0) {
+        for (const st of STAGE_ORDER.slice(liveIdx + 1)) {
+          if (g.reached[st] === "done") g.reached[st] = "again";
+        }
+      }
       g.status = { label: live.task.state === "queued" ? "ждёт исполнителя" : "идёт", tone: "live" };
     } else if (waiting) {
       g.status = { label: "ждёт твоего ответа", tone: "warn" };
@@ -136,10 +162,26 @@ function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Ques
       g.status = { label: "на доработку", tone: "warn" };
     } else if (allCancelled) {
       g.status = { label: "отменена", tone: "muted" };
-    } else if (failed) {
-      g.status = { label: "сорвалась", tone: "bad" };
     } else {
-      g.status = { label: "остановлена", tone: "warn" };
+      // Кто ходит следующим. Свежий сбой без вопроса — оркестратор ещё не
+      // добрался до него: он обходит задачи раз в полминуты. Если прошло
+      // много времени и вопроса так и нет — никто не взялся, и это плохо.
+      const newest = g.items[g.items.length - 1];
+      const qs = newest ? qState.get(newest.task.id) : undefined;
+      const ageMin = newest
+        ? (Date.now() - Date.parse(newest.task.created_at ?? "")) / 60000
+        : 1e9;
+      if (qs === "answered") {
+        g.status = { label: "оркестратор ответил, продолжаем", tone: "live" };
+      } else if (failed && !qs && ageMin < 10) {
+        g.status = { label: "сорвалась, оркестратор разбирается", tone: "warn" };
+      } else if (failed) {
+        g.status = { label: "сорвалась и стоит — никто не взялся", tone: "bad" };
+      } else if (!qs && ageMin < 10) {
+        g.status = { label: "закончила ход, оркестратор решает", tone: "warn" };
+      } else {
+        g.status = { label: "остановлена, ждёт решения", tone: "warn" };
+      }
     }
   }
 
@@ -163,6 +205,9 @@ function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
   if (g.meta?.closed) return "archive";
   if (g.status.label === "ждёт твоего ответа") return "waiting";
   if (g.status.tone === "bad" || g.status.label === "на доработку") return "waiting";
+  // Пока ход оркестратора — это не дело владельца, ему туда смотреть незачем.
+  if (g.status.label === "оркестратор ответил, продолжаем") return "live";
+  if (g.status.label.includes("оркестратор")) return "live";
   if (g.status.tone === "live") return "live";
   const age = Date.now() - Date.parse(g.latest.created_at ?? "");
   const fresh = Number.isFinite(age) && age < FRESH_DAYS * 864e5;
@@ -171,17 +216,17 @@ function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
 }
 
 const SECTIONS: { key: "waiting" | "live" | "done"; title: string; hint: string }[] = [
-  { key: "waiting", title: "Нужен ты", hint: "Стоит и само не сдвинется" },
-  { key: "live", title: "Идёт сейчас", hint: "Работает прямо в эту минуту" },
+  { key: "waiting", title: "Нужен ты", hint: "Без тебя не сдвинется" },
+  { key: "live", title: "Идёт сейчас", hint: "Работает или вот-вот продолжится — от тебя ничего не нужно" },
   { key: "done", title: "Свежие итоги", hint: "Закончено за последние два дня" },
 ];
 
 export function WorkView({
   tasks, workers, pending, error, fetching, updatedAt,
-  onTask, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
+  onTask, onAnswer, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
 }: ViewStateProps & {
   tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
-  onTask: (id: string) => void; onDelegate: () => void;
+  onTask: (id: string) => void; onAnswer?: () => void; onDelegate: () => void;
   hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
@@ -207,6 +252,10 @@ export function WorkView({
     const h = window.setInterval(() => void pull(), 20000);
     return () => { alive = false; window.clearInterval(h); };
   }, []);
+
+  // Хук обязан вызываться до любых ранних выходов, иначе на втором
+  // рендере их станет меньше и React уронит весь экран.
+  const projectName = useProjectName();
 
   if (pending) return <LoadingState label="Загружаю работу" />;
   if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
@@ -257,7 +306,8 @@ export function WorkView({
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
-                            onTask={onTask} />
+                            onTask={onTask} onAnswer={onAnswer}
+                            project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
             );
@@ -281,7 +331,8 @@ export function WorkView({
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
-                            onTask={onTask} />
+                            onTask={onTask} onAnswer={onAnswer}
+                            project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
             );
@@ -300,11 +351,16 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
-  onToggle: () => void; onTask: (id: string) => void;
+  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void;
+  project?: string;
 }) {
   const worker = workerMap.get(g.latest.worker_id);
+  // Самая свежая ссылка «посмотреть» по всей работе: её называет стадия
+  // разработки, а принимается работа позже — искать надо по всем шагам.
+  const tryUrl = [...g.items].reverse()
+    .map((it) => it.verdict?.try_url).find(Boolean) ?? "";
   return (
     <section style={{
       background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
@@ -313,8 +369,34 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
-        <Pill text={g.meta?.closed ? "закрыта" : g.status.label}
-              tone={g.meta?.closed ? "muted" : g.status.tone} />
+        {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (
+          // Итог принят — значит изменение уже на стенде. Сама плашка и есть
+          // дверь туда: «сделано» без возможности посмотреть — просто слово.
+          <a href={tryUrl} target="_blank" rel="noreferrer"
+             onClick={(e) => e.stopPropagation()}
+             title="Открыть страницу, где видно сделанное"
+             style={{
+               fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
+               background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741",
+               textDecoration: "none", whiteSpace: "nowrap",
+             }}>работа принята · посмотреть →</a>
+        ) : g.status.label === "ждёт твоего ответа" && onAnswer ? (
+          // Плашка про долг перед владельцем обязана вести туда, где долг
+          // закрывают. Сообщить о проблеме и не дать способа её решить —
+          // худший вид экрана.
+          <button
+            onClick={(e) => { e.stopPropagation(); onAnswer(); }}
+            title="Открыть экран, где можно ответить"
+            style={{
+              fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
+              background: "#4a3f22", color: "#e0cf9f", border: "1px solid #7a6a3a",
+              cursor: "pointer", whiteSpace: "nowrap",
+            }}>ждёт твоего ответа →</button>
+        ) : (
+          <Pill text={g.meta?.closed ? "закрыта" : g.status.label}
+                tone={g.meta?.closed ? "muted" : g.status.tone} />
+        )}
+        {project && <ProjectTag name={project} />}
         {g.meta?.origin && (
           <span
             title={g.meta.reason || undefined}
@@ -327,6 +409,12 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
             }}>{ORIGIN_RU[g.meta.origin] ?? g.meta.origin}</span>
         )}
         <strong style={{ fontSize: 15, opacity: g.meta?.closed ? 0.65 : 1 }}>{g.base}</strong>
+        {(g.lap ?? 1) > 1 && (
+          <span title="Работа возвращалась на доработку — идёт повторный круг"
+                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999,
+                         border: "1px solid #5c4f2a", color: "#e0cf9f",
+                         whiteSpace: "nowrap" }}>круг {g.lap}</span>
+        )}
         {g.meta?.closed_reason && (
           <span style={{ fontSize: 12, color: muted }}>· {g.meta.closed_reason}</span>
         )}
@@ -346,17 +434,22 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
           const fg = s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
                    : isNow ? "#8ec5ff" : "#5a6270";
           const skipped = s === "skipped";
+          const again = s === "again";
           return (
             <span key={st}
               title={skipped ? "Стадию не проводили: работу завели сразу с более позднего шага"
                              : (s ? undefined : "Стадия ещё не пройдена")}
               style={{
                 fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
-                background: skipped ? "transparent" : bg,
-                color: skipped ? "#4a515e" : (s || isNow ? fg : "#5a6270"),
+                background: skipped ? "transparent" : again ? "#3a3320" : bg,
+                color: skipped ? "#4a515e" : again ? "#e0cf9f"
+                     : (s || isNow ? fg : "#5a6270"),
                 border: isNow ? "1px solid #3d6a92"
-                      : skipped ? "1px dashed #363d4a" : "1px solid transparent",
-              }}>{skipped ? `${STAGE_RU[st]} — не нужна` : STAGE_RU[st]}</span>
+                      : skipped ? "1px dashed #363d4a"
+                      : again ? "1px solid #5c4f2a" : "1px solid transparent",
+              }}>{skipped ? `${STAGE_RU[st]} — не нужна`
+                  : again ? `${STAGE_RU[st]} — заново`
+                  : STAGE_RU[st]}</span>
           );
         })}
       </div>
@@ -364,7 +457,31 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
       {expanded && (
         <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #262c38)", paddingTop: 10,
                       display: "flex", flexDirection: "column", gap: 6 }}>
-          {g.items.map(({ task, stage, verdict }) => (
+          {g.items.map(({ task, stage, verdict }, idx) => {
+            const isLast = idx === g.items.length - 1;
+            // «Остановлена» уместно только для последнего шага. У прежних шагов
+            // ход просто закончился, и работа поехала дальше — это не остановка.
+            const stopped = verdict?.action === "stop";
+            const label =
+              LIVE.includes(task.state) ? "идёт"
+              : task.state === "failed" ? "сорвалась"
+              : task.state === "cancelled" ? "отменена"
+              : verdict?.final_pass === true ? "проверка пройдена"
+              : verdict?.final_pass === false ? "на доработку"
+              : verdict?.action === "advance" ? "этап пройден"
+              : stopped && !isLast && stage === "Review" ? "вернул на доработку"
+              : stopped && !isLast ? "ход закончен, работа пошла дальше"
+              : stopped ? "остановлена, ждёт решения"
+              : "отработала";
+            const tone =
+              LIVE.includes(task.state) ? "live"
+              : task.state === "failed" ? "bad"
+              : task.state === "cancelled" ? "muted"
+              : verdict?.final_pass === false ? "warn"
+              : verdict?.final_pass === true || verdict?.action === "advance" ? "ok"
+              : stopped && !isLast ? "muted"
+              : stopped ? "warn" : "muted";
+            return (
             <div key={task.id}
                  onClick={() => onTask(task.id)}
                  style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
@@ -372,33 +489,15 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask }: {
               <span style={{ minWidth: 110, color: "#8ec5ff" }}>
                 {stage ? STAGE_RU[stage] ?? stage : "—"}
               </span>
-              <Pill
-                text={
-                  LIVE.includes(task.state) ? "идёт"
-                  : task.state === "failed" ? "сорвалась"
-                  : task.state === "cancelled" ? "отменена"
-                  : verdict?.final_pass === true ? "проверка пройдена"
-                  : verdict?.final_pass === false ? "на доработку"
-                  : verdict?.action === "advance" ? "этап пройден"
-                  : verdict?.action === "stop" ? "остановлена"
-                  : "отработала"
-                }
-                tone={
-                  LIVE.includes(task.state) ? "live"
-                  : task.state === "failed" ? "bad"
-                  : task.state === "cancelled" ? "muted"
-                  : verdict?.final_pass === false ? "warn"
-                  : verdict?.final_pass === true || verdict?.action === "advance" ? "ok"
-                  : verdict?.action === "stop" ? "warn" : "muted"
-                }
-              />
+              <Pill text={label} tone={tone as keyof typeof TONE} />
               <span style={{ color: muted }}>
                 {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgo(task.created_at)}
               </span>
               <span style={{ flex: 1 }} />
               <span style={{ color: muted }}>открыть ›</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
