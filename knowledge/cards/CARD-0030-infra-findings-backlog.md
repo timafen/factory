@@ -7,12 +7,25 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Implemented, awaiting Verify. Branch: `factory/94811040-165-c6a8ffc6-85d`. Head commit: `444ae37` (верхний коммит ветки — служебная правка только этой карточки, допустим как родитель вершины).
-What changed: экран Settings — русские названия всех полей и видимое пояснение под каждым (включая группы уведомлений, таблицу маршрутизации этапов и заметку конфигурации); e2e-сценарий `control-plane.spec.ts` обновлён под новый текст; узкая доставка поверх свежего `origin/main` — только шесть файлов задачи.
-Evidence: `npx vitest run src/Settings.test.tsx` (6/6, включая новый цикл по всем ~43 полям на русские названия и непустые пояснения) — PASS; `npx tsc -p tsconfig.app.json --noEmit`, `npx vite build`, `npx eslint src/Settings.tsx src/Settings.test.tsx`, `go build ./...` — PASS; `git diff --name-only origin/main` — ровно 6 файлов задачи.
-Next action: человек проверяет (Verify) и мёржит в `main`.
+Status: Verified PASS — ожидает слияния человеком. Branch: `factory/94811040-165-c6a8ffc6-85d`. Head commit: `f43d944`.
+What changed: экран Settings — русские названия всех полей и видимое пояснение под каждым (включая группы уведомлений, таблицу маршрутизации этапов и заметку конфигурации); e2e-сценарий `control-plane.spec.ts` обновлён под новый текст; узкая доставка поверх свежего `origin/main` — семь файлов задачи, включая собранный UI и карточку.
+Evidence: чистый `npm ci`; `npx vitest run src/Settings.test.tsx` (6/6, включая цикл по всем ~43 полям); `npm run typecheck`; `npm run build`; focused ESLint — PASS. Полные Vitest, ESLint, Go test и Settings E2E имеют известные независимые сбои, описанные в записи Verify ниже.
+One next action: влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Русские названия всех полей и пояснение к каждому | `cd web && npx vitest run src/Settings.test.tsx --reporter=verbose` | PASS: 6/6; специальный тест проходит цикл по всем ~43 полям, проверяя русскую подпись и непустое пояснение. |
+| Маршрутизация и уведомления не потеряли настройку | те же Settings-тесты | PASS: проверены таблица маршрутизации, пять групп уведомлений, умолчания и PUT с пятью каноническими ключами. |
+| Сборка поставляемого UI | чистый `cd web && npm ci`; `npm run typecheck`; `npm run build` | PASS: TypeScript без ошибок, production-сборка Vite за 5.38 s. |
+| Регрессии изменённых файлов | `npx eslint src/Settings.tsx src/Settings.test.tsx`; `git diff --check origin/main...HEAD` | PASS: ESLint без замечаний, пробельных ошибок нет. |
+| Полный Vitest | `cd web && npx vitest run --reporter=dot` | Известная база: 79 passed, 15 failed — только неизменённый `src/App.test.tsx`. |
+| Полные ESLint и Go tests | `npm run lint`; `go build ./cmd/factory-server && go test ./...` | Известная база: ESLint — 10 ошибок вне диффа (`Access`, `Live`, `Pipeline`, `Say`); Go test не компилирует неизменённый `internal/controlplane/pilot_config_test.go` из-за старого формата `stages`. |
+| Browser Settings E2E | `npx playwright test -g 'edits pilot settings from the Settings screen'` | BLOCKED известной базой: API возвращает `pilot config schema is invalid` (старый object-формат `stages` вместо `[]PilotStage`), поэтому экран не загружается до действий сценария. |
+
 
 ### 2026-08-08 — Verify
 
