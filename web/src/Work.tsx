@@ -381,7 +381,12 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
   const worker = workerMap.get(g.latest.worker_id);
   // Самая свежая ссылка «посмотреть» по всей работе: её называет стадия
   // разработки, а принимается работа позже — искать надо по всем шагам.
-  const tryUrl = [...g.items].reverse()
+  // Дверь называет последняя стадия, которая реально смотрела результат.
+  // Черновые ссылки старых кругов разработки не должны перебивать её:
+  // они уже уводили хозяина на чужой экран.
+  const byStage = (st: string) => [...g.items].reverse()
+    .filter((it) => it.stage === st).map((it) => it.verdict?.try_url).find(Boolean);
+  const tryUrl = byStage("Verify") ?? byStage("Review") ?? [...g.items].reverse()
     .map((it) => it.verdict?.try_url).find(Boolean) ?? "";
   return (
     <section style={{
