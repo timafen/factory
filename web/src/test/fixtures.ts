@@ -302,6 +302,18 @@ export function mockControlPlane(
       const window = new URL(path, "http://factory.test").searchParams.get("window");
       return Response.json({ ...metrics, window });
     }
+    if (path === "/api/v1/dashboard") {
+      return Response.json({
+        now: {
+          running: [
+            { id: "active-implementation", title: "[auto] [3/5 Implement + Test] Show active work" },
+          ],
+        },
+      });
+    }
+    if (path === "/api/v1/works") {
+      return Response.json({ "Show active work": { origin: "owner", start_stage: "Triage" } });
+    }
     if (path === "/api/v1/repositories") {
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { remote_identity: string };

@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleDot, Play, RotateCcw, Users } from "lucide-react";
+import { CircleDot, Play, RotateCcw, UserRound, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { api } from "./api";
 import { useVisibleInterval } from "./polling";
-import type { MetricsSummary, MetricsWindow } from "./types";
+import type { Dashboard, MetricsSummary, MetricsWindow, WorksMetadata } from "./types";
 import { ErrorState, LoadingState, StaleBanner, ViewHeader } from "./ui";
 
 const windows: Array<{ value: MetricsWindow; label: string }> = [
@@ -13,12 +13,48 @@ const windows: Array<{ value: MetricsWindow; label: string }> = [
   { value: "all", label: "All retained" },
 ];
 
+const stageLabels: Record<string, string> = {
+  Triage: "Разбор",
+  Specification: "Спецификация",
+  "Implement + Test": "Разработка и тесты",
+  Review: "Ревью",
+  Verify: "Проверка",
+};
+
+const originLabels: Record<string, string> = {
+  owner: "владелец",
+  assistant: "ассистент",
+  orchestrator: "оркестратор",
+};
+
+function parseActiveWorkTitle(title: string) {
+  const match = /^\[auto\]\s*\[(\d+)\/(\d+)\s+([^\]]+)\]\s*(.*)$/.exec(title.trim());
+  if (!match) {
+    return { title: title.replace(/^\[auto\]\s*/, "").trim(), stage: null, progress: null };
+  }
+  return {
+    title: match[4].trim(),
+    stage: match[3].trim(),
+    progress: `${match[1]}/${match[2]}`,
+  };
+}
+
 export function Overview() {
   const [window, setWindow] = useState<MetricsWindow>("7d");
   const interval = useVisibleInterval(10_000);
   const metrics = useQuery({
     queryKey: ["metrics", window],
     queryFn: () => api.metrics(window),
+    refetchInterval: interval,
+  });
+  const dashboard = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: api.dashboard,
+    refetchInterval: interval,
+  });
+  const works = useQuery({
+    queryKey: ["works"],
+    queryFn: api.works,
     refetchInterval: interval,
   });
 
@@ -36,6 +72,12 @@ export function Overview() {
         onRefresh={() => void metrics.refetch()}
       />
       {metrics.error && <StaleBanner error={metrics.error} />}
+      <ActiveWork
+        dashboard={dashboard.data}
+        works={works.data}
+        pending={dashboard.isPending || works.isPending}
+        unavailable={Boolean(dashboard.error || works.error)}
+      />
       <div className="metrics-toolbar">
         <span>Time window</span>
         <div className="window-picker" aria-label="Metrics window">
@@ -52,6 +94,59 @@ export function Overview() {
       </div>
       {metrics.data && <Metrics data={metrics.data} />}
     </div>
+  );
+}
+
+function ActiveWork({
+  dashboard,
+  works,
+  pending,
+  unavailable,
+}: {
+  dashboard?: Dashboard;
+  works?: WorksMetadata;
+  pending: boolean;
+  unavailable: boolean;
+}) {
+  const running = dashboard?.now?.running ?? [];
+
+  return (
+    <section className="active-work" aria-labelledby="active-work-heading">
+      <div className="active-work-heading">
+        <div>
+          <h2 id="active-work-heading">Сейчас в работе</h2>
+          <p>Что делает фабрика, кем поставлено и на каком этапе.</p>
+        </div>
+        <span>{running.length}</span>
+      </div>
+      {pending && !dashboard ? (
+        <p className="active-work-message">Загружаю активную работу…</p>
+      ) : unavailable && !dashboard ? (
+        <p className="active-work-message">Не удалось получить активную работу.</p>
+      ) : running.length === 0 ? (
+        <p className="active-work-message">Сейчас активной работы нет.</p>
+      ) : (
+        <div className="active-work-list">
+          {running.map((item) => {
+            const parsed = parseActiveWorkTitle(item.title);
+            const metadata = works?.[parsed.title];
+            const stage = parsed.stage ? (stageLabels[parsed.stage] ?? parsed.stage) : null;
+            return (
+              <article className="active-work-item" key={item.id}>
+                <strong>{parsed.title || "Работа без названия"}</strong>
+                <div className="active-work-facts">
+                  <span><UserRound size={13} /> Поставил: {metadata?.origin ? (originLabels[metadata.origin] ?? metadata.origin) : "не указано"}</span>
+                  <span><CircleDot size={13} /> Этап: {stage ? `${parsed.progress ? `${parsed.progress} · ` : ""}${stage}` : "не указан"}</span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+      {unavailable && dashboard && (
+        <p className="active-work-warning">Данные о постановщике или обновлении могут быть неполными.</p>
+      )}
+    </section>
   );
 }
 

@@ -1,6 +1,19 @@
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type Runtime = "codex" | "claude-code";
 
+export interface Dashboard {
+  now?: {
+    running?: Array<{ id: string; title: string }>;
+  };
+}
+
+export interface WorkMetadata {
+  origin?: "owner" | "assistant" | "orchestrator";
+  start_stage?: string;
+}
+
+export type WorksMetadata = Record<string, WorkMetadata>;
+
 export interface Repository {
   id: string;
   key: string;

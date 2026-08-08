@@ -25,6 +25,8 @@ import type {
   LegacyPollerSelection,
   PilotSettings,
   PilotSettingsResponse,
+  Dashboard,
+  WorksMetadata,
 } from "./types";
 
 export class APIError extends Error {
@@ -69,6 +71,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  dashboard: () => request<Dashboard>("/api/v1/dashboard"),
+  works: () => request<WorksMetadata>("/api/v1/works"),
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
   updatePilotSettings: (version: string, settings: PilotSettings) =>
     request<PilotSettingsResponse>("/api/v1/settings/pilot", {
