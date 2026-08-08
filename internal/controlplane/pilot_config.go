@@ -178,7 +178,15 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 	warnings := []string{}
 	warningSeen := map[string]bool{}
 	for _, stage := range pilotStages {
-		workers, ok := settings.Stages[stage]
+		// Этапы лежат списком: порядок в конвейере — это и есть порядок здесь.
+		var workers protocol.PilotStageWorkers
+		ok := false
+		for _, st := range settings.Stages {
+			if st.Workflow == stage {
+				workers, ok = st.Workers, true
+				break
+			}
+		}
 		if !ok {
 			return nil, invalid("invalid_pilot_settings", "missing stage: "+stage)
 		}

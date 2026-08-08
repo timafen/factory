@@ -788,7 +788,7 @@ type PilotSettings struct {
 	DeployStagingCmd    string                       `json:"deploy_staging_cmd"`
 	OwnerChatURL        string                       `json:"owner_chat_url"`
 	OwnerUIURL          string                       `json:"owner_ui_url"`
-	Stages              map[string]PilotStageWorkers `json:"stages"`
+	Stages              []PilotStage                 `json:"stages"`
 	SkipStagesForLow    []string                     `json:"skip_stages_for_low"`
 	StoppedPipelines    []string                     `json:"stopped_pipelines"`
 	// Потолок кругов по одной работе и группы уведомлений: этим управляет
@@ -803,6 +803,13 @@ type PilotSettings struct {
 	NtfyServer          string                       `json:"ntfy_server"`
 	NtfyOwnerTopic      string                       `json:"ntfy_owner_topic"`
 	BrainChain          []PilotBrain                 `json:"brain_chain"`
+}
+
+// Этапы конвейера идут списком, а не набором: порядок здесь и есть
+// порядок работы, и он важен.
+type PilotStage struct {
+	Workflow string            `json:"workflow"`
+	Workers  PilotStageWorkers `json:"workers"`
 }
 
 type PilotStageWorkers struct {
