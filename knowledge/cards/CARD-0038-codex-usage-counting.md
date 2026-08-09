@@ -2,10 +2,10 @@
 
 ## HEAD
 
-- Status: ready for repeat review — лишний артефакт удалён, заявленная область
-  поставки соблюдена; целевые проверки и production-сборка проходят.
+- Status: ready for repeat review — область осознанно включает актуальный
+  production bundle; целевые проверки и production-сборка проходят.
 - Branch: `factory/82b68a42-1d7-1f10a897-746`.
-- Head commit: `ebcf712` (проверенная реализация до обновления карточки).
+- Head commit: `097e723` (проверенная реализация до обновления карточки).
 - What changed: тариф учитывает контекст свыше 272K и cache writes; при
   отсутствии данных о записи кэша сумма явно названа базовой оценкой.
 - What changed: cumulative total обновляется при каждом событии, поэтому
@@ -14,8 +14,9 @@
   `npm test -- --run src/Overview.test.ts` → 9/9 passed; `npm run build` → passed.
 - Evidence: `just check` блокируют две прежние ошибки `staticcheck` вне диффа
   карточки: `cards_http.go:37` (U1000), `pilot_config.go:132` (SA4006).
-- Evidence: `git diff --name-only origin/main...HEAD` → только 8 заявленных файлов.
-- Next action: повторить Review поставки CARD-0038.
+- Evidence: повторный `npm run build` детерминированно создаёт
+  `index-FwC9R2L7.js`; его SHA-1 совпадает с production bundle в реализации.
+- Next action: повторить Review поставки CARD-0038 с расширенной областью.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -66,3 +67,10 @@ cumulative total исправлено для смешанного потока. 
 содержит только восемь заявленных файлов CARD-0038. Целевые проверки прошли
 5/5 и 9/9, production-сборка успешна; `just check` по-прежнему останавливают
 две прежние ошибки `staticcheck` вне области карточки.
+
+### 2026-08-09 — Implement
+
+Повторная production-сборка доказала, что `index-FwC9R2L7.js` создаётся из
+актуального `Overview.tsx`, а `index.html` ссылается на него; без файла экран
+не загружается. Bundle возвращён, область поставки осознанно расширена и будет
+явно объявлена при сдаче.
