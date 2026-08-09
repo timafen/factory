@@ -2,7 +2,8 @@
 
 ## HEAD
 
-- Status: implemented — целевые проверки и сборка проходят.
+- Status: implemented — целевые проверки и сборки проходят; общий gate
+  блокируют не относящиеся к карточке ошибки базовой ветки.
 - Branch: `factory/1f408044-f2d-744f8964-5a7`.
 - Head commit: `a773443` (проверенная ревизия реализации; следующий коммит
   уточняет только карточку и не заменяет эту фиксированную точку самоссылкой).
@@ -12,6 +13,8 @@
   «стоимость не определена», а не ложный ноль.
 - Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 3/3 OK;
   `npm test -- --run src/Overview.test.ts` → 9/9 passed; `npm run build` → passed.
+- Evidence: весь `pilot.test_pilot` → 27/27; Go tests → passed; общий `just check`
+  остановлен старыми staticcheck и тремя `Dialog.test.tsx` вне области карточки.
 - Next action: сохранить `attempt_id` рядом с session id при запуске Codex,
   прежде чем показывать его расход у конкретной задачи.
 
@@ -35,3 +38,10 @@
 версионированный тариф OpenAI на дату реализации, общий дневной учёт и честное
 отображение неизвестной цены. Три серверных и девять UI-тестов проходят,
 production-сборка web завершилась успешно.
+
+### 2026-08-09 — Implement
+
+На финальной истории весь Python-набор пилота прошёл 27/27, Go tests,
+tooling/launcher и обе сборки прошли. Общий `just check` не зелёный из-за двух
+staticcheck-ошибок в `internal/controlplane` и трёх тестов `Dialog.test.tsx`;
+ни один из этих файлов не входит в дифф CARD-0038.
