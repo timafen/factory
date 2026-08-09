@@ -160,7 +160,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   const headline = q > 0
     ? { text: `Ждёт твоего ответа: ${q}`, tone: "warn" as const, icon: <MessageCircleQuestion size={22} /> }
     : running > 0
-      ? { text: "Всё идёт", tone: "ok" as const, icon: <Activity size={22} /> }
+      ? { text: "Всё идёт — твоего участия не нужно", tone: "ok" as const, icon: <Activity size={22} /> }
       : queued > 0
         ? { text: "Работа в очереди, ждём исполнителя", tone: "muted" as const, icon: <Loader2 size={22} /> }
         : { text: "Фабрика свободна", tone: "muted" as const, icon: <CheckCircle2 size={22} /> };
@@ -390,7 +390,10 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                 </div>
                 {last?.fallback && (
                   <div style={{ fontSize: 12.5, color: "#e0cf9f", marginBottom: 6 }}>
-                    работает запасной: основной не ответил
+                    прошлый ответ{last?.at ? " (" + last.at.slice(11, 16) + ")" : ""} дал запасной — основной тогда молчал
+                    {b.chain[0] && !b.chain[0].blocked
+                      ? "; сейчас основной снова доступен и вернётся со следующим вопросом"
+                      : ""}
                   </div>
                 )}
                 <div style={{ fontSize: 12.5, opacity: 0.6, margin: "6px 0 4px" }}>

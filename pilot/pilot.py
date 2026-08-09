@@ -667,6 +667,15 @@ def brain(conf, prompt, timeout=180):
             out = (p.stdout or "").strip()
             both = (p.stdout or "") + (p.stderr or "")
             if out:
+                # Успешный ответ — доказательство, что лимита нет: снимаем
+                # застрявший блок с этого провайдера сами.
+                try:
+                    lm = load_limits()
+                    if (lm.get(eng.get("provider")) or {}).get("state") in ("exhausted", "throttled"):
+                        clear_limit(eng["provider"])
+                        log("LIMIT CLEARED by success: " + str(eng.get("provider")))
+                except Exception:
+                    pass
                 if i:
                     log(f"BRAIN FALLBACK: отвечает {eng['cli']}/{eng['model']} "
                         f"(первые {i} не смогли)")
@@ -2724,7 +2733,7 @@ def limit_active(provider, limits=None):
     else:
         # без явного срока держим блок час — этого хватает, чтобы не долбиться
         seen = rec.get("detected_at") or ""
-        if seen and (time.time() - rec.get("detected_epoch", 0)) > 3600:
+        if seen and (time.time() - rec.get("detected_epoch", 0)) > 900:
             return False
     return True
 
