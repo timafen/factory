@@ -8,6 +8,11 @@ runner обслуживает HTTP API «Диалога» и CLI `factory-worker
 кэша Chromium, установленного Playwright; серверная установка описана скриптом
 `ops/install-server-browser.sh`.
 
+На Ubuntu 24.04 AppArmor запрещает user-namespace sandbox загруженному
+Playwright Chromium, поэтому headless-процесс запускается с `--no-sandbox` от
+непривилегированного пользователя Factory. Его сеть при этом закрыта локальным
+allowlist-прокси; системные права процесса не расширяются.
+
 ## Граница доступа
 
 Разрешён только origin `https://staging-automation.tarser.net` и любые пути на
