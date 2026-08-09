@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented — awaiting review.
-- Branch: `factory/c118b3e8-abe-dbe37a8b-249`.
-- Head commit: `37cc2dd` (проверенный снимок реализации и тестов после rebase).
+- Status: Implemented — повторно ожидает Review.
+- Branch: `factory/a7e4642a-a60-556348d7-07d`.
+- Head commit: `b21e726` (проверенный снимок исправления и тестов).
 - Specification: `knowledge/specs/stalled-work-diagnosis-repair.md`.
-- What changed: технический диагноз теперь запускает безопасную одноразовую отмену и продолжение той же работы после подтверждённой остановки; неоднозначность и ошибки останавливают ремонт.
-- Evidence: `python3 -m unittest pilot.test_pilot.DiagnosisRepairTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 42 tests OK; синтаксис и `git diff --check` → OK.
-- One next action: проверить поставку и влить её в `main`.
+- What changed: автопочинка восстанавливает незавершённую отмену и продолжение после перезапуска; выпавшая из короткого списка исходная задача проверяется адресно по сохранённому ID.
+- Evidence: `python3 -m unittest pilot.test_pilot.DiagnosisRepairTests` → 9 tests OK; `python3 -m unittest pilot.test_pilot` → 45 tests OK; синтаксис и `git diff --check` → OK.
+- One next action: повторно отправить реализацию на Review.
 
 ## LOG
 
@@ -20,3 +20,11 @@
 и прежней веткой. Шесть целевых и все 42 теста пилота прошли; синтаксис и пробелы
 проверены. Повторная отмена, повторное продолжение и воздействие на неоднозначные
 активные запуски закрыты тестами.
+
+### 2026-08-09 — Implement
+
+Закрыты замечания Review о двух границах перезапуска и ограниченном списке задач.
+Сохранённые `cancel_pending` и `resume_pending` теперь восстанавливаются
+идемпотентным повтором того же действия, а отсутствующая в снимке исходная задача
+читается по сохранённому ID. Девять целевых и все 45 тестов пилота прошли;
+синтаксис и чистота diff проверены.
