@@ -2,22 +2,27 @@
 
 ## HEAD
 
-- Status: DEPLOYED: переключение провайдеров выпущено из `main`; естественный
-  живой fallback ещё не наблюдался, потому что активный Claude отвечает первым.
-- Branch: `factory/9282fb82-de4-c2771913-08b`.
-- Head commit: `4305787` (реализация, тесты и выпущенный сквош-коммит).
-- What changed: `pilot.brain()` передаёт `conf` в `note_limit()` при rate-limit,
-  и `BrainFallbackTest` доказывает немедленный переход с Codex на Claude и
-  исключение заблокированного Codex при следующем вызове.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (13 тестов),
-  `python3 -m py_compile pilot/pilot.py` → успешно; `fx factory release` собрал
-  и установил `4305787`, `factory-pilot` активен. В `brain_state.json` после
-  выпуска записан обычный ответ Claude (`fallback: false`), оба провайдера
-  имеют состояние `ok`.
-- Next action: при естественном исчерпании активного провайдера подтвердить
-  `fallback: true` в `brain_state.json` и событие `BRAIN FALLBACK` в журнале.
+- Status: IMPLEMENTED: повторные модели исчерпанной подписки пропускаются уже
+  в текущем вызове мозга; ветка готова к проверке.
+- Branch: `factory/990572e8-535-316754fd-1f2`.
+- Head commit: `bf433a3` (реализация и целевой тест после rebase на `origin/main`).
+- What changed: после `note_limit()` мозг обновляет снимок блокировок, поэтому
+  цепочка Codex → Codex → Claude запускает только первый Codex и живой Claude.
+- Evidence: `python3 -m unittest pilot.test_pilot` → OK (14 тестов),
+  `python3 -m py_compile pilot/pilot.py` → успешно.
+- Next action: проверить ветку и влить её в `main`.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+- Закрыт случай нескольких моделей одной подписки в `brain_chain`: сразу после
+  обнаружения лимита локальный снимок блокировок перечитывается, и оставшиеся
+  модели того же провайдера не получают заведомо бесполезные вызовы.
+- Добавлен изолированный тест цепочки Codex → Codex → Claude; реальные CLI,
+  сеть и подписки не используются.
+- `python3 -m unittest pilot.test_pilot` → OK (14 тестов),
+  `python3 -m py_compile pilot/pilot.py` → успешно.
 
 ### 2026-08-09 — Implement
 
