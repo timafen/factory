@@ -2,18 +2,16 @@
 
 ## HEAD
 
-- Status: Specification — повторная проверка после исправлений.
-- Branch: `factory/541568ab-47f-3c577e8a-a3a`.
-- Head commit: `a902511` (`Привязать спецификацию Bernstein к тегу 3.13.0`);
-  проверенный снимок после rebase, следующий commit меняет только HEAD карточки.
+- Status: Implement — два замечания ревью исправлены, готово к Review.
+- Branch: `factory/989b3a4c-c8b-40f83321-2a1`.
+- Head commit: `43a19c6` (`Закрепить источники Bernstein за проверенным снимком`);
+  следующий commit меняет только HEAD/LOG карточки.
 - Specification: `knowledge/specs/bernstein-reuse-evaluation.md`.
-- What changed: сопоставлены Factory и Bernstein 3.13.0; предложен только
-  выключенный по умолчанию PoC Bernstein как подчинённого движка одного Attempt.
-- Evidence: спецификация фиксирует снимок upstream, матрицу владения, восемь
-  проверяемых критериев, условия продолжения и отказа; проверки структуры и
-  `git diff --check` прошли.
-- One next action: повторно проверить оба документа; интеграцию не
-  разрешать до успешного отдельного offline PoC.
+- What changed: README/tree закреплён за commit `f683ce8…`; ошибочный
+  `f6bc3b43` в истории заменён на фактический commit тега 3.13.0.
+- Evidence: `git ls-remote` → тег `v3.13.0` указывает на `f683ce8…`;
+  пять закреплённых URL → HTTP 200; `git diff --check` → PASS.
+- One next action: передать два точечных исправления на повторный Review.
 
 ## LOG
 
@@ -40,3 +38,10 @@ commit и лицензионной отметки прошли; трёхточе
 Связь тега подтверждена `git ls-remote`; проверки структуры документов и
 `git diff --check` прошли. Документы возвращены на повторную проверку;
 интеграция до успешного отдельного offline PoC не разрешена.
+
+### 2026-08-09 — Implement
+
+После точечного Review ссылка на README/tree закреплена за commit
+`f683ce8dbc6b89d3f91e578cd641d5882bf489dd`, а ошибочный `f6bc3b43` удалён
+из исторической записи. Тег `v3.13.0` проверен через `git ls-remote`,
+все пять закреплённых URL ответили HTTP 200, `git diff --check` прошёл.
