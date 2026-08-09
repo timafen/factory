@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented and target tests pass.
-- Branch: `factory/047fa875-4d2-18a62485-e6b`.
-- Head commit: `8100690` (implementation commit after rebase onto `origin/main`).
+- Status: Implemented; all required checks pass.
+- Branch: `factory/54e78a31-548-7d379441-212`.
+- Head commit: `a6ac7a8` (code head after rebase onto `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `npm --prefix web run build` → OK. `go test -timeout 5m ./...` доходит до не затронутого `internal/controlplane` и падает на `TestHTTPManagedRepositoryCatalog`: 404 вместо 200.
-- One next action: влить поставку; базовую Go-поломку `internal/controlplane` исправить отдельно.
+- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника. Базовый 404 каталога исполнителя устранён отдельным минимальным коммитом.
+- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `go test ./internal/controlplane -run '^TestHTTPManagedRepositoryCatalog$' -count=1` → OK; `go test -timeout 5m ./...` → OK; `npm --prefix web run build` → OK.
+- One next action: влить поставку в `main`.
 
 ## LOG
 
@@ -27,3 +27,7 @@
 ### 2026-08-08 — Implement
 
 Отдельная поставка вернула только обещанную реализацию `pilot`: живые состояния закреплены как контракт, а шесть тестов доказывают автономное и идемпотентное возобновление. Целевой и полный pilot-наборы, а также web-сборка прошли. Полная Go-регрессия зафиксировала базовую ошибку маршрута каталога репозиториев вне области этой карточки.
+
+### 2026-08-08 — Implement
+
+На чистом снимке свежего `origin/main` отдельно воспроизведён базовый 404 в `TestHTTPManagedRepositoryCatalog`; отсутствующий маршрут каталога исполнителя восстановлен минимальным коммитом. После перебазирования патруля предметные и полные проверки Python и Go, а также web-сборка прошли, поэтому прежняя блокировка снята.
