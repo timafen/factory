@@ -74,10 +74,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
-  dialogMessage: (model: string, messages: DialogMessage[]) =>
+  dialogMessage: (brainIndex: number, messages: DialogMessage[]) =>
     request<DialogResponse>("/api/v1/dialog/messages", {
       method: "POST",
-      body: JSON.stringify({ model, messages }),
+      body: JSON.stringify({ brain_index: brainIndex, messages }),
     }),
   updatePilotSettings: (version: string, settings: PilotSettings) =>
     request<PilotSettingsResponse>("/api/v1/settings/pilot", {
