@@ -4,11 +4,11 @@
 
 - Status: READY: поставка проверена, новых падений относительно `origin/main` нет.
 - Branch: `factory/ea2c212d-a7e-9ef69ff9-6b3`.
-- Head commit: `84c1bca` (перебазированная реализация перед этой записью).
+- Head commit: `efd81ec` (перебазированная реализация перед этой записью).
 - What changed: `/dialog` ведёт многоходовый разговор с мозгом фабрики на
   выбранной разрешённой модели; ошибки и лимиты безопасно объясняются человеку.
-- Evidence: `go test ./...`, `TestDialog`, web build и 3 теста Dialog — PASS.
-  Полный Vitest: 97/101 PASS; те же 4 падения воспроизведены на чистом main.
+- Evidence: `go test ./...`, web build и полный Vitest (101/101) — PASS.
+  До обновления main те же 4 падения были воспроизведены на чистом main.
 - One next action: влить назначенную ветку в `main`.
 
 ## LOG
@@ -90,3 +90,9 @@ destinations as the current page` (нет кнопки «Главное»), `Ove
 дополнительный `escalate: true`). На ветке 97/101 PASS, включая 3/3 Dialog;
 `go test ./...`, `TestDialog` и `npm run build` — PASS. Эти базовые падения не
 исправлялись; production bundle пересобран после rebase на свежий main.
+
+### 2026-08-09 — Implement (финальная проверка)
+
+Свежий `origin/main` получил отдельное исправление четырёх базовых web-тестов.
+После финального rebase `npx vitest run` — 101/101 PASS, `go test ./...` — PASS,
+`npm run build` — PASS. Область поставки диалога осталась без посторонних файлов.
