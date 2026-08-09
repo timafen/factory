@@ -109,9 +109,6 @@ export function DelegateModal({
     if (!context.trim()) nextErrors.description = "Enter task context.";
     if (!workerID) nextErrors.worker = "Choose a worker.";
     if (!repositoryID) nextErrors.repository = "Choose a repository.";
-    if (attachmentFiles.length) {
-      nextErrors.attachments = "File delivery is not enabled yet, so this task has not been created.";
-    }
     const timeoutSeconds = Number(timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 28_800) {
       nextErrors.timeout = "Choose a timeout from one minute to eight hours.";
@@ -135,7 +132,16 @@ export function DelegateModal({
       request_key: requestRef.current.key,
       ...payload,
     } as CreateTaskInput;
-    create.mutate(input);
+	void (async () => {
+		const attachments = [];
+		try {
+			for (const file of attachmentFiles) attachments.push(await api.uploadTaskAttachment(input.request_key, file));
+			await create.mutateAsync({ ...input, attachment_ids: attachments.map((item) => item.id) });
+		} catch (error) {
+			await Promise.allSettled(attachments.map((item) => api.deleteTaskAttachment(input.request_key,item.id)));
+			setErrors((current) => ({ ...current, attachments: error instanceof Error ? error.message : "Не удалось загрузить вложения." }));
+		}
+	})();
   };
 
   return (

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -1186,6 +1187,72 @@ func createTestTask(t *testing.T, store *Store, requestKey, workerID, repository
 		t.Fatal("expected task to be created")
 	}
 	return task
+}
+
+func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
+	store := newTestStore(t)
+	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 1, Health: "healthy", Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.UploadAttachment(context.Background(), "with-files", "screen.png", "image/png", strings.NewReader("image bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.CreateTaskRequest{RequestKey: "with-files", Title: "Inspect screenshot", Description: "Use the file", WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60, AttachmentIDs: []string{attachment.ID}}
+	detail, created, err := store.CreateTask(context.Background(), request)
+	if err != nil || !created {
+		t.Fatalf("create = %v, %v", created, err)
+	}
+	if len(detail.Attachments) != 1 || detail.Attachments[0].SHA256 != attachment.SHA256 {
+		t.Fatalf("attachments = %#v", detail.Attachments)
+	}
+	var path string
+	if err := store.db.QueryRow(`SELECT storage_path FROM task_attachments WHERE id=?`, attachment.ID).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != filepath.Join(store.attachmentRoot, detail.Task.ID) {
+		t.Fatalf("path = %s", path)
+	}
+	claim := claimTestTask(t, store, worker.ID, "attachment-claim", tokenA)
+	if len(claim.Attachments) != 1 {
+		t.Fatalf("claim attachments = %#v", claim.Attachments)
+	}
+	loadedPath, _, err := store.AttachmentForAttempt(context.Background(), claim.Attempt.ID, attachment.ID, tokenA)
+	if err != nil || loadedPath != path {
+		t.Fatalf("download authorization = %s, %v", loadedPath, err)
+	}
+	if _, _, err := store.AttachmentForAttempt(context.Background(), claim.Attempt.ID, attachment.ID, tokenB); err == nil {
+		t.Fatal("foreign lease downloaded attachment")
+	}
+}
+
+func TestUploadAttachmentRejectsExecutableAndOversizedFiles(t *testing.T) {
+	store := newTestStore(t)
+	if _, err := store.UploadAttachment(context.Background(), "limits", "run.exe", "", strings.NewReader("x")); err == nil {
+		t.Fatal("executable accepted")
+	}
+	// A synthetic reader avoids allocating 10 MiB in the test.
+	var oversized io.Reader = io.MultiReader(strings.NewReader(strings.Repeat("x", 1024)), &repeatReader{remaining: protocol.MaxAttachmentBytes})
+	if _, err := store.UploadAttachment(context.Background(), "limits", "large.log", "", oversized); err == nil {
+		t.Fatal("oversized attachment accepted")
+	}
+}
+
+type repeatReader struct{ remaining int }
+
+func (r *repeatReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if len(p) > r.remaining {
+		p = p[:r.remaining]
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	r.remaining -= len(p)
+	return len(p), nil
 }
 
 func claimTestTask(t *testing.T, store *Store, workerID, requestID, token string) protocol.Claim {

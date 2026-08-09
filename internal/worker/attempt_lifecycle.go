@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,6 +144,10 @@ func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim,
 		manager.finishWithWorktree(claim, token, handle, repository, value, "failed", "", err.Error())
 		return
 	}
+	if err := manager.materializeAttachments(handle.context, claim, token, value.Path); err != nil {
+		manager.finishWithWorktree(claim, token, handle, repository, value, "failed", "", err.Error())
+		return
+	}
 	prompt := buildPrompt(claim, value)
 	if len([]byte(value.Branch)) > protocol.MaxAgentBranchBytes ||
 		len([]byte(value.BaseBranch)) > protocol.MaxAgentBranchBytes ||
@@ -237,6 +244,49 @@ func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim,
 	sender.closeAndWait(5 * time.Second)
 	manager.finishWithWorktree(claim, token, handle, repository, value,
 		terminalState(message), message.Result, message.Error)
+}
+
+func (manager *Manager) materializeAttachments(ctx context.Context, claim protocol.Claim, token, worktree string) error {
+	if len(claim.Attachments) == 0 {
+		return nil
+	}
+	dir := filepath.Join(worktree, ".factory", "attachments")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, attachment := range claim.Attachments {
+		name, err := safeWorkerAttachmentName(attachment.Name)
+		if err != nil {
+			return err
+		}
+		body, serverDigest, err := manager.client.attachment(ctx, claim.Attempt.ID, attachment.ID, token)
+		if err != nil {
+			return err
+		}
+		file, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			body.Close()
+			return err
+		}
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, protocol.MaxAttachmentBytes+1))
+		closeErr, bodyErr := file.Close(), body.Close()
+		if copyErr != nil || closeErr != nil || bodyErr != nil {
+			return errors.Join(copyErr, closeErr, bodyErr)
+		}
+		digest := hex.EncodeToString(hash.Sum(nil))
+		if written != attachment.Size || written > protocol.MaxAttachmentBytes || digest != attachment.SHA256 || serverDigest != attachment.SHA256 {
+			return errors.New("attachment size or SHA-256 verification failed")
+		}
+	}
+	return nil
+}
+
+func safeWorkerAttachmentName(name string) (string, error) {
+	if name == "" || filepath.Base(name) != name || strings.Contains(name, "\\") {
+		return "", errors.New("attachment contains an unsafe name")
+	}
+	return name, nil
 }
 
 func (manager *Manager) validateClaim(claim protocol.Claim) error {
@@ -671,12 +721,19 @@ func terminalState(message supervisorMessage) string {
 }
 
 func buildPrompt(claim protocol.Claim, value worktree) string {
+	description := claim.Task.Description
+	if len(claim.Attachments) > 0 {
+		description += "\n\nПрикреплённые файлы уже сохранены в рабочей копии. Обязательно ознакомься с ними:\n"
+		for _, attachment := range claim.Attachments {
+			description += "- .factory/attachments/" + attachment.Name + "\n"
+		}
+	}
 	return protocol.FormatAgentPrompt(
 		claim.Task.Title,
 		claim.Repository.RemoteIdentity,
 		value.Branch,
 		value.BaseBranch,
-		claim.Task.Description,
+		description,
 	)
 }
 
