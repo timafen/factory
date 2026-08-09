@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: implemented — живой пилот ограничен значениями 12/120.
-- Branch: `factory/a9d1955c-222-694259ce-523`.
-- Head commit: `bd88af4` — фиксация снижения лимитов и результатов проверки.
-- What changed: в `/opt/factory-data/pilot/config.json` потолок задач одной
-  работы снижен с 60 до 12, общий суточный потолок — с 250 до 120.
-- Evidence: точная JSON-проверка значений проходит; `python3 -m unittest
-  pilot.test_pilot -q` проходит.
-- Next action: наблюдать следующий цикл пилота (опрос раз в 30 секунд), чтобы
-  убедиться в применении ограничений к новым задачам.
+- Status: implemented — готово к повторному Review, оба живых лимита подтверждены.
+- Branch: `factory/df20549b-76b-d63337d0-0c3`.
+- Head commit: `8cefbe1` — исходная карточка предыдущей стадии.
+- What changed: в `/opt/factory-data/pilot/config.json` фактические значения
+  `work_day_cap=30` и `day_task_cap=400` заменены на утверждённые 12 и 120.
+- Evidence: точная JSON-проверка вывела `JSON caps: 12 120`; целевой набор
+  `python3 -m unittest pilot.test_pilot -q` — 24 теста, `OK`.
+- Next action: Review подтверждает оба значения живого конфига.
 
 ГОТОВО-КОГДА: файл /opt/factory-data/pilot/config.json
 ГОТОВО-КОГДА: команда python3 -c 'import json; c=json.load(open("/opt/factory-data/pilot/config.json")); assert (c["work_day_cap"], c["day_task_cap"]) == (12, 120)'
@@ -75,3 +74,10 @@
 Резервная копия исходного конфига сохранена рядом с ним перед изменением.
 Точная JSON-проверка и `python3 -m unittest pilot.test_pilot -q` завершились
 успешно; код пилота не менялся, так как он перечитывает конфигурацию каждый цикл.
+
+### 2026-08-09 — Implement
+
+После замечания Review живой конфиг повторно проверен: вместо заявленных в
+карточке значений там были `work_day_cap=30` и `day_task_cap=400`. Оба ключа
+атомарно заменены на 12 и 120 с сохранением исходного файла в резервной копии.
+Точная JSON-проверка подтвердила `12 120`; целевой набор выполнил 24 теста с `OK`.
