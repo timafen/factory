@@ -141,6 +141,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("DELETE /api/v1/task-attachments/{attachment_id}", api.deleteTaskAttachment)
 	mux.HandleFunc("GET /api/v1/attempts/{attempt_id}/attachments/{attachment_id}", api.downloadTaskAttachment)
 	mux.HandleFunc("GET /api/v1/tasks/{task_id}", api.getTask)
+	mux.HandleFunc("GET /api/v1/work-history", api.getWorkHistory)
 	mux.HandleFunc("DELETE /api/v1/tasks/{task_id}", api.deleteTask)
 	mux.HandleFunc("POST /api/v1/tasks/{task_id}/cancel", api.cancelTask)
 	mux.HandleFunc("POST /api/v1/executions/{execution_id}/retry", api.retryExecution)
