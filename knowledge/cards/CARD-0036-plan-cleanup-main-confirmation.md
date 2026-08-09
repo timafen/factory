@@ -23,7 +23,7 @@
 | Завершённая карточка не возвращается в План | `python3 -m unittest pilot/test_pilot.py -v` | Прошли 14 из 14; все 5 сценариев `PlanCardCleanupTest` подтверждают закрытие только после принятого финального этапа и исключение карточки из автозапуска. |
 | Реализация не дублируется | `git diff --name-only origin/main...HEAD` | До записи проверки изменены только CARD-0036 и CARD-0037; `pilot/pilot.py` и `pilot/test_pilot.py` уже совпадают с `main`. |
 | Смежные серверные части работают | `go test ./...` и `go build ./...` | Все Go-пакеты и сборка завершились с нулевым кодом. |
-| Web-интерфейс не регрессировал | `cd web && npm test -- --run`, `npm run typecheck`, `npm run build` | Все 40 web-тестов, typecheck и production-сборка прошли. |
+| Web-интерфейс не регрессировал | `cd web && npm test -- --run`, `npm run typecheck`, `npm run build` | Все 101 web-тест, typecheck и production-сборка прошли. |
 | Известный lint-долг изолирован | `cd web && npm run lint` | Ровно 9 errors и 7 warnings в файлах, перечисленных в CARD-0037; они не входят в diff поставки. |
 
 ### 2026-08-09 — Implement
