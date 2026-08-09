@@ -2,11 +2,15 @@
 
 ## HEAD
 
-- Status: Specification accepted — awaiting implementation
-- Branch: `factory/632a39e0-4ac-31c288f7-c80`
-- What changes: перегруженный сервер сохраняет гарантированный минимум работы и допускает лёгкие этапы конвейера, но откладывает тяжёлые сборки и тестовые прогоны.
-- Evidence contract: целевые тесты пилота фиксируют допуск ниже минимального числа работ, допуск лёгкой стадии и блокировку тяжёлой стадии при нагрузке `over`.
-- Next action: реализовать `knowledge/specs/server-load-admission.md`, обновить карточку результатами Implement и Verify.
+- Status: Implement complete — awaiting Verify
+- Branch: `factory/3e984ded-44a-8141732d-17a`
+- Head commit: `abcbee8` (`Сохранить движение лёгких этапов при загрузке сервера`)
+- What changed: при обычной перегрузке пилот сохраняет один гарантированный запуск,
+  пропускает `Triage`, `Specification`, `Review` и откладывает тяжёлые стадии.
+  Авария памяти или диска остаётся полной блокировкой.
+- Evidence: `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` → 7 tests, OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0.
+- Next action: Verify прогоняет полный `python3 -m unittest pilot.test_pilot`.
 
 ## LOG
 
@@ -17,3 +21,10 @@
 минимальный объём без новых API и настроек: единая проверка допуска сохраняет
 одну работу и лёгкие стадии, а `Implement + Test` и `Verify` ждут снижения
 нагрузки. Подробный контракт — в `knowledge/specs/server-load-admission.md`.
+
+### 2026-08-09 — Implement
+
+Единый допуск встроен перед `create_task`, поэтому применяется к переходам,
+ответам владельца, сторожу, эпикам и автозапуску без дублирования политики.
+Целевой класс: 7 тестов, OK; соседний `CreateTaskFallbackTest`: 1 тест, OK;
+компиляция `pilot/pilot.py` и `pilot/test_pilot.py`: exit 0.
