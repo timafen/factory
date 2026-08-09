@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
+- Status: BLOCKED: полный Vitest-набор имеет 4 падения вне области диалога.
 - Branch: `factory/c7d42304-437-ac09919f-7e3`.
 - Head commit: `1562fc5` (перебазированная поставка перед записью проверки).
 - Evidence: после перебазирования `go test ./...` — PASS; `TestDialog` — PASS;
   TypeScript, production build и 3 сценария Vitest Dialog — PASS. Полный Vitest
   выявил 4 несвязанных падения в Overview, Settings и App.
-- One next action: человек принимает решение о слиянии с учётом несвязанных
-  красных web-тестов и возможного внешнего proxy timeout.
+- One next action: устранить либо подтвердить базовые падения Overview, Settings
+  и App, затем повторить полный Vitest-набор.
 
 ## LOG
 
