@@ -15,7 +15,7 @@ Claude Code.
 `chernistry/bernstein` перенаправляет на `sipyourdrink-ltd/bernstein`; commit
 фиксирует исследованный снимок независимо от переименования владельца.
 
-Первичные источники: [репозиторий и README](https://github.com/sipyourdrink-ltd/bernstein),
+Первичные источники: [репозиторий и README](https://github.com/sipyourdrink-ltd/bernstein/tree/f683ce8dbc6b89d3f91e578cd641d5882bf489dd),
 [архитектура](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/architecture/ARCHITECTURE.md),
 [plans](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/architecture/plans.md),
 [workflow manifests](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/operations/workflow-manifests.md) и
