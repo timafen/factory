@@ -1,6 +1,9 @@
 import contextlib
 import importlib
+import json
+import os
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -9,6 +12,68 @@ import uuid
 from unittest import mock
 
 from pilot import pilot
+
+
+class CodexUsageTests(unittest.TestCase):
+    def write_rollout(self, events):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = os.path.join(temporary.name, "rollout-test.jsonl")
+        with open(path, "w") as fh:
+            for event in events:
+                fh.write(json.dumps(event) + "\n")
+        return path
+
+    @staticmethod
+    def event(at, usage, total=None):
+        info = {"last_token_usage": usage}
+        if total is not None:
+            info["total_token_usage"] = total
+        return {"timestamp": at, "type": "event_msg",
+                "payload": {"type": "token_count", "info": info}}
+
+    def test_codex_rollout_uses_exact_model_and_separate_cached_price(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-5.6-terra"}},
+            self.event("2026-08-09T10:00:01Z",
+                       {"input_tokens": 1200, "cached_input_tokens": 200,
+                        "output_tokens": 100}),
+        ])
+        with mock.patch.object(pilot.glob, "glob", side_effect=[[path], []]):
+            usage = pilot.codex_usage_since(0)
+
+        self.assertEqual((usage["input"], usage["cache_read"], usage["output"]),
+                         (1000, 200, 100))
+        self.assertAlmostEqual(usage["cost_usd"], 0.00405)
+        self.assertTrue(usage["cost_defined"])
+
+    def test_cumulative_counts_are_deltas_and_unknown_price_is_not_zero(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-future-exact"}},
+            self.event("2026-08-09T10:00:01Z", None,
+                       {"input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 10}),
+            self.event("2026-08-09T10:00:02Z", None,
+                       {"input_tokens": 150, "cached_input_tokens": 30, "output_tokens": 25}),
+        ])
+        with mock.patch.object(pilot.glob, "glob", side_effect=[[path], []]):
+            usage = pilot.codex_usage_since(0)
+
+        self.assertEqual(usage["total_tokens"], 175)
+        self.assertFalse(usage["cost_defined"])
+        self.assertEqual(usage["unknown_models"], ["gpt-future-exact"])
+        self.assertIsNone(pilot.openai_api_cost("gpt-future-exact", 1, 1, 1))
+
+    def test_day_total_adds_global_codex_estimate_without_task_attribution(self):
+        with mock.patch.object(pilot, "attempts_of", return_value=["claude-attempt"]), \
+                mock.patch.object(pilot, "task_cost_usd", return_value=2.0), \
+                mock.patch.object(pilot, "codex_usage_since",
+                                  return_value={"cost_usd": 1.25}):
+            spent = pilot.day_spent([{"id": "task", "created_at":
+                                      time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime()),
+                                      "state": "succeeded"}])
+        self.assertEqual(spent, 3.25)
 
 
 class CreateTaskFallbackTest(unittest.TestCase):
