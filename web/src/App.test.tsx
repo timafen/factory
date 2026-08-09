@@ -3,7 +3,24 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { mockControlPlane } from "./test/fixtures";
+import { mockControlPlane as mockFixtureControlPlane } from "./test/fixtures";
+
+function mockControlPlane(options?: Parameters<typeof mockFixtureControlPlane>[0]) {
+  const fetch = mockFixtureControlPlane(options);
+  const fixtureImplementation = fetch.getMockImplementation();
+  fetch.mockImplementation((input, init) => {
+    const path = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const fixturePath = path
+      .replace("/api/v1/tasks?limit=200", "/api/v1/tasks?limit=50")
+      .replace(/(\/api\/v1\/automations\/[^/]+\/occurrences\?)limit=200/, "$1limit=50");
+    return fixtureImplementation!(fixturePath, init);
+  });
+  return fetch;
+}
 
 function renderApp() {
   const client = new QueryClient({
@@ -692,8 +709,10 @@ describe("App", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
 
     expect(await screen.findByRole("heading", { name: "Implement #183" })).toBeVisible();
-    expect(screen.getAllByText("Implement · revision 1")).toHaveLength(2);
+    expect(screen.getByText("Implement · revision 1")).toBeVisible();
+    await user.click(screen.getByText("Задание агенту (техническое) — развернуть"));
     expect(screen.getByText("Issue #183 remains ordinary text.", { selector: ".long-copy" })).toBeVisible();
+    await user.click(screen.getByText("Полный промпт (инструкция + контекст) — развернуть"));
     expect(screen.getByText(/Workflow instructions:/)).toBeVisible();
     const taskCreate = fetch.mock.calls.find(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST");
     expect(JSON.parse(String(taskCreate?.[1]?.body))).toMatchObject({
@@ -704,12 +723,20 @@ describe("App", () => {
 
   it("renders every task status in the operational board", async () => {
     mockControlPlane();
+    const user = userEvent.setup();
     renderApp();
 
-    for (const state of ["Queued", "Running", "Succeeded", "Failed", "Cancelled"]) {
-      const column = await screen.findByRole("region", { name: new RegExp(`^${state}`) });
-      expect(within(column).getByText(`${state.toLowerCase()} task`)).toBeVisible();
-      expect(within(column).getByText(state, { selector: ".status-badge" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Показать по этапам" }));
+    for (const [heading, title] of [
+      ["В очереди", "queued task"],
+      ["В работе", "running task"],
+      ["Отработали", "succeeded task"],
+      ["Сорвались", "failed task"],
+      ["Отменены", "cancelled task"],
+    ]) {
+      const column = screen.getByRole("heading", { name: heading }).closest("section");
+      expect(column).not.toBeNull();
+      expect(within(column as HTMLElement).getByText(title)).toBeVisible();
     }
   });
 
