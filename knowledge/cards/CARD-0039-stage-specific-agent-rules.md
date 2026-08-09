@@ -4,9 +4,9 @@
 
 - Статус: реализация завершена.
 - Ветка: `factory/2bf5fd1b-dde-bd83905c-0b2`.
-- Head commit: `4da09f9` — общий блок очищен от двух этапных дублей.
+- Head commit: `1ed4cca` — общий блок очищен от двух этапных дублей.
 - Что изменилось: Specification требует `ГОТОВО-КОГДА` в ревизии 5, Review — трёхточечный diff и границы замечаний в ревизии 6; общий `AGENT_RULES` сохраняет только универсальные правила.
-- Evidence: `python3 -m unittest pilot.test_pilot.AgentRulesScopeTests` → 3 tests, OK; `python3 -m unittest pilot.test_pilot` → 35 tests, OK.
+- Evidence: `python3 -m unittest pilot.test_pilot.AgentRulesScopeTests` → 3 tests, OK; `python3 -m unittest pilot.test_pilot` → 35 tests, OK; `just build` → оба бинарных файла собраны.
 - Следующее действие: провести Review по диффу поставки.
 
 ## LOG
