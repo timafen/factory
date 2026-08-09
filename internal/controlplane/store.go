@@ -110,10 +110,9 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(8)
-	attachmentRoot := filepath.Join(os.TempDir(), "factory-attachments")
-	if path != ":memory:" {
-		attachmentRoot = filepath.Join(filepath.Dir(path), "task-attachments")
-	}
+	// Attachments deliberately live outside the database directory: the Factory
+	// host owns their retention and workers receive these exact paths in context.
+	attachmentRoot := "/opt/factory-data/attachments"
 	store := &Store{db: db, attachmentRoot: attachmentRoot, now: time.Now, sweepEvery: 5 * time.Second}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
@@ -2226,6 +2225,22 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		}
 		if err != nil {
 			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+	}
+	if len(input.AttachmentIDs) > 0 {
+		var paths []string
+		for _, attachmentID := range input.AttachmentIDs {
+			var name string
+			if err := tx.QueryRowContext(ctx, `SELECT name FROM task_attachments WHERE id=?`, attachmentID).Scan(&name); err != nil {
+				return protocol.TaskDetail{}, false, unavailable(err)
+			}
+			paths = append(paths, "ВЛОЖЕНИЕ: "+filepath.Join(s.attachmentRoot, taskID, attachmentID+"-"+name))
+		}
+		attachmentContext := "\n\n" + strings.Join(paths, "\n")
+		taskContext += attachmentContext
+		resolvedPrompt += attachmentContext
+		if len([]byte(taskContext)) > protocol.MaxDescriptionBytes || len([]byte(resolvedPrompt)) > protocol.MaxResolvedPromptBytes || !protocol.AgentPromptFits(input.Title, repositoryRemoteIdentity, resolvedPrompt) {
+			return protocol.TaskDetail{}, false, invalid("attachment_context_too_large", "вложения делают контекст задачи слишком большим")
 		}
 	}
 	executionID, err := newID()
