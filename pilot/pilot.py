@@ -1159,45 +1159,6 @@ def set_idea(idea_id, **fields):
     return None
 
 
-def cleanup_completed_plan_cards(tasks, final_stage_no):
-    """Close plan cards whose linked pipeline reached an accepted final stage.
-
-    The linked task is the run boundary.  This deliberately refuses title-only
-    guesses and old successful runs, either of which could hide fresh work.
-    """
-    by_id = {t.get("id"): t for t in tasks or [] if t.get("id")}
-    open_questions = {q.get("task_id") for q in load_questions()
-                      if q.get("status") == "open"}
-    closed = []
-    for idea in ideas_all():
-        if idea.get("state") not in ("planned", "in_work"):
-            continue
-        linked = by_id.get(idea.get("task_id"))
-        since = (linked or {}).get("created_at")
-        if not linked or not since:
-            continue
-        base = base_title(linked.get("title", ""))
-        candidates = []
-        for task in tasks or []:
-            if (task.get("created_at") or "") < since:
-                continue
-            if base_title(task.get("title", "")) != base:
-                continue
-            if stage_no_of(task.get("title")) != final_stage_no:
-                continue
-            candidates.append(task)
-        candidates.sort(key=lambda t: (t.get("created_at") or "", t.get("id") or ""))
-        final = candidates[-1] if candidates else None
-        if (not final or final.get("state") != "succeeded"
-                or final.get("id") in open_questions
-                or not final_ok(final.get("id"), strict=True)):
-            continue
-        set_idea(idea["id"], state="done")
-        closed.append(idea["id"])
-        log(f"PLAN DONE idea={idea['id']} task={final.get('id')}")
-    return closed
-
-
 def collect_ideas(result, repo_id="", source=""):
     """Разбирает отчёт агента и заводит карточки. Вернёт их число."""
     n = 0
@@ -3335,12 +3296,6 @@ def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
 
     tasks = api("/tasks?limit=100").get("tasks") or []
-    # Сначала убрать выполненное из открытого Плана. Автоподбор (когда он
-    # включён) ниже по циклу уже не увидит эту карточку как planned.
-    try:
-        cleanup_completed_plan_cards(tasks, len(stages))
-    except Exception as e:
-        log("plan_cleanup_error", repr(e))
     workers = best_workers(api("/workers")["workers"])
     repo_identity_by_id = {r["id"]: r["remote_identity"]
                            for r in (api("/repositories").get("repositories") or [])}
