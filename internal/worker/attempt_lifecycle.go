@@ -255,7 +255,7 @@ func (manager *Manager) materializeAttachments(ctx context.Context, claim protoc
 		return err
 	}
 	for _, attachment := range claim.Attachments {
-		name, err := safeWorkerAttachmentName(attachment.Name)
+		name, err := workerAttachmentFilename(attachment)
 		if err != nil {
 			return err
 		}
@@ -287,6 +287,17 @@ func safeWorkerAttachmentName(name string) (string, error) {
 		return "", errors.New("attachment contains an unsafe name")
 	}
 	return name, nil
+}
+
+func workerAttachmentFilename(attachment protocol.TaskAttachment) (string, error) {
+	name, err := safeWorkerAttachmentName(attachment.Name)
+	if err != nil {
+		return "", err
+	}
+	if attachment.ID == "" || filepath.Base(attachment.ID) != attachment.ID || strings.Contains(attachment.ID, "\\") {
+		return "", errors.New("attachment contains an unsafe ID")
+	}
+	return attachment.ID + "-" + name, nil
 }
 
 func (manager *Manager) validateClaim(claim protocol.Claim) error {
@@ -725,7 +736,11 @@ func buildPrompt(claim protocol.Claim, value worktree) string {
 	if len(claim.Attachments) > 0 {
 		description += "\n\nПрикреплённые файлы уже сохранены в рабочей копии. Обязательно ознакомься с ними:\n"
 		for _, attachment := range claim.Attachments {
-			description += "- .factory/attachments/" + attachment.Name + "\n"
+			name, err := workerAttachmentFilename(attachment)
+			if err != nil {
+				name = attachment.Name
+			}
+			description += "- .factory/attachments/" + name + "\n"
 		}
 	}
 	return protocol.FormatAgentPrompt(
