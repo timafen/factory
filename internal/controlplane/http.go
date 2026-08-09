@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
+	"github.com/owainlewis/factory/internal/serverbrowser"
 )
 
 type API struct {
@@ -27,6 +28,7 @@ type API struct {
 	pilotConfig  *PilotConfigStore
 	dialogRunner dialogRunner
 	sandboxKeys  sandboxKeysRunner
+	browser      browserCapturer
 }
 
 type workerRegistrationRequest struct {
@@ -77,7 +79,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, browser: serverbrowser.Runner{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -139,6 +141,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("POST /api/v1/dialog/messages", api.postDialogMessage)
 	mux.HandleFunc("GET /api/v1/dialog/models", api.getDialogModels)
+	mux.HandleFunc("POST /api/v1/browser/capture", api.captureBrowser)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
 	mux.HandleFunc("POST /api/v1/task-attachments", api.uploadTaskAttachment)

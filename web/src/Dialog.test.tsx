@@ -59,6 +59,19 @@ it("previews a screenshot and sends its bytes with the question",async()=>{
   expect(screen.queryByAltText("Скриншот: screen.png")).not.toBeInTheDocument();
 });
 
+it("captures the approved stand in the server browser and attaches it",async()=>{
+  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+    if(String(input).includes("models")) return new Response(JSON.stringify(models),{status:200,headers:{"Content-Type":"application/json"}});
+    if(String(input).includes("browser/capture")) return new Response(JSON.stringify({url:"https://staging-automation.tarser.net/orders",content_type:"image/png",data:"iVBORw=="}),{status:200,headers:{"Content-Type":"application/json"}});
+    throw new Error("unexpected request");
+  }));
+  render(<Dialog/>); const user=userEvent.setup();
+  const address=await screen.findByLabelText("Адрес страницы стенда");
+  await user.clear(address); await user.type(address,"https://staging-automation.tarser.net/orders");
+  await user.click(screen.getByRole("button",{name:"Посмотреть стенд"}));
+  expect(await screen.findByAltText("Скриншот: стенд.png")).toBeVisible();
+});
+
 it("waits for the latest screenshot selection before sending",async()=>{
   const readers: Array<{result:string|null;onload:(()=>void)|null}>=[];
   const OriginalFileReader=globalThis.FileReader;
