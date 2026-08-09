@@ -2596,14 +2596,22 @@ def budget_guard(conf, tasks, workers=None):
         # Потолок работы исчерпан или дешёвый перезапуск уже был — стоп.
         if total >= wcap or int(rec.get("downgrades") or 0) >= 1:
             rec["stopped"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            if total >= wcap:
+                why_stop = ("Потолок работы исчерпан: съедено {0:.2f} из {1:.0f} "
+                            "долларов.".format(total, wcap))
+            else:
+                why_stop = ("Два захода подряд сожгли бюджет этапа, а работа не "
+                            "сдвинулась ни на один коммит (съедено {0:.2f} из {1:.0f} "
+                            "долларов). Жечь дальше без нового плана не буду."
+                            .format(total, wcap))
             changed = True
             note_budget_stop(base)
             stop_pipeline(conf, base)
             log(f"BUDGET HARD STOP base={base!r} всего=${total:.2f} "
                 f"потолок работы=${wcap:.0f}")
             notify(conf, "Остановил работу · деньги",
-                   f"{base}\n\nСъедено ${total:.2f} при потолке ${wcap:.0f}. "
-                   "Сам перезапускать не буду — оживить можно в интерфейсе.",
+                   base + chr(10) + chr(10) + why_stop + chr(10) +
+                   "Оживить: скажи Клоду — или в Настройках убери работу из поля «Остановленные процессы».",
                    priority="high", tags="moneybag", click=f"{UI_BASE}/work")
             continue
 
