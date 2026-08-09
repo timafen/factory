@@ -379,6 +379,20 @@ class PlanAutostartTest(unittest.TestCase):
                          "вторая модель исчерпанного провайдера должна быть пропущена")
         self.assertEqual(len(self.claude_calls), 1)
 
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_missing_created_task_id_leaves_card_planned(self, _limits, _questions,
+                                                         ideas, _create, set_idea):
+        ideas.return_value = self.cards
+
+        with self.assertRaisesRegex(RuntimeError, "no task.id"):
+            pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        set_idea.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

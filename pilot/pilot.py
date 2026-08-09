@@ -1300,6 +1300,8 @@ def autostart_plan(conf, tasks, workflows, workers):
                            "timeout_seconds": conf.get("timeout_seconds", 7200),
                            "workflow_revision_id": workflow["revision_id"]}, conf)
     task_id = (created.get("task") or {}).get("id", "")
+    if not task_id:
+        raise RuntimeError("create_task returned no task.id")
     set_idea(rec["id"], state="in_work", task_id=task_id)
     note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
     notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
