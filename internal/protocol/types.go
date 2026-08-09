@@ -168,9 +168,23 @@ type CreateTaskRequest struct {
 	Route                      *TaskRoute `json:"route,omitempty"`
 	TimeoutSeconds             int        `json:"timeout_seconds"`
 	WorkflowRevisionID         string     `json:"workflow_revision_id,omitempty"`
+	AttachmentIDs              []string   `json:"attachment_ids,omitempty"`
 	DescriptionProvided        bool       `json:"-"`
 	ContextProvided            bool       `json:"-"`
 	WorkflowRevisionIDProvided bool       `json:"-"`
+}
+
+const (
+	MaxTaskAttachments = 5
+	MaxAttachmentBytes = 10 << 20
+)
+
+type TaskAttachment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
 }
 
 func (request *CreateTaskRequest) UnmarshalJSON(data []byte) error {
@@ -254,6 +268,7 @@ type Attempt struct {
 
 type TaskDetail struct {
 	Task                Task                  `json:"task"`
+	Attachments         []TaskAttachment      `json:"attachments,omitempty"`
 	Context             string                `json:"context"`
 	Execution           Execution             `json:"execution"`
 	Repository          Repository            `json:"repository"`
@@ -716,10 +731,11 @@ type ClaimRequest struct {
 }
 
 type Claim struct {
-	Attempt    Attempt    `json:"attempt"`
-	Execution  Execution  `json:"execution"`
-	Task       Task       `json:"task"`
-	Repository Repository `json:"repository"`
+	Attempt     Attempt          `json:"attempt"`
+	Execution   Execution        `json:"execution"`
+	Task        Task             `json:"task"`
+	Repository  Repository       `json:"repository"`
+	Attachments []TaskAttachment `json:"attachments,omitempty"`
 }
 
 type LeaseRequest struct {
@@ -774,38 +790,38 @@ type APIError struct {
 
 // PilotSettings is the complete, user-editable pilot configuration.
 type PilotSettings struct {
-	Note                string                       `json:"_note,omitempty"`
-	Enabled             bool                         `json:"enabled"`
-	PollSeconds         float64                      `json:"poll_seconds"`
-	TimeoutSeconds      float64                      `json:"timeout_seconds"`
-	AutoMerge           bool                         `json:"auto_merge"`
-	AutoAnswer          bool                         `json:"auto_answer"`
-	MaxStageAttempts    int                          `json:"max_stage_attempts"`
-	AllowAnyWorker      bool                         `json:"allow_any_worker"`
-	AllowedWorkers      []string                     `json:"allowed_workers"`
-	MaxParallelSubtasks int                          `json:"max_parallel_subtasks"`
-	DayCapUSD           float64                      `json:"day_cap_usd"`
-	DeployStagingCmd    string                       `json:"deploy_staging_cmd"`
-	OwnerChatURL        string                       `json:"owner_chat_url"`
-	OwnerUIURL          string                       `json:"owner_ui_url"`
-	Stages              []PilotStage                 `json:"stages"`
-	SkipStagesForLow    []string                     `json:"skip_stages_for_low"`
-	StoppedPipelines    []string                     `json:"stopped_pipelines"`
+	Note                string       `json:"_note,omitempty"`
+	Enabled             bool         `json:"enabled"`
+	PollSeconds         float64      `json:"poll_seconds"`
+	TimeoutSeconds      float64      `json:"timeout_seconds"`
+	AutoMerge           bool         `json:"auto_merge"`
+	AutoAnswer          bool         `json:"auto_answer"`
+	MaxStageAttempts    int          `json:"max_stage_attempts"`
+	AllowAnyWorker      bool         `json:"allow_any_worker"`
+	AllowedWorkers      []string     `json:"allowed_workers"`
+	MaxParallelSubtasks int          `json:"max_parallel_subtasks"`
+	DayCapUSD           float64      `json:"day_cap_usd"`
+	DeployStagingCmd    string       `json:"deploy_staging_cmd"`
+	OwnerChatURL        string       `json:"owner_chat_url"`
+	OwnerUIURL          string       `json:"owner_ui_url"`
+	Stages              []PilotStage `json:"stages"`
+	SkipStagesForLow    []string     `json:"skip_stages_for_low"`
+	StoppedPipelines    []string     `json:"stopped_pipelines"`
 	// Потолок кругов по одной работе и группы уведомлений: этим управляет
 	// пилот, но владелец должен видеть и править их на экране «Настройки».
-	MaxWorkRounds       int                          `json:"max_work_rounds,omitempty"`
-	MaxCapRescues       int                          `json:"max_cap_rescues,omitempty"`
-	MaxLoopRescues      int                          `json:"max_loop_rescues,omitempty"`
-	WorkDayCap          int                          `json:"work_day_cap,omitempty"`
-	DayTaskCap          int                          `json:"day_task_cap,omitempty"`
-	NotifyGroups        map[string]bool              `json:"notify_groups,omitempty"`
-	StageBaseUSD        map[string]float64           `json:"stage_base_usd"`
-	ComplexityFactor    map[string]float64           `json:"complexity_factor"`
-	WorkCapUSD          map[string]float64           `json:"work_cap_usd"`
-	NtfyTopic           string                       `json:"ntfy_topic"`
-	NtfyServer          string                       `json:"ntfy_server"`
-	NtfyOwnerTopic      string                       `json:"ntfy_owner_topic"`
-	BrainChain          []PilotBrain                 `json:"brain_chain"`
+	MaxWorkRounds    int                `json:"max_work_rounds,omitempty"`
+	MaxCapRescues    int                `json:"max_cap_rescues,omitempty"`
+	MaxLoopRescues   int                `json:"max_loop_rescues,omitempty"`
+	WorkDayCap       int                `json:"work_day_cap,omitempty"`
+	DayTaskCap       int                `json:"day_task_cap,omitempty"`
+	NotifyGroups     map[string]bool    `json:"notify_groups,omitempty"`
+	StageBaseUSD     map[string]float64 `json:"stage_base_usd"`
+	ComplexityFactor map[string]float64 `json:"complexity_factor"`
+	WorkCapUSD       map[string]float64 `json:"work_cap_usd"`
+	NtfyTopic        string             `json:"ntfy_topic"`
+	NtfyServer       string             `json:"ntfy_server"`
+	NtfyOwnerTopic   string             `json:"ntfy_owner_topic"`
+	BrainChain       []PilotBrain       `json:"brain_chain"`
 }
 
 // Этапы конвейера идут списком, а не набором: порядок здесь и есть

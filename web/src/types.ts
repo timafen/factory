@@ -426,7 +426,10 @@ interface CreateTaskBaseInput {
   worker_id: string;
   repository_id: string;
   timeout_seconds: number;
+	attachment_ids?: string[];
 }
+
+export interface TaskAttachment { id: string; name: string; content_type: string; size: number; sha256: string }
 
 export type CreateTaskInput = CreateTaskBaseInput & (
   | { description: string; context?: never; workflow_revision_id?: never }

@@ -1,6 +1,14 @@
 package worker
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -27,5 +35,40 @@ func TestBuildPromptIncludesGrammaticalSafetyInstruction(t *testing.T) {
 
 	if got := buildPrompt(claim, value); got != want {
 		t.Fatalf("buildPrompt() = %q, want %q", got, want)
+	}
+}
+
+func TestMaterializeAttachmentsVerifiesAndWritesBeforeRuntime(t *testing.T) {
+	content := []byte("screenshot bytes")
+	digestBytes := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestBytes[:])
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Factory-Lease-Token") != "lease" {
+			t.Error("missing lease token")
+		}
+		w.Header().Set("X-Content-SHA256", digest)
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+	manager := &Manager{client: newClient(server.URL, server.Client())}
+	claim := protocol.Claim{Attempt: protocol.Attempt{ID: "attempt"}, Attachments: []protocol.TaskAttachment{{ID: "attachment", Name: "screen.png", Size: int64(len(content)), SHA256: digest}}}
+	worktree := t.TempDir()
+	if err := manager.materializeAttachments(context.Background(), claim, "lease", worktree); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(worktree, ".factory", "attachments", "screen.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestBuildPromptListsMaterializedAttachments(t *testing.T) {
+	claim := protocol.Claim{Task: protocol.Task{Title: "Inspect", Description: "Use evidence"}, Repository: protocol.Repository{RemoteIdentity: "github.com/example/repo"}, Attachments: []protocol.TaskAttachment{{Name: "screen.png"}}}
+	prompt := buildPrompt(claim, worktree{Branch: "factory/test", BaseBranch: "main"})
+	if !strings.Contains(prompt, ".factory/attachments/screen.png") {
+		t.Fatalf("prompt = %q", prompt)
 	}
 }
