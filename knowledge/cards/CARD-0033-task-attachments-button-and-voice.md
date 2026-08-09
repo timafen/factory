@@ -2,18 +2,22 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/66c2762e-cc4-1e85fca1-3d7`.
-- Head commit: будет указан завершающим коммитом Verify.
-- What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
-  `/opt/factory-data/attachments/<id-задачи>/`; worker сохраняет одноимённые файлы
-  как `<id>-<имя>`; fallback пилота сохраняет исходный ключ привязки файлов.
-- Evidence: полный Go-набор, целевые Go/Python-проверки, TypeScript и production
-  web build → PASS. Полный Vitest сохраняет один известный сбой notification
-  groups в неизменённом `Settings.test.tsx`; полный ESLint — 9 известных ошибок.
-- One next action: влить ветку в `main`.
+- Status: Implement PASS — готово к проверке и слиянию.
+- Branch: `factory/18ac6eab-c12-aa2634d5-927`.
+- Head commit: `9082607`.
+- What changed: спецификация закрепляет одной целевой командой сквозную проверку
+  привязки вложения, материализации worker и объявления пути файла в prompt.
+- Evidence: целевые Go-тесты, TypeScript и production web build → PASS.
+- One next action: проверить поставку и влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+Проверяемое обещание спецификации сведено к трём регрессиям сквозной доставки:
+файл принадлежит задаче и хранится в её каталоге, worker проверяет и записывает
+его до runtime, а prompt называет материализованный путь. Целевая Go-команда,
+проверка TypeScript и production web build прошли.
 
 ### 2026-08-08 — Verify
 
