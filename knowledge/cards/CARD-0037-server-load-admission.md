@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: Implement complete — awaiting Verify
-- Branch: `factory/3e984ded-44a-8141732d-17a`
-- Head commit: `4368da8` (`Сохранить движение лёгких этапов при загрузке сервера`)
-- What changed: при обычной перегрузке пилот сохраняет один гарантированный запуск,
-  пропускает `Triage`, `Specification`, `Review` и откладывает тяжёлые стадии.
-  Авария памяти или диска остаётся полной блокировкой.
-- Evidence: `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` → 7 tests, OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0;
-  `go build ./...` → exit 0.
-- Next action: Verify прогоняет полный `python3 -m unittest pilot.test_pilot`.
+- Status: Specification complete — implementation remains open
+- Branch: `factory/69b852f2-6fb-8a930395-255`
+- Head commit: `7cfef92` (`Оставить поставку мягкого допуска в заявленной области`)
+- What changed: из поставки убраны незаявленные изменения `pilot/*`;
+  критерии готовности спецификации приведены к разрешённой области.
+- Evidence: `git diff --exit-code origin/main -- pilot/pilot.py pilot/test_pilot.py` → exit 0;
+  `git diff --name-only origin/main...HEAD` → только карточка и спецификация;
+  `python3 -m unittest pilot.test_pilot` → 24 tests, OK; `go build ./...` → exit 0.
+- Next action: согласовать расширение области на `pilot/pilot.py` и `pilot/test_pilot.py` для реализации.
 
 ## LOG
 
@@ -29,3 +28,10 @@
 ответам владельца, сторожу, эпикам и автозапуску без дублирования политики.
 Целевой класс: 7 тестов, OK; соседний `CreateTaskFallbackTest`: 1 тест, OK;
 компиляция `pilot/pilot.py` и `pilot/test_pilot.py`: exit 0; `go build ./...`: exit 0.
+
+### 2026-08-09 — Implement
+
+По результату машинной проверки из ветки убраны изменения `pilot/pilot.py`
+и `pilot/test_pilot.py`, не входившие в заявленную область. Итоговый дифф от
+точки ветвления содержит только карточку и спецификацию; целевая проверка чистоты
+`pilot/*` завершилась с exit 0. Реализация политики в этой области не поставляется.
