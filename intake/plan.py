@@ -7,6 +7,7 @@
 """
 import html
 import sys
+import uuid
 
 sys.path.insert(0, "/opt/factory-data/pilot")
 import pilot  # noqa: E402
