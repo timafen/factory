@@ -24,8 +24,9 @@ const maxPilotConfigBytes = 1 << 20
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
 
 type PilotConfigStore struct {
-	path string
-	mu   sync.Mutex
+	path   string
+	rename func(string, string) error
+	mu     sync.Mutex
 }
 
 type ReviveWorkResponse struct {
@@ -33,7 +34,9 @@ type ReviveWorkResponse struct {
 	State string `json:"state"`
 }
 
-func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
+func NewPilotConfigStore(path string) *PilotConfigStore {
+	return &PilotConfigStore{path: path, rename: os.Rename}
+}
 
 func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
 	s.mu.Lock()
@@ -84,10 +87,12 @@ func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
 		return ReviveWorkResponse{}, err
 	}
 	known := signals[work]
+	wasStopped := false
 	stopped := make([]string, 0, len(settings.StoppedPipelines))
 	for _, name := range settings.StoppedPipelines {
 		if name == work {
 			known = true
+			wasStopped = true
 			continue
 		}
 		stopped = append(stopped, name)
@@ -104,17 +109,21 @@ func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
 	if !known {
 		return ReviveWorkResponse{}, &ServiceError{Code: "work_not_stopped", Message: "work is not stopped", Status: 404}
 	}
-	settings.StoppedPipelines = stopped
-	body, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return ReviveWorkResponse{}, unavailable(err)
-	}
-	if err := s.atomicWrite(append(body, '\n')); err != nil {
-		return ReviveWorkResponse{}, err
-	}
 	signals[work] = true
 	if err := s.atomicWritePath(s.revivePath(), signals); err != nil {
 		return ReviveWorkResponse{}, err
+	}
+	// Publish the revive signal before removing an owner pause. If signal
+	// persistence fails, the configuration remains byte-for-byte stopped.
+	if wasStopped {
+		settings.StoppedPipelines = stopped
+		body, marshalErr := json.MarshalIndent(settings, "", "  ")
+		if marshalErr != nil {
+			return ReviveWorkResponse{}, unavailable(marshalErr)
+		}
+		if err := s.atomicWrite(append(body, '\n')); err != nil {
+			return ReviveWorkResponse{}, err
+		}
 	}
 	return ReviveWorkResponse{Work: work, State: "reviving"}, nil
 }
@@ -247,7 +256,7 @@ func (s *PilotConfigStore) atomicWrite(body []byte) error {
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(tmpName, s.path)
+		err = s.rename(tmpName, s.path)
 	}
 	if err == nil {
 		if d, openErr := os.Open(dir); openErr == nil {
