@@ -788,6 +788,22 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
         self.assertEqual(self.revive, {})
 
+    def test_revive_after_rework_runs_review_again(self):
+        old_review = self.task(stage="Review")
+        old_review["created_at"] = "2026-08-09T10:00:00Z"
+        reworked_implementation = self.task(stage="Implement")
+        reworked_implementation["created_at"] = "2026-08-09T11:00:00Z"
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"}
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([reworked_implementation, old_review])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[3/3 Review]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-review")
+
 
 class PlanCardCleanupTest(unittest.TestCase):
     def setUp(self):

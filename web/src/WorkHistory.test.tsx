@@ -120,3 +120,19 @@ it("does not offer revive for ordinary failed work", async () => {
   await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
   expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
 });
+
+it("does not offer revive for a closed work with a stale stopped status", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") return Response.json({ "Понятная история": { state: "stopped_owner", text: "остановлена" } });
+    if (path === "/api/v1/works") return Response.json({ "Понятная история": { closed: true } });
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory();
+
+  fireEvent.click(await screen.findByRole("button", { name: /Архив/ }));
+  await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
+  expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
+});

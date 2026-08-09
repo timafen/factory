@@ -1541,11 +1541,19 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec.setdefault("since", now)
             mem[base] = rec
             continue
-        idx = [stages.index(st) for st, t in lst
-               if t.get("state") == "succeeded" and st in stages]
-        if not idx:
+        succeeded = [(st, t) for st, t in lst
+                     if t.get("state") == "succeeded" and st in stages]
+        if not succeeded:
             continue
-        far = max(idx)
+        # A later rework lap may successfully finish an earlier stage after a
+        # Review from the previous lap. Continue from the latest success, not
+        # the furthest stage that happened to succeed at any time.
+        latest_stage, src = max(
+            succeeded,
+            key=lambda item: (item[1].get("created_at") or "",
+                              item[1].get("id") or ""),
+        )
+        far = stages.index(latest_stage)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
             continue
@@ -1569,8 +1577,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         worker = workers.get(wname)
         if not nw or not nw.get("enabled") or not worker:
             continue
-        src = next((t for st, t in lst if st == stages[far]), None)
-        rid = (src or {}).get("repository_id") or ""
+        rid = src.get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
         try:
             create_task({"request_key": str(uuid.uuid4()), "title": title,

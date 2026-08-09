@@ -530,7 +530,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
             }}>{ORIGIN_RU[g.meta.origin] ?? g.meta.origin}</span>
         )}
         <strong style={{ fontSize: 15, opacity: g.meta?.closed ? 0.65 : 1 }}>{g.base}</strong>
-        {(g.status.label.startsWith("остановлена:") || g.status.label.startsWith("застряла:")) && (
+        {!g.meta?.closed && (g.status.label.startsWith("остановлена:") || g.status.label.startsWith("застряла:")) && (
           <>
             <button className="button" disabled={reviving}
               onClick={(event) => { event.stopPropagation(); void onRevive(g.base); }}>

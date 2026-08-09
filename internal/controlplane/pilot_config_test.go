@@ -3,6 +3,7 @@ package controlplane
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -276,6 +277,29 @@ func TestReviveWorkAcceptsStuckAndRejectsUnknown(t *testing.T) {
 	}
 	if _, err := store.Revive("Неизвестная"); err == nil {
 		t.Fatal("unknown work was accepted")
+	}
+}
+
+func TestReviveWorkKeepsOwnerPauseWhenSignalWriteFails(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+	store.rename = func(oldPath, newPath string) error {
+		if newPath == filepath.Join(filepath.Dir(path), "revive.json") {
+			return errors.New("injected revive signal write failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+
+	if _, err := store.Revive("Работа"); err == nil {
+		t.Fatal("revive succeeded despite signal write failure")
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 2 || got[0] != "Работа" || got[1] != "Работа рядом" {
+		t.Fatalf("stopped pipelines changed after failed signal write: %#v", got)
 	}
 }
 
