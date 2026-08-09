@@ -36,6 +36,10 @@ EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
 EPIC_PLAN_PREFIX = "[epic-plan]"     # or any task titled like this
 EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
 
+HOST_LOAD_ACTIVE_STATES = {"running", "queued", "pending", "created", "starting"}
+HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
+HOST_LOAD_MINIMUM_ACTIVE = 1
+
 
 def api(path, body=None):
     req = urllib.request.Request(API + path)
@@ -321,6 +325,10 @@ AGENT_RULES = """
 
 
 def create_task(body, conf=None):
+    if conf and not host_load_admits(
+            conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
+            conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
+        raise RuntimeError("host_load_admission: stage deferred")
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
     if str(body.get("title", "")).startswith(PREFIX):
@@ -334,7 +342,9 @@ def create_task(body, conf=None):
        different model tier than a dead button).
     Every fallback is logged with the control-plane error that caused it."""
     try:
-        return api("/tasks", body)
+        out = api("/tasks", body)
+        _note_admitted_task(conf, out, body)
+        return out
     except urllib.error.HTTPError as e:
         msg = _http_err(e)
         if "repository_not_advertised" not in msg:
@@ -357,6 +367,7 @@ def create_task(body, conf=None):
     try:
         out = api("/tasks", b2)
         log(f"task create: acquired {identity} dynamically for pinned worker")
+        _note_admitted_task(conf, out, body)
         return out
     except urllib.error.HTTPError as e:
         log(f"task create: route+worker failed ({_http_err(e)}); trying any eligible worker")
@@ -371,7 +382,19 @@ def create_task(body, conf=None):
     out = api("/tasks", b3)
     wid = (out.get("task") or {}).get("worker_id", "?")
     log(f"task create: routed to substitute worker {wid} (original tier unavailable)")
+    _note_admitted_task(conf, out, body)
     return out
+
+
+def _note_admitted_task(conf, response, body):
+    """Keep the cycle snapshot honest after a successful create."""
+    tasks = (conf or {}).get("_host_load_tasks")
+    if tasks is None:
+        return
+    task = dict((response or {}).get("task") or {})
+    task.setdefault("title", body.get("title", ""))
+    task.setdefault("state", "created")
+    tasks.append(task)
 
 
 def gh_merge(repo_identity, branch, title):
@@ -3231,6 +3254,25 @@ def host_overloaded(conf, workers=None):
     return host_block(workers).get("state") == "over"
 
 
+def stage_from_title(title):
+    match = STAGE_TITLE_RE.match(str(title or ""))
+    return match.group(1).strip() if match else ""
+
+
+def host_load_admits(tasks, stage, load, respect_host_load=True):
+    """Decide whether a pipeline stage may start under the current host load."""
+    if not respect_host_load or not load or load.get("state") != "over":
+        return True
+    if any((load.get(resource) or {}).get("state") == "over"
+           for resource in ("memory", "disk")):
+        return False
+    active = sum(1 for task in (tasks or [])
+                 if task.get("state") in HOST_LOAD_ACTIVE_STATES)
+    if active < HOST_LOAD_MINIMUM_ACTIVE:
+        return True
+    return stage in HOST_LOAD_LIGHT_STAGES
+
+
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
 
 
@@ -3472,6 +3514,10 @@ def rescue_queued(conf, tasks, workflows, workers):
             nw = workflows.get(stage)
             if not nw or not nw.get("enabled"):
                 continue
+            if not host_load_admits(
+                    tasks, stage, conf.get("_host_load_snapshot"),
+                    conf.get("respect_host_load", True)):
+                continue
             cx = complexity_of(conf, stage, (sick or {}).get("name", "")) or "medium"
             name = stage_worker(conf, stage, cx, workers)
             fresh = workers.get(name) if isinstance(workers, dict) else None
@@ -3675,15 +3721,19 @@ def cycle(conf, state):
     except Exception as e:
         log("day_cap_error", repr(e))
 
-    # Перегруженный сервер: начатое доигрывается, новое не берётся. Иначе
-    # мы просто замедляем всё сразу и получаем таймауты вместо результата.
+    # Перегрузка больше не останавливает сторож и весь конвейер. Один запуск
+    # гарантирован, затем допускаются только лёгкие стадии; память и диск —
+    # аварийные исключения. Снимок используют все create_task ниже по циклу.
+    conf.pop("_host_load_snapshot", None)
+    conf.pop("_host_load_tasks", None)
     try:
-        if host_overloaded(conf, workers):
-            hb = host_block(workers)
+        hb = host_block(workers)
+        if conf.get("respect_host_load", True) and hb.get("state") == "over":
             log(f"HOST BUSY: процессор {hb.get('cpu', {}).get('percent')}%, "
                 f"память {hb.get('memory', {}).get('percent')}%, "
-                f"диск {hb.get('disk', {}).get('percent')}% — новую работу не беру")
-            return
+                f"диск {hb.get('disk', {}).get('percent')}% — действует мягкий допуск")
+            conf["_host_load_snapshot"] = hb
+            conf["_host_load_tasks"] = list(tasks)
     except Exception as e:
         log("host_load_error", repr(e))
 
