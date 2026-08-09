@@ -44,6 +44,7 @@ export interface EventSummary {
 
 const hiddenEventTypes = new Set([
   "rate_limit_event",
+  "reasoning",
   "system",
   "thread.started",
   "turn.started",
@@ -51,11 +52,12 @@ const hiddenEventTypes = new Set([
 ]);
 
 export function eventSummary(event: AttemptEvent): EventSummary | null {
+  if (event.kind === "stdout" || event.kind === "stderr") return null;
   if (typeof event.payload === "string") {
-    return { label: stateLabel(event.kind), text: event.payload };
+    return { label: eventLabel(event.kind), text: event.payload };
   }
   const payload = record(event.payload);
-  if (!payload) return fallbackSummary(event);
+  if (!payload) return null;
 
   const type = stringValue(payload.type);
   if (type === "assistant") return claudeAssistantSummary(payload);
@@ -63,35 +65,29 @@ export function eventSummary(event: AttemptEvent): EventSummary | null {
   if (type === "result") {
     const result = stringValue(payload.result);
     if (payload.is_error === true) {
-      return { label: "Error", text: result ?? "Claude Code reported a terminal error" };
+      return { label: "Ошибка", text: result ?? "Исполнитель сообщил об ошибке" };
     }
-    return result ? { label: "Result", text: result } : null;
+    return result ? { label: "Результат", text: result } : null;
   }
   if (type === "item.started" || type === "item.completed") {
     return codexItemSummary(payload, type === "item.completed");
   }
   if (type === "error") {
-    return { label: "Error", text: errorText(payload) ?? "The runtime reported an error." };
+    return { label: "Ошибка", text: errorText(payload) ?? "Исполнитель сообщил об ошибке" };
   }
   if (type === "turn.failed") {
-    return { label: "Error", text: errorText(payload) ?? "The Codex turn failed." };
+    return { label: "Ошибка", text: errorText(payload) ?? "Исполнитель не смог завершить работу" };
   }
   if (type && hiddenEventTypes.has(type)) return null;
 
   const stream = stringValue(payload.stream);
-  const streamText = stringValue(payload.text);
-  if (stream && streamText) {
-    return {
-      label: stream === "stderr" ? "Error output" : "Output",
-      text: compactOutput(streamText, Boolean(payload.truncated)),
-    };
-  }
+  if (stream === "stdout" || stream === "stderr") return null;
+  if (type) return null;
   const directText = firstString(payload, ["text", "message", "title", "summary"]);
   if (directText) {
     return { label: eventLabel(event.kind), text: directText };
   }
-  if (type) return { label: "Runtime", text: humanize(type) };
-  return fallbackSummary(event);
+  return null;
 }
 
 function claudeAssistantSummary(payload: Record<string, unknown>): EventSummary | null {
@@ -110,7 +106,7 @@ function claudeAssistantSummary(payload: Record<string, unknown>): EventSummary 
       lines.push(toolAction(block, false));
     }
   }
-  return lines.length > 0 ? { label: "Assistant", text: lines.join("\n\n") } : null;
+  return lines.length > 0 ? { label: "Исполнитель", text: lines.join("\n\n") } : null;
 }
 
 function claudeToolResultSummary(payload: Record<string, unknown>): EventSummary | null {
@@ -119,7 +115,10 @@ function claudeToolResultSummary(payload: Record<string, unknown>): EventSummary
   const blocks = message.content.map(record).filter((value) => value?.type === "tool_result");
   if (blocks.length === 0) return null;
   const failed = blocks.some((block) => block?.is_error === true);
-  return { label: failed ? "Tool error" : "Tool", text: failed ? "Tool call failed" : "Tool call completed" };
+  return {
+    label: failed ? "Ошибка инструмента" : "Инструмент",
+    text: failed ? "Инструмент завершился с ошибкой" : "Инструмент завершил работу",
+  };
 }
 
 function codexItemSummary(payload: Record<string, unknown>, completed: boolean): EventSummary | null {
@@ -129,46 +128,45 @@ function codexItemSummary(payload: Record<string, unknown>, completed: boolean):
   const failed = completed && (item.status === "failed" || (item.error !== undefined && item.error !== null));
   if (type === "agent_message") {
     const text = stringValue(item.text);
-    return text ? { label: "Assistant", text } : null;
+    return text ? { label: "Исполнитель", text } : null;
   }
   if (type === "reasoning") return null;
   if (type === "command_execution") {
-    const command = compactLine(stringValue(item.command) ?? "Command");
-    if (!completed) return { label: "Command", text: `Running ${command}` };
+    const command = compactLine(stringValue(item.command) ?? "команда без названия");
+    if (!completed) return { label: "Команда", text: `Запускаю: ${command}` };
     const exitCode = numberValue(item.exit_code);
-    if (!failed && exitCode === 0) return { label: "Command", text: `Succeeded: ${command}` };
-    if (exitCode !== null) return { label: "Command error", text: `Failed (${exitCode}): ${command}` };
-    if (failed) return { label: "Command error", text: `Failed: ${command}` };
-    return { label: "Command", text: `Finished: ${command}` };
+    if (!failed && exitCode === 0) return { label: "Команда", text: `Выполнено: ${command}` };
+    if (exitCode !== null) {
+      return { label: "Ошибка команды", text: `Код ${exitCode}: ${command}` };
+    }
+    if (failed) return { label: "Ошибка команды", text: `Не удалось выполнить: ${command}` };
+    return { label: "Команда", text: `Завершено: ${command}` };
   }
   if (type?.includes("tool_call")) {
-    return { label: failed ? "Tool error" : "Tool", text: toolAction(item, completed, failed) };
+    return {
+      label: failed ? "Ошибка инструмента" : "Инструмент",
+      text: toolAction(item, completed, failed),
+    };
   }
   if (type === "file_change") {
     return {
-      label: failed ? "File error" : "Files",
-      text: failed ? "File changes failed" : completed ? "File changes completed" : "Changing files",
+      label: failed ? "Ошибка файлов" : "Файлы",
+      text: failed ? "Не удалось изменить файлы" : completed ? "Файлы изменены" : "Изменяю файлы",
     };
   }
-  if (type) return { label: "Runtime", text: `${humanize(type)} ${completed ? "completed" : "started"}` };
   return null;
 }
 
 function toolAction(value: Record<string, unknown>, completed: boolean, failed = false): string {
-  const name = firstString(value, ["tool", "name"]) ?? "Tool call";
-  const input = record(value.input);
-  const command = input ? stringValue(input.command) : null;
-  const subject = command ? `${name}: ${compactLine(command)}` : name;
-  if (failed) return `${subject} failed`;
-  return completed ? `${subject} completed` : `Using ${subject}`;
-}
-
-function fallbackSummary(event: AttemptEvent): EventSummary {
-  return { label: eventLabel(event.kind), text: "Runtime update" };
+  const name = firstString(value, ["tool", "name"]) ?? "без названия";
+  if (failed) return `Инструмент завершился с ошибкой: ${name}`;
+  return completed ? `Инструмент завершил работу: ${name}` : `Запущен инструмент: ${name}`;
 }
 
 function eventLabel(kind: string): string {
-  if (kind === "claude-code" || kind === "codex") return "Runtime";
+  if (kind === "claude-code" || kind === "codex") return "Исполнитель";
+  if (kind === "progress") return "Ход работы";
+  if (kind === "check") return "Проверка";
   return stateLabel(kind);
 }
 
@@ -179,24 +177,10 @@ function errorText(payload: Record<string, unknown>): string | null {
   return error ? firstString(error, ["message", "detail"]) : null;
 }
 
-function compactOutput(text: string, truncated: boolean): string {
-  const trimmed = text.trim();
-  if (truncated && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
-    return "Large structured runtime output omitted";
-  }
-  const maximum = 500;
-  return trimmed.length > maximum ? `${trimmed.slice(0, maximum)}…` : trimmed;
-}
-
 function compactLine(value: string): string {
   const line = value.replace(/\s+/g, " ").trim();
   const maximum = 240;
   return line.length > maximum ? `${line.slice(0, maximum)}…` : line;
-}
-
-function humanize(value: string): string {
-  const words = value.replace(/[._-]+/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function record(value: unknown): Record<string, unknown> | null {
