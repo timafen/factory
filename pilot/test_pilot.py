@@ -634,6 +634,7 @@ class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
         self.memory = {}
+        self.revive = {}
         self.work_status = {}
         self.created = []
         self.notifications = []
@@ -668,11 +669,15 @@ class PipelineWatchTests(unittest.TestCase):
     def _load(self, path, default=None):
         if path == pilot.STALL_PATH:
             return self.memory
+        if path == pilot.REVIVE_PATH:
+            return self.revive
         return default
 
     def _save(self, path, value):
         if path == pilot.STALL_PATH:
             self.memory = value
+        elif path == pilot.REVIVE_PATH:
+            self.revive = value
         elif path.endswith("/pilot/work_status.json"):
             self.work_status = value
 
@@ -767,6 +772,21 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 1)
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+        self.assertEqual(self.revive, {})
 
 
 class PlanCardCleanupTest(unittest.TestCase):
