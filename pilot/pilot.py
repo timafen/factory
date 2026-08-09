@@ -322,6 +322,10 @@ AGENT_RULES = """
    только целевые тесты своей области (и новые). Ревью тесты не запускает —
    читает дифф, максимум целевые при сомнении. Полный набор — ровно ОДИН раз,
    на Проверке, перед вливанием. Итерации должны быть минутами, не десятками.
+   Если общий набор проекта красный ИЗ-ЗА файлов вне твоей области — это долг
+   проекта, а не твой дефект: прогони целевые тесты своей области, запиши
+   строкой НАХОДКА, что именно красное, и ставь PASS. Работу за чужую
+   красноту не возвращают.
 9. Живая проверка на стенде РАЗРЕШЕНА и желательна (торговый проект):
    sudo -n /usr/local/bin/fx staging sandbox bootstrap-accounts | seller-policies
    | listings   (можно с флагами вида --tenant-id=... --account-id=...).
@@ -2604,6 +2608,37 @@ BRANCH_ANY = re.compile(r"\bfactory/[A-Za-z0-9._/-]+")
 CONTEXT_BRANCH = re.compile(r"^Branch:\s*(\S+)\s*$", re.M)
 
 
+def branch_candidates(result, prev_context):
+    """Все имена веток, что встретились, в порядке доверия: сначала явная
+    строка отчёта, потом упоминания в отчёте, потом контекст задания."""
+    out = []
+    for source, pattern in ((result, BRANCH_LINE), (result, BRANCH_ANY),
+                            (prev_context, CONTEXT_BRANCH), (prev_context, BRANCH_ANY)):
+        for m in pattern.finditer(source or ""):
+            name = m.group(1) if pattern.groups else m.group(0)
+            name = (name or "").strip().strip("`,.;")
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
+def pushed_branch(candidates, repo_identity):
+    """Ветка, которой нет в хранилище, для проверки не существует.
+    Берём первую опубликованную; если хранилище недоступно — первую вообще."""
+    if not candidates:
+        return ""
+    short = (repo_identity or "").split("github.com/")[-1]
+    if not short:
+        return candidates[0]
+    for name in candidates[:6]:
+        info = gh_json(["api", f"repos/{short}/branches/{name}"])
+        if isinstance(info, dict) and info.get("name") == name:
+            if name != candidates[0]:
+                log(f"BRANCH PICK: беру опубликованную {name} вместо {candidates[0]}")
+            return name
+    return candidates[0]
+
+
 def extract_branch(result, prev_context):
     """Find the pushed working branch: explicit BRANCH: line first, then any
     factory/* mention in the result, then the branch carried in the previous
@@ -4140,6 +4175,15 @@ def cycle(conf, state):
 
         handoff = verdict.get("handoff", "")
         branch = extract_branch(result, detail.get("context", ""))
+        if next_stage in ("Review", "Verify"):
+            try:
+                rid_b = detail["task"].get("repository_id") or ""
+                cands = branch_candidates(result, detail.get("context", ""))
+                picked = pushed_branch(cands, repo_identity_by_id.get(rid_b, ""))
+                if picked:
+                    branch = picked
+            except Exception as e:
+                log("branch_pick_error", repr(e))
         branch_line = f"Branch: {branch}\n" if branch else ""
 
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
