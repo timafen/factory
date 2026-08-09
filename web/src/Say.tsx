@@ -38,7 +38,8 @@ export function SayView() {
   const [refining, setRefining] = useState<null | "rec" | "stt" | "think">(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const refineFlag = useRef(false);
-  const refineIntent = useRef<"edit" | "ask">("edit");
+  const refineIntentRef = useRef<"edit" | "ask">("edit");
+  const [refineIntent, setRefineIntent] = useState<"edit" | "ask">("edit");
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -134,6 +135,8 @@ export function SayView() {
   // auto-read the proposal aloud when it arrives (for hands-free use)
   useEffect(() => {
     if (phase === "proposal" && proposal && autoRead) {
+      // A new proposal intentionally starts the external speech synthesizer.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       speak(proposalToSpeech(proposal));
     }
     if (phase !== "proposal") stopSpeaking();
@@ -178,7 +181,7 @@ export function SayView() {
       rec.start();
       if (!refineFlag.current) setPhase("recording");
       window.setTimeout(() => startWave(stream), 50);
-    } catch (e) {
+    } catch {
       setError("Нет доступа к микрофону. Разреши доступ в браузере и попробуй снова.");
       if (refineFlag.current) { refineFlag.current = false; setRefining(null); }
       else setPhase("idle");
@@ -194,7 +197,8 @@ export function SayView() {
   const startRefine = async (intent: "edit" | "ask") => {
     stopSpeaking();
     refineFlag.current = true;
-    refineIntent.current = intent;
+    refineIntentRef.current = intent;
+    setRefineIntent(intent);
     setAnswer(null);
     setRefining("rec");
     await startRecording();
@@ -212,7 +216,7 @@ export function SayView() {
       const r2 = await fetch("/intake/dispatch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: said, proposal, intent: refineIntent.current }),
+        body: JSON.stringify({ text: said, proposal, intent: refineIntentRef.current }),
       });
       if (!r2.ok) throw new Error(`refine ${r2.status}`);
       const data = await r2.json() as (Omit<Proposal, "mode"> & { answer?: string; mode: string });
@@ -224,7 +228,7 @@ export function SayView() {
         setAnswer(null);
         // useEffect on proposal change auto-reads the revised plan
       }
-    } catch (e) {
+    } catch {
       setError("Не получилось уточнить. Скажи ещё раз.");
     } finally {
       refineFlag.current = false;
@@ -241,7 +245,7 @@ export function SayView() {
       const data = (await r.json()) as { text: string };
       setTranscript(data.text || "");
       setPhase("review");
-    } catch (e) {
+    } catch {
       setError("Не удалось распознать речь. Попробуй ещё раз.");
       setPhase("idle");
     }
@@ -260,7 +264,7 @@ export function SayView() {
       if (!r.ok) throw new Error(`dispatch ${r.status}`);
       setProposal((await r.json()) as Proposal);
       setPhase("proposal");
-    } catch (e) {
+    } catch {
       setError("Диспетчер не смог разобрать задачу. Поправь текст и попробуй снова.");
       setPhase("review");
     }
@@ -403,7 +407,7 @@ export function SayView() {
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             {refining === "rec" ? (
               <button className="button" onClick={stopRecording} style={{ borderColor: "#ff9d9d" }}>
-                <Square size={15} /> Стоп — я сказал{refineIntent.current === "ask" ? " (вопрос)" : " (правки)"}
+                <Square size={15} /> Стоп — я сказал{refineIntent === "ask" ? " (вопрос)" : " (правки)"}
               </button>
             ) : refining ? (
               <button className="button" disabled>
