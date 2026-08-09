@@ -1564,6 +1564,71 @@ def branch_report(repo_identity, branch):
     return "есть", files
 
 
+REBUILD_DIR = f"{HOME}/pilot/rebuild"
+
+
+def _git(cwd, *args, timeout=180):
+    env = dict(os.environ, HOME=HOME, GIT_TERMINAL_PROMPT="0")
+    p = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True,
+                       text=True, timeout=timeout, env=env)
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base):
+    """Собрать ветку заново от свежей главной и перенести ТОЛЬКО свои файлы.
+    Делает пилот своими руками: агент мог бы забыть или сделать не так."""
+    if not (repo_identity and dirty_branch and keep_files):
+        return ""
+    short = repo_identity.split("github.com/")[-1]
+    url = f"https://github.com/{short}.git"
+    os.makedirs(REBUILD_DIR, exist_ok=True)
+    work = f"{REBUILD_DIR}/{re.sub(chr(91) + '^a-zA-Z0-9' + chr(93), '_', dirty_branch)[:60]}"
+    try:
+        if os.path.isdir(work):
+            subprocess.run(["rm", "-rf", work], timeout=60)
+        rc, out = _git(REBUILD_DIR, "init", "-q", work)
+        if rc:
+            log("rebuild: init " + out[:120]); return ""
+        for args in (("remote", "add", "origin", url),
+                     ("fetch", "--depth", "1", "origin", "main"),
+                     ("fetch", "--depth", "1", "origin", dirty_branch)):
+            rc, out = _git(work, *args)
+            if rc:
+                log("rebuild: " + args[0] + " " + out[:160]); return ""
+        clean = dirty_branch + "-clean"
+        rc, out = _git(work, "checkout", "-q", "-B", clean, "FETCH_HEAD^{commit}")
+        rc, out = _git(work, "checkout", "-q", "-B", clean, "origin/main")
+        if rc:
+            log("rebuild: base " + out[:160]); return ""
+        taken = []
+        for f in keep_files:
+            rc, out = _git(work, "checkout", "origin/" + dirty_branch, "--", f)
+            if rc == 0:
+                taken.append(f)
+        if not taken:
+            log("rebuild: ни один файл области не перенесён"); return ""
+        _git(work, "add", "-A")
+        rc, out = _git(work, "-c", "user.name=Factory Pilot",
+                       "-c", "user.email=pilot@factory", "commit", "-q", "-m",
+                       "Пересобрано машиной от свежей главной: " + base[:90])
+        if rc:
+            log("rebuild: commit " + out[:160]); return ""
+        rc, out = _git(work, "push", "-q", "--force-with-lease", "origin",
+                       "HEAD:" + clean)
+        if rc:
+            log("rebuild: push " + out[:200]); return ""
+        log(f"REBUILD OK: {clean} собрана от главной, файлов {len(taken)}")
+        return clean
+    except Exception as e:
+        log("rebuild_error", repr(e))
+        return ""
+    finally:
+        try:
+            subprocess.run(["rm", "-rf", work], timeout=60)
+        except Exception:
+            pass
+
+
 def review_gate(conf, base, branch, repo_identity):
     """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
     Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
@@ -1597,6 +1662,14 @@ def review_gate(conf, base, branch, repo_identity):
         for p in known.get(base) or []:
             mine.add(p.split("::", 1)[1] if "::" in p else p)
         foreign = sorted(f for f in files if mine and f not in mine)
+        if foreign and mine:
+            clean = rebuild_clean_branch(repo_identity, branch, sorted(mine), base)
+            if clean:
+                return {"back": False, "branch": clean,
+                        "note": ("Ветка пересобрана машиной от свежей главной: "
+                                 "в поставке остались только файлы области "
+                                 "(" + ", ".join(sorted(mine))[:400] + "). "
+                                 "Проверяй ветку " + clean + ".")}
         if foreign and cap_rescues(base, "DIRT") < 1:
             note_cap_rescue(base, "DIRT")
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
@@ -4248,6 +4321,9 @@ def cycle(conf, state):
                 except Exception as e:
                     log("gate_return_error", repr(e))
             elif g:
+                if g.get("branch"):
+                    branch = g["branch"]
+                    branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
         context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}"
