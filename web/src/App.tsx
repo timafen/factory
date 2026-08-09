@@ -20,6 +20,7 @@ import { AnswerView } from "./Answer";
 import { AccessView } from "./Access";
 import { AutomationDetail, AutomationsView } from "./Automations";
 import { Settings } from "./Settings";
+import { Dialog } from "./Dialog";
 
 type Route =
   | { page: "overview" }
@@ -39,6 +40,7 @@ type Route =
   | { page: "cards" }
   | { page: "automations" }
   | { page: "settings" }
+  | { page: "dialog" }
   | { page: "automation"; id: string };
 
 function readRoute(): Route {
@@ -52,6 +54,7 @@ function readRoute(): Route {
   if (parts[0] === "automations" && parts[1]) return { page: "automation", id: parts[1] };
   if (parts[0] === "automations") return { page: "automations" };
   if (parts[0] === "settings") return { page: "settings" };
+  if (parts[0] === "dialog") return { page: "dialog" };
   if (parts[0] === "workers") return { page: "workers" };
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
@@ -73,6 +76,7 @@ function routePath(route: Route): string {
   if (route.page === "automation") return `/automations/${route.id}`;
   if (route.page === "automations") return "/automations";
   if (route.page === "settings") return "/settings";
+  if (route.page === "dialog") return "/dialog";
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
@@ -289,6 +293,13 @@ export function App() {
             <GitBranch size={17} /> Repositories
           </button>
           <button
+            className={`nav-item ${route.page === "dialog" ? "active" : ""}`}
+            aria-current={route.page === "dialog" ? "page" : undefined}
+            onClick={() => navigate({ page: "dialog" })}
+          >
+            <MessageCircleQuestion size={17} /> Диалог
+          </button>
+          <button
             className={`nav-item ${route.page === "settings" ? "active" : ""}`}
             aria-current={route.page === "settings" ? "page" : undefined}
             onClick={() => navigate({ page: "settings" })}
@@ -330,6 +341,7 @@ export function App() {
             {route.page === "automations" && "Automations"}
             {route.page === "automation" && "Automation detail"}
             {route.page === "settings" && "Settings"}
+            {route.page === "dialog" && "Диалог"}
           </div>
           <button className="button button-primary" onClick={() => openDelegate()}>
             <Plus size={16} /> Delegate task
@@ -421,6 +433,7 @@ export function App() {
           )}
           {route.page === "cards" && <CardsView />}
           {route.page === "settings" && <Settings />}
+          {route.page === "dialog" && <Dialog />}
           {route.page === "automations" && (
             <AutomationsView onAutomation={(id) => navigate({ page: "automation", id })} />
           )}
