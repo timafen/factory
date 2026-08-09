@@ -2,11 +2,11 @@
 
 ## HEAD
 
-- Статус: реализация завершена.
-- Ветка: `factory/d2544b35-eca-04fd230c-198`.
-- Head commit: `7c05ec3` — проверенная предыдущая поставка, из которой перенесены только целевые изменения.
+- Статус: реализация завершена, поставка пересобрана без посторонних изменений.
+- Ветка: `factory/79cbbd17-6b6-16294e65-250`.
+- Head commit: `83730a7` — целевое изменение поверх свежего `origin/main`.
 - Что изменилось: из общего `AGENT_RULES` удалены требования только для Specification и Review; универсальные правила сохранены.
-- Evidence: `python3 -m unittest pilot.test_pilot.AgentRulesScopeTests` → 3 tests, OK; `python3 -m unittest pilot.test_pilot` → 35 tests, OK; `just build` → Factory binaries built.
+- Evidence: целевые тесты → 3 tests, OK; все тесты пилота → 35 tests, OK; `just build` → Factory binaries built; API Factory → сигнатуры правил найдены в Specification 5 и Review 6.
 - Следующее действие: провести Review чистого трёхточечного diff.
 
 ## LOG
@@ -24,3 +24,7 @@
 ### 2026-08-09 — Implement
 
 По решению владельца изменение повторно собрано от свежего `origin/main` без спецификации и постороннего поведения конвейера. В поставке оставлены только общий `AGENT_RULES`, три целевых теста и эта карточка; 3 целевых и все 35 тестов пилота прошли, бинарные файлы собраны.
+
+### 2026-08-09 — Implement
+
+Новая поставка собрана поверх актуального `origin/main`: в трёхточечном diff остались только `pilot/pilot.py`, `pilot/test_pilot.py` и CARD-0039. Проверка API подтвердила правило `ГОТОВО-КОГДА` в удалённой Specification 5 и трёхточечный diff в Review 6; 3 целевых и 35 тестов пилота прошли, `just build` завершился успешно.
