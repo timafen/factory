@@ -2379,7 +2379,17 @@ def note_budget_stop(base):
 
 def budget_stopped(base):
     try:
-        return base in (load(BUDGET_STOPS, {}) or {})
+        rec = load(BUDGET_STOPS, {}) or {}
+        if base not in rec:
+            return False
+        # Работу уже оживили (её нет в остановленных) — метка устарела:
+        # снимаем, иначе любой обычный вопрос красится в «деньги».
+        conf_disk = load(CONF_PATH, {}) or {}
+        if base not in (conf_disk.get("stopped_pipelines") or []):
+            rec.pop(base, None)
+            save(BUDGET_STOPS, rec)
+            return False
+        return True
     except Exception:
         return False
 
