@@ -109,6 +109,14 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, invalid("unknown_dialog_model", "Выбранная модель недоступна"))
 		return
 	}
+	if engineResting(selected.Model) {
+		writeError(w, &ServiceError{Code: dialog_rate_limited, Message: У этой модели сейчас исчерпана квота. Выберите другую модель, Status: http.StatusTooManyRequests})
+		return
+	}
+	if providerBlocked(selected.Provider) {
+		writeError(w, &ServiceError{Code: dialog_rate_limited, Message: Подписка этой модели сейчас заблокирована. Выберите другую модель, Status: http.StatusTooManyRequests})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), dialogTimeout)
 	defer cancel()
 	answer, err := a.dialogRunner.Run(ctx, *selected, request.Messages)
