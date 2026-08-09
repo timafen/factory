@@ -100,6 +100,7 @@ NOTIFY_GROUPS = {
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
     "routine": ("Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
+                "Взял из Плана",
                 "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
@@ -1179,6 +1180,62 @@ def collect_ideas(result, repo_id="", source=""):
         if add_idea(kind, title or text, repo_id, why, origin="agent", source=source):
             n += 1
     return n
+
+
+PLAN_ACTIVE_STATES = ("running", "queued", "pending", "created", "starting", "preparing")
+
+
+def active_auto_works(tasks):
+    """Unique pipeline works that occupy an automatic-start slot."""
+    active = set()
+    for task in tasks:
+        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if match and task.get("state") in PLAN_ACTIVE_STATES:
+            active.add(match.group(2).strip())
+    open_questions = {q.get("task_id") for q in load_questions()
+                      if q.get("status") == "open"}
+    for task in tasks:
+        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if match and task.get("id") in open_questions:
+            active.add(match.group(2).strip())
+    return active
+
+
+def autostart_plan(conf, tasks, workflows, workers):
+    """Start at most one top planned card when the pipeline has a free slot."""
+    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 3)):
+        return None
+    planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
+                     key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
+    if not planned:
+        return None
+    rec = planned[0]
+    stage_name, nstages = first_stage(conf)
+    workflow = workflows.get(stage_name) or {}
+    worker_name = stage_worker(conf, stage_name, "medium", workers)
+    worker = workers.get(worker_name)
+    if not stage_name or not workflow.get("enabled") or not worker:
+        return None
+    title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
+    source = rec.get("source") or "не указан"
+    context = (
+        "Конвейер автоматически взял верхнюю карточку из Плана.\n\n"
+        f"Что разобрать: {rec['title']}\n\n"
+        f"Зачем: {rec.get('why') or 'не записано'}\n\n"
+        f"Источник: {source}.\n\n"
+        "Это этап Triage: проверь готовность работы, границы и риски; "
+        "продолжай только с вердиктом READY."
+    )[:60000]
+    created = create_task({"request_key": str(uuid.uuid4()), "title": title,
+                           "context": context, "worker_id": worker["id"],
+                           "repository_id": rec.get("repo") or "",
+                           "timeout_seconds": conf.get("timeout_seconds", 7200),
+                           "workflow_revision_id": workflow["revision_id"]}, conf)
+    task_id = (created.get("task") or {}).get("id", "")
+    set_idea(rec["id"], state="in_work", task_id=task_id)
+    note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
+    notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
+    return task_id
 
 
 # --------------------------------------------------------- сторож конвейера ---
@@ -3360,6 +3417,13 @@ def cycle(conf, state):
             return
     except Exception as e:
         log("host_load_error", repr(e))
+
+    # Свободный слот получает верхнюю карточку Плана. Ошибка создания не
+    # переводит карточку в работу и не мешает уже запущенному конвейеру.
+    try:
+        autostart_plan(conf, tasks, workflows, workers)
+    except Exception as e:
+        log("plan_autostart_error", repr(e))
 
     # Сторож конвейера: молча умерших работ быть не должно.
     try:
