@@ -42,13 +42,19 @@ func TestProxyRejectsRedirectDestinationsOutsideAllowlist(t *testing.T) {
 }
 
 func TestPublicAddressRejectsInternalTargets(t *testing.T) {
-	for _, value := range []string{"127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "::1", "fe80::1", "fc00::1"} {
+	for _, value := range []string{
+		"0.0.0.1", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1",
+		"192.0.0.1", "192.0.2.1", "192.168.1.1", "198.18.0.1", "198.51.100.1", "203.0.113.10", "240.0.0.1",
+		"::1", "64:ff9b::1", "100::1", "100:0:0:1::1", "2001:db8::1", "2002::1", "3fff::1", "5f00::1", "fe80::1", "fc00::1", "ff00::1",
+	} {
 		if publicAddress(net.ParseIP(value)) {
-			t.Errorf("internal address %s allowed", value)
+			t.Errorf("special address %s allowed", value)
 		}
 	}
-	if !publicAddress(net.ParseIP("203.0.113.10")) {
-		t.Error("public address rejected")
+	for _, value := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if !publicAddress(net.ParseIP(value)) {
+			t.Errorf("public address %s rejected", value)
+		}
 	}
 }
 
@@ -74,7 +80,7 @@ printf '\211PNG\r\n\032\nproof' >"$output"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capture.URL != AllowedOrigin+"/orders" || !strings.Contains(string(arguments), "--proxy-server=http://127.0.0.1:") || !strings.Contains(string(arguments), "--disable-quic") || !strings.Contains(string(arguments), "--no-sandbox") {
+	if capture.URL != AllowedOrigin+"/orders" || !strings.Contains(string(arguments), "--proxy-server=http://127.0.0.1:") || !strings.Contains(string(arguments), "--disable-quic") || strings.Contains(string(arguments), "--no-sandbox") {
 		t.Fatalf("capture=%+v args=%s", capture, arguments)
 	}
 }

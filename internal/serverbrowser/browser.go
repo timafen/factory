@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -59,7 +60,7 @@ func (runner Runner) Capture(ctx context.Context, value string) (Capture, error)
 	go func() { _ = proxy.Serve(listener) }()
 
 	arguments := []string{
-		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-quic", "--disable-background-networking",
+		"--headless=new", "--disable-gpu", "--disable-quic", "--disable-background-networking",
 		"--disable-component-update", "--no-first-run", "--no-default-browser-check",
 		"--proxy-server=http://" + listener.Addr().String(), "--proxy-bypass-list=<-loopback>",
 		"--window-size=1440,1000", "--hide-scrollbars", "--screenshot=" + output, parsed.String(),
@@ -158,6 +159,37 @@ func approvedAddress(ctx context.Context) (string, error) {
 }
 
 func publicAddress(address net.IP) bool {
-	return address != nil && !address.IsPrivate() && !address.IsLoopback() && !address.IsLinkLocalUnicast() &&
-		!address.IsLinkLocalMulticast() && !address.IsUnspecified() && !address.IsMulticast()
+	parsed, ok := netip.AddrFromSlice(address)
+	if !ok {
+		return false
+	}
+	parsed = parsed.Unmap()
+	if !parsed.IsGlobalUnicast() {
+		return false
+	}
+	for _, prefix := range specialAddressPrefixes {
+		if prefix.Contains(parsed) {
+			return false
+		}
+	}
+	return true
+}
+
+// specialAddressPrefixes contains non-public IANA special-purpose ranges. A
+// resolved stand address must be globally routable and outside every range.
+var specialAddressPrefixes = mustPrefixes(
+	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+	"172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.31.196.0/24", "192.52.193.0/24",
+	"192.88.99.0/24", "192.168.0.0/16", "192.175.48.0/24", "198.18.0.0/15",
+	"198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+	"64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "100:0:0:1::/64", "2001::/23",
+	"2001:db8::/32", "2002::/16", "2620:4f:8000::/48", "3fff::/20", "5f00::/16", "fc00::/7", "fe80::/10",
+)
+
+func mustPrefixes(values ...string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefixes = append(prefixes, netip.MustParsePrefix(value))
+	}
+	return prefixes
 }

@@ -29,6 +29,7 @@ type API struct {
 	dialogRunner dialogRunner
 	sandboxKeys  sandboxKeysRunner
 	browser      browserCapturer
+	browserSlots chan struct{}
 }
 
 type workerRegistrationRequest struct {
@@ -79,7 +80,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, browser: serverbrowser.Runner{}}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, browser: serverbrowser.Runner{}, browserSlots: make(chan struct{}, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)

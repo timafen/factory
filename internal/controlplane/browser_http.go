@@ -15,6 +15,7 @@ type browserCapturer interface {
 }
 
 func (a *API) captureBrowser(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	var request struct {
 		URL string `json:"url"`
 	}
@@ -25,6 +26,15 @@ func (a *API) captureBrowser(w http.ResponseWriter, r *http.Request) {
 	if _, err := serverbrowser.ValidateURL(request.URL); err != nil {
 		writeError(w, invalid("browser_url_not_allowed", "Браузер открывает только основной тестовый стенд"))
 		return
+	}
+	if a.browserSlots != nil {
+		select {
+		case a.browserSlots <- struct{}{}:
+			defer func() { <-a.browserSlots }()
+		default:
+			writeError(w, &ServiceError{Code: "browser_busy", Message: "Серверный браузер уже занят, повторите попытку позже", Status: http.StatusTooManyRequests})
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
