@@ -395,6 +395,15 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
 
+    def test_ignores_task_without_canonical_pipeline_title(self):
+        task = self.task()
+        task["title"] = "Implement Встроенный патруль"
+
+        self.watch([task])
+
+        self.assertEqual(self.memory, {})
+        self.assertEqual(self.created, [])
+
     def test_gives_up_after_two_nudges_and_notifies_only_once(self):
         self.memory = {
             "Встроенный патруль": {
@@ -771,6 +780,62 @@ class PlanAutostartTest(unittest.TestCase):
 
         ideas.assert_not_called()
         create.assert_not_called()
+
+    def test_successful_stage_preserves_files_declared_in_report(self):
+        report = "ОБЛАСТЬ: pilot/pilot.py, docs/additional.md"
+        task = {"id": "done", "title": "[auto] [1/2 Implement] Счётчик",
+                "state": "succeeded"}
+        detail = {"task": {"repository_id": "repo-1"},
+                  "workflow": {"title": "Implement"},
+                  "attempts": [{"result": report}]}
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/tasks/done":
+                return detail
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        conf = {"stages": [{"workflow": "Implement"}, {"workflow": "Review"}],
+                "auto_plan": False}
+        state = {"processed": [], "epics_processed": []}
+        saved = {}
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "pipeline_watch", "collect_ideas", "route_question")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_overloaded",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "load", side_effect=lambda path, default=None:
+                saved.get(path, default)))
+            stack.enter_context(mock.patch.object(
+                pilot, "save", side_effect=lambda path, value:
+                saved.__setitem__(path, value)))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "stop", "reason": "test"}))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "load_questions", return_value=[]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        self.assertEqual(saved[pilot.AREAS_PATH]["Счётчик"], [
+            "repo-1::docs/additional.md", "repo-1::pilot/pilot.py",
+        ])
 
 
 class PlanManualTaskTest(unittest.TestCase):

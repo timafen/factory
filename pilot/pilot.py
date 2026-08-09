@@ -4276,6 +4276,11 @@ def cycle(conf, state):
         result = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
 
         try:
+            area_extend(base_title(title), result,
+                        detail["task"].get("repository_id") or "")
+        except Exception as e:
+            log("area_extend_error", repr(e))
+        try:
             collect_ideas(result, detail["task"].get("repository_id") or "",
                           base_title(title))
         except Exception as e:
