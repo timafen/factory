@@ -2,23 +2,15 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — начальная загрузка «Доступов» переведена на React
-  Query, точечный тест добавлен и зелёный.
-- Branch: `factory/fecba8dd-807-5efa334a-6df`.
-- Head commit: `6a7214b`.
-- What changed: `web/src/Access.tsx` больше не грузит рубильники через
-  `useEffect` + прямой `setState` — читает `useQuery(["access"])`, а
-  переключение (`toggle`) после POST рефетчит тот же запрос. Ошибка чтения
-  списка по-прежнему видна пользователю. Новый `web/src/Access.test.tsx`
-  закрепляет показ загруженного рубильника и повторный GET после переключения.
-- Evidence: `cd web && npm test -- --run src/Access.test.tsx` → 2 passed;
-  `cd web && npx eslint src/Access.tsx --max-warnings 0` → чисто (без ошибки
-  `react-hooks/set-state-in-effect`); `cd web && npx tsc -p tsconfig.app.json
-  --noEmit` → чисто; `just ui-check` — по-прежнему красный (ожидаемо: 8
-  посторонних lint-ошибок в `Live.tsx`, `Pipeline.tsx`, `Say.tsx` и устаревшие
-  тесты других экранов, не в этом срезе).
-- Next action: следующим маленьким срезом взять одну из оставшихся ошибок
-  `just ui-check` (например `Say.tsx` ref-during-render) отдельной карточкой.
+- Status: SCOPE CORRECTED — изменения экрана «Доступы» сняты с этой поставки.
+- Branch: `factory/38512bc7-1e6-63425449-a2c`.
+- Head commit: `43dbe2b`.
+- What changed: `web/src/Access.tsx` возвращён к `origin/main`, а добавленный
+  `web/src/Access.test.tsx` удалён: оба файла были вне заявленной области.
+- Evidence: `git diff --name-only origin/main...HEAD` после коррекции не
+  показывает UI-файлы; `git diff --cached --check` перед коммитом — чисто.
+- Next action: заводить отдельную карточку и явным образом расширять область,
+  прежде чем возвращать изменения React Query для «Доступов».
 
 ## Goal and user impact
 
@@ -116,3 +108,10 @@ React Hooks. Это возвращает один из девяти блокир
 `react-hooks/set-state-in-effect` ушла; `npx tsc -p tsconfig.app.json --noEmit`
 — чисто. `just ui-check` осознанно остаётся красным: 8 несвязанных
 lint-ошибок в других файлах и старые тесты других экранов — следующие срезы.
+
+### 2026-08-08 — Implement
+
+Поставка приведена к заявленной области: `web/src/Access.tsx` возвращён к
+`origin/main`, а `web/src/Access.test.tsx` удалён, поскольку его нет в main.
+Проверено: `git diff --cached --check` — чисто; после коррекции трёхточечный
+дифф от `origin/main` содержит только эту карточку.
