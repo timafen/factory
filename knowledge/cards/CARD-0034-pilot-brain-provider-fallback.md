@@ -5,14 +5,14 @@
 - Status: IMPLEMENTED: работа со своей стороны завершена; полный Verify после
   слияния зависимой задачи `f39669c8` в `origin/main`.
 - Branch: `factory/609c535a-844-ffa71c8e-92f`.
-- Head commit: `b99e89c` (реализация до этой записи о состоянии поставки).
+- Head commit: `84fd361` (реальный HEAD после rebase, до этой записи evidence).
 - What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
   срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
   Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
   во втором вызове `brain()` (красный без фикса), затем подтверждает, что он
   больше не запускается, пока Claude отвечает сразу.
 - Evidence: после перебазирования `python3 -m unittest pilot.test_pilot` → OK
-  (2 теста), `python3 -m py_compile pilot/pilot.py` → без ошибок и `just build`
+  (8 тестов), `python3 -m py_compile pilot/pilot.py` → без ошибок и `just build`
   → успешно. `just test` и `just vet` ранее завершились успешно; `just ui-check`
   падает на девяти lint-ошибках в неизменённых UI-файлах, а `npm test -- --run` —
   на четырёх существующих UI-тестах (98 всего).
@@ -97,3 +97,11 @@ TaskDetail). Эти результаты не затрагивают путь `b
 
 Открытое продолжение явно закреплено: проверки после слияния `f39669c8` —
 только rebase и полный Verify, без повторной переделки готового кода.
+
+### 2026-08-08 — Implement
+
+После обязательного rebase на `origin/main` сохранены новый тест переключения и
+добавленные в main тесты патруля. Целевые обещания спецификации подтверждены:
+`python3 -m unittest pilot.test_pilot` → OK (8 тестов),
+`python3 -m py_compile pilot/pilot.py` → без ошибок. Полный Verify по-прежнему
+назначен после слияния `f39669c8` и в этом заходе не повторялся.
