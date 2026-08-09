@@ -4,11 +4,11 @@
 
 - Status: implemented — оба живых лимита применены и подтверждены на Stage 3.
 - Branch: `factory/5262f064-57e-bd8ad9e6-46f`.
-- Head commit: `f866e21` — исходная поставка карточки перед этой реализацией.
+- Head commit: `fdec522` — коммит реализации после rebase на свежий `main`.
 - What changed: в `/opt/factory-data/pilot/config.json` фактические значения
   `work_day_cap=30` и `day_task_cap=400` заменены на утверждённые 12 и 120.
 - Evidence: точная JSON-проверка вывела `JSON caps: 12 120`; целевой набор
-  `python3 -m unittest pilot.test_pilot -q` — 24 теста, `OK`.
+  `python3 -m unittest pilot.test_pilot -q` — 32 теста, `OK` после rebase.
 - Next action: влить поставку после успешной проверки.
 
 ГОТОВО-КОГДА: файл /opt/factory-data/pilot/config.json
