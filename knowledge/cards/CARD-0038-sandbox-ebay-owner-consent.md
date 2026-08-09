@@ -5,7 +5,7 @@
 - Status: Blocked — в `tarser-operations` нет безопасного start/status-контракта
   для Factory.
 - Branch: `factory/802cfd44-f99-d37f5434-47d`.
-- Head commit: `bdd0589`.
+- Head commit: `bc098ed`.
 - What changed: подтверждён callback
   `/marketplaces/ebay/oauth/callback/`; реализация Factory остановлена до
   появления структурированных start/status операций в торговой системе.
