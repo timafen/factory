@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: done — владелец разрешил поставку отдельно от старых UI-ошибок.
-- Branch: `factory/782a636d-9df-c8866ea0-458`
-- Head commit: `1bbaa46` (ревизия, получившая ручной APPROVE).
+- Status: ready for review — чистая поставка пересобрана по решению владельца.
+- Branch: `factory/2642bf5f-dd1-babefe1f-060`
+- Head commit: `2fd69a7` (коммит двух карточек после сборки от свежего `origin/main`).
 - What changed: подтверждено, что очистка завершённых карточек уже поставлена в
   `main`; повторная реализация не создавалась.
-- Evidence: 5 целевых сценариев `PlanCardCleanupTest`, все 12 Python-тестов,
-  `go test ./...`, `go build ./...`, TypeScript-проверка и web-сборка прошли.
-  Ранее падавшие сценарии `Overview active work` и `Settings` теперь проходят
-  14/14; `npm run lint` всё ещё сообщает 9 старых UI-ошибок вне поставки.
-- Next action: влить карточку; lint-долг исправить отдельно по CARD-0037.
+- Evidence: `PlanCardCleanupTest` прошёл 5/5; трёхточечный diff от свежего
+  `origin/main` содержит только CARD-0036 и CARD-0037.
+- Next action: проверить новый HEAD и влить две карточки; lint-долг исправить
+  отдельно по CARD-0037.
 
 ## LOG
 
