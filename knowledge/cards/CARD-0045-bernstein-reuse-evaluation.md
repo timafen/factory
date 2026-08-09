@@ -4,6 +4,8 @@
 
 - Status: Specification — повторная проверка после исправлений.
 - Branch: `factory/541568ab-47f-3c577e8a-a3a`.
+- Head commit: `a902511` (`Привязать спецификацию Bernstein к тегу 3.13.0`);
+  проверенный снимок после rebase, следующий commit меняет только HEAD карточки.
 - Specification: `knowledge/specs/bernstein-reuse-evaluation.md`.
 - What changed: сопоставлены Factory и Bernstein 3.13.0; предложен только
   выключенный по умолчанию PoC Bernstein как подчинённого движка одного Attempt.
