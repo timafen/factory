@@ -1897,6 +1897,34 @@ def deep_diagnose(conf, base, stage, rounds, tasks):
     return verdict
 
 
+def diag_sweep(conf, tasks):
+    """Обход всех живых работ: у кого кругов больше порога — зовём старшую
+    модель разобраться. Один разбор на работу, дальше конвейер идёт по нему."""
+    diag_at = int(conf.get("deep_diag_rounds", 5))
+    seen = set()
+    for t in tasks:
+        title = t.get("title") or ""
+        if not title.startswith(PREFIX):
+            continue
+        if t.get("state") not in ("running", "queued"):
+            continue
+        m = STAGE_TITLE_RE.match(title)
+        if not m:
+            continue
+        base = m.group(2).strip()
+        if base in seen:
+            continue
+        seen.add(base)
+        rounds = max(stage_attempts(tasks, "Implement + Test", base),
+                     stage_attempts(tasks, "Review", base))
+        if rounds < diag_at:
+            continue
+        try:
+            deep_diagnose(conf, base, m.group(1).strip(), rounds, tasks)
+        except Exception as e:
+            log("diag_sweep_error", repr(e))
+
+
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch=""):
     """Try to resolve the question with the orchestrator; escalate if it's the
@@ -3769,6 +3797,13 @@ def cycle(conf, state):
         handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id)
     except Exception as e:
         log("epic_error", repr(e))
+
+    # Работа, которая крутится дольше порога, разбирается старшей моделью —
+    # независимо от того, задавал ли конвейер вопрос.
+    try:
+        diag_sweep(conf, tasks)
+    except Exception as e:
+        log("diag_sweep_outer_error", repr(e))
 
     # Очередь, доставшаяся заболевшему исполнителю, сама не рассосётся.
     try:
