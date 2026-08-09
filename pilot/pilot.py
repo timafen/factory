@@ -634,6 +634,25 @@ def explain_failure(conf, stage, base, raw):
 # берём первый, чей провайдер сейчас не заблокирован и который ответил.
 
 BRAIN_STATE = f"{HOME}/pilot/brain_state.json"
+BRAIN_DOWN = f"{HOME}/pilot/brain_down.json"
+
+
+def engine_down(model):
+    """Модель отдыхает после собственного лимита? Час — и пробуем снова."""
+    try:
+        return float((load(BRAIN_DOWN, {}) or {}).get(model or "", 0)) > time.time()
+    except Exception:
+        return False
+
+
+def note_engine_down(model, hours=1):
+    try:
+        d = load(BRAIN_DOWN, {}) or {}
+        d[model or ""] = time.time() + hours * 3600
+        save(BRAIN_DOWN, d)
+        log(f"BRAIN ENGINE DOWN {model}: своя квота исчерпана, отдыхает {hours} ч")
+    except Exception as e:
+        log("brain_down_error", repr(e))
 
 BRAIN_DEFAULT = [
     {"cli": "claude", "model": "fable", "provider": "claude"},
@@ -656,6 +675,9 @@ def brain(conf, prompt, timeout=180):
         if limit_active(eng.get("provider", ""), limits):
             problems.append(f"{eng.get('model')}: провайдер заблокирован")
             continue
+        if engine_down(eng.get("model")):
+            problems.append(f"{eng.get('model')}: своя квота исчерпана")
+            continue
         try:
             if eng.get("cli") == "codex":
                 env = dict(os.environ, HOME=HOME)
@@ -670,6 +692,12 @@ def brain(conf, prompt, timeout=180):
                     capture_output=True, text=True, timeout=timeout, env=env, cwd=HOME)
             out = (p.stdout or "").strip()
             both = (p.stdout or "") + (p.stderr or "")
+            # «Твой лимит исчерпан» — это не ответ, а отказ. Короткий текст с
+            # признаками лимита разбирать нельзя: откладываем эту модель.
+            if out and len(out) < 400 and LIMIT_SIGNS.search(out):
+                note_engine_down(eng.get("model"))
+                problems.append(f"{eng.get('model')}: своя квота исчерпана")
+                continue
             if out:
                 # Успешный ответ — доказательство, что лимита нет: снимаем
                 # застрявший блок с этого провайдера сами.
