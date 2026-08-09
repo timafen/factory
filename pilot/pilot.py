@@ -3522,6 +3522,43 @@ def cycle(conf, state):
         branch = extract_branch(result, detail.get("context", ""))
         branch_line = f"Branch: {branch}\n" if branch else ""
 
+        # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
+        if (wf == "Specification" and not PROMISE_LINE.search(result or "")
+                and cap_rescues(base, "SPEC") < 1):
+            note_cap_rescue(base, "SPEC")
+            back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
+            nl = chr(10)
+            spec_ctx = nl.join([
+                f"Pipeline: {base}",
+                f"Previous stage: {wf}",
+                branch_line.strip(),
+                "",
+                "Спецификация принята по содержанию, но в отчёте НЕТ строк "
+                "ГОТОВО-КОГДА — без них проверка работы держится на мнении, "
+                "а не на фактах. Дополни СУЩЕСТВУЮЩУЮ спецификацию (ветку не "
+                "переключай: git fetch origin <ветка> и git reset --hard "
+                "FETCH_HEAD) и закончи отчёт строками:",
+                "ГОТОВО-КОГДА: файл <путь, который изменится>",
+                "ГОТОВО-КОГДА: команда <команда, обязана выйти нулём>",
+                "Лучшая команда — новый тест, выражающий суть задачи "
+                "(сейчас он красный)."])
+            try:
+                create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                             "context": spec_ctx[:20000],
+                             "worker_id": worker["id"],
+                             "repository_id": detail["task"].get("repository_id") or "",
+                             "timeout_seconds": conf.get("timeout_seconds", 7200),
+                             "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
+                                 or nw["revision_id"]}, conf)
+                log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
+                notify(conf, "Вернул сам: спецификация без обещаний",
+                       base + chr(10) + "Спецификация не назвала проверяемые признаки "
+                       "готовности (ГОТОВО-КОГДА) — вернул дописать. Твоего участия не нужно.",
+                       tags="wrench", click=f"{UI_BASE}/work")
+                continue
+            except Exception as e:
+                log("spec_gate_error", repr(e))
+
         # Ворота: дешёвая машинная проверка вместо дорогого круга Ревью.
         gate_note = ""
         if next_stage == "Review" and branch:
