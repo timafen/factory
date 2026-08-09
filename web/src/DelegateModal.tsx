@@ -11,6 +11,7 @@ import {
 import { api } from "./api";
 import { invalidateControlPlane } from "./controlPlaneQueries";
 import { runtimeLabel } from "./format";
+import { TaskFilePicker } from "./TaskFilePicker";
 import type { CreateTaskInput, Worker } from "./types";
 import { InlineError } from "./ui";
 
@@ -50,6 +51,7 @@ export function DelegateModal({
   const [mode, setMode] = useState<"manual" | "auto">("manual");
   const [startStage, setStartStage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const selectedWorker = workers.find((worker) => worker.id === workerID);
   const repositories = selectedWorker?.repositories ?? [];
   const workflows = useQuery({
@@ -107,6 +109,9 @@ export function DelegateModal({
     if (!context.trim()) nextErrors.description = "Enter task context.";
     if (!workerID) nextErrors.worker = "Choose a worker.";
     if (!repositoryID) nextErrors.repository = "Choose a repository.";
+    if (attachmentFiles.length) {
+      nextErrors.attachments = "File delivery is not enabled yet, so this task has not been created.";
+    }
     const timeoutSeconds = Number(timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 28_800) {
       nextErrors.timeout = "Choose a timeout from one minute to eight hours.";
@@ -221,6 +226,9 @@ export function DelegateModal({
                   : "This becomes the selected worker runtime prompt."}
             >
               <textarea id={descriptionID} name="description" rows={6} aria-invalid={Boolean(errors.description)} placeholder="Describe the outcome, constraints, and checks…" />
+            </Field>
+            <Field label="Files" htmlFor="task-files">
+              <TaskFilePicker files={attachmentFiles} onChange={setAttachmentFiles} error={errors.attachments} />
             </Field>
             <Field label="Worker" htmlFor="delegate-worker" error={errors.worker}>
               <select
