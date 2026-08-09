@@ -2,17 +2,15 @@
 
 ## HEAD
 
-- Status: PASS — критерии обзора и браузерные сценарии задачи проходят.
-- Branch: `factory/7fda7047-0c4-74d0225d-4f9`.
-- Head commit: `2af2adc`.
+- Status: READY FOR REVIEW — блокирующее замечание о торговом релизе исправлено.
+- Branch: `factory/be42d122-966-9726d71e-6cf`.
+- Head commit: `bb90cc2`.
 - Specification: `knowledge/specs/overview-project-products.md`.
-- What changed: снимок и «Обзор» показывают каждый включённый проект в порядке
-  каталога; `trade` и `factory` — единственные фиксированные read-only провайдеры.
-- Evidence: 71 Python, 18 целевых UI и `PilotConfig` Go → PASS; браузерные
-  «Обзор» + Settings round-trip → PASS; build и полный UI/Go/tooling → PASS.
-  Полный e2e дошёл до 15/18 и выявил внешний mobile-overflow Automation;
-  два оставшихся сценария прошли отдельно. `staticcheck` повторяет два main-долга.
-- One next action: слить ветку, а mobile-overflow Automation вести отдельно.
+- What changed: торговый провайдер извлекает идентификатор сборки из пути
+  `current`, ищет по нему тему коммита и иначе показывает «Сборка <идентификатор>».
+- Evidence: 72 Python, 18 целевых UI и `PilotConfig` Go → PASS; frontend и
+  `factory-server` build → PASS; `git diff --check` → PASS.
+- One next action: повторно проверить исправление на стадии Review; не выкатывать.
 
 ## LOG
 
@@ -49,3 +47,11 @@ Go-тесты и production-сборка; живые staging, prod и factory п
 После ребейза прошли 71 Python, 18 UI, `PilotConfig` Go, build и два целевых e2e.
 Полный e2e: 15 сценариев прошли, один внешний дефект узкой Automation-страницы
 остановил serial-набор; два хвостовых сценария затем прошли отдельно.
+
+### 2026-08-09 — Implement
+
+Путь торгового выпуска больше не передаётся целиком в `git log`: пилот извлекает
+basename сборки, показывает тему найденного коммита либо понятную подпись
+«Сборка <идентификатор>». Регрессия проверяет оба исхода на непустом репозитории.
+После rebase прошли 72 Python-теста, 18 UI-тестов, целевые Go-тесты, frontend и
+`factory-server` build; выкат не выполнялся.
