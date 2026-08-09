@@ -1231,6 +1231,47 @@ func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
 	}
 }
 
+func TestCreateTaskRestoresMovedAttachmentsWhenFilesystemMoveFails(t *testing.T) {
+	store := newTestStore(t)
+	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 1, Health: "healthy", Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.UploadAttachment(context.Background(), "move-failure", "same.png", "image/png", strings.NewReader("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UploadAttachment(context.Background(), "move-failure", "same.png", "image/png", strings.NewReader("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstPath, secondPath string
+	if err := store.db.QueryRow(`SELECT storage_path FROM task_attachments WHERE id=?`, first.ID).Scan(&firstPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT storage_path FROM task_attachments WHERE id=?`, second.ID).Scan(&secondPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(secondPath); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.CreateTaskRequest{RequestKey: "move-failure", Title: "Inspect", Description: "Use files", WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, AttachmentIDs: []string{first.ID, second.ID}}
+	if _, _, err := store.CreateTask(context.Background(), request); err == nil {
+		t.Fatal("task creation succeeded after attachment move failure")
+	}
+	var storedPath string
+	var taskID sql.NullString
+	if err := store.db.QueryRow(`SELECT storage_path, task_id FROM task_attachments WHERE id=?`, first.ID).Scan(&storedPath, &taskID); err != nil {
+		t.Fatal(err)
+	}
+	if storedPath != firstPath || taskID.Valid {
+		t.Fatalf("attachment was not restored: path=%q task=%#v", storedPath, taskID)
+	}
+	if _, err := os.Stat(firstPath); err != nil {
+		t.Fatalf("restored blob is missing: %v", err)
+	}
+}
+
 func TestUploadAttachmentRejectsExecutableAndOversizedFiles(t *testing.T) {
 	store := newTestStore(t)
 	if _, err := store.UploadAttachment(context.Background(), "limits", "run.exe", "", strings.NewReader("x")); err == nil {

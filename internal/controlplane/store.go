@@ -2278,6 +2278,19 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		if err := os.MkdirAll(taskDirectory, 0o700); err != nil {
 			return protocol.TaskDetail{}, false, unavailable(err)
 		}
+		type attachmentMove struct{ oldPath, newPath string }
+		var moves []attachmentMove
+		rollbackMoves := func(cause error) error {
+			var rollbackErr error
+			for index := len(moves) - 1; index >= 0; index-- {
+				move := moves[index]
+				if err := os.Rename(move.newPath, move.oldPath); err != nil {
+					rollbackErr = errors.Join(rollbackErr, err)
+				}
+			}
+			_ = os.Remove(taskDirectory)
+			return errors.Join(cause, rollbackErr)
+		}
 		for _, attachmentID := range input.AttachmentIDs {
 			var oldPath, name string
 			if err := tx.QueryRowContext(ctx, `SELECT storage_path,name FROM task_attachments WHERE id=?`, attachmentID).Scan(&oldPath, &name); err != nil {
@@ -2285,13 +2298,21 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 			}
 			newPath := filepath.Join(taskDirectory, attachmentID+"-"+name)
 			if err := os.Rename(oldPath, newPath); err != nil {
-				return protocol.TaskDetail{}, false, unavailable(err)
+				return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
 			}
+			moves = append(moves, attachmentMove{oldPath: oldPath, newPath: newPath})
 			if _, err := tx.ExecContext(ctx, `UPDATE task_attachments SET storage_path=? WHERE id=?`, newPath, attachmentID); err != nil {
-				return protocol.TaskDetail{}, false, unavailable(err)
+				return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
 			}
-			_ = os.Remove(filepath.Dir(oldPath))
 		}
+		if err := tx.Commit(); err != nil {
+			return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
+		}
+		for _, move := range moves {
+			_ = os.Remove(filepath.Dir(move.oldPath))
+		}
+		detail, err := s.Task(ctx, taskID)
+		return detail, true, err
 	}
 	if err := tx.Commit(); err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)

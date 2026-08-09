@@ -56,7 +56,7 @@ func TestMaterializeAttachmentsVerifiesAndWritesBeforeRuntime(t *testing.T) {
 	if err := manager.materializeAttachments(context.Background(), claim, "lease", worktree); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(worktree, ".factory", "attachments", "screen.png"))
+	got, err := os.ReadFile(filepath.Join(worktree, ".factory", "attachments", "attachment-screen.png"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,35 @@ func TestMaterializeAttachmentsVerifiesAndWritesBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestMaterializeAttachmentsKeepsDuplicateNamesDistinct(t *testing.T) {
+	content := []byte("same bytes")
+	digestBytes := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestBytes[:])
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-SHA256", digest)
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+	manager := &Manager{client: newClient(server.URL, server.Client())}
+	claim := protocol.Claim{Attempt: protocol.Attempt{ID: "attempt"}, Attachments: []protocol.TaskAttachment{
+		{ID: "first", Name: "screen.png", Size: int64(len(content)), SHA256: digest},
+		{ID: "second", Name: "screen.png", Size: int64(len(content)), SHA256: digest},
+	}}
+	worktree := t.TempDir()
+	if err := manager.materializeAttachments(context.Background(), claim, "lease", worktree); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first-screen.png", "second-screen.png"} {
+		if _, err := os.Stat(filepath.Join(worktree, ".factory", "attachments", name)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestBuildPromptListsMaterializedAttachments(t *testing.T) {
-	claim := protocol.Claim{Task: protocol.Task{Title: "Inspect", Description: "Use evidence"}, Repository: protocol.Repository{RemoteIdentity: "github.com/example/repo"}, Attachments: []protocol.TaskAttachment{{Name: "screen.png"}}}
+	claim := protocol.Claim{Task: protocol.Task{Title: "Inspect", Description: "Use evidence"}, Repository: protocol.Repository{RemoteIdentity: "github.com/example/repo"}, Attachments: []protocol.TaskAttachment{{ID: "attachment", Name: "screen.png"}}}
 	prompt := buildPrompt(claim, worktree{Branch: "factory/test", BaseBranch: "main"})
-	if !strings.Contains(prompt, ".factory/attachments/screen.png") {
+	if !strings.Contains(prompt, ".factory/attachments/attachment-screen.png") {
 		t.Fatalf("prompt = %q", prompt)
 	}
 }
