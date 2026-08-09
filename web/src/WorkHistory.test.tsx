@@ -108,6 +108,32 @@ it("revives only stopped work once and shows API errors", async () => {
   await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
 });
 
+it("revives stuck work through its encoded name and removes the action after success", async () => {
+  const stuck = { ...task, title: "[auto] [3/5 Implement + Test] Работа / с пробелом" };
+  let requestedPath = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") {
+      return Response.json({ "Работа / с пробелом": { state: "stuck", text: "застряла" } });
+    }
+    if (path.includes("/revive")) {
+      requestedPath = path;
+      expect(init?.method).toBe("POST");
+      return Response.json({ work: "Работа / с пробелом", state: "reviving" });
+    }
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory([stuck]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Оживить" }));
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument());
+  expect(requestedPath).toBe(`/api/v1/works/${encodeURIComponent("Работа / с пробелом")}/revive`);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("does not offer revive for ordinary failed work", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
