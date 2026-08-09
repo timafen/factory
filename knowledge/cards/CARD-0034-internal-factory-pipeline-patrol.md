@@ -2,15 +2,23 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/54e78a31-548-7d379441-212`.
-- Head commit: `3810b71` (проверенный снимок поставки после перебазирования на `origin/main`).
+- Status: Implemented — awaiting review.
+- Branch: `factory/13285b85-081-0b0922cf-67c`.
+- Head commit: `61628e7` (проверенный снимок дополнительного сценария патруля).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника. Базовый 404 каталога исполнителя устранён отдельным минимальным коммитом.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `go test ./internal/controlplane/... -run '^TestHTTPManagedRepositoryCatalog$' -count=1` → OK; `go test -timeout 5m ./...` → OK; `npm --prefix web run build` → OK.
-- One next action: человеку влить проверенную поставку в `main`.
+- What changed: патруль по-прежнему обрабатывает только канонические автоматические задачи; добавлена защита от произвольного заголовка, который не создаёт ни остановку, ни новый этап.
+- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 7 tests OK; `python3 -m unittest pilot.test_pilot` → 36 tests OK; `git diff --check` → OK.
+- One next action: проверить и влить поставку в `main`.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+На свежем `origin/main` реализация патруля уже присутствовала, поэтому старую
+версию не переносили и не откатывали защиту очистки веток. Добавлен изолированный
+сценарий: задача без канонического заголовка конвейера не сохраняет состояние
+остановки и не запускает этап. Целевые 7 и все 36 тестов пилота прошли; проверка
+пробелов диффа чистая.
 
 ### 2026-08-08 — Specification
 
