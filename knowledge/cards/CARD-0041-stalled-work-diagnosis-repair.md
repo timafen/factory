@@ -2,18 +2,27 @@
 
 ## HEAD
 
-- Status: Implemented — замечание Review исправлено, ожидает повторный Review.
-- Branch: `factory/143a55bc-4e5-5a72d02d-02c`.
-- Head commit: `b2de890` (реализация и регрессионная проверка).
+- Status: Verified PASS — ожидает вливания человеком.
+- Branch: `factory/ff90b2e2-b1d-33a318bc-79b`.
+- Коммит реализации: `b2de890` (реализация и регрессионная проверка).
 - Specification: `knowledge/specs/stalled-work-diagnosis-repair.md`.
 - What changed: после успешного запуска автоматического ремонта `route_question()`
   сразу завершает маршрут и не задаёт владельцу вопрос и не останавливает pipeline,
   в том числе при достижении `max_work_rounds`.
 - Evidence: целевые проверки → 12 tests OK; весь `pilot.test_pilot` → 59 tests OK;
-  `py_compile` и `git diff --check` → OK.
-- One next action: проверить реализацию на Review.
+  web lint/typecheck/unit/build → OK; `py_compile` и `git diff --check` → OK.
+- One next action: влить проверенное изменение.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+Принятое владельцем уточнение убирает самоссылку: поле «Коммит реализации»
+сохраняет идентификатор содержательного изменения, а не устаревающий после
+каждой записи в карточку HEAD. Все 59 тестов пилота, 54 web unit-теста,
+lint/typecheck и production build прошли; `py_compile` и `git diff --check`
+подтвердили корректность и чистоту изменений. Browser-набор остановился на
+внешнем ожидании заголовка `Factory overview`, не затронутом изменением.
 
 ### 2026-08-09 — Implement
 
