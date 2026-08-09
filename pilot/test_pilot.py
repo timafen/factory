@@ -37,5 +37,135 @@ class CreateTaskFallbackTest(unittest.TestCase):
             self.assertEqual(payload["attachment_ids"], ["screenshot-id", "document-id"])
 
 
+class PipelineWatchTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 10_000
+        self.memory = {}
+        self.work_status = {}
+        self.created = []
+        self.notifications = []
+        self.conf = {
+            "stages": [
+                {"workflow": "Specification"},
+                {"workflow": "Implement"},
+                {"workflow": "Review"},
+            ],
+            "timeout_seconds": 900,
+        }
+        self.workflows = {
+            "Specification": {"enabled": True, "revision_id": "rev-spec"},
+            "Implement": {"enabled": True, "revision_id": "rev-impl"},
+            "Review": {"enabled": True, "revision_id": "rev-review"},
+        }
+        self.workers = {
+            "worker": {"id": "worker-id", "online": True, "health": "healthy"}
+        }
+        self.patches = [
+            mock.patch.object(pilot, "load", side_effect=self._load),
+            mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
+            mock.patch.object(pilot, "stage_worker", return_value="worker"),
+            mock.patch.object(pilot, "create_task", side_effect=self._create),
+            mock.patch.object(pilot, "notify", side_effect=self._notify),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _load(self, path, default=None):
+        if path == pilot.STALL_PATH:
+            return self.memory
+        return default
+
+    def _save(self, path, value):
+        if path == pilot.STALL_PATH:
+            self.memory = value
+        elif path.endswith("/pilot/work_status.json"):
+            self.work_status = value
+
+    def _create(self, body, conf):
+        self.created.append(body)
+        return {"task": {"id": "new-task"}}
+
+    def _notify(self, conf, title, message, **kwargs):
+        self.notifications.append((title, message, kwargs))
+
+    @staticmethod
+    def task(stage="Specification", state="succeeded", repository_id="repo-id"):
+        return {
+            "title": f"[auto] [1/3 {stage}] Встроенный патруль",
+            "state": state,
+            "repository_id": repository_id,
+        }
+
+    def watch(self, tasks=None):
+        pilot.pipeline_watch(
+            self.conf, tasks or [self.task()], self.workflows, self.workers
+        )
+
+    def test_waits_before_resuming_lost_transition(self):
+        self.watch()
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Встроенный патруль"]["since"], self.now)
+
+    def test_resumes_once_after_wait_with_same_repository_and_revision(self):
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["repository_id"], "repo-id")
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
+        self.assertEqual(self.created[0]["worker_id"], "worker-id")
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+
+        self.watch()
+        self.assertEqual(len(self.created), 1)
+
+    def test_live_task_clears_stall_and_prevents_duplicate(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": 1, "why": "nudged"}
+        }
+        self.watch([self.task(state="succeeded"), self.task(stage="Implement", state="running")])
+
+        self.assertNotIn("Встроенный патруль", self.memory)
+        self.assertEqual(self.created, [])
+
+    def test_owner_pause_is_not_resumed(self):
+        self.conf["stopped_pipelines"] = ["Встроенный патруль"]
+        self.watch()
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Встроенный патруль"]["why"], "owner")
+        self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stopped_owner")
+
+    def test_completed_pipeline_is_not_resumed(self):
+        self.memory = {"Встроенный патруль": {"since": 1, "nudges": 1}}
+        self.watch([self.task(stage="Review")])
+
+        self.assertNotIn("Встроенный патруль", self.memory)
+        self.assertEqual(self.created, [])
+
+    def test_gives_up_after_two_nudges_and_notifies_only_once(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+            }
+        }
+        with mock.patch.object(
+            pilot, "orchestrator_answer", side_effect=AssertionError("external helper called")
+        ):
+            self.watch()
+            self.watch()
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Встроенный патруль"]["why"], "give_up")
+        self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
+        self.assertEqual(len(self.notifications), 1)
+        self.assertIn("после двух попыток", self.notifications[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()
