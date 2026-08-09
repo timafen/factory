@@ -2,16 +2,23 @@
 
 ## HEAD
 
-- Status: BLOCKED: два общих дефекта `staticcheck` остаются в базовой ветке вне поставки.
-- Branch: `factory/90745c0b-247-2d4b41d1-7a6`
-- Head commit: `d55b718` — ревизия автоподбора после rebase на свежий `origin/main`.
+- Status: IMPLEMENTED: поставка готова к этапу Verify.
+- Branch: `factory/b380c421-3b3-5bc05e81-cde`
+- Head commit: `d9324ad` — реализация и тесты на свежем `origin/main`.
 - What changed: пилот запускает одну верхнюю `planned`-карточку при свободном
   слоте, учитывает ожидание владельца и меняет карточку лишь после создания задачи.
-- Evidence: целевые 17 Python-тестов, все Go-тесты, сборка и 98 UI-тестов прошли;
-  `just check` остановлен только прежними `U1000` и `SA4006` вне диффа.
-- Next action: отдельной поставкой исправить два дефекта `staticcheck` в `main`.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 18/18 OK;
+  `go test -timeout 5m ./...`, `go build ./...`, `npm run build` — exit 0.
+- Next action: на этапе Verify прогнать полные ворота перед вливанием.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+Поставка перебазирована на `origin/main`. При слиянии сохранены обе стороны
+изменений уведомлений и тестов провайдеров; тесты изолированы от локального
+файла прежней квоты. Автоподбор подтверждён 18 Python-тестами, весь Go-код —
+`go test -timeout 5m ./...` и `go build ./...`; `npm run build` завершился нулём.
 
 ### 2026-08-09 — Verify
 
