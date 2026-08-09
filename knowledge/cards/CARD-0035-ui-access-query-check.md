@@ -4,8 +4,9 @@
 
 - Status: IMPLEMENTED — исправление и тест восстановлены на свежем `main`,
   обязательные проверки зелёные.
-- Branch: `factory/97aa0a90-daf-ee24968d-25d`.
-- Head commit: `63e1ace` (коммит реализации; карточка обновлена следом).
+- Branch: `factory/385e0906-a23-ef9c3cbc-e17`.
+- Head commit: HEAD кода в поставленной исходной ветке — `1d6a334`; эта
+  правка карточки лежит поверх.
 - What changed: `web/src/Access.tsx` больше не грузит рубильники через
   `useEffect` + прямой `setState` — читает `useQuery(["access"])`, а
   переключение (`toggle`) после POST рефетчит тот же запрос. Ошибка чтения
@@ -120,3 +121,10 @@ lint-ошибок в других файлах и старые тесты дру
 свежего `origin/main`. Трёхточечный diff содержит карточку, `Access.tsx` и
 `Access.test.tsx`. Проверено: целевые тесты — 2 passed; ESLint, обязательный
 `tsc -p tsconfig.app.json --noEmit` и production-сборка — exit 0.
+
+### 2026-08-09 — Implement
+
+Исправлена отметка HEAD: после `git fetch origin` команда
+`git rev-parse --short origin/factory/97aa0a90-daf-ee24968d-25d` вернула
+`1d6a334`. Карточка перенесена на ветку текущей поставки; целевые 2 теста,
+ESLint, TypeScript и production-сборка повторно завершились успешно.
