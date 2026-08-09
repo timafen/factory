@@ -16,6 +16,7 @@ type Dash = {
   spend?: {
     day_usd?: number; week_usd?: number; day_tokens?: number; week_tokens?: number;
     wasted_usd?: number; day_cost_defined?: boolean; week_cost_defined?: boolean;
+    day_base_estimate?: boolean; week_base_estimate?: boolean;
     day_unknown_models?: string[]; week_unknown_models?: string[];
     worst?: { usd: number; title: string; id: string } | null;
   };
@@ -346,7 +347,11 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         <section style={{ ...card, flex: 1, minWidth: 280 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <Coins size={16} color="#e0cf9f" /><strong>Расход</strong>
-            <span style={{ fontSize: 11, color: muted }}>оценка по API-тарифу · Клод по задачам, Codex общим итогом</span>
+            <span style={{ fontSize: 11, color: muted }}>
+              {d.spend?.day_base_estimate || d.spend?.week_base_estimate
+                ? "базовая оценка по API-тарифу (журнал не сообщает запись кэша)"
+                : "оценка по API-тарифу"} · Клод по задачам, Codex общим итогом
+            </span>
           </div>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", fontSize: 13 }}>
             <div><div style={{ color: muted, fontSize: 12 }}>за сутки</div>
