@@ -1,6 +1,15 @@
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type Runtime = "codex" | "claude-code";
 
+export interface EbayConsent {
+  operation_id: string;
+  consent_url?: string;
+  status: "pending" | "authorized" | "failed" | "expired";
+  message?: string;
+}
+
+export type EbayConsentStatus = Omit<EbayConsent, "consent_url">;
+
 export interface Repository {
   id: string;
   key: string;
