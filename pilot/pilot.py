@@ -1342,6 +1342,52 @@ def collect_ideas(result, repo_id="", source=""):
 
 PLAN_ACTIVE_STATES = ("running", "queued", "pending", "created", "starting", "preparing")
 
+PLAN_REPOSITORY_ALIASES = {
+    "factory": "timafen/factory",
+    "tarser": "timafen/tarser-operations",
+    "trading": "timafen/tarser-operations",
+    "tarser-operations": "timafen/tarser-operations",
+}
+
+
+def resolve_plan_repository(repository_id):
+    """Translate legacy human project names in Plan cards to control-plane ids."""
+    alias = PLAN_REPOSITORY_ALIASES.get((repository_id or "").strip().lower())
+    if not alias:
+        return repository_id
+    repositories = api("/repositories").get("repositories") or []
+    matches = []
+    for repository in repositories:
+        identity = (repository.get("remote_identity") or "").lower()
+        if identity.endswith(".git"):
+            identity = identity[:-4]
+        if identity.endswith(alias):
+            matches.append(repository.get("id"))
+    matches = [repo_id for repo_id in matches if repo_id]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"plan repository alias {repository_id!r} resolved to {len(matches)} repositories"
+        )
+    return matches[0]
+
+
+def is_plan_repository_error(error):
+    text = str(error).lower()
+    return any(marker in text for marker in (
+        "repository_not_advertised",
+        "no remote identity for repo",
+        "plan repository alias",
+    ))
+
+
+def explain_bad_plan_repository(conf, candidate, detail=""):
+    reason = "Не запущено автоматически: у карточки указан несуществующий проект. Выберите проект заново."
+    set_idea(candidate["id"], state="new", reason=reason)
+    log("PLAN skip " + repr(candidate.get("title", "")[:70])
+        + ": invalid repository " + repr(detail[:180]))
+    notify(conf, "Не взял из Плана", candidate.get("title", ""),
+           body=reason, tags="warning", click=UI_BASE + "/intake/plan")
+
 
 def active_auto_works(tasks):
     """Unique pipeline works that occupy an automatic-start slot."""
@@ -1367,51 +1413,62 @@ def autostart_plan(conf, tasks, workflows, workers):
                      key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
     if not planned:
         return None
-    rec = None
-    for candidate in planned:
-        if candidate.get("repo"):
-            rec = candidate
-            break
-        reason = "Не запущено автоматически: сначала выберите проект."
-        set_idea(candidate["id"], state="new", reason=reason)
-        log("PLAN skip " + repr(candidate.get("title", "")[:70]) + ": no repository")
-        notify(conf, "Не взял из Плана", candidate.get("title", ""),
-               body=reason, tags="warning", click=UI_BASE + "/intake/plan")
-    if rec is None:
-        return None
     stage_name, nstages = first_stage(conf)
     workflow = workflows.get(stage_name) or {}
     worker_name = stage_worker(conf, stage_name, "medium", workers)
     worker = workers.get(worker_name)
     if not stage_name or not workflow.get("enabled") or not worker:
         return None
-    title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
-    source = rec.get("source") or "не указан"
-    context = (
-        "Конвейер автоматически взял верхнюю карточку из Плана.\n\n"
-        f"Что разобрать: {rec['title']}\n\n"
-        f"Зачем: {rec.get('why') or 'не записано'}\n\n"
-        f"Источник: {source}.\n\n"
-        "Это этап Triage: проверь готовность работы, границы и риски; "
-        "продолжай только с вердиктом READY."
-    )[:60000]
-    generation = rec.get("run_generation")
-    if not generation:
-        generation = str(uuid.uuid4())
-        set_idea(rec["id"], run_generation=generation)
-        rec["run_generation"] = generation
-    created = create_task({"request_key": f"plan-autostart:{rec['id']}:{generation}", "title": title,
-                           "context": context, "worker_id": worker["id"],
-                           "repository_id": rec.get("repo") or "",
-                           "timeout_seconds": conf.get("timeout_seconds", 7200),
-                           "workflow_revision_id": workflow["revision_id"]}, conf)
-    task_id = (created.get("task") or {}).get("id", "")
-    if not task_id:
-        raise RuntimeError("create_task returned no task.id")
-    set_idea(rec["id"], state="in_work", task_id=task_id)
-    note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
-    notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
-    return task_id
+    for rec in planned:
+        if not rec.get("repo"):
+            reason = "Не запущено автоматически: сначала выберите проект."
+            set_idea(rec["id"], state="new", reason=reason)
+            log("PLAN skip " + repr(rec.get("title", "")[:70]) + ": no repository")
+            notify(conf, "Не взял из Плана", rec.get("title", ""),
+                   body=reason, tags="warning", click=UI_BASE + "/intake/plan")
+            continue
+
+        title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
+        source = rec.get("source") or "не указан"
+        context = (
+            "Конвейер автоматически взял верхнюю карточку из Плана.\n\n"
+            f"Что разобрать: {rec['title']}\n\n"
+            f"Зачем: {rec.get('why') or 'не записано'}\n\n"
+            f"Источник: {source}.\n\n"
+            "Это этап Triage: проверь готовность работы, границы и риски; "
+            "продолжай только с вердиктом READY."
+        )[:60000]
+        generation = rec.get("run_generation")
+        if not generation:
+            generation = str(uuid.uuid4())
+            set_idea(rec["id"], run_generation=generation)
+            rec["run_generation"] = generation
+        stored_repository_id = rec.get("repo") or ""
+        try:
+            repository_id = resolve_plan_repository(stored_repository_id)
+            created = create_task({
+                "request_key": f"plan-autostart:{rec['id']}:{generation}",
+                "title": title, "context": context, "worker_id": worker["id"],
+                "repository_id": repository_id,
+                "timeout_seconds": conf.get("timeout_seconds", 7200),
+                "workflow_revision_id": workflow["revision_id"],
+            }, conf)
+        except RuntimeError as error:
+            if not is_plan_repository_error(error):
+                raise
+            explain_bad_plan_repository(conf, rec, str(error))
+            continue
+        task_id = (created.get("task") or {}).get("id", "")
+        if not task_id:
+            raise RuntimeError("create_task returned no task.id")
+        updates = {"state": "in_work", "task_id": task_id}
+        if repository_id != stored_repository_id:
+            updates["repo"] = repository_id
+        set_idea(rec["id"], **updates)
+        note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
+        notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
+        return task_id
+    return None
 
 
 # --------------------------------------------------------- сторож конвейера ---
@@ -3972,7 +4029,13 @@ def pipeline_health(tasks):
     return out
 
 
-def write_dashboard(conf, tasks, workers, codex_snapshot=None):
+def codex_snapshot_windows(codex_snapshot, windows):
+    """Read the exact time windows used to create a shared usage snapshot."""
+    day_start, week_start = windows
+    return codex_snapshot[day_start], codex_snapshot[week_start]
+
+
+def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=None):
     """Снимок состояния фабрики одним файлом: интерфейсу остаётся только показать."""
     now = time.time()
     by_state = {}
@@ -4013,12 +4076,15 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None):
                 spend["worst"] = {"usd": round(usd, 2), "title": (t.get("title") or "")[:70],
                                   "id": t["id"]}
 
-    today = time.strftime("%Y-%m-%d", time.gmtime())
-    day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
-    week_start = time.time() - 7 * 86400
+    if codex_windows is None:
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+        week_start = time.time() - 7 * 86400
+        codex_windows = (day_start, week_start)
+    else:
+        day_start, week_start = codex_windows
     codex_snapshot = codex_snapshot or codex_usage_snapshot(day_start, week_start)
-    day_codex = codex_snapshot[day_start]
-    week_codex = codex_snapshot[week_start]
+    day_codex, week_codex = codex_snapshot_windows(codex_snapshot, codex_windows)
     spend["day_usd"] += day_codex["cost_usd"]
     spend["week_usd"] += week_codex["cost_usd"]
     spend["day_tokens"] = day_codex["total_tokens"]
@@ -4325,6 +4391,30 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
                     make_epic_from(tid, title, detail)
 
 
+def deploy_after_merge(conf, repo_identity):
+    """Release only the environment owned by the repository that was merged."""
+    identity = (repo_identity or "").lower()
+    if identity.endswith(".git"):
+        identity = identity[:-4]
+    if identity.endswith("timafen/tarser-operations"):
+        command_key = "deploy_staging_cmd"
+        label = "TRADING-STAGING-DEPLOY"
+    elif identity.endswith("timafen/factory"):
+        command_key = "deploy_factory_cmd"
+        label = "FACTORY-DEPLOY"
+    else:
+        log(f"POST-MERGE-DEPLOY skipped: unknown repository {repo_identity!r}")
+        return None
+
+    command = conf.get(command_key)
+    if not command:
+        log(f"{label} skipped: {command_key} is not configured")
+        return None
+    rc, output = run_shell(command)
+    log(f"{label} rc={rc} :: {output[:200]}")
+    return rc
+
+
 def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
 
@@ -4352,7 +4442,7 @@ def cycle(conf, state):
     # Снимок для главного экрана. Никогда не должен ломать цикл.
     try:
         write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]},
-                        codex_snapshot)
+                        codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
 
@@ -4647,12 +4737,8 @@ def cycle(conf, state):
                         else:
                             notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
-                    cmd = conf.get("deploy_staging_cmd")
-                    if ok and cmd:
-                        rc, dout = run_shell(cmd)
-                        log(f"STAGING-DEPLOY rc={rc} :: {dout[:200]}")
-                    elif ok:
-                        log("merged to main; no deploy_staging_cmd set -> production deploy is a human one-tap")
+                    if ok:
+                        deploy_after_merge(conf, repo_identity)
                 else:
                     log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
             else:

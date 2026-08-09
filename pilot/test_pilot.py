@@ -967,6 +967,30 @@ class PlanAutostartTest(unittest.TestCase):
         notify.assert_called_once()
         self.assertEqual(pilot.notify_group("Взял из Плана"), "routine")
 
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "new-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    @mock.patch.object(pilot, "api")
+    def test_legacy_factory_alias_resolves_to_repository_id(
+            self, api, _limits, _questions, ideas, create, set_idea,
+            _note_work, _notify):
+        self.cards[1]["repo"] = "factory"
+        ideas.return_value = self.cards
+        api.return_value = {"repositories": [{
+            "id": "factory-repo-id",
+            "remote_identity": "github.com/timafen/factory",
+        }]}
+
+        pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(create.call_args.args[0]["repository_id"], "factory-repo-id")
+        set_idea.assert_called_once_with(
+            "top", state="in_work", task_id="new-task", repo="factory-repo-id")
+
     @mock.patch.object(pilot, "create_task")
     @mock.patch.object(pilot, "ideas_all")
     @mock.patch.object(pilot, "load_questions")
@@ -1059,6 +1083,34 @@ class PlanAutostartTest(unittest.TestCase):
                                 reason="Не запущено автоматически: сначала выберите проект."),
                       set_idea.call_args_list)
         self.assertIn("сначала выберите проект", notify.call_args_list[0].kwargs["body"])
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_invalid_repository_is_explained_and_does_not_block_next(
+            self, _limits, _questions, ideas, create, set_idea, _note_work, notify):
+        self.cards[0]["repo"] = "repo-2"
+        self.cards[0]["order"] = 20
+        self.cards[1]["repo"] = "missing-repo"
+        create.side_effect = [
+            RuntimeError("repository_not_advertised: missing-repo"),
+            {"task": {"id": "next-task"}},
+        ]
+        ideas.return_value = self.cards
+
+        result = pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(result, "next-task")
+        self.assertEqual(create.call_args_list[1].args[0]["repository_id"], "repo-2")
+        self.assertIn(mock.call(
+            "top", state="new",
+            reason="Не запущено автоматически: у карточки указан несуществующий проект. Выберите проект заново."),
+            set_idea.call_args_list)
+        self.assertIn("несуществующий проект", notify.call_args_list[0].kwargs["body"])
 
     @mock.patch.object(pilot, "notify")
     @mock.patch.object(pilot, "note_work")
@@ -1360,6 +1412,63 @@ class HostLoadAdmissionTests(unittest.TestCase):
         api.assert_called_once_with("/tasks/queued-task")
         stage_worker.assert_not_called()
         create.assert_not_called()
+
+
+class DashboardSnapshotTest(unittest.TestCase):
+    def test_shared_snapshot_uses_original_float_windows(self):
+        day_start = 100.0
+        week_start = 12.345678
+        snapshot = {
+            day_start: {"total_tokens": 10},
+            week_start: {"total_tokens": 70},
+        }
+
+        day, week = pilot.codex_snapshot_windows(
+            snapshot, (day_start, week_start))
+
+        self.assertEqual(day["total_tokens"], 10)
+        self.assertEqual(week["total_tokens"], 70)
+
+
+class PostMergeDeployTest(unittest.TestCase):
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
+    def test_trading_repository_releases_only_trading_staging(self, run_shell, log):
+        conf = {
+            "deploy_staging_cmd": "fx staging release",
+            "deploy_factory_cmd": "fx factory release",
+        }
+
+        result = pilot.deploy_after_merge(
+            conf, "github.com/timafen/tarser-operations")
+
+        self.assertEqual(result, 0)
+        run_shell.assert_called_once_with("fx staging release")
+        self.assertIn("TRADING-STAGING-DEPLOY", log.call_args.args[0])
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
+    def test_factory_repository_never_releases_trading_staging(self, run_shell, log):
+        conf = {"deploy_staging_cmd": "fx staging release"}
+
+        result = pilot.deploy_after_merge(conf, "github.com/timafen/factory")
+
+        self.assertIsNone(result)
+        run_shell.assert_not_called()
+        self.assertIn("deploy_factory_cmd is not configured", log.call_args.args[0])
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
+    def test_factory_repository_uses_its_own_release_command(self, run_shell, _log):
+        conf = {
+            "deploy_staging_cmd": "fx staging release",
+            "deploy_factory_cmd": "fx factory release",
+        }
+
+        result = pilot.deploy_after_merge(conf, "github.com/timafen/factory.git")
+
+        self.assertEqual(result, 0)
+        run_shell.assert_called_once_with("fx factory release")
 
 
 if __name__ == "__main__":

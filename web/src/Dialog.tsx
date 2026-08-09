@@ -69,7 +69,9 @@ export function Dialog() {
   }, []);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (typeof endRef.current?.scrollIntoView === "function") {
+      endRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [messages.length, pending]);
 
   useEffect(() => {
@@ -124,6 +126,8 @@ export function Dialog() {
       setMessages([...shown, { ...response.message, modelLabel: response.model_label }]);
       setScreenshot(null);
     } catch (cause) {
+      setMessages(messages);
+      setQuestion(content);
       setError(cause instanceof APIError ? cause.message : "Модель не ответила. Попробуйте ещё раз");
     } finally { setPending(false); }
   };
@@ -140,7 +144,8 @@ export function Dialog() {
       <header className="dlg-top">
         <h1 id="dialog-title">Диалог</h1>
         <div className="dlg-pick">
-          <button type="button" className="dlg-chip" onClick={() => setPickerOpen((v) => !v)} disabled={pending}>
+          <button type="button" className="dlg-chip" aria-label="Модель для диалога"
+            onClick={() => setPickerOpen((v) => !v)} disabled={pending}>
             <span className="dlg-dot" />
             {current ? current.model : "выбрать модель"}
             <span className="dlg-caret">▾</span>
@@ -209,7 +214,7 @@ export function Dialog() {
       <div className={"dlg-compose" + (dragOver ? " dlg-drag" : "")}>
         {screenshot && (
           <div className="dlg-preview">
-            <img src={`data:${screenshot.content_type};base64,${screenshot.data}`} alt={screenshot.name} />
+            <img src={`data:${screenshot.content_type};base64,${screenshot.data}`} alt={`Скриншот: ${screenshot.name}`} />
             <span>{screenshot.name}</span>
             <button type="button" onClick={() => setScreenshot(null)} aria-label="Убрать скриншот">×</button>
           </div>
@@ -220,8 +225,10 @@ export function Dialog() {
           <button type="button" className="dlg-clip" title="Прикрепить скриншот"
             onClick={() => fileRef.current?.click()} disabled={pending}>📎</button>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden
+            aria-label="Скриншот к вопросу"
             onChange={(e) => { take(e.target.files?.[0]); e.target.value = ""; }} />
           <textarea ref={areaRef} rows={1} value={question} disabled={pending}
+            aria-label="Ваш вопрос"
             placeholder="Спросите или вставьте скриншот…"
             onChange={(e) => setQuestion(e.target.value)}
             onPaste={(e) => {
@@ -232,7 +239,8 @@ export function Dialog() {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
             }} />
           <button type="button" className="dlg-send" disabled={!canSend}
-            onClick={() => void send()} aria-label="Отправить">
+            onClick={() => void send()}
+            aria-label={pending ? "Модель думает…" : reading ? "Читаем скриншот…" : error ? "Повторить" : "Отправить"}>
             {pending ? <span className="dlg-spin" /> : "↑"}
           </button>
         </div>
