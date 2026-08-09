@@ -11,6 +11,39 @@ from unittest import mock
 from pilot import pilot
 
 
+class AgentRulesScopeTests(unittest.TestCase):
+    def test_common_rules_exclude_stage_specific_requirements(self):
+        self.assertNotIn("ГОТОВО-КОГДА", pilot.AGENT_RULES)
+        self.assertNotIn("Ревью: меряй поставку", pilot.AGENT_RULES)
+        self.assertNotIn("git diff origin/main...HEAD, три точки", pilot.AGENT_RULES)
+
+    def test_common_rules_keep_markers_and_universal_requirements(self):
+        expected = (
+            "=== ПРАВИЛА ДЛЯ АГЕНТА",
+            "=== КОНЕЦ ПРАВИЛ ===",
+            "Ветка: режь от свежего origin/main",
+            "Сдача: сначала перебазируй на свежий main",
+            "Отчёт заканчивай строками",
+            "Пиши для человека",
+            "Знания: заводи ОТДЕЛЬНУЮ карточку",
+            "Скорость: НЕ гоняй полный набор тестов",
+            "Живая проверка на стенде РАЗРЕШЕНА",
+        )
+        for requirement in expected:
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, pilot.AGENT_RULES)
+
+    def test_auto_task_gets_common_rules_only_once(self):
+        body = {"title": "[auto] Проверить область правил", "context": "Вводные"}
+        with mock.patch.object(pilot, "api", return_value={"task": {}}) as api:
+            pilot.create_task(body)
+            pilot.create_task(body)
+
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(body["context"].count("=== ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+        self.assertEqual(body["context"].count("=== КОНЕЦ ПРАВИЛ ==="), 1)
+
+
 class CreateTaskFallbackTest(unittest.TestCase):
     def test_voice_attachments_keep_request_key_through_fallback(self):
         request_key = "voice-request-with-files"
