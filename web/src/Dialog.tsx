@@ -40,7 +40,7 @@ export function Dialog() {
     <div className="page-heading"><div><h1 id="dialog-title">Диалог</h1><p>Разговор с выбранной моделью фабрики</p></div></div>
     <label className="field dialog-model">Модель
       <select aria-label="Модель для диалога" value={brainIndex ?? ""} onChange={(event)=>setBrainIndex(Number(event.target.value))} disabled={pending}>
-        {models.map((item,index)=><option key={index} value={index}>{item.note?.trim() || `${item.provider} — ${item.model}`}</option>)}
+        {models.map((item,index)=><option key={index} value={index}>{`${item.model} — ${item.provider}${item.note?.trim() ? " · " + item.note.trim() : ""}`}</option>)}
       </select>
     </label>
     <div className="dialog-history" aria-live="polite">
