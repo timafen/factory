@@ -4,7 +4,7 @@
 
 - Status: implemented — живой пилот ограничен значениями 12/120.
 - Branch: `factory/a9d1955c-222-694259ce-523`.
-- Head commit: будет указан в поставке этой карточки.
+- Head commit: `bd88af4` — фиксация снижения лимитов и результатов проверки.
 - What changed: в `/opt/factory-data/pilot/config.json` потолок задач одной
   работы снижен с 60 до 12, общий суточный потолок — с 250 до 120.
 - Evidence: точная JSON-проверка значений проходит; `python3 -m unittest
