@@ -2,20 +2,19 @@
 
 ## HEAD
 
-- Status: ready for review — целевые проверки и сборка проходят; сбои общего
-  gate воспроизведены на чистом `origin/main` вне диффа карточки.
-- Branch: `factory/89e04832-28f-bc4000bc-ecc`.
-- Head commit: `8261efe` (проверенная ревизия до текущего обновления карточки).
-- What changed: общий счётчик читает rollout-журналы Codex, применяет точный
-  версионированный API-тариф и включает известную сумму в дневной предохранитель.
-- What changed: обзор показывает общие токены Codex; неизвестная модель даёт
-  «стоимость не определена», а не ложный ноль.
-- Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 3/3 OK;
+- Status: ready for repeat review — оба замечания прошлого Review исправлены;
+  целевые проверки и production-сборка проходят.
+- Branch: `factory/a9d2ca1a-b6f-d8b1a722-ff9`.
+- Head commit: `596df7d` (проверенная реализация до обновления карточки).
+- What changed: тариф учитывает контекст свыше 272K и cache writes; при
+  отсутствии данных о записи кэша сумма явно названа базовой оценкой.
+- What changed: cumulative total обновляется при каждом событии, поэтому
+  смешанный поток `last_token_usage`/`total_token_usage` не удваивает расход.
+- Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 5/5 OK;
   `npm test -- --run src/Overview.test.ts` → 9/9 passed; `npm run build` → passed.
-- Evidence: `just check` доходит до двух прежних ошибок `staticcheck`; на чистом
-  `origin/main` те же две ошибки и те же 3/3 сбоя `Dialog.test.tsx`.
-- Next action: сохранить `attempt_id` рядом с session id при запуске Codex,
-  прежде чем показывать его расход у конкретной задачи.
+- Evidence: `just check` блокируют две прежние ошибки `staticcheck` вне диффа
+  карточки: `cards_http.go:37` (U1000), `pilot_config.go:132` (SA4006).
+- Next action: повторить Review исправленного расчёта и смешанного сценария.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -51,3 +50,11 @@ staticcheck-ошибок в `internal/controlplane` и трёх тестов `Di
 `origin/main`. Целевые проверки прошли 3/3 и 9/9, production-сборка успешна.
 Две ошибки `staticcheck` и три сбоя `Dialog.test.tsx` одинаково воспроизведены
 на ветке и в чистом экспорте `origin/main`; затронутых ими файлов нет в диффе.
+
+### 2026-08-09 — Implement
+
+После REQUEST CHANGES добавлены множители длинного контекста GPT-5.6, цена
+cache writes и честная пометка базовой оценки при неполном rollout. Сохранение
+cumulative total исправлено для смешанного потока. Серверные тесты 5/5, UI
+9/9 и production-сборка прошли; общий gate по-прежнему блокируют две прежние
+`staticcheck`-ошибки вне диффа CARD-0038.
