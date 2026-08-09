@@ -2,14 +2,17 @@
 
 ## HEAD
 
-- Status: done
+- Status: BLOCKED: полный web-набор уже падает вне области поставки.
 - Branch: `factory/3186123f-6f9-b8870d0a-3ae`
-- Head commit: `0db5ca9` (проверенный продуктовый снимок `origin/main`)
+- Head commit: будет указан в проверочном коммите этой ветки.
 - What changed: подтверждено, что очистка завершённых карточек уже поставлена в
   `main`; повторная реализация не создавалась.
-- Evidence: 5 целевых сценариев `PlanCardCleanupTest` прошли; `go test ./...` и
-  `go build ./...` прошли.
-- Next action: передать этап на проверку без повторного круга реализации.
+- Evidence: 5 целевых сценариев `PlanCardCleanupTest`, все 12 Python-тестов,
+  `go test ./...`, `go build ./...`, TypeScript-проверка и web-сборка прошли.
+  `npm test` падает в двух сценариях Overview/Settings, `npm run lint` — на 9
+  старых UI-ошибках; карточка не меняет эти файлы.
+- Next action: владельцу решить, исправлять ли существующие web-падения отдельной
+  карточкой, затем повторить полную проверку.
 
 ## LOG
 
@@ -20,3 +23,13 @@
 дублирующие изменения не вносились. `python3 -m unittest
 pilot.test_pilot.PlanCardCleanupTest` прошёл 5 тестов; `go test ./...` и
 `go build ./...` завершились успешно.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Наблюдение |
+| --- | --- | --- |
+| Завершённая карточка не возвращается в План | `python3 -m unittest pilot.test_pilot.PlanCardCleanupTest` | 5 из 5 сценариев прошли; закрывается только связанная карточка с принятым финальным этапом. |
+| Нет повторной реализации | `git diff --name-only origin/main...HEAD` | Только эта карточка; рабочий код и тесты уже в `main`. |
+| Смежные серверные части не сломаны | `python3 -m unittest pilot/test_pilot.py`, `go test ./...`, `go build ./...` | 12 Python-тестов и все Go-пакеты прошли. |
+| Web-поставка собирается | `npx tsc -p tsconfig.app.json --noEmit`, `npm run build` | Обе команды завершились успешно. |
+| Полный web-набор зелёный | `npm test -- --run`, `npm run lint` | Заблокировано: 2 падения тестов Overview/Settings и 9 lint-ошибок в неизменённых UI-файлах. |
