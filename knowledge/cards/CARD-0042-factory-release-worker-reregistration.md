@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented — целевые проверки зелёные.
-- Branch: `factory/00055e81-4fd-03cfb5ab-483`.
-- Head commit: `ea5ac13`.
+- Status: Implemented — блокирующие замечания Review устранены.
+- Branch: `factory/0814fdde-3bf-38c921c3-fdb`.
+- Head commit: `f98891d`.
 - Specification: `knowledge/specs/factory-release-worker-reregistration.md`.
-- What changed: выкат ставит сервер и воркер одной ревизией, ждёт здоровую
-  регистрацию конкретного worker identity и откатывает пару при сбое.
-- Evidence: `bash ops/test-fx-factory-release.sh` → PASS; `go build
-  ./cmd/factory-server ./cmd/factory-worker` → PASS.
-- One next action: влить ветку после проверки диффа относительно свежего main.
+- What changed: успех требует нового heartbeat после рестарта; trap возвращает
+  оба бинаря при прерывании переключения пары.
+- Evidence: `bash ops/test-fx-factory-release.sh` → PASS (включая старую healthy
+  запись и TERM между установками); сборка сервера и воркера → PASS.
+- One next action: повторить Review до передачи на проверку.
 
 ## LOG
 
@@ -27,3 +27,10 @@ Release-скрипт теперь поставляет сервер и ворк�
 правильном порядке и ждёт здоровый online-ответ для ID выкатываемого воркера.
 Изолированный shell-тест подтвердил успешный путь, общий откат при сбое сервера,
 регистрации и установки, а также отсутствие установки при ошибке сборки воркера.
+
+### 2026-08-09 — Implement
+
+После блокирующего Review проверка регистрации требует `last_heartbeat` новее
+снятого до рестарта, а EXIT/signal trap сохраняет общий откат пары до подтверждения
+релиза. Целевой тест подтвердил отказ на старой healthy-записи и восстановление
+обоих бинарей при TERM между их установками; Go-компоненты собираются.
