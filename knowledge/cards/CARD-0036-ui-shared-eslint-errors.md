@@ -17,7 +17,8 @@
 
 1. В `Live.tsx`, `Pipeline.tsx` и `Say.tsx` отсутствуют восемь зафиксированных
    ESLint-ошибок, а в `Speak.tsx`, `TaskFilePicker.tsx` и `project.tsx` — семь
-   предупреждений Fast Refresh.
+   предупреждений Fast Refresh; стартовая загрузка `Access.tsx` также не
+   блокирует общий строгий шлюз.
 2. Голосовое уточнение сохраняет выбранный режим для запроса и безопасно
    показывает его в интерфейсе.
 
@@ -27,6 +28,7 @@
 ГОТОВО-КОГДА: файл web/src/Speak.tsx
 ГОТОВО-КОГДА: файл web/src/TaskFilePicker.tsx
 ГОТОВО-КОГДА: файл web/src/project.tsx
+ГОТОВО-КОГДА: файл web/src/Access.tsx
 ГОТОВО-КОГДА: команда just ui-check
 
 ## LOG
