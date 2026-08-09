@@ -485,32 +485,46 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-        {STAGE_ORDER.map((st) => {
-          const s = g.reached[st];
-          const isNow = g.currentStage === st;
-          const bg = s === "done" ? "#2f5741" : s === "bad" ? "#5a2b2b"
-                   : isNow ? "#2a4560" : "#232833";
-          const fg = s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
-                   : isNow ? "#8ec5ff" : "#5a6270";
-          const skipped = s === "skipped";
-          const again = s === "again";
-          return (
-            <span key={st}
-              title={skipped ? "Стадию не проводили: работу завели сразу с более позднего шага"
-                             : (s ? undefined : "Стадия ещё не пройдена")}
-              style={{
-                fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
-                background: skipped ? "transparent" : again ? "#3a3320" : bg,
-                color: skipped ? "#4a515e" : again ? "#e0cf9f"
-                     : (s || isNow ? fg : "#5a6270"),
-                border: isNow ? "1px solid #3d6a92"
-                      : skipped ? "1px dashed #363d4a"
-                      : again ? "1px solid #5c4f2a" : "1px solid transparent",
-              }}>{skipped ? `${STAGE_RU[st]} — не нужна`
-                  : again ? `${STAGE_RU[st]} — заново`
-                  : STAGE_RU[st]}</span>
-          );
-        })}
+        {(() => {
+          const idxNow = g.currentStage ? STAGE_ORDER.indexOf(g.currentStage) : -1;
+          const maxIdx = STAGE_ORDER.reduce((m, x, i) => (g.reached[x] ? i : m), -1);
+          return STAGE_ORDER.map((st, idx) => {
+            const s = g.reached[st];
+            const isNow = g.currentStage === st;
+            // Этап никогда не проводился, но работа уже дальше него:
+            // значит, он и не понадобится (например, разбор сделан в плане
+            // эпика). Честная подпись вместо немого серого.
+            const skipped = s === "skipped" || (!s && !isNow && idx < maxIdx);
+            const again = s === "again";
+            // Зелёное позади возврата — история прошлого круга, а не текущее
+            // состояние: после «Разработка — заново» Ревью пройдёт снова.
+            const past = s === "done" && idxNow >= 0 && idx > idxNow;
+            const bg = past ? "#1a2620" : s === "done" ? "#2f5741" : s === "bad" ? "#5a2b2b"
+                     : isNow ? "#2a4560" : "#232833";
+            const fg = past ? "#5f8f74" : s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
+                     : isNow ? "#8ec5ff" : "#5a6270";
+            return (
+              <span key={st}
+                title={skipped ? "Стадию не проводили: работа началась с более позднего шага (например, разбор уже сделан в плане эпика)"
+                     : past ? "Этап проходил в прошлом круге; после возврата в разработку он будет пройден заново"
+                     : again ? "Этап идёт повторно после возврата"
+                     : (s ? undefined : "Стадия ещё не пройдена")}
+                style={{
+                  fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
+                  background: skipped ? "transparent" : again ? "#3a3320" : bg,
+                  color: skipped ? "#4a515e" : again ? "#e0cf9f"
+                       : (s || isNow ? fg : "#5a6270"),
+                  border: isNow ? "1px solid #3d6a92"
+                        : skipped ? "1px dashed #363d4a"
+                        : past ? "1px dashed #2f5741"
+                        : again ? "1px solid #5c4f2a" : "1px solid transparent",
+                }}>{skipped ? `${STAGE_RU[st]} — не нужна`
+                    : past ? `${STAGE_RU[st]} — прошлый круг`
+                    : again ? `${STAGE_RU[st]} — заново`
+                    : STAGE_RU[st]}</span>
+            );
+          });
+        })()}
       </div>
 
       {expanded && (
