@@ -2,16 +2,24 @@
 
 ## HEAD
 
-- Status: Implemented — блокирующие замечания Review устранены; ожидает повторный Review.
-- Branch: `factory/d3e9c5c4-bd2-2f11b55e-d51`.
-- Head commit: `ecb3d19` (`Дать агентам защищённый просмотр стендов`).
+- Status: Implemented — обязательная проверка типов закрыта; готово к Review.
+- Branch: `factory/3804eb0b-065-879e7b6a-153`.
+- Head commit: `0443a7a` (`Убрать устаревшие файлы экрана просмотра стенда`).
 - Specification: `knowledge/specs/server-browser-for-agents-and-dialog.md`.
 - What changed: Chromium принудительно запрещает непроксируемый WebRTC/UDP;
   CLI атомарно заменяет снимок файлом с правами 0600, даже после прежнего 0644.
-- Evidence: целевые Go-тесты PASS; тесты API/протокола/worker и «Диалога» PASS.
-- One next action: повторный Review проверяет сетевую границу и трёхточечный diff.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit` — PASS; трёхточечный
+  diff содержит только 22 файла задачи.
+- One next action: передать реализацию на Review.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+По решению владельца повторён только недостающий контроль: после установки
+зависимостей из lock-файла команда `npx tsc -p tsconfig.app.json --noEmit`
+завершилась с кодом 0. Трёхточечный diff с `origin/main` содержит ровно 22
+заявленных файла серверного браузера, CLI, «Диалога», тестов и документации.
 
 ### 2026-08-09 — Specification
 
