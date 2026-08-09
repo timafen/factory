@@ -99,7 +99,7 @@ NOTIFY_GROUPS = {
     "done": ("Задача выполнена", "Задача завершена", "Эпик завершён", "Задача заведена",
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
-    "routine": ("Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
+    "routine": ("Повторяю этап", "Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
                 "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
@@ -2237,6 +2237,11 @@ TRY_HOSTS = ("factory.timafen.com", "staging-automation.tarser.net",
 # Старое имя стенда ещё отвечает и зашито в коде приложения, но владельцу
 # показываем только новое: пусть ссылка ведёт туда, где он на самом деле живёт.
 TRY_ALIASES = (("staging.ops.tarser.net", "staging-automation.tarser.net"),)
+INFRA_SIGNS = re.compile(
+    r"refresh_token_reused|Please try signing in again|401 Unauthorized|"
+    r"could not be refreshed|Not logged in|Permission denied|"
+    r"connection reset|temporary failure in name resolution", re.I)
+
 TRY_NONE = ("none", "нет", "-", "n/a")
 PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
 # служебные страницы: человек там результата не увидит
@@ -3531,6 +3536,29 @@ def cycle(conf, state):
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
                 continue
+            # Сбой окружения, а не работы: вход в модель протух, сеть моргнула.
+            # Владельцу тут делать нечего — повторяем этап сами.
+            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA") < 3:
+                note_cap_rescue(base, "INFRA")
+                try:
+                    create_task({"request_key": str(uuid.uuid4()),
+                                 "title": title[:200],
+                                 "context": (detail.get("context") or
+                                             detail["task"].get("context") or "")[:20000],
+                                 "worker_id": detail["task"].get("worker_id") or "",
+                                 "repository_id": rid,
+                                 "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                 "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
+                                     or (workflows.get(wf, {}) or {}).get("revision_id")}, conf)
+                    log(f"INFRA RETRY task={tid} stage={wf}: сбой окружения, повторяю этап")
+                    notify(conf, "Повторяю этап: сбой окружения",
+                           base + chr(10) + "Вход в модель или сеть подвели — это не ошибка работы. "
+                           "Повторяю тот же этап сам, твоего участия не нужно.",
+                           tags="repeat", click=f"{UI_BASE}/work")
+                    continue
+                except Exception as e:
+                    log("infra_retry_error", repr(e))
+
             done = stage_attempts(tasks, wf, base)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
