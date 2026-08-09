@@ -29,7 +29,7 @@ type Dash = {
     chain?: { cli: string; model: string; provider: string; note?: string; blocked?: boolean }[];
     last?: { cli?: string; model?: string; provider?: string; fallback?: boolean; at?: string };
   };
-  limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string }>;
+  limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
   release?: {
     staging_release?: string; prod_release?: string;
