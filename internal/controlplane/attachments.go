@@ -12,9 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+const pendingAttachmentTTL = 24 * time.Hour
 
 var executableExtensions = map[string]bool{
 	".exe": true, ".com": true, ".bat": true, ".cmd": true, ".msi": true,
@@ -125,6 +128,33 @@ func (s *Store) DeletePendingAttachment(ctx context.Context, id, requestKey stri
 		return unavailable(err)
 	}
 	_ = os.RemoveAll(filepath.Dir(path))
+	return nil
+}
+
+func (s *Store) cleanupPendingAttachments(ctx context.Context, before int64) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,storage_path FROM task_attachments WHERE task_id IS NULL AND created_at < ?`, before)
+	if err != nil {
+		return unavailable(err)
+	}
+	type stale struct{ id, path string }
+	var values []stale
+	for rows.Next() {
+		var value stale
+		if err := rows.Scan(&value.id, &value.path); err != nil {
+			rows.Close()
+			return unavailable(err)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Close(); err != nil {
+		return unavailable(err)
+	}
+	for _, value := range values {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM task_attachments WHERE id=? AND task_id IS NULL`, value.id); err != nil {
+			return unavailable(err)
+		}
+		_ = os.RemoveAll(filepath.Dir(value.path))
+	}
 	return nil
 }
 
