@@ -45,9 +45,9 @@ func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, m
 	var stdout bytes.Buffer
 	command.Stdout = &limitedWriter{writer: &stdout, remaining: dialogMaxOutput}
 	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	command.Stderr = &limitedWriter{writer: &stderr, remaining: dialogMaxOutput}
 	if err := command.Run(); err != nil {
-		return "", err
+		return "", fmt.Errorf("dialog CLI failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -102,12 +102,8 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var selected *protocol.PilotBrain
-	for i := range settings.Settings.BrainChain {
-		brain := &settings.Settings.BrainChain[i]
-		if brain.Model == request.Model {
-			selected = brain
-			break
-		}
+	if request.BrainIndex != nil && *request.BrainIndex >= 0 && *request.BrainIndex < len(settings.Settings.BrainChain) {
+		selected = &settings.Settings.BrainChain[*request.BrainIndex]
 	}
 	if selected == nil || (selected.CLI != "codex" && selected.CLI != "claude") {
 		writeError(w, invalid("unknown_dialog_model", "Выбранная модель недоступна"))
@@ -121,6 +117,10 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, &ServiceError{Code: "dialog_timeout", Message: "Модель не ответила вовремя. Попробуйте ещё раз", Status: http.StatusGatewayTimeout})
 			return
 		}
+		if isDialogRateLimit(err) {
+			writeError(w, &ServiceError{Code: "dialog_rate_limited", Message: "Лимит выбранной модели исчерпан. Попробуйте позже или выберите другую модель", Status: http.StatusTooManyRequests})
+			return
+		}
 		writeError(w, &ServiceError{Code: "dialog_failed", Message: "Не удалось получить ответ модели. Попробуйте ещё раз", Status: http.StatusBadGateway})
 		return
 	}
@@ -132,10 +132,10 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateDialogRequest(request protocol.DialogRequest) error {
-	if request.Model == "" || len(request.Messages) == 0 || len(request.Messages) > dialogMaxMessages {
+	if request.BrainIndex == nil || *request.BrainIndex < 0 || len(request.Messages) == 0 || len(request.Messages) > dialogMaxMessages {
 		return invalid("invalid_dialog", "Проверьте модель и число сообщений")
 	}
-	total := len(request.Model)
+	total := 0
 	for _, message := range request.Messages {
 		if message.Role != "user" && message.Role != "assistant" {
 			return invalid("invalid_dialog_role", "В истории есть неизвестная роль")
@@ -152,6 +152,16 @@ func validateDialogRequest(request protocol.DialogRequest) error {
 		return invalid("dialog_too_large", "История диалога слишком велика")
 	}
 	return nil
+}
+
+func isDialogRateLimit(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"rate limit", "rate_limit", "too many requests", "quota exceeded", "usage limit", "status 429", "error 429"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func dialogModelLabel(brain protocol.PilotBrain) string {
