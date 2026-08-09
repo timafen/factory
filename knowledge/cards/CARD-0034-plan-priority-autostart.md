@@ -5,7 +5,7 @@
 - Status: IMPLEMENTED: ручное и автоматическое создание задач исправлено,
   готово к повторной проверке.
 - Branch: `factory/f0599a27-417-6608738d-459`
-- Head commit: `66799ac` — реализация после rebase на свежий `origin/main`.
+- Head commit: `6e392b1` — реализация после rebase на свежий `origin/main`.
 - What changed: ручная кнопка снова создаёт задачу с UUID-ключом; карточка без
   проекта не блокирует очередь; повтор автозапуска остаётся идемпотентным.
 - Evidence: `python3 -m unittest pilot.test_pilot` — 24/24 OK;
