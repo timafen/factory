@@ -99,6 +99,7 @@ NOTIFY_GROUPS = {
     "done": ("Задача выполнена", "Задача завершена", "Эпик завершён", "Задача заведена",
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
+    "diag": ("Разобрался в застрявшей", "Застряла — нужен ты"),
     "routine": ("Повторяю этап", "Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
                 "Взял из Плана",
                 "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
@@ -1788,11 +1789,100 @@ def provider_limits_tick(conf):
     save(PROVIDER_LIMITS_PATH, st)
 
 
+DIAG_PROMPT = (
+    "Ты старший инженер фабрики. Работа буксует: этап прошёл {n} кругов подряд "
+    "и каждый раз возвращался. Ниже — последние отчёты и ошибки стадий.\n\n"
+    "Определи НАСТОЯЩУЮ причину: это дефект кода, поломка окружения (доступ, "
+    "ключи, права, сеть), недостижимое требование или придирка проверяющего.\n\n"
+    "Ответь строго JSON без пояснений:\n"
+    "{{\"причина\": \"<одна фраза по-русски, для человека, без жаргона>\", "
+    "\"решение\": \"<что сделать, одна-две фразы>\", "
+    "\"нужен_владелец\": true|false}}\n\n"
+    "нужен_владелец = true ТОЛЬКО если это про деньги, боевую систему, доступы "
+    "владельца или выбор продукта. Всё остальное чинится без него.\n\n"
+    "РАБОТА: {base}\n\nПОСЛЕДНЕЕ:\n{tail}")
+
+
+def load_tasks_safe(limit=60):
+    try:
+        return api(f"/tasks?limit={limit}").get("tasks") or []
+    except Exception:
+        return []
+
+
+def recent_stage_text(tasks, base, limit=3):
+    """Последние отчёты и ошибки стадий этой работы — материал для разбора."""
+    out = []
+    for t in tasks:
+        if base not in (t.get("title") or ""):
+            continue
+        if t.get("state") not in ("succeeded", "failed", "cancelled"):
+            continue
+        try:
+            d = api(f"/tasks/{t['id']}")
+        except Exception:
+            continue
+        atts = d.get("attempts") or []
+        res = next((a.get("result") for a in reversed(atts) if a.get("result")), "") or ""
+        err = next((a.get("error") for a in reversed(atts) if a.get("error")), "") or ""
+        out.append(f"--- {t.get('title', '')[:80]} [{t.get('state')}]\n"
+                   f"{squeeze(err, 800)}\n{squeeze(res, 1600)}")
+        if len(out) >= limit:
+            break
+    return "\n\n".join(out)[:9000]
+
+
+def deep_diagnose(conf, base, stage, rounds, tasks):
+    """Зовём сильную модель разобраться и говорим владельцу по-человечески.
+    Один разбор на работу — дальше конвейер действует по найденному решению."""
+    if cap_rescues(base, "DIAG") >= 1:
+        return None
+    note_cap_rescue(base, "DIAG")
+    tail = recent_stage_text(tasks, base)
+    try:
+        text, eng = brain(conf, DIAG_PROMPT.format(n=rounds, base=base, tail=tail),
+                          timeout=240)
+        verdict = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    except Exception as e:
+        log("diag_error", repr(e))
+        return None
+    why = str(verdict.get("причина") or "").strip()
+    what = str(verdict.get("решение") or "").strip()
+    owner = bool(verdict.get("нужен_владелец"))
+    log(f"DIAG {base[:40]!r} кругов={rounds}: {why[:90]} | владелец={owner}")
+    if owner:
+        notify(conf, "Застряла — нужен ты",
+               f"{base}\n\nРабота прошла {rounds} кругов и не движется.\n"
+               f"Причина: {cut(why, 220)}\n"
+               f"Что предлагаю: {cut(what, 220)}\n"
+               "Без твоего решения дальше не пойдёт.",
+               priority="high", tags="warning", click=f"{UI_BASE}/answer")
+    else:
+        notify(conf, "Разобрался в застрявшей",
+               f"{base}\n\nБуксовала {rounds} кругов. Причина: {cut(why, 220)}\n"
+               f"Делаю: {cut(what, 220)}\n"
+               "Твоего участия не нужно.",
+               tags="mag", click=f"{UI_BASE}/work")
+    return verdict
+
+
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch=""):
     """Try to resolve the question with the orchestrator; escalate if it's the
     owner's call OR if this stage has already been retried too many times."""
     cap = conf.get("max_stage_attempts", 3)
+    # Порог разбора: столько кругов подряд — и зовём сильную модель разобраться,
+    # а владельцу уходит одно человеческое сообщение вместо десяти пушей.
+    diag_at = int(conf.get("deep_diag_rounds", 5))
+    if attempts_so_far >= diag_at:
+        try:
+            v = deep_diagnose(conf, base, stage, attempts_so_far, load_tasks_safe())
+            if v and str(v.get("решение") or "").strip():
+                situation = (situation + "\n\nРАЗБОР СТАРШЕЙ МОДЕЛИ: "
+                             + str(v.get("причина") or "") + " Решение: "
+                             + str(v.get("решение") or ""))
+        except Exception as e:
+            log("diag_hook_error", repr(e))
     # Стоп-кран. Восемь кругов подряд — это уже не плохой код, а помеха,
     # которую конвейер сам убрать не может: сломанное окружение, недоступный
     # сервер, требование, которое агент не в силах выполнить. Дальше он просто

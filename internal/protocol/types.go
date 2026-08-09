@@ -809,11 +809,12 @@ type PilotSettings struct {
 	StoppedPipelines    []string     `json:"stopped_pipelines"`
 	// Потолок кругов по одной работе и группы уведомлений: этим управляет
 	// пилот, но владелец должен видеть и править их на экране «Настройки».
-	MaxWorkRounds    int                `json:"max_work_rounds,omitempty"`
-	MaxCapRescues    int                `json:"max_cap_rescues,omitempty"`
-	MaxLoopRescues   int                `json:"max_loop_rescues,omitempty"`
-	WorkDayCap       int                `json:"work_day_cap,omitempty"`
-	DayTaskCap       int                `json:"day_task_cap,omitempty"`
+	MaxWorkRounds    int `json:"max_work_rounds,omitempty"`
+	MaxCapRescues    int `json:"max_cap_rescues,omitempty"`
+	MaxLoopRescues   int `json:"max_loop_rescues,omitempty"`
+	WorkDayCap       int `json:"work_day_cap,omitempty"`
+	DayTaskCap       int
+	DeepDiagRounds   int                `json:"deep_diag_rounds,omitempty"`
 	NotifyGroups     map[string]bool    `json:"notify_groups,omitempty"`
 	StageBaseUSD     map[string]float64 `json:"stage_base_usd"`
 	ComplexityFactor map[string]float64 `json:"complexity_factor"`
