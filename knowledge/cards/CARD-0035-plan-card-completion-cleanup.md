@@ -4,7 +4,7 @@
 
 - Status: Implemented
 - Branch: `factory/06aa3bc6-101-aa0ba874-34b`
-- Head commit: `5323a57`
+- Head commit: `0de7d8d`
 - What changed: перед новым автоподбором План переводит связанную карточку в
   `done`, только когда последний этап прогона завершён и строго принят.
 - Evidence: `python3 -m unittest pilot.test_pilot.PlanCardCleanupTest` — 5 tests,
