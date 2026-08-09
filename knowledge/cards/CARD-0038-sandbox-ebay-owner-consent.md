@@ -4,7 +4,7 @@
 
 - Status: Implemented — ждёт выката Factory и smoke на staging.
 - Branch: `factory/0f6cde34-11f-6563214b-b6d`.
-- Head commit: `6c0518a` — владелец сам подтверждает eBay продавца в песочнице.
+- Head commit: `2988dc6` — владелец сам подтверждает eBay продавца в песочнице.
 - What changed: добавлены `/sandbox-keys`, серверные start/status endpoints и
   строгий staging-only seller bridge. UI открывает consent URL только по клику
   и опрашивает безопасный статус; OAuth-поля отбрасываются на сервере.
