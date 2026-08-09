@@ -15,7 +15,8 @@ const STAGE_RU: Record<string, string> = {
 
 type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  // Где владельцу открыть сделанное и посмотреть.
-                 try_url?: string };
+                 try_url?: string   proof?: string;
+};
 type Question = { task_id?: string; status?: string; question?: string };
 type WorkMeta = {
   origin?: "owner" | "assistant" | "orchestrator";
@@ -399,6 +400,9 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
   // «Готово, когда» — перевод сути в проверяемые факты. Показываем сразу
   // после Спецификации: владелец может сказать «я просил другое» до того,
   // как потрачен хоть один круг разработки.
+  const proofTxt = [...g.items].reverse()
+    .filter((it) => it.stage === "Verify")
+    .map((it) => it.verdict?.proof).find(Boolean) ?? "";
   const promiseLine = g.promise && ((g.promise.files?.length ?? 0) + (g.promise.commands?.length ?? 0) > 0)
     ? [...(g.promise.files ?? []).map((f) => `файл ${f}`),
        ...(g.promise.commands ?? []).map((c) => `команда: ${c}`)].join(" · ")
@@ -417,6 +421,13 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
+        {g.status.label === "работа принята" && !tryUrl && proofTxt && !g.meta?.closed && (
+          <span title="Результат не видно на экране — вот как машина его подтвердила"
+                style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999,
+                         background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741" }}>
+            принята · {proofTxt.slice(0, 90)}
+          </span>
+        )}
         {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (
           // Итог принят — значит изменение уже на стенде. Сама плашка и есть
           // дверь туда: «сделано» без возможности посмотреть — просто слово.

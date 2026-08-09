@@ -273,7 +273,12 @@ AGENT_RULES = """
    git push -u origin HEAD. Непушенная работа не существует.
 3. Отчёт заканчивай строками:
    ОБЛАСТЬ: <файлы через запятую, ровно как в git>
-   TRY: <ссылка на конкретный экран с результатом, не корень панели>
+   TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
+   страницы (health, login, «ok») — НЕ результат. Если работа невидимая
+   (чистка кода, конфиги), пиши: TRY: нет>
+   ДОКАЗАТЕЛЬСТВО: <обязательно, если TRY: нет — одна фраза по-русски, как
+   машина подтвердила результат: «поиск старых имён по коду даёт 0
+   совпадений, 366 тестов зелёные»>
 4. Спецификация ДОПОЛНИТЕЛЬНО обязана выдать проверяемые обещания:
    ГОТОВО-КОГДА: файл <путь>            (файл, который изменится)
    ГОТОВО-КОГДА: команда <команда>      (обязана выйти нулём; лучший вариант —
@@ -2111,6 +2116,16 @@ TRY_HOSTS = ("factory.timafen.com", "staging-automation.tarser.net",
 # показываем только новое: пусть ссылка ведёт туда, где он на самом деле живёт.
 TRY_ALIASES = (("staging.ops.tarser.net", "staging-automation.tarser.net"),)
 TRY_NONE = ("none", "нет", "-", "n/a")
+PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
+# служебные страницы: человек там результата не увидит
+TRY_USELESS = ("/health", "/login", "/admin/login")
+
+
+def proof_of(result):
+    m = None
+    for m in PROOF_LINE.finditer(result or ""):
+        pass
+    return (m.group(1).strip()[:300] if m else "")
 
 
 def _is_bare_root(u):
@@ -3306,8 +3321,13 @@ def cycle(conf, state):
                 # Ссылка живёт рядом с итогом: экран показывает её только там,
                 # где написано «сделано».
                 seen = try_url(result, detail["task"].get("repository_id") or "")
+                if seen and any(u in seen for u in TRY_USELESS):
+                    seen = ""     # страница «ok» — не дверь к результату
                 if seen:
                     rec["try_url"] = seen
+                pf = proof_of(result)
+                if pf:
+                    rec["proof"] = pf
                 save(f"{VERDICT_DIR}/{tid}.json", rec)
             except Exception as e:
                 log("verdict_save_error", repr(e))
@@ -3332,13 +3352,19 @@ def cycle(conf, state):
                     if ok:
                         # Хозяину не нужно знать про main — это кухня. Ему нужно:
                         # задача выполнена, и вот дверь, где потрогать результат.
-                        proof = try_url(result, rid)
-                        notify(conf, "Задача выполнена",
-                               base_title(title)
-                               + ("\nПосмотреть: " + proof if proof
-                                  else "\nСсылку на результат стадия не назвала — открой карточку."),
+                        link = try_url(result, rid)
+                        if link and any(u in link for u in TRY_USELESS):
+                            link = ""
+                        pf = proof_of(result)
+                        if link:
+                            body_txt = "\nПосмотреть: " + link
+                        elif pf:
+                            body_txt = "\nРезультат не визуальный. Проверено: " + pf
+                        else:
+                            body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
+                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
                                tags="white_check_mark",
-                               click=proof or f"{UI_BASE}/tasks/{tid}")
+                               click=link or f"{UI_BASE}/tasks/{tid}")
                     else:
                         # Конфликт слияния — рабочий случай, а не тупик: пока эта
                         # работа шла, в main влилась соседняя. Возвращаем в
