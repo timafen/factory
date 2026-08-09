@@ -2,22 +2,33 @@
 
 ## HEAD
 
-- Status: BLOCKED: рабочая ветка с переключением провайдеров не влита в
-  `origin/main`, поэтому живой выпуск не содержит изменения.
-- Branch: `factory/0d885cc5-94f-d4ece21b-6aa`.
-- Head commit: `da0344d` (проверяемая реализация и её тест на свежем `main`).
+- Status: DEPLOYED: переключение провайдеров выпущено из `main`; естественный
+  живой fallback ещё не наблюдался, потому что активный Claude отвечает первым.
+- Branch: `factory/9282fb82-de4-c2771913-08b`.
+- Head commit: `4305787` (реализация, тесты и выпущенный сквош-коммит).
 - What changed: `pilot.brain()` передаёт `conf` в `note_limit()` при rate-limit,
   и `BrainFallbackTest` доказывает немедленный переход с Codex на Claude и
   исключение заблокированного Codex при следующем вызове.
 - Evidence: `python3 -m unittest pilot.test_pilot` → OK (13 тестов),
-  `python3 -m py_compile pilot/pilot.py`, `just test`, `just vet` и `just build`
-  → успешно. Полный `just check` заблокирован форматированием Go-кода вне
-  диффа. Выпуск от 2026-08-09 00:23 CDT собран из `main` на `0db5ca9`, не из
-  этой ветки; `fx factory logs 200` не содержит события fallback.
-- Next action: влить эту ветку в `main`, повторить выпуск и проверить fallback
-  по журналу живого сервиса.
+  `python3 -m py_compile pilot/pilot.py` → успешно; `fx factory release` собрал
+  и установил `4305787`, `factory-pilot` активен. В `brain_state.json` после
+  выпуска записан обычный ответ Claude (`fallback: false`), оба провайдера
+  имеют состояние `ok`.
+- Next action: при естественном исчерпании активного провайдера подтвердить
+  `fallback: true` в `brain_state.json` и событие `BRAIN FALLBACK` в журнале.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+- Реализация и 13 целевых тестов перенесены на назначенную ветку поверх свежего
+  `origin/main`; diff ограничен четырьмя файлами задачи.
+- `python3 -m unittest pilot.test_pilot` и
+  `python3 -m py_compile pilot/pilot.py` завершились успешно.
+- Сквош-коммит `4305787` доставлен в `main`; `fx factory release` успешно
+  собрал интерфейс и сервер, установил пилот и подтвердил, что он жив.
+- Естественный fallback после выпуска не возник: первым отвечает Claude,
+  состояния Claude и Codex — `ok`; искусственно менять боевую цепочку не стали.
 
 ### 2026-08-08 — Specification
 
