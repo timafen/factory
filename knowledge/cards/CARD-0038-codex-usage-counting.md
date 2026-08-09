@@ -2,17 +2,20 @@
 
 ## HEAD
 
-- Status: реализовано и проверено; замечание Review по контролю области исправлено.
-- Branch: `factory/381c1f1e-d7b-7e0afd2a-52f`.
-- Head commit: `7e1cb3f` (реализация и production-бандл).
+- Status: реализовано; обе находки Review исправлены, готово к повторной проверке.
+- Branch: `factory/36aa43da-9c7-fc0f4ad4-2c2`.
+- Head commit: `7f0f49b` (реализация и исправления Review).
 - What changed: счётчик читает rollout-журналы Codex и показывает дневные
   токены и расчётную API-стоимость; неизвестные тарифы помечаются честно.
 - What changed: восстановлены `area_extend`, `other_areas` и удаление только
   чужих файлов/служебного мусора без потери допустимого расширения поставки.
-- Evidence: целевые Python-тесты → 10/10 OK, включая 2 регрессии области.
+- Evidence: весь `pilot.test_pilot` → 47/47 OK, включая интеграционную
+  проверку сохранения дополнительных файлов и защиту заголовка.
 - Evidence: целевые UI-тесты → 9/9 passed; typecheck и Vite build → passed.
 - Evidence: `dist/index.html` ссылается на собранный `index-D4r1I9JT.js`.
-- Next action: повторить Review CARD-0038 для поставки `7e1cb3f`.
+- Evidence: общий `just check` остановлен двумя прежними staticcheck-ошибками
+  вне области; полный UI-набор — тремя прежними сбоями `Dialog.test.tsx`.
+- Next action: повторить Review CARD-0038 для поставки `7f0f49b`.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -21,6 +24,15 @@
 ГОТОВО-КОГДА: команда cd web && npm test -- --run src/Overview.test.ts
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+Чистая поставка собрана на `factory/36aa43da-9c7-fc0f4ad4-2c2` от свежего
+`origin/main`. После успешной стадии `area_extend` снова сохраняет все файлы
+из строки `ОБЛАСТЬ` до сбора идей; интеграционная регрессия проверяет сохранение
+дополнительного файла. Защитный тест неканонического заголовка восстановлен.
+Весь набор `pilot` прошёл 47/47, UI карточки — 9/9, typecheck и build успешны;
+общие проверки сохраняют известные сбои staticcheck и `Dialog.test.tsx` вне области.
 
 ### 2026-08-09 — Implement
 
