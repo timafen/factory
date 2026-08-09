@@ -2,19 +2,23 @@
 
 ## HEAD
 
-- Status: Implemented, tests green.
+- Status: BLOCKED: целевая проверка зелёная, но полный UI-набор содержит
+  четыре падения вне диффа этой работы.
 - Branch: `factory/14902703-a11-c9268e6a-7b6`.
-- Head commit: `4f727b4` (перенесённая и проверенная реализация до этой записи).
+- Head commit: `ce2f6b3` (повторная проверка переключения подписок).
 - What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
   срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
   Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
   во втором вызове `brain()` (красный без фикса), затем подтверждает, что он
   больше не запускается, пока Claude отвечает сразу.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (2 теста);
-  `python3 -m py_compile pilot/pilot.py` → без ошибок; тест вручную
-  проверен красным на коде до фикса (`git stash` кода `pilot.py`).
-- Next action: нет — маленький слайс закрыт. Более широкий fallback при
-  ошибках, не похожих на лимит, остаётся отдельным решением (см. спецификацию).
+- Evidence: после перебазирования `python3 -m unittest pilot.test_pilot` → OK
+  (2 теста), `python3 -m py_compile pilot/pilot.py` → без ошибок и `just build`
+  → успешно. `just test` и `just vet` ранее завершились успешно; `just ui-check`
+  падает на девяти lint-ошибках в неизменённых UI-файлах, а `npm test -- --run` —
+  на четырёх существующих UI-тестах (98 всего).
+- Next action: владелец UI должен восстановить зелёный `just ui-check` и UI-тесты,
+  затем повторить Verify. Более широкий fallback при ошибках, не похожих на лимит,
+  остаётся отдельным решением (см. спецификацию).
 
 ## LOG
 
@@ -55,3 +59,18 @@
 
 Проверено повторно: `python3 -m unittest pilot.test_pilot` → OK (2 теста);
 `python3 -m py_compile pilot/pilot.py` → без ошибок.
+
+### 2026-08-08 — Verify
+
+После перебазирования на свежий `origin/main` подтверждены все критерии
+переключения: изолированный `BrainFallbackTest` записывает лимит Codex с
+исходной конфигурацией, возвращает Claude в первом вызове и не запускает Codex
+во втором. `python3 -m unittest pilot.test_pilot` завершился OK (2 теста),
+`python3 -m py_compile pilot/pilot.py` и `just build` завершились успешно;
+`just test` и `just vet` также зелёные.
+
+Полный UI-набор не даёт выдать PASS: `just ui-check` сообщает девять lint-ошибок
+в `web/src/Live.tsx`, `Pipeline.tsx` и `Say.tsx`, которых нет в диффе карточки;
+`npm test -- --run` завершился с 4 падениями из 98 (Overview, Settings и
+TaskDetail). Эти результаты не затрагивают путь `brain()`, но требуют отдельной
+починки или актуализации UI-проверок до повторной верификации.
