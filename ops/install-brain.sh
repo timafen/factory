@@ -36,8 +36,10 @@ install_one intake/plan.py   "$LIVE/intake/plan.py"   py || exit 7
 [ -z "$changed" ] && { echo "   мозг совпадает с репозиторием — перезапуск не нужен"; exit 0; }
 
 restart=""
-case "$changed" in *"/pilot/"*)  restart="$restart factory-pilot";;  esac
-case "$changed" in *"/intake/"*) restart="$restart factory-intake";; esac
+case "$changed" in
+  *"/pilot/"*) restart="$restart factory-pilot factory-intake";;
+  *"/intake/"*) restart="$restart factory-intake";;
+esac
 step "перезапускаю:$restart"
 # shellcheck disable=SC2086
 systemctl restart $restart
