@@ -82,6 +82,7 @@ export interface PilotSettings {
   ntfy_server: string;
   ntfy_owner_topic: string;
   notify_groups?: Partial<Record<PilotNotificationGroup, boolean>>;
+  project_providers?: Array<{ remote_identity: string; type: "trade" | "factory" }>;
   brain_chain: Array<{ cli: string; model: string; provider: string; note?: string }>;
 }
 

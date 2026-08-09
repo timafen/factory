@@ -1526,5 +1526,121 @@ class PostMergeDeployTest(unittest.TestCase):
         run_shell.assert_called_once_with("fx factory release")
 
 
+class DashboardProjectsTest(unittest.TestCase):
+    def setUp(self):
+        pilot._dash_slow = {"at": 0, "data": {}}
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[
+        (True, "origin/trunk"),
+        (True, "updated"),
+        (True, "1723200000\x00Свежий коммит из trunk"),
+    ])
+    def test_project_main_fetches_configured_non_main_branch_before_reading(self, command, _repo):
+        result = pilot._project_main("shop")
+
+        self.assertEqual(result, {"main_subject": "Свежий коммит из trunk"})
+        self.assertEqual(command.call_args_list[0].args[0][-3:], [
+            "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        self.assertEqual(command.call_args_list[1].args[0][-3:], ["fetch", "origin", "trunk"])
+        self.assertEqual(command.call_args_list[2].args[0][-1], "origin/trunk")
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[
+        (False, ""),
+        (True, "ref: refs/heads/develop\tHEAD\nabc\tHEAD"),
+        (True, "updated"),
+        (True, "1723200000\x00Свежий коммит из develop"),
+    ])
+    def test_project_main_discovers_remote_default_when_origin_head_is_unset(self, command, _repo):
+        result = pilot._project_main("shop")
+
+        self.assertEqual(result, {"main_subject": "Свежий коммит из develop"})
+        self.assertEqual(command.call_args_list[1].args[0][-3:], ["--symref", "origin", "HEAD"])
+        self.assertEqual(command.call_args_list[2].args[0][-1], "develop")
+        self.assertEqual(command.call_args_list[3].args[0][-1], "origin/develop")
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command")
+    @mock.patch.object(pilot, "api")
+    def test_enabled_projects_keep_api_order_and_use_only_fixed_providers(self, api, command, _repo):
+        api.return_value = {"repositories": [
+            {"id": "a", "remote_identity": "github.com/acme/shop", "enabled": True},
+            {"id": "b", "remote_identity": "github.com/acme/factory", "enabled": True},
+            {"id": "c", "remote_identity": "github.com/acme/disabled", "enabled": False},
+            {"id": "d", "remote_identity": "github.com/acme/plain", "enabled": True},
+        ]}
+        command.side_effect = lambda args, timeout=25: (
+            (True, "current -> /releases/release-one") if args[-1] == "release-info"
+            else (True, "HTTP 200"))
+        conf = {"project_providers": [
+            {"remote_identity": "github.com/acme/shop", "type": "trade"},
+            {"remote_identity": "github.com/acme/factory", "type": "factory"},
+        ]}
+
+        projects = pilot.dashboard_slow(conf)
+
+        self.assertEqual([p["id"] for p in projects], ["a", "b", "d"])
+        self.assertEqual([e["name"] for e in projects[0]["environments"]], ["Стейдж", "Прод"])
+        self.assertEqual([e["name"] for e in projects[1]["environments"]], ["Прод"])
+        self.assertEqual(projects[2]["provider_status"], "not_configured")
+        scopes = [call.args[0][3] for call in command.call_args_list]
+        self.assertEqual(scopes, ["staging", "staging", "prod", "prod", "factory", "factory"])
+        self.assertTrue(all(call.args[0][:3] == ["sudo", "-n", "/usr/local/bin/fx"]
+                            for call in command.call_args_list))
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[(True, "current -> release"), (False, "")])
+    def test_failed_health_is_unavailable_not_a_false_outage(self, command, _repo):
+        snapshot = pilot._environment_snapshot("Прод", "factory", "repo")
+        self.assertEqual(snapshot, {"name": "Прод", "status": "unavailable"})
+        self.assertNotIn("health", snapshot)
+        self.assertEqual(command.call_count, 2)
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
+    @mock.patch.object(pilot, "_fixed_command")
+    def test_trade_release_path_uses_build_id_for_git_and_fallback(self, command, _repo):
+        command.side_effect = [
+            (True, "current -> /srv/shop/releases/6f6e2863"),
+            (True, "HTTP 200"),
+            (True, "Исправить карточку товара"),
+            (True, "current -> /srv/shop/releases/a1b2c3d4"),
+            (True, "HTTP 200"),
+            (False, ""),
+        ]
+
+        resolved = pilot._environment_snapshot("Стейдж", "staging", "shop")
+        fallback = pilot._environment_snapshot("Прод", "prod", "shop")
+
+        self.assertEqual(resolved["release_label"], "Исправить карточку товара")
+        self.assertEqual(fallback["release_label"], "Сборка a1b2c3d4")
+        self.assertEqual(command.call_args_list[2], mock.call([
+            "git", "-c", "safe.directory=*", "-C", "/work/shop",
+            "log", "-1", "--format=%s", "6f6e2863",
+        ], 10))
+        self.assertEqual(command.call_args_list[5].args[0][-1], "a1b2c3d4")
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[
+        (True, "релиз от 9 августа, 16:22, из main: Исправлен обзор\nточка сборки: abc"),
+        (True, "интерфейс: HTTP 200\nданные: HTTP 200"),
+    ])
+    def test_factory_human_release_format_is_recognized(self, _command, _repo):
+        snapshot = pilot._environment_snapshot("Прод", "factory", "repo")
+        self.assertEqual(snapshot["status"], "available")
+        self.assertEqual(snapshot["release_label"], "релиз от 9 августа, 16:22, из main: Исправлен обзор")
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[
+        (True, "релиз от 9 августа, 16:22, из main: Исправлен обзор"),
+        (True, "интерфейс: HTTP 200\nданные: HTTP 500"),
+    ])
+    def test_environment_is_unhealthy_when_any_required_http_component_fails(self, _command, _repo):
+        snapshot = pilot._environment_snapshot("Прод", "factory", "repo")
+
+        self.assertEqual(snapshot["status"], "available")
+        self.assertEqual(snapshot["health"], "unhealthy")
+
+
 if __name__ == "__main__":
     unittest.main()

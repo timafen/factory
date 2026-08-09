@@ -1,5 +1,5 @@
 import {
-  Activity, AlertTriangle, CheckCircle2, Coins, GitBranch, HeartPulse,
+  Activity, CheckCircle2, Coins, HeartPulse,
   KeyRound, Loader2, MessageCircleQuestion, RefreshCw, Server, Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -39,16 +39,19 @@ type Dash = {
              rounds_median?: number | null;
              review_first_pass?: [number, number] | null;
              minutes_median?: number | null };
-  release?: {
-    staging_release?: string; prod_release?: string;
-    staging_release_human?: string; prod_release_human?: string;
-    main_head?: string; main_subject?: string;
-    staging_commit_known?: boolean; prod_commit_known?: boolean;
-    staging_in_main?: boolean; prod_in_main?: boolean;
-    staging_health?: string; prod_health?: string;
-  };
+  projects?: ProductProject[];
   janitor?: string;
 };
+
+export type ProductEnvironment = { name: string; status: "available" | "unavailable"; release_label?: string; health?: "healthy" | "unhealthy" };
+export type ProductProject = { id: string; name: string; remote_identity: string; main_subject?: string; provider_status: "configured" | "not_configured"; environments: ProductEnvironment[] };
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function productState(project: ProductProject) {
+  if (project.provider_status !== "configured") return "Стенд не настроен";
+  if (project.environments.some((environment) => environment.status !== "available")) return "Сведения о выпуске недоступны";
+  return "Данные доступны";
+}
 
 type ActiveTask = {
   id: string;
@@ -171,9 +174,6 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       : queued > 0
         ? { text: "Работа в очереди, ждём исполнителя", tone: "muted" as const, icon: <Loader2 size={22} /> }
         : { text: "Фабрика свободна", tone: "muted" as const, icon: <CheckCircle2 size={22} /> };
-
-  const rel = d.release ?? {};
-  const mainOk = rel.staging_in_main === true;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -301,46 +301,18 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         </section>
       )}
 
-      {/* 2. Продукт: что где живёт */}
-      <section style={card}>
+      {/* 2. Продукты: один честный блок на зарегистрированный проект */}
+      {(d.projects ?? []).map((project) => <section style={card} key={project.id} aria-label={`Продукт — ${project.name}`}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <Server size={16} color="#8ec5ff" /><strong>Продукт — торговая система (automation.tarser.net)</strong>
-          <span style={{ flex: 1 }} />
-          {rel.main_subject && <span style={{ fontSize: 12, color: muted }}>последнее изменение: {rel.main_subject}</span>}
+          <Server size={16} color="#8ec5ff" /><strong>Продукт — {project.name}</strong>
+          <span style={{ flex: 1 }} /><span style={{ fontSize: 12, color: muted }}>последнее изменение: {project.main_subject || "недоступно"}</span>
         </div>
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-          {([["Стейдж", rel.staging_release_human || (rel.staging_release ? `сборка ${rel.staging_release.slice(0, 8)} — описание недоступно` : ""), rel.staging_health, rel.staging_in_main, rel.staging_commit_known],
-             ["Прод", rel.prod_release_human || (rel.prod_release ? `сборка ${rel.prod_release.slice(0, 8)} — описание недоступно` : ""), rel.prod_health, rel.prod_in_main, rel.prod_commit_known]] as const).map(
-            ([name, release, health, inMain, known]) => (
-              <div key={name} style={{ minWidth: 240, flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <strong style={{ fontSize: 14 }}>{name}</strong>
-                  <Pill text={/HTTP (2|3)\d\d/.test(health ?? "") ? "отвечает" : "не отвечает"}
-                        tone={/HTTP (2|3)\d\d/.test(health ?? "") ? "ok" : "bad"} />
-                </div>
-                <div style={{ fontSize: 12.5, color: muted }}>релиз {release || "—"}</div>
-                <div style={{ fontSize: 12.5, marginTop: 3 }}>
-                  {known === false
-                    ? <span style={{ color: "#ffb4b4" }}>коммита нет в репозитории</span>
-                    : inMain
-                      ? <span style={{ color: "#7ee2a8" }}>собран из main</span>
-                      : <span style={{ color: "#e0cf9f" }}>сборка рабочей ветки — работа ещё не влита</span>}
-                </div>
-              </div>
-            ))}
-        </div>
-        {!mainOk && (
-          <div style={{ marginTop: 10, fontSize: 12.5, color: "#e0cf9f" }}>
-            <AlertTriangle size={13} style={{ verticalAlign: -2 }} /> Развёрнутое не собрано из main.
-            Пока это так, выкат из главной ветки включать нельзя.
-          </div>
-        )}
-        {rel.main_subject && (
-          <div style={{ marginTop: 8, fontSize: 12, color: muted }}>
-            <GitBranch size={12} style={{ verticalAlign: -2 }} /> последнее в main: {rel.main_subject}
-          </div>
-        )}
-      </section>
+        {project.provider_status !== "configured" ? <div style={{ color: "#e0cf9f" }}>Стенд не настроен</div> :
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>{project.environments.map((environment)=><div key={environment.name} style={{ minWidth: 240, flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><strong>{environment.name}</strong>{environment.status === "available" && <Pill text={environment.health === "healthy" ? "отвечает" : "не отвечает"} tone={environment.health === "healthy" ? "ok" : "bad"}/>}</div>
+            {environment.status === "available" ? <div style={{ fontSize: 12.5, color: muted }}>релиз: {environment.release_label}</div> : <div style={{ color: "#e0cf9f" }}>Сведения о выпуске недоступны</div>}
+          </div>)}</div>}
+      </section>)}
 
       {/* 3. Расход и лимиты */}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>

@@ -3807,57 +3807,120 @@ def _sh(cmd, timeout=25):
         return f"ошибка: {e}"
 
 
-def _repo_dir():
-    for root, dirs, _ in os.walk(f"{HOME}/workers"):
-        if os.path.basename(root) == "repositories":
-            for d in dirs:
-                return os.path.join(root, d)
-    return ""
+def _project_repo_dirs(repository_id):
+    """Return only an exact managed-repository cache, never a guessed path."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", repository_id or ""):
+        return []
+    matches = glob.glob(f"{HOME}/workers/*/repositories/{repository_id}")
+    return [path for path in matches if os.path.isdir(os.path.join(path, ".git"))]
 
 
-def dashboard_slow():
-    """Тяжёлая часть: состояние релизов и здоровье стендов. Раз в пять минут."""
+def _project_repo_dir(repository_id):
+    return next(iter(_project_repo_dirs(repository_id)), "")
+
+
+def _fixed_command(args, timeout=25):
+    """Run a code-owned argv without a shell and preserve success separately."""
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return result.returncode == 0, (result.stdout or result.stderr or "").strip()
+    except Exception:
+        return False, ""
+
+
+def _project_main(repository_id):
+    candidates = []
+    for repo in _project_repo_dirs(repository_id):
+        ok, remote_head = _fixed_command(
+            ["git", "-c", "safe.directory=*", "-C", repo, "symbolic-ref", "--short",
+             "refs/remotes/origin/HEAD"], 10)
+        if not ok:
+            ok, advertised = _fixed_command(
+                ["git", "-c", "safe.directory=*", "-C", repo, "ls-remote", "--symref",
+                 "origin", "HEAD"], 25)
+            default_match = re.search(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", advertised,
+                                      re.MULTILINE) if ok else None
+            remote_head = f"origin/{default_match.group(1)}" if default_match else ""
+        if not ok or not re.fullmatch(r"origin/[A-Za-z0-9._/-]+", remote_head):
+            continue
+        branch = remote_head.removeprefix("origin/")
+        fetched, _ = _fixed_command(
+            ["git", "-c", "safe.directory=*", "-C", repo, "fetch", "origin", branch], 25)
+        if not fetched:
+            continue
+        ok, value = _fixed_command(
+            ["git", "-c", "safe.directory=*", "-C", repo, "log", "-1", "--format=%ct%x00%s",
+             remote_head], 10)
+        if ok and "\x00" in value:
+            timestamp, subject = value.split("\x00", 1)
+            if timestamp.isdigit() and subject:
+                candidates.append((int(timestamp), subject[:90]))
+    return {"main_subject": max(candidates)[1]} if candidates else {}
+
+
+def _provider_environments(provider_type):
+    if provider_type == "trade":
+        return (("Стейдж", "staging"), ("Прод", "prod"))
+    if provider_type == "factory":
+        return (("Прод", "factory"),)
+    return ()
+
+
+def _environment_snapshot(label, scope, repository_id):
+    prefix = ["sudo", "-n", "/usr/local/bin/fx", scope]
+    release_ok, release_out = _fixed_command(prefix + ["release-info"])
+    match = re.search(r"current\s*->\s*(\S+)", release_out) if release_ok else None
+    factory_label = re.search(r"^(релиз[^\n]+)", release_out, re.IGNORECASE) if release_ok else None
+    health_ok, health_out = _fixed_command(prefix + ["health"])
+    health_codes = re.findall(r"HTTP\s+([1-5]\d\d)", health_out) if health_ok else []
+    if not (match or factory_label) or not health_codes:
+        return {"name": label, "status": "unavailable"}
+    release_id = os.path.basename(match.group(1).rstrip("/")) if match else ""
+    release_label = factory_label.group(1) if factory_label else f"Сборка {release_id}"
+    if match:
+        for repo in _project_repo_dirs(repository_id):
+            subject_ok, subject = _fixed_command(
+                ["git", "-c", "safe.directory=*", "-C", repo, "log", "-1", "--format=%s", release_id], 10)
+            if subject_ok and subject:
+                release_label = subject[:90]
+                break
+    return {
+        "name": label,
+        "status": "available",
+        "release_label": release_label,
+        "health": "healthy" if all(code.startswith(("2", "3")) for code in health_codes) else "unhealthy",
+    }
+
+
+def dashboard_slow(conf):
+    """Тяжёлая часть: проекты, выпуски и здоровье сред. Раз в пять минут."""
     if time.time() - _dash_slow["at"] < 300:
         return _dash_slow["data"]
-    out = {}
-    # Каталоги стендов пилоту напрямую не видны (и не должны быть) — спрашиваем
-    # через того же посредника, что и агенты.
-    for key, scope in (("staging", "staging"), ("prod", "prod")):
-        info = _sh(f"sudo -n /usr/local/bin/fx {scope} release-info")
-        m = re.search(r"current\s*->\s*(\S+)", info)
-        if m:
-            out[f"{key}_release"] = os.path.basename(m.group(1))
-    repo = _repo_dir()
-    if repo:
-        g = f"git -c safe.directory='*' -C '{repo}'"
-        _sh(f"{g} fetch origin --quiet", 40)
-        out["main_head"] = _sh(f"{g} rev-parse --short origin/main")[:12]
-        out["main_subject"] = _sh(f"{g} log -1 --format=%s origin/main")[:90]
-        for key, sha in (("staging", out.get("staging_release", "")),
-                         ("prod", out.get("prod_release", ""))):
-            if not sha:
-                continue
-            known = _sh(f"{g} cat-file -e {sha}^{{commit}} && echo yes || echo no").endswith("yes")
-            out[f"{key}_commit_known"] = known
-            if known:
-                # Голый хеш ничего не говорит хозяину. Имя релиза — это дата
-                # и что в нём сделано, тем же языком, что у fx factory.
-                subj = _sh(f"{g} log -1 --format=%s {sha}")[:80]
-                iso = _sh(f"{g} log -1 --format=%cI {sha}")[:16]
-                human = ""
-                try:
-                    M = ["января", "февраля", "марта", "апреля", "мая", "июня",
-                         "июля", "августа", "сентября", "октября", "ноября", "декабря"]
-                    human = "от %d %s, %s" % (int(iso[8:10]), M[int(iso[5:7]) - 1], iso[11:16])
-                except Exception:
-                    pass
-                out[f"{key}_release_human"] = (human + (" — " + subj if subj else "")).strip()
-            out[f"{key}_in_main"] = (
-                known and _sh(f"{g} merge-base --is-ancestor {sha} origin/main && echo yes || echo no").endswith("yes"))
-    out["staging_health"] = _sh("sudo -n /usr/local/bin/fx staging health")[:60]
-    out["prod_health"] = _sh("sudo -n /usr/local/bin/fx prod health")[:60]
-    _dash_slow.update({"at": time.time(), "data": out})
-    return out
+    configured = {str(item.get("remote_identity", "")).strip().lower(): item.get("type", "")
+                  for item in conf.get("project_providers", []) if isinstance(item, dict)}
+    projects = []
+    for repository in api("/repositories").get("repositories") or []:
+        if not repository.get("enabled"):
+            continue
+        identity = str(repository.get("remote_identity", ""))
+        project = {
+            "id": repository.get("id", ""),
+            "remote_identity": identity,
+            "name": identity.rstrip("/").rsplit("/", 1)[-1] or identity,
+            **_project_main(repository.get("id", "")),
+        }
+        provider_type = configured.get(identity.lower(), "")
+        environments = _provider_environments(provider_type)
+        if not environments:
+            project["provider_status"] = "not_configured"
+            project["environments"] = []
+        else:
+            project["provider_status"] = "configured"
+            project["environments"] = [_environment_snapshot(label, scope, repository.get("id", ""))
+                                       for label, scope in environments]
+        projects.append(project)
+    _dash_slow.update({"at": time.time(), "data": projects})
+    return projects
 
 
 def brain_block(conf):
@@ -4125,7 +4188,7 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         "workers": prov,
         "limits": limits_view(),
         "access": load(f"{HOME}/pilot/access.json", {}),
-        "release": dashboard_slow(),
+        "projects": dashboard_slow(conf),
         "recent_done": recent_done_block(),
         "health": pipeline_health(tasks),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],

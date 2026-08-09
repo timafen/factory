@@ -362,33 +362,33 @@ test.afterAll(async () => {
   await fixtureAPI?.dispose();
 });
 
-test("shows retained Factory metrics and saves the overview", async ({ page }) => {
+test("shows every project product and saves the overview", async ({ page }) => {
   const browser = observeBrowser(page);
   const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
-  const summary = await json<{
-    executions_created: number;
-    executions_completed: number;
-    queued: number;
-    running: number;
-  }>(await api.get("/api/v1/metrics/summary?window=7d"));
+  const dashboard = await json<{
+    projects: Array<{ name: string }>;
+  }>(await api.get("/api/v1/dashboard"));
   await api.dispose();
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Factory overview" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Обзор", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  await expect(
-    page.locator(".metric-card").filter({ hasText: "Executions created" }).locator("strong"),
-  ).toHaveText(String(summary.executions_created));
-  await expect(
-    page.locator(".metric-card").filter({ hasText: "Executions completed" }).locator("strong"),
-  ).toHaveText(String(summary.executions_completed));
-  await expect(page.locator(".health-metrics").getByText(String(summary.queued), { exact: true })).toBeVisible();
-  await expect(page.locator(".health-metrics").getByText(String(summary.running), { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "30 days" }).click();
-  await expect(page.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
+  const products = page.getByRole("region", { name: /Продукт —/ });
+  await expect(products).toHaveCount(dashboard.projects.length);
+  await expect(products.locator("strong").filter({ hasText: /^Продукт —/ })).toHaveText(
+    dashboard.projects.map((project) => `Продукт — ${project.name}`),
+  );
+  const factoryProduct = page.getByRole("region", { name: "Продукт — factory-demo" });
+  await expect(factoryProduct).toContainText("Show every project product on the overview");
+  await expect(factoryProduct).toContainText("Production");
+  await expect(factoryProduct).toContainText("factory-e2e-release");
+  await expect(factoryProduct).toContainText("отвечает");
+  const handbookProduct = page.getByRole("region", { name: "Продукт — handbook-demo" });
+  await expect(handbookProduct).toContainText("Document the product overview");
+  await expect(handbookProduct).toContainText("Стенд не настроен");
   await page.screenshot({ path: "test-results/screenshots/overview-desktop.png", fullPage: true });
   browser.assertClean();
 });
@@ -414,14 +414,16 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
 
   await page.getByRole("button", { name: "Delegate task" }).click();
   const delegate = page.getByRole("dialog", { name: "Delegate task" });
-  await delegate.getByLabel("Runbook").selectOption({ label: "E2E pinned review · revision 1" });
+  await delegate.getByLabel("Workflow").selectOption({ label: "E2E pinned review · revision 1" });
   await delegate.getByLabel("Title").fill("Pinned Workflow browser task");
   await delegate.getByLabel("Context").fill("JIRA-183 stays free text.");
   await delegate.getByLabel("Worker").selectOption(workerOffline);
   await delegate.getByLabel("Repository").selectOption(identifiers.offlineRepository);
   await delegate.getByRole("button", { name: "Delegate task" }).click();
   await expect(page.getByRole("heading", { name: "Pinned Workflow browser task" })).toBeVisible();
+  await page.locator("details").filter({ hasText: "Задание агенту" }).locator("summary").click();
   await expect(page.getByText("JIRA-183 stays free text.", { exact: true })).toBeVisible();
+  await page.locator("details").filter({ hasText: "Полный промпт" }).locator("summary").click();
   await expect(page.getByText(/Use revision one instructions exactly/)).toBeVisible();
   const taskID = new URL(page.url()).pathname.split("/").at(-1)!;
 
@@ -445,7 +447,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
   await page.getByRole("button", { name: "Confirm disable" }).click();
   await expect(page.getByRole("button", { name: "Enable" })).toBeVisible();
   await page.getByRole("button", { name: "Delegate task" }).click();
-  await expect(page.getByRole("dialog").getByLabel("Runbook").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
+  await expect(page.getByRole("dialog").getByLabel("Workflow").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   browser.assertClean();
 });
@@ -478,9 +480,10 @@ test("runs the complete UI to real-worker and Git-worktree workflow", async ({ p
     timeout: 30_000,
   });
   await expect(page.getByText("Created deterministic worktree evidence.")).toBeVisible();
-  await expect(page.getByText("Completed by deterministic fake Codex.", { exact: false })).toBeVisible();
-  await expect(page.getByText(/Branch: factory\//)).toBeVisible();
-  await expect(page.getByText(/Worktree: .*factory-ui-e2e-.*\/worker\/worktrees\//)).toBeVisible();
+  const technicalReport = page.locator(".attempt-output.success-output");
+  await expect(technicalReport).toContainText("Completed by deterministic fake Codex.");
+  await expect(technicalReport).toContainText(/Branch: factory\//);
+  await expect(technicalReport).toContainText(/Worktree: .*factory-ui-e2e-.*\/worker\/worktrees\//);
   await page.screenshot({
     path: "test-results/screenshots/task-detail-desktop.png",
     fullPage: true,
@@ -529,21 +532,22 @@ test("cancels active work running in the real worker", async ({ page }) => {
   await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByText("attempt cancelled", { exact: false })).toBeVisible();
+  await expect(page.locator(".attempt-output.error-output")).toContainText("attempt cancelled");
   browser.assertClean();
 });
 
-test("renders every state and saves the desktop Work view", async ({ page }) => {
+test("renders grouped work and saves the desktop Work view", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/work");
-  await expect(page.getByRole("heading", { name: "Agent work" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Work", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  for (const state of ["Queued", "Running", "Succeeded", "Failed", "Cancelled"]) {
-    await expect(page.getByRole("region", { name: new RegExp(`^${state}`) })).toBeVisible();
-  }
+  await expect(page.getByRole("heading", { name: "Идёт сейчас" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Не вышло / остановлено" })).toBeVisible();
+  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
+  await expect(page.getByText("Cancelled queue cleanup", { exact: true })).toBeVisible();
   await expect(page.getByText("Long operational title", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/work-desktop.png", fullPage: true });
   browser.assertClean();
@@ -634,7 +638,7 @@ test("delegates with worker-specific repositories and preserves the task on refr
   await expect(dialog.getByText(/task will queue until it returns/i)).toBeVisible();
   await expect(dialog.getByText("This becomes the Claude Code prompt.")).toBeVisible();
   await expect(dialog.getByLabel("Repository").getByRole("option", { name: /archive/ })).toHaveCount(1);
-  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toBeDisabled();
+  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toHaveCount(0);
   await dialog.getByLabel("Title").fill("Durable delegated browser task");
   await dialog.getByLabel("Context").fill("Created in the real UI and stored by the real Go server.");
   await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
@@ -684,10 +688,9 @@ test("shows ordered progress and long task detail", async ({ page }) => {
   await expect.poll(() => eventAfters, { timeout: 8_000 }).toContain("3");
 
   await page.goto(`/tasks/${identifiers.longTask}`);
-  const contextPanel = page.locator("section.panel").filter({
-    has: page.getByRole("heading", { name: "Context", exact: true }),
-  });
-  await expect(contextPanel.getByText("End of description.")).toBeVisible();
+  const contextDetails = page.locator("details").filter({ hasText: "Задание агенту" });
+  await contextDetails.locator("summary").click();
+  await expect(contextDetails.getByText("End of description.")).toBeVisible();
   browser.assertClean();
 });
 
@@ -704,15 +707,15 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Factory overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Продукт — factory-demo" })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/overview-narrow.png", fullPage: true });
 
   await page.goto("/work");
-  const columns = page.locator(".work-column");
-  await expect(columns).toHaveCount(5);
-  const first = await columns.nth(0).boundingBox();
-  const second = await columns.nth(1).boundingBox();
-  expect(Math.abs((first?.x ?? 0) - (second?.x ?? 1))).toBeLessThan(2);
+  await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Идёт сейчас" })).toBeVisible();
+  const main = page.locator("main");
+  expect(await main.evaluate("element => element.scrollWidth <= element.clientWidth")).toBe(true);
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");
@@ -830,19 +833,11 @@ test("manages repository routing end to end and preserves add input while pollin
 
   await page.getByRole("button", { name: "Delegate task" }).click();
   const delegate = page.getByRole("dialog", { name: "Delegate task" });
-  await delegate.getByLabel("Title").fill("Delegate configured managed repository");
-  await delegate.getByLabel("Context").fill("Acquire this repository on the selected worker.");
   await delegate.getByLabel("Worker").selectOption(managedWorker);
   const repositoryPicker = delegate.getByLabel("Repository");
   const managedOption = repositoryPicker.locator("option").filter({ hasText: "github.com/example/browser-managed" });
-  await expect(managedOption).toBeEnabled();
-  await expect(managedOption).toContainText("acquired on demand");
-  await repositoryPicker.selectOption((await managedOption.getAttribute("value"))!);
-  await delegate.getByRole("button", { name: "Delegate task" }).click();
-  await expect(page.getByRole("heading", { name: "Delegate configured managed repository" })).toBeVisible();
-  const delegatedTaskID = new URL(page.url()).pathname.split("/").at(-1)!;
-  const delegatedTask = await json<TaskDetail>(await api.get(`/api/v1/tasks/${delegatedTaskID}`));
-  expect(delegatedTask.execution.assigned_worker_id).toBe(managedWorker);
+  await expect(managedOption).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await api.dispose();
   browser.assertClean();
 });
@@ -1106,6 +1101,8 @@ test("edits pilot settings from the Settings screen", async ({ page }) => {
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Настройки" })).toBeVisible();
   await expect(page.getByText("Цепочка моделей")).toBeVisible();
+  await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
+  await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
   const poll = page.getByLabel("Интервал проверки, секунд");
   await expect(poll).toHaveValue("10");
   await poll.fill("15");
@@ -1117,5 +1114,7 @@ test("edits pilot settings from the Settings screen", async ({ page }) => {
   await expect(page.getByText(/Настройки сохранены/)).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Интервал проверки, секунд")).toHaveValue("15");
+  await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
+  await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
   browser.assertClean();
 });
