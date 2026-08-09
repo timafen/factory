@@ -20,6 +20,7 @@ Planner layer (epics):
 """
 import calendar
 import io
+import glob
 import json, re, subprocess, time, urllib.request, urllib.error, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
@@ -2484,6 +2485,107 @@ PRICE = {"opus": (15.0, 75.0), "fable": (15.0, 75.0),
          "sol": (5.0, 30.0), "terra": (2.50, 15.0), "luna": (1.0, 6.0)}
 _usage_cache = {}          # путь файла -> (смещение, накопленный расход)
 
+# Версия тарифа намеренно привязана к точным API-именам. Похожее имя нельзя
+# оценивать ценой соседней модели: в таком случае интерфейс показывает, что
+# стоимость не определена. Суммы — USD за миллион токенов standard processing.
+OPENAI_API_PRICE_VERSIONS = ({
+    "effective_from": "2026-08-09",
+    "source": "https://openai.com/api/pricing/",
+    "models": {
+        "gpt-5.6-sol": {"input": 5.0, "cached_input": 0.50, "output": 30.0},
+        "gpt-5.6-terra": {"input": 2.50, "cached_input": 0.25, "output": 15.0},
+        "gpt-5.6-luna": {"input": 1.0, "cached_input": 0.10, "output": 6.0},
+    },
+},)
+
+
+def openai_api_cost(model, input_tokens, cached_input_tokens, output_tokens):
+    """Расчётная API-стоимость или None для модели без точного тарифа."""
+    price = OPENAI_API_PRICE_VERSIONS[-1]["models"].get(model)
+    if not price:
+        return None
+    return (input_tokens * price["input"]
+            + cached_input_tokens * price["cached_input"]
+            + output_tokens * price["output"]) / 1e6
+
+
+def _event_epoch(value):
+    try:
+        return calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _codex_usage_events(path):
+    """Прочитать приращения токенов Codex из одного rollout JSONL."""
+    events = []
+    model = ""
+    previous_total = None
+    try:
+        with open(path, errors="ignore") as fh:
+            for line in fh:
+                if '"model"' not in line and '"token_count"' not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                payload = obj.get("payload") or {}
+                if obj.get("type") == "turn_context" and payload.get("model"):
+                    model = payload["model"]
+                    continue
+                if obj.get("type") != "event_msg" or payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info") or {}
+                usage = info.get("last_token_usage")
+                if not usage:
+                    total = info.get("total_token_usage") or {}
+                    current = tuple(int(total.get(k) or 0) for k in
+                                    ("input_tokens", "cached_input_tokens", "output_tokens"))
+                    if previous_total is None:
+                        usage = dict(zip(("input_tokens", "cached_input_tokens", "output_tokens"), current))
+                    else:
+                        usage = dict(zip(("input_tokens", "cached_input_tokens", "output_tokens"),
+                                         (max(0, n - old) for n, old in zip(current, previous_total))))
+                    previous_total = current
+                raw_input = int(usage.get("input_tokens") or 0)
+                cached = int(usage.get("cached_input_tokens") or 0)
+                output = int(usage.get("output_tokens") or 0)
+                if raw_input or cached or output:
+                    events.append({"at": _event_epoch(obj.get("timestamp")),
+                                   "model": usage.get("model") or model,
+                                   "input": max(0, raw_input - cached),
+                                   "cache_read": cached, "output": output})
+    except OSError:
+        pass
+    return events
+
+
+def codex_usage_since(since_epoch):
+    """Общий расход Codex с указанного момента, без ложной связи с задачей."""
+    paths = set(glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"))
+    paths.update(glob.glob(f"{HOME}/.codex-*/sessions/*/*/*/rollout-*.jsonl"))
+    totals = {"input": 0, "cache_read": 0, "output": 0, "total_tokens": 0,
+              "cost_usd": 0.0, "cost_defined": True, "unknown_models": []}
+    unknown = set()
+    for path in paths:
+        for event in _codex_usage_events(path):
+            if event["at"] < since_epoch:
+                continue
+            totals["input"] += event["input"]
+            totals["cache_read"] += event["cache_read"]
+            totals["output"] += event["output"]
+            cost = openai_api_cost(event["model"], event["input"],
+                                   event["cache_read"], event["output"])
+            if cost is None:
+                unknown.add(event["model"] or "неизвестная модель")
+            else:
+                totals["cost_usd"] += cost
+    totals["total_tokens"] = totals["input"] + totals["cache_read"] + totals["output"]
+    totals["cost_defined"] = not unknown
+    totals["unknown_models"] = sorted(unknown)
+    return totals
+
 
 def _scan_usage(path):
     """Досчитать расход по журналу сессии, читая только новый хвост файла."""
@@ -2673,7 +2775,8 @@ def day_spent(tasks):
         if (t.get("created_at") or "")[:10] != today:
             continue
         atts += attempts_of(t["id"], not _live(t))
-    return task_cost_usd(atts)
+    start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+    return task_cost_usd(atts) + codex_usage_since(start)["cost_usd"]
 
 
 def branch_head(branch):
@@ -3213,7 +3316,9 @@ def write_dashboard(conf, tasks, workers):
             return 1e9
 
     spend = {"day_usd": 0.0, "day_tokens": 0, "week_usd": 0.0, "week_tokens": 0,
-             "wasted_usd": 0.0, "worst": None}
+             "wasted_usd": 0.0, "worst": None, "day_cost_defined": True,
+             "week_cost_defined": True, "day_unknown_models": [],
+             "week_unknown_models": []}
     for t in tasks[:60]:
         h = age_h(t)
         if h > 24 * 7:
@@ -3236,6 +3341,18 @@ def write_dashboard(conf, tasks, workers):
             if not spend["worst"] or usd > spend["worst"]["usd"]:
                 spend["worst"] = {"usd": round(usd, 2), "title": (t.get("title") or "")[:70],
                                   "id": t["id"]}
+
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    day_codex = codex_usage_since(calendar.timegm(time.strptime(today, "%Y-%m-%d")))
+    week_codex = codex_usage_since(time.time() - 7 * 86400)
+    spend["day_usd"] += day_codex["cost_usd"]
+    spend["week_usd"] += week_codex["cost_usd"]
+    spend["day_tokens"] = day_codex["total_tokens"]
+    spend["week_tokens"] = week_codex["total_tokens"]
+    spend["day_cost_defined"] = day_codex["cost_defined"]
+    spend["week_cost_defined"] = week_codex["cost_defined"]
+    spend["day_unknown_models"] = day_codex["unknown_models"]
+    spend["week_unknown_models"] = week_codex["unknown_models"]
 
     prov = {}
     for w in workers.values() if isinstance(workers, dict) else workers:
