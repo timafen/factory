@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Implement complete — два блокера Review исправлены и проверены.
-- Branch: `factory/76333948-0cd-b45ac5cb-7c6`.
-- Head commit: `9cdee1e` (исправление коллизий и компенсация файловых операций после rebase).
+- Status: Implement complete — три согласованные правки Review выполнены.
+- Branch: `factory/38e17944-2a9-e1fa3a51-af1`.
+- Head commit: `000ea85` (блокировка полного цикла отправки и серверное определение MIME).
 - What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
   `/opt/factory-data/attachments/<id-задачи>/`; worker сохраняет одноимённые файлы
   как `<id>-<имя>`, а сбой привязки возвращает все уже перемещённые blob назад.
-- Evidence: полный `go test ./...`, две целевые регрессии, TypeScript,
-  `TaskFilePicker` Vitest, production web build и обе Go-сборки → PASS.
-- One next action: повторить Review двух исправленных блокеров.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, production web build,
+  целевой `App.test.tsx` и заданные пакеты Go → PASS; полный Vitest сохраняет
+  известный baseline-сбой notification groups в `Settings.test.tsx`.
+- One next action: выполнить Verify трёх исправлений Review.
 
 ## LOG
 
@@ -58,3 +59,11 @@ blob при создании задачи теперь компенсируют�
 `Rename`, обновления БД или `Commit`; тест с удалённым вторым source-файлом
 доказывает возврат первого blob и откат `task_id`. Полный Go-набор, целевые
 регрессии, TypeScript, picker-тест и production web build прошли.
+
+### 2026-08-08 — Implement
+
+По суженному решению владельца кнопка `Delegate task` теперь недоступна с начала
+загрузки файлов до завершения создания задачи, а сервер игнорирует заявленный
+клиентом MIME и определяет его по первым байтам содержимого. UI- и Go-регрессии,
+TypeScript, production build и заданные пакеты Go прошли; полный Vitest сохраняет
+известный несвязанный сбой ожидания notification groups.
