@@ -3,13 +3,12 @@
 ## HEAD
 
 - Status: Implement complete — сквозная доставка готова и проверена.
-- Branch: `factory/d31c6388-715-ad51e9ca-6ad`.
-- Head commit: `d405f6b` (реализация слита со свежим `origin/main`).
-- What changed: `/work` и `/say` загружают до 5 файлов по 10 МБ; сервер хранит
-  их в каталоге ID задачи. Worker скачивает по действующей lease, сверяет размер
-  и SHA-256 и кладёт в `.factory/attachments` до запуска runtime.
-- Evidence: `go test ./internal/controlplane ./internal/worker ./internal/protocol`,
-  полный Vitest, TypeScript и production build → PASS.
+- Branch: `factory/335b5459-8af-a4f82608-cd4`.
+- Head commit: pending (будет заменён фактическим коммитом поставки).
+- What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
+  `/opt/factory-data/attachments/<id-задачи>/` и добавляет каждый путь в context
+  строкой `ВЛОЖЕНИЕ:`. Карточка показывает этот context, worker получает файл.
+- Evidence: pending — целевые Go-тесты и web-проверки запускаются перед поставкой.
 - One next action: провести Review сквозного контракта и пользовательских ошибок.
 
 ## LOG
@@ -42,3 +41,10 @@
 Оба UI-маршрута используют общий picker и показывают русскую причину отказа;
 неудачные незавершённые загрузки подчищаются. Целевые Go-тесты, полный Vitest,
 TypeScript и production build прошли после слияния со свежим `origin/main`.
+
+### 2026-08-08 — Implement
+
+Закрыт контракт созданной голосовой задачи: Control Plane записывает файлы в
+`/opt/factory-data/attachments/<id-задачи>/` и добавляет абсолютный путь каждого
+файла в context строкой `ВЛОЖЕНИЕ:`. Изолированный тест проверяет путь хранения
+и его видимость в возвращаемой карточке задачи.

@@ -1214,6 +1214,10 @@ func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
 	if filepath.Dir(path) != filepath.Join(store.attachmentRoot, detail.Task.ID) {
 		t.Fatalf("path = %s", path)
 	}
+	wantContextPath := "ВЛОЖЕНИЕ: " + path
+	if !strings.Contains(detail.Context, wantContextPath) {
+		t.Fatalf("context does not name attachment path: %q", detail.Context)
+	}
 	claim := claimTestTask(t, store, worker.ID, "attachment-claim", tokenA)
 	if len(claim.Attachments) != 1 {
 		t.Fatalf("claim attachments = %#v", claim.Attachments)
