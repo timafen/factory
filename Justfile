@@ -61,6 +61,12 @@ boundary:
 test:
     go test -timeout 5m ./...
 
+# Prove stopped work can be revived end-to-end across API, pilot and UI.
+test-revive-stopped-work:
+    go test ./internal/controlplane -run 'Revive'
+    python3 -m unittest pilot.test_pilot.PipelineWatchTests.test_revive_restarts_next_unfinished_stage
+    cd web && npm test -- --run WorkHistory.test.tsx
+
 # Race-check worker coordination and process cancellation paths.
 test-worker-race:
     go test -timeout 5m -race ./internal/worker -run '^(TestPeriodicRegistrationCannotOvertakeRetainedCapacityHandoff|TestConfigurationStableIdentityLockAndHealthRecovery|TestHealthFailureCancelsRetryingClaimBeforeServerRecovery|TestCommittedClaimBecomesFailedWhenHealthChangesBeforeResponse|TestCancellationStopsCompleteProcessGroup)$'

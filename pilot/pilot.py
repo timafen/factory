@@ -1524,6 +1524,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_PATH = f"{HOME}/pilot/revive.json"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1570,7 +1571,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if m:
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
+    revive = load(REVIVE_PATH, {}) or {}
     now = int(time.time())
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in list(revive):
+        mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
+        revive.pop(base, None)
+    save(REVIVE_PATH, revive)
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
