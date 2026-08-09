@@ -15,7 +15,7 @@ const STAGE_RU: Record<string, string> = {
 
 type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  // Где владельцу открыть сделанное и посмотреть.
-                 try_url?: string   proof?: string;
+                 try_url?: string; proof?: string;
 };
 type Question = { task_id?: string; status?: string; question?: string };
 type WorkMeta = {
