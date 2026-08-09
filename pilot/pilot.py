@@ -1601,7 +1601,11 @@ def review_gate(conf, base, branch, repo_identity):
                     "alert_msg": ("В работе оказались файлы, не относящиеся к задаче "
                                   "(%d шт.) — вернул в разработку с точным списком, "
                                   "что убрать. Твоего участия не нужно." % len(foreign)),
-                    "note": ("Машинная проверка перед Ревью: в поставке файлы ВНЕ "
+                    "rebuild": True,
+                    "note": ("Ветку НЕ чисти по файлу — собери заново от свежей главной "
+                             "(git fetch origin main; git reset --hard origin/main; "
+                             "затем git checkout <старая ветка> -- <только свои файлы>). "
+                             "Машинная проверка перед Ревью: в поставке файлы ВНЕ "
                              "заявленной области работы:\n"
                              + "\n".join("  - " + f for f in foreign)
                              + "\nЗаявленная область:\n"
@@ -2379,13 +2383,7 @@ def handle_answers(conf, workflows, workers, tasks):
             continue
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base_title(q.get("title", ""))))
-        branch_line = (
-            f"Прошлая работа лежит в ветке: {br}\n"
-            "ВЕТКУ В РАБОЧЕЙ КОПИИ НЕ ПЕРЕКЛЮЧАЙ — checkout чужой ветки ломает "
-            "рабочую копию воркера. Оставайся на своей ветке и забери прошлую "
-            f"работу так: `git fetch origin {br} && git reset --hard FETCH_HEAD`. "
-            "Продолжай поверх и запушь СВОЮ текущую ветку: `git push -u origin HEAD`.\n\n"
-        ) if br else ""
+        branch_line = resume_branch_line(base_title(q.get("title", "")), br, rounds)
         context = (
             f"Pipeline: {q['title']}\n"
             f"Previous stage: {q['stage']} (остановлена, владелец ответил на вопрос)\n"
@@ -2616,6 +2614,33 @@ def extract_branch(result, prev_context):
         if match:
             return match.group(1) if pattern.groups else match.group(0)
     return ""
+
+
+def resume_branch_line(base, br, rounds=0):
+    """Как продолжать работу: поверх старой ветки или с чистого листа.
+    Ветка, которую уже возвращали за чужие файлы, тащит их в каждый круг —
+    такую собираем заново от свежей главной и переносим только своё."""
+    if not br:
+        return ""
+    dirty = cap_rescues(base, "DIRT") > 0 or cap_rescues(base, "GATE") > 0
+    if dirty or rounds >= 3:
+        return (
+            f"Прошлая работа лежит в ветке: {br}\n"
+            "ВЕТКУ НЕ ПРОДОЛЖАЙ: она уже тащит посторонние файлы, и каждый круг "
+            "они возвращаются. Собери работу заново, с чистого листа:\n"
+            "1) git fetch origin main\n"
+            "2) git reset --hard origin/main   (ты остаёшься на своей ветке)\n"
+            f"3) забери из старой ветки ТОЛЬКО свои файлы: git checkout {br} -- <файл> ... \n"
+            "   (по одному, ровно те, что в ОБЛАСТИ задачи; ничего лишнего)\n"
+            "4) git diff --name-only origin/main...HEAD — в списке ТОЛЬКО твои файлы\n"
+            "5) git push --force-with-lease -u origin HEAD\n\n")
+    return (
+        f"Прошлая работа лежит в ветке: {br}\n"
+        "ВЕТКУ В РАБОЧЕЙ КОПИИ НЕ ПЕРЕКЛЮЧАЙ — checkout чужой ветки ломает "
+        "рабочую копию воркера. Оставайся на своей ветке и забери прошлую "
+        f"работу так: `git fetch origin {br} && git reset --hard FETCH_HEAD`. "
+        "Перед сдачей перебазируйся: `git fetch origin main && git rebase origin/main`. "
+        "Запушь СВОЮ ветку: `git push --force-with-lease -u origin HEAD`.\n\n")
 
 
 def branch_from_history(tasks, base, limit=8):
