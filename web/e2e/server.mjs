@@ -244,7 +244,10 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   deploy_staging_cmd: "deploy",
   owner_chat_url: "https://example.test/chat",
   owner_ui_url: "https://example.test/ui",
-  stages: Object.fromEntries(pilotStages.map((stage) => [stage, { low: workerID, medium: workerID, high: workerID }])),
+  stages: pilotStages.map((workflow) => ({
+    workflow,
+    workers: { low: workerID, medium: workerID, high: workerID },
+  })),
   skip_stages_for_low: ["Review"],
   stopped_pipelines: [],
   stage_base_usd: Object.fromEntries(pilotStages.map((stage) => [stage, 1])),

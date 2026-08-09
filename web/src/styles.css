@@ -678,6 +678,7 @@ button { color: inherit; }
   gap: 12px;
   align-items: start;
 }
+.detail-grid > *, .worker-detail-layout > * { min-width: 0; }
 .detail-grid { margin-bottom: 12px; }
 
 .panel {
@@ -707,6 +708,7 @@ button { color: inherit; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.runbook-copy { width: 100%; max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .metadata { margin: 0; display: grid; gap: 8px; }
 .metadata div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: baseline; }
@@ -1170,7 +1172,7 @@ button { color: inherit; }
   .primary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-card:nth-child(2) { border-right: 0; }
   .metric-card:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
-  .metrics-detail-grid, .detail-grid, .worker-detail-layout, .repository-detail-layout { grid-template-columns: 1fr; }
+  .metrics-detail-grid, .detail-grid, .worker-detail-layout, .repository-detail-layout { grid-template-columns: minmax(0, 1fr); }
   .worker-profile-panel, .repository-profile-panel { position: static; }
 }
 
