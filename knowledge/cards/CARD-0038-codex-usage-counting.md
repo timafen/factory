@@ -3,15 +3,14 @@
 ## HEAD
 
 - Status: implemented and verified — ready for repeat Review.
-- Branch: `factory/9a3cfa83-b2e-96199875-6ea`.
-- Head commit: `c3ce25c` (implementation on current `origin/main`).
-- What changed: rollout читает фактическое поле `cache_write_input_tokens` и
-  включает запись кэша в токены и расчётную API-стоимость.
-- What changed: обработанные смещения кэшируются; единый снимок расходов
-  используется для суток, недели и дневного предохранителя.
-- Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 6/6 OK.
+- Branch: `factory/2e2ee91d-13b-761b25c2-2d9`.
+- Head commit: `6cc2552` (implementation on fresh `origin/main`).
+- What changed: rollout безопасно пропускает неверные JSON-типы и сохраняет
+  смещение перед недописанной строкой, чтобы прочитать её после дозаписи.
+- What changed: production bundle пересобран и согласован с `dist/index.html`.
+- Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 8/8 OK.
+- Evidence: `npm run typecheck` → passed; `npm run build` → passed and bundle exists.
 - Evidence: `npm test -- --run src/Overview.test.ts` → 9/9 passed;
-  `npm run build` → passed.
 - Next action: повторить Review CARD-0038 по чистому diff от точки ветвления.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
@@ -78,3 +77,10 @@ cumulative total исправлено для смешанного потока. 
 смещениям и единый снимок для суток, недели и дневного лимита. Серверные тесты
 прошли 6/6, UI-тесты 9/9, production-сборка завершилась успешно; отдельный тест
 подтверждает, что неизменённый журнал открывается только один раз.
+
+### 2026-08-09 — Implement
+
+После REQUEST CHANGES работа заново перенесена на свежий `origin/main` без
+посторонней CARD-0039. Парсер пропускает неверные типы, а незавершённая JSONL-
+строка читается после дозаписи; это подтверждают 8/8 серверных тестов. Проверка
+типов, 9/9 UI-тестов и production-сборка прошли, созданный JS-бандл существует.
