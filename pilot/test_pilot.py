@@ -124,6 +124,21 @@ class DiagnosisRepairTests(unittest.TestCase):
             return {"task": {"id": "looping-task"}}
         raise AssertionError(path)
 
+    def saved_repair(self, status):
+        return {
+            "status": status,
+            "task_id": "looping-task",
+            "request_key": "stable-repair-key",
+            "title": self.task["title"],
+            "context": "Прошлая работа лежит в ветке factory/old-work",
+            "branch": "factory/old-work",
+            "reason": "исполнитель повторяет один и тот же шаг",
+            "solution": "исправить проверку состояния",
+            "worker_id": "worker-id",
+            "repository_id": "repo-id",
+            "workflow_revision_id": "revision-id",
+        }
+
     def test_cancel_once_wait_for_terminal_then_resume_once_on_same_branch(self):
         verdict = {"причина": "исполнитель повторяет один и тот же шаг",
                    "решение": "исправить проверку состояния", "нужен_владелец": False}
@@ -148,6 +163,56 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.created[0]["title"], self.task["title"])
         self.assertIn("factory/old-work", self.created[0]["context"])
         self.assertIn("исправить проверку состояния", self.created[0]["context"])
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+    def test_restart_replays_cancel_pending_for_same_task(self):
+        self.repairs = {"Починить отчёт": self.saved_repair("cancel_pending")}
+
+        with mock.patch.object(pilot, "api", side_effect=self.detail_api):
+            pilot.reconcile_diag_repairs(self.conf, [self.task])
+
+        self.assertEqual(
+            [call for call in self.api_calls if call[0].endswith("/cancel")],
+            [("/tasks/looping-task/cancel", {})],
+        )
+        self.assertEqual(
+            self.repairs["Починить отчёт"]["status"], "cancellation_requested"
+        )
+
+    def test_restart_replays_resume_pending_with_same_request_key(self):
+        self.repairs = {"Починить отчёт": self.saved_repair("resume_pending")}
+
+        with mock.patch.object(
+                pilot, "create_task",
+                side_effect=lambda body, _conf:
+                self.created.append(body) or {"task": {"id": "repair-task"}}):
+            pilot.reconcile_diag_repairs(self.conf, [])
+            pilot.reconcile_diag_repairs(self.conf, [])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["request_key"], "stable-repair-key")
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+    def test_missing_source_in_short_list_is_read_by_saved_id(self):
+        self.repairs = {
+            "Починить отчёт": self.saved_repair("cancellation_requested")
+        }
+
+        def source_api(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks/looping-task":
+                return {"task": dict(self.task, state="cancelled")}
+            raise AssertionError(path)
+
+        with mock.patch.object(pilot, "api", side_effect=source_api), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=lambda body, _conf:
+                    self.created.append(body) or {"task": {"id": "repair-task"}}):
+            pilot.reconcile_diag_repairs(self.conf, [])
+
+        self.assertEqual(self.api_calls, [("/tasks/looping-task", None)])
+        self.assertEqual(len(self.created), 1)
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
     def test_ambiguous_active_runs_are_not_cancelled(self):

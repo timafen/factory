@@ -2061,11 +2061,35 @@ def reconcile_diag_repairs(conf, tasks):
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
     by_id = {t.get("id"): t for t in tasks}
     for base, repair in list(repairs.items()):
-        if repair.get("status") != "cancellation_requested":
+        status = repair.get("status")
+        if status == "cancel_pending":
+            # A restart may happen after the control plane accepted the cancel
+            # but before we persisted its result. Cancelling the same task is
+            # idempotent, so replay the exact operation instead of abandoning
+            # the repair in its durable transition state.
+            try:
+                api(f"/tasks/{repair['task_id']}/cancel", {})
+            except Exception as e:
+                _fail_diag_repair(conf, base, repair,
+                                  f"отмена зациклившегося запуска не подтверждена: {e}")
+                continue
+            repair["status"] = "cancellation_requested"
+            _save_diag_repair(base, repair)
+            status = "cancellation_requested"
+            log(f"DIAG REPAIR CANCEL RECOVERED task={repair['task_id']} base={base!r}")
+        if status not in ("cancellation_requested", "resume_pending"):
             continue
-        source = by_id.get(repair.get("task_id"))
-        if not source or source.get("state") not in TERMINAL_TASK_STATES:
-            continue
+        if status == "cancellation_requested":
+            source = by_id.get(repair.get("task_id"))
+            if not source:
+                try:
+                    detail = api(f"/tasks/{repair['task_id']}")
+                    source = detail.get("task") or {}
+                except Exception as e:
+                    log(f"DIAG REPAIR SOURCE READ WAIT base={base!r}: {e}")
+                    continue
+            if source.get("state") not in TERMINAL_TASK_STATES:
+                continue
         branch = repair.get("branch") or ""
         branch_note = ""
         if branch:
@@ -2090,10 +2114,11 @@ def reconcile_diag_repairs(conf, tasks):
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": repair.get("workflow_revision_id", ""),
         }
-        # No retry after a failed create. The stable request key protects the
-        # boundary where the server accepted the task but the response was lost.
-        repair["status"] = "resume_pending"
-        _save_diag_repair(base, repair)
+        # Persist before creation. After a restart, resume_pending replays this
+        # exact body; the stable request key makes task creation idempotent.
+        if status == "cancellation_requested":
+            repair["status"] = "resume_pending"
+            _save_diag_repair(base, repair)
         try:
             result = create_task(body, conf)
         except Exception as e:
