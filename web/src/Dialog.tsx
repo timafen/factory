@@ -6,7 +6,7 @@ type ShownMessage = DialogMessage & { modelLabel?: string };
 
 export function Dialog() {
   const [models, setModels] = useState<Array<{model:string; provider:string; note?:string}>>([]);
-  const [model, setModel] = useState("");
+  const [brainIndex, setBrainIndex] = useState<number | null>(null);
   const [messages, setMessages] = useState<ShownMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [pending, setPending] = useState(false);
@@ -17,18 +17,18 @@ export function Dialog() {
     api.pilotSettings().then(({settings}) => {
       if (!active) return;
       setModels(settings.brain_chain);
-      setModel(settings.brain_chain[0]?.model ?? "");
+      setBrainIndex(settings.brain_chain.length > 0 ? 0 : null);
     }).catch(() => active && setError("Не удалось загрузить список моделей"));
     return () => { active = false; };
   }, []);
 
   const send = async () => {
     const content = question.trim();
-    if (!content || !model || pending) return;
+    if (!content || brainIndex === null || pending) return;
     const history: DialogMessage[] = [...messages.map(({role, content}) => ({role, content})), {role:"user", content}];
     setPending(true); setError("");
     try {
-      const response = await api.dialogMessage(model, history);
+      const response = await api.dialogMessage(brainIndex, history);
       setMessages([...history, {...response.message, modelLabel:response.model_label}]);
       setQuestion("");
     } catch (cause) {
@@ -39,8 +39,8 @@ export function Dialog() {
   return <section className="dialog-view" aria-labelledby="dialog-title">
     <div className="page-heading"><div><h1 id="dialog-title">Диалог</h1><p>Разговор с выбранной моделью фабрики</p></div></div>
     <label className="field dialog-model">Модель
-      <select aria-label="Модель для диалога" value={model} onChange={(event)=>setModel(event.target.value)} disabled={pending}>
-        {models.map((item)=><option key={`${item.provider}:${item.model}`} value={item.model}>{item.note?.trim() || `${item.provider} — ${item.model}`}</option>)}
+      <select aria-label="Модель для диалога" value={brainIndex ?? ""} onChange={(event)=>setBrainIndex(Number(event.target.value))} disabled={pending}>
+        {models.map((item,index)=><option key={index} value={index}>{item.note?.trim() || `${item.provider} — ${item.model}`}</option>)}
       </select>
     </label>
     <div className="dialog-history" aria-live="polite">
@@ -54,6 +54,6 @@ export function Dialog() {
       <textarea aria-label="Ваш вопрос" value={question} onChange={(event)=>setQuestion(event.target.value)} disabled={pending}
         onKeyDown={(event)=>{ if(event.key === "Enter" && !event.shiftKey){ event.preventDefault(); void send(); } }} />
     </label>
-    <button className="button button-primary" disabled={pending || !model || !question.trim()} onClick={()=>void send()}>{pending ? "Модель думает…" : error ? "Повторить" : "Отправить"}</button>
+    <button className="button button-primary" disabled={pending || brainIndex === null || !question.trim()} onClick={()=>void send()}>{pending ? "Модель думает…" : error ? "Повторить" : "Отправить"}</button>
   </section>;
 }
