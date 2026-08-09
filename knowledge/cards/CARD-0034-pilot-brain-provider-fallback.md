@@ -2,22 +2,20 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED: работа со своей стороны завершена; полный Verify после
-  слияния зависимой задачи `f39669c8` в `origin/main`.
-- Branch: `factory/609c535a-844-ffa71c8e-92f`.
-- Head commit: `1eb0d52` (последний коммит с кодом и проверками).
-- What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
-  срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
-  Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
-  во втором вызове `brain()` (красный без фикса), затем подтверждает, что он
-  больше не запускается, пока Claude отвечает сразу.
-- Evidence: после перебазирования `python3 -m unittest pilot.test_pilot` → OK
-  (8 тестов), `python3 -m py_compile pilot/pilot.py` → без ошибок и `just build`
-  → успешно. `just test` и `just vet` ранее завершились успешно; `just ui-check`
-  падает на девяти lint-ошибках в неизменённых UI-файлах, а `npm test -- --run` —
-  на четырёх существующих UI-тестах (98 всего).
-- Next action: после слияния `f39669c8` перебазировать ветку и выполнить только
-  полный Verify, не переделывая реализацию.
+- Status: BLOCKED: рабочая ветка с переключением провайдеров не влита в
+  `origin/main`, поэтому живой выпуск не содержит изменения.
+- Branch: `factory/0d885cc5-94f-d4ece21b-6aa`.
+- Head commit: `091dff1` (проверяемая реализация и её тест).
+- What changed: `pilot.brain()` передаёт `conf` в `note_limit()` при rate-limit,
+  и `BrainFallbackTest` доказывает немедленный переход с Codex на Claude и
+  исключение заблокированного Codex при следующем вызове.
+- Evidence: `python3 -m unittest pilot.test_pilot` → OK (8 тестов),
+  `python3 -m py_compile pilot/pilot.py`, `just test`, `just vet` и `just build`
+  → успешно. Полный `just check` заблокирован форматированием Go-кода вне
+  диффа. Выпуск от 2026-08-09 00:23 CDT собран из `main` на `0db5ca9`, не из
+  этой ветки; `fx factory logs 200` не содержит события fallback.
+- Next action: влить эту ветку в `main`, повторить выпуск и проверить fallback
+  по журналу живого сервиса.
 
 ## LOG
 
@@ -97,6 +95,21 @@ TaskDetail). Эти результаты не затрагивают путь `b
 
 Открытое продолжение явно закреплено: проверки после слияния `f39669c8` —
 только rebase и полный Verify, без повторной переделки готового кода.
+
+### 2026-08-09 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Лимит Codex сохраняется с исходной конфигурацией | `python3 -m unittest pilot.test_pilot` | OK, 8 тестов; `BrainFallbackTest` фиксирует вызов `note_limit(conf, ...)`. |
+| Первый запрос переходит на Claude | тот же изолированный тест | В выводе дважды `BRAIN FALLBACK: отвечает claude/fable`; тест проверяет ответ Claude после лимита Codex. |
+| Следующий запрос не тратит попытку Codex | тот же изолированный тест | OK; мок Codex не вызывается при втором обращении. |
+| Код пилота синтаксически корректен | `python3 -m py_compile pilot/pilot.py` | Успех. |
+| Серверная сборка и регрессии | `just test`, `just vet`, `just build` | Успех. |
+| Полный штатный набор | `just check` | BLOCKED на `format-check`: в рабочем дереве есть неотформатированный Go-код вне диффа этой ветки. |
+| Живой выпуск содержит изменение | `sudo -n /usr/local/bin/fx factory release-info`, `git merge-base --is-ancestor HEAD origin/main` | Нет: выпуск от 00:23 CDT собран из `main` на `0db5ca9`; проверяемый HEAD не является предком `origin/main`. |
+| Журнал живого сервера показывает fallback | `sudo -n /usr/local/bin/fx factory logs 200` | Нет записей `BRAIN FALLBACK`, `codex`, `claude` или rate-limit; это ожидаемо, пока изменение не влито. |
+
+Сервис после выпуска активен: `fx factory status` показывает `active (running)`.
 
 ### 2026-08-08 — Implement
 
