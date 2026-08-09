@@ -2,16 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — проверки поставки зелёные, ждёт выката и smoke на staging.
-- Branch: `factory/6f8b4c51-051-e01a5ac4-e4e`.
-- Head commit: `43dd054` — закреплён полный проверяемый путь согласия eBay.
-- What changed: добавлены `/sandbox-keys`, серверные start/status endpoints и
-  строгий staging-only seller bridge. UI открывает consent URL только по клику
-  и опрашивает безопасный статус; OAuth-поля отбрасываются на сервере.
-- Evidence: `go test ./internal/controlplane` и целевой Vitest 66/66 — успешно;
-  `npx tsc -p tsconfig.app.json --noEmit`, web build и lint — успешно. Полный
-  Vitest: те же 3 сбоя `Dialog.test.tsx` на свежем main (98/101) и ветке
-  (103/106), поэтому это подтверждённый прежний дефект, а не регрессия поставки.
+- Status: Implemented — блокирующие замечания устранены, ждёт повторной проверки.
+- Branch: `factory/1066fc78-dd8-5ac74721-5be`.
+- Head commit: `22a296f` — реализация безопасного status API и polling.
+- What changed: status API сверяет operation ID и выдаёт отдельную модель без
+  URL/секретов. UI хранит проверенную ссылку старта отдельно, опрашивает статус
+  последовательно и не откатывается из конечного состояния.
+- Evidence: `go test ./...` — успешно; целевой Vitest 69/69, TypeScript, build
+  и lint — успешно. Полный Vitest: прежние 3 сбоя `Dialog.test.tsx`, 106/109.
 - One next action: выкатить Factory на staging и пройти eBay consent тестовым seller.
 
 ## LOG
@@ -52,3 +50,12 @@ TypeScript, build и lint прошли. Полный Vitest выявил тол�
 (main 98/101, ветка 103/106). Целевые UI-тесты прошли 66/66, отдельная правильная
 проверка `npx tsc -p tsconfig.app.json --noEmit`, build, lint и Go-проверки
 прошли. Живой smoke остаётся обязательным после обновления `fx` и выката main.
+
+### 2026-08-09 — Implement
+
+На ветке `factory/1066fc78-dd8-5ac74721-5be` закрыто блокирующее замечание
+ревью: status API теперь сверяет operation ID и не способен вернуть подменённый
+URL или секретные поля. UI сохраняет ссылку только из start-ответа, polling
+последовательный и защищён от регресса `authorized` в `pending`. Целевые Vitest
+69/69, полный Go, TypeScript, build и lint прошли; полный Vitest сохранил три
+известных сбоя `Dialog.test.tsx` (106/109).
