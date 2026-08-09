@@ -2,15 +2,27 @@
 
 ## HEAD
 
-- Status: Implement + Test complete — awaiting repeat review.
-- Branch: `factory/725328e8-098-8a4e675d-626-clean`.
-- Head commit: `bc31279` (проверенный функциональный снимок поверх `origin/main` `b1e040b`).
+- Status: BLOCKED: поставленная ветка не содержит функциональной реализации, а полный UI-набор падает.
+- Branch: `factory/b57de3bb-f8a-289da78c-9fb`.
+- Head commit: `9176943` (поставленное для проверки состояние после перебазирования на `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
 - What changed: восстановлены 18 обязательных Playwright-сценариев для актуальных экранов и API; Dialog использует каталог доступных моделей, а длинный runbook больше не растягивает мобильный экран. `web/dist` пересобран.
-- Evidence: app `tsc` → OK; web unit → 101 passed; Playwright → 18 passed; pilot → 35 OK; Go, lint и build → OK.
-- One next action: повторно проверить поставку и влить её в `main`.
+- Evidence: `PipelineWatchTests` → 6 OK; полный pilot → 35 OK; Go test и vet, UI typecheck, lint и production build → OK. Полный UI unit-набор: 3 падения в `Dialog.test.tsx`; Playwright: первый из 18 сценариев падает, ожидая устаревший заголовок `Factory overview` вместо фактического `Обзор`.
+- One next action: доставить на эту ветку заявленные файлы функциональной поставки и устранить падения UI-набора, затем повторить Verify.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Потерянный переход ждёт и запускается единожды | `python3 -m unittest pilot.test_pilot.PipelineWatchTests` | 6 OK; изолированные сценарии ожидания и одиночного запуска прошли |
+| Живая задача не получает дубль | та же команда | сценарий сбрасывает запись остановки при живой задаче |
+| Пауза владельца и предел попыток сохраняются | та же команда | сценарии `stopped_owner` и однократной эскалации прошли |
+| Патруль автономен | та же команда | тест проходит без сети, cron и внешнего оркестратора |
+| Полный экранный регресс | `npm --prefix web test`; `npm --prefix web run test:browser` | BLOCKED: 3 unit-падения Dialog; первый браузерный сценарий не находит ожидаемый устаревший заголовок |
+
+Регрессии: `just test`, `just vet`, UI typecheck, lint и production build прошли; полный набор UI не прошёл. Трёхточечный diff поставленной ветки содержит только эту карточку, хотя спецификация обещает изменения `pilot/pilot.py` и `pilot/test_pilot.py`; функциональная поставка не доставлена в проверяемую ветку.
 
 ### 2026-08-09 — Implement
 
