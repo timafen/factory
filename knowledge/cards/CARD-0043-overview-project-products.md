@@ -2,15 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented — целевые проверки и сборка зелёные.
+- Status: BLOCKED — обязательный браузерный набор не проходит.
 - Branch: `factory/485cc076-09a-d2c70818-ea0`.
-- Head commit: `3f1618d`.
+- Head commit: `0f4b681`.
 - Specification: `knowledge/specs/overview-project-products.md`.
 - What changed: снимок и «Обзор» показывают каждый включённый проект в порядке
   каталога; `trade` и `factory` — единственные фиксированные read-only провайдеры.
-- Evidence: 68 Python + 18 UI tests + `PilotConfig` Go tests → PASS;
-  production web build → PASS; три живых read-only источника → available/healthy.
-- One next action: провести этап Verify и опубликовать результат на staging.
+- Evidence: целевые 68 Python, 18 UI и `PilotConfig` Go тестов → PASS;
+  полный UI-набор → PASS (119 тестов). `just test-browser` → FAIL: e2e ожидает
+  устаревший заголовок `Factory overview`, которого нет в новом экране.
+- One next action: привести браузерный сценарий обзора к утверждённому интерфейсу
+  и повторить Verify.
 
 ## LOG
 
@@ -28,3 +30,13 @@
 ограничены типами `trade` и `factory` без команд из UI. Ошибка источника не
 объявляется отказом стенда. Прошли 68 Python-тестов, 18 UI-тестов, целевые
 Go-тесты и production-сборка; живые staging, prod и factory прочитаны успешно.
+
+### 2026-08-09 — Verify
+
+| Проверка | Результат |
+| --- | --- |
+| Порядок включённых проектов, фиксированные провайдеры и честные fallback-состояния | PASS: `pilot.test_pilot` (68), `Overview.test.ts` (11) и `Settings.test.tsx` (7). |
+| Строгая схема и сохранение реестра провайдеров | PASS: `go test ./internal/controlplane -run PilotConfig`. |
+| Полный UI-набор | PASS: `just ui-check` — 119 тестов, lint и typecheck. |
+| Браузерная проверка реального сервера | BLOCKED: `just test-browser` падает в `e2e/control-plane.spec.ts:377`: сценарий ожидает удалённый заголовок `Factory overview`; 17 сценариев после него не запущены. |
+| Статический анализ | Внешний долг: `just check` останавливается на двух предупреждениях `staticcheck`, уже присутствующих в `origin/main` (подтверждено `git blame`). |
