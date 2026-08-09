@@ -42,7 +42,12 @@ sleep 6
 ok=1
 for u in $restart; do systemctl -q is-active "$u" || ok=0; done
 if [ "$ok" = 1 ] && echo "$restart" | grep -q intake; then
-  code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' http://127.0.0.1:7338/health || echo 000)
+  code=000
+  for _ in 1 2 3 4 5 6 7 8; do
+    code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:7338/health || echo 000)
+    [ "$code" = 200 ] && break
+    sleep 5
+  done
   [ "$code" = 200 ] || ok=0
 fi
 if [ "$ok" != 1 ]; then
