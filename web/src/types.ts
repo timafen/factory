@@ -81,6 +81,16 @@ export interface PilotSettingsResponse {
   warnings: string[];
 }
 
+export interface DialogMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface DialogResponse {
+  message: DialogMessage;
+  model_label: string;
+}
+
 export interface ManagedRepository {
   id: string;
   remote_identity: string;

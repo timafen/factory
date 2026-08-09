@@ -850,6 +850,21 @@ type PilotSettingsResponse struct {
 	Warnings []string      `json:"warnings"`
 }
 
+type DialogMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type DialogRequest struct {
+	BrainIndex *int            `json:"brain_index"`
+	Messages   []DialogMessage `json:"messages"`
+}
+
+type DialogResponse struct {
+	Message    DialogMessage `json:"message"`
+	ModelLabel string        `json:"model_label"`
+}
+
 type UpdatePilotSettingsRequest struct {
 	Version  string        `json:"version"`
 	Settings PilotSettings `json:"settings"`
