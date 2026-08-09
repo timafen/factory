@@ -32,6 +32,10 @@ type Dash = {
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
   recent_done?: RecentDone[];
+  health?: { merged_today?: number; merged_yesterday?: number;
+             rounds_median?: number | null;
+             review_first_pass?: [number, number] | null;
+             minutes_median?: number | null };
   release?: {
     staging_release?: string; prod_release?: string;
     staging_release_human?: string; prod_release_human?: string;
@@ -238,6 +242,39 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           </div>
         ))}
       </section>
+
+      {d.health && (
+        <section style={card} aria-label="Здоровье конвейера">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <Activity size={15} color="#8ec5ff" /><strong style={{ fontSize: 14 }}>Здоровье конвейера</strong>
+            <span style={{ fontSize: 11.5, color: muted }}>по последним влитым работам</span>
+          </div>
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.merged_today ?? 0}</div>
+              <div style={{ fontSize: 11.5, color: muted }}>влито сегодня{typeof d.health.merged_yesterday === "number" ? " (вчера " + d.health.merged_yesterday + ")" : ""}</div>
+            </div>
+            {d.health.rounds_median != null && (
+              <div>
+                <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.rounds_median}</div>
+                <div style={{ fontSize: 11.5, color: muted }}>кругов разработки на работу</div>
+              </div>
+            )}
+            {d.health.review_first_pass && (
+              <div>
+                <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.review_first_pass[0]} из {d.health.review_first_pass[1]}</div>
+                <div style={{ fontSize: 11.5, color: muted }}>прошли Ревью с первого раза</div>
+              </div>
+            )}
+            {d.health.minutes_median != null && (
+              <div>
+                <div style={{ fontSize: 19, fontWeight: 700 }}>~{d.health.minutes_median} мин</div>
+                <div style={{ fontSize: 11.5, color: muted }}>от старта до вливания</div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {(d.recent_done ?? []).length > 0 && (
         <section style={card} aria-label="Сделано недавно">

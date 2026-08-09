@@ -2970,6 +2970,64 @@ def host_overloaded(conf, workers=None):
     return host_block(workers).get("state") == "over"
 
 
+MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
+
+
+def _median(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else None
+
+
+def pipeline_health(tasks):
+    """Числа вместо ощущений: влито сегодня/вчера, кругов разработки на
+    влитую работу, Ревью с первого раза, минуты от старта до вливания."""
+    out = {"merged_today": 0, "merged_yesterday": 0}
+    try:
+        lines = io.open(MERGES_PATH, encoding="utf-8").readlines()[-60:]
+    except Exception:
+        lines = []
+    merges = []
+    for line in lines:
+        try:
+            merges.append(json.loads(line))
+        except Exception:
+            pass
+    today = time.strftime("%Y-%m-%d")
+    yday = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    out["merged_today"] = sum(1 for m in merges if str(m.get("at", "")).startswith(today))
+    out["merged_yesterday"] = sum(1 for m in merges if str(m.get("at", "")).startswith(yday))
+    rounds, first_pass, minutes = [], [], []
+    seen = set()
+    for m in reversed(merges):
+        base = m.get("base") or ""
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        if len(seen) > 8:
+            break
+        impl = [t for t in tasks if base in (t.get("title") or "")
+                and "Implement" in (t.get("title") or "")]
+        rev = [t for t in tasks if base in (t.get("title") or "")
+               and "Review" in (t.get("title") or "")]
+        if impl:
+            rounds.append(len(impl))
+        if rev:
+            first_pass.append(1 if len(rev) == 1 else 0)
+        starts = sorted(t.get("created_at") or "" for t in impl + rev if t.get("created_at"))
+        try:
+            if starts:
+                t0 = time.mktime(time.strptime(starts[0][:19], "%Y-%m-%dT%H:%M:%S"))
+                t1 = time.mktime(time.strptime(str(m.get("at"))[:19], "%Y-%m-%d %H:%M:%S"))
+                if 0 < t1 - t0 < 86400:
+                    minutes.append(int((t1 - t0) / 60))
+        except Exception:
+            pass
+    out["rounds_median"] = _median(rounds)
+    out["review_first_pass"] = (sum(first_pass), len(first_pass)) if first_pass else None
+    out["minutes_median"] = _median(minutes)
+    return out
+
+
 def write_dashboard(conf, tasks, workers):
     """Снимок состояния фабрики одним файлом: интерфейсу остаётся только показать."""
     now = time.time()
@@ -3039,6 +3097,7 @@ def write_dashboard(conf, tasks, workers):
         "access": load(f"{HOME}/pilot/access.json", {}),
         "release": dashboard_slow(),
         "recent_done": recent_done_block(),
+        "health": pipeline_health(tasks),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],
     }
     save(DASH_PATH, data)
@@ -3502,6 +3561,13 @@ def cycle(conf, state):
                     ok, out = gh_merge(repo_identity, branch, base_title(title))
                     log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
                     if ok:
+                        try:
+                            with open(MERGES_PATH, "a", encoding="utf-8") as mf:
+                                mf.write(json.dumps({"base": base_title(title),
+                                    "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                                    ensure_ascii=False) + chr(10))
+                        except Exception as e:
+                            log("merge_journal_error", repr(e))
                         # Хозяину не нужно знать про main — это кухня. Ему нужно:
                         # задача выполнена, и вот дверь, где потрогать результат.
                         link = try_url(result, rid)
