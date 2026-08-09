@@ -2,17 +2,24 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED: блокирующие находки Review исправлены, готово к Verify.
-- Branch: `factory/af3c948b-fb2-0755fcd4-718`
-- Head commit: `9e1ed36` — реализация исправлений автоподбора.
-- What changed: карточка без проекта больше не блокирует очередь; поколение
-  запуска сохраняет идемпотентность повтора и меняется при новом планировании.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 23/23 OK;
-  `npm run typecheck`, web build и 101 тест — PASS;
-  `go test -timeout 5m ./...`, `go build ./...` — PASS.
-- Next action: Verify должен подтвердить два регрессионных сценария.
+- Status: IMPLEMENTED: ручное и автоматическое создание задач исправлено,
+  готово к повторной проверке.
+- Branch: `factory/f0599a27-417-6608738d-459`
+- Head commit: `66799ac` — реализация после rebase на свежий `origin/main`.
+- What changed: ручная кнопка снова создаёт задачу с UUID-ключом; карточка без
+  проекта не блокирует очередь; повтор автозапуска остаётся идемпотентным.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 24/24 OK;
+  `git diff --name-only origin/main...HEAD` — только 5 файлов CARD-0034.
+- Next action: Review должен повторно проверить ручную кнопку и границы поставки.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+После ответа владельца восстановлен импорт `uuid` в обработчике Плана. Новый
+регрессионный тест проходит ручной `action="task"` через `_promote()`, проверяет
+UUID-ключ, созданную задачу и перевод карточки в работу. После rebase прошли
+24 Python-теста; трёхточечный diff содержит только пять файлов CARD-0034.
 
 ### 2026-08-09 — Implement
 
