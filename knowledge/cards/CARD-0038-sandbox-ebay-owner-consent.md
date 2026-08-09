@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented — целевые проверки зелёные, ждёт выката и smoke на staging.
-- Branch: `factory/cb28ad85-83b-1bb9646b-b94`.
-- Head commit: `a849dc2` — закреплён полный проверяемый путь согласия eBay.
+- Status: Implemented — проверки поставки зелёные, ждёт выката и smoke на staging.
+- Branch: `factory/6f8b4c51-051-e01a5ac4-e4e`.
+- Head commit: `43dd054` — закреплён полный проверяемый путь согласия eBay.
 - What changed: добавлены `/sandbox-keys`, серверные start/status endpoints и
   строгий staging-only seller bridge. UI открывает consent URL только по клику
   и опрашивает безопасный статус; OAuth-поля отбрасываются на сервере.
-- Evidence: `go test ./internal/controlplane` — успешно; целевой Vitest — 66/66;
-  `tsc --noEmit`, web build, lint и `go test ./...` — успешно. Живой smoke
-  ожидаемо остановлен старым установленным `fx`, который ещё не знает нового флага.
+- Evidence: `go test ./internal/controlplane` и целевой Vitest 66/66 — успешно;
+  `npx tsc -p tsconfig.app.json --noEmit`, web build и lint — успешно. Полный
+  Vitest: те же 3 сбоя `Dialog.test.tsx` на свежем main (98/101) и ветке
+  (103/106), поэтому это подтверждённый прежний дефект, а не регрессия поставки.
 - One next action: выкатить Factory на staging и пройти eBay consent тестовым seller.
 
 ## LOG
@@ -43,3 +44,11 @@ polling и добавлены сценарии отказа с повторны�
 TypeScript, build и lint прошли. Полный Vitest выявил только три прежних сбоя
 `Dialog.test.tsx`, не изменённого поставкой; live smoke требует сначала выкатить
 новый `fx`.
+
+### 2026-08-09 — Implement
+
+По решению владельца три сбоя полного Vitest воспроизведены на отдельном чистом
+снимке свежего `origin/main`: падают ровно те же три теста `Dialog.test.tsx`
+(main 98/101, ветка 103/106). Целевые UI-тесты прошли 66/66, отдельная правильная
+проверка `npx tsc -p tsconfig.app.json --noEmit`, build, lint и Go-проверки
+прошли. Живой smoke остаётся обязательным после обновления `fx` и выката main.
