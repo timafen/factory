@@ -20,4 +20,3 @@
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot
-
