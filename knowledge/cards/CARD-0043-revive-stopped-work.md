@@ -3,12 +3,12 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: implemented; targeted checks and UI build pass
-- Branch: `factory/e477cd70-fcf-03efd720-f35`
-- Head commit: `4f88aec`
+- Status: implemented and ready for Review
+- Branch: `factory/cbb954af-d53-d48539fb-a86`
+- Head commit: `eb6be8e`
 - What changed: карточки `stopped_owner` и `stuck` получили кнопку «Оживить»; API снимает только точную паузу, а пилот сбрасывает попытки и продолжает со следующего незавершённого этапа.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, pilot, 5 UI tests); `npm --prefix web run typecheck` и `npm --prefix web run build` → PASS.
-- Next action: провести Review реализации и границ конкурентного обновления файлов состояния.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, pilot, 6 UI tests); `npm --prefix web run typecheck` и `npm --prefix web run build` → PASS.
+- Next action: провести Review реализации и тестов на ветке доставки.
 
 ## LOG
 
@@ -85,3 +85,7 @@
 ### 2026-08-09 — Implement
 
 Добавлена команда `POST /api/v1/works/{work}/revive`, идемпотентный сигнал пилоту и кнопка на остановленных карточках с pending/error-состояниями. Точное имя удаляется из `stopped_pipelines`, `give_up` сбрасывается только для выбранной работы, а Task создаёт существующий `pipeline_watch` со следующего этапа. `just test-revive-stopped-work`, полный пакет `internal/controlplane`, класс `PipelineWatchTests`, TypeScript-проверка и UI-сборка прошли.
+
+### 2026-08-09 — Implement
+
+Реализация восстановлена на свежем `origin/main`; UI-проверка дополнена успешным оживлением состояния `stuck` для имени с пробелом и слешем. `just test-revive-stopped-work` прошёл: Go API, пилот и 6 UI-тестов; `npm --prefix web run typecheck` и `npm --prefix web run build` также прошли.
