@@ -656,6 +656,7 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "take_revive_signals", return_value=[]),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -767,6 +768,41 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        self.patches.append(mock.patch.object(pilot, "take_revive_signals", return_value=["Встроенный патруль"]))
+        self.patches[-1].start()
+        self.addCleanup(self.patches[-1].stop)
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 1)
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+
+    def test_signal_created_during_scan_is_not_lost(self):
+        self.patches[2].stop()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "REVIVE_DIR", directory):
+            first = pilot.revive_signal_path("Первая")
+            with open(first, "x"):
+                pass
+            original_listdir = os.listdir
+
+            def listdir_and_signal(path):
+                names = original_listdir(path)
+                with open(pilot.revive_signal_path("Вторая"), "x"):
+                    pass
+                return names
+
+            with mock.patch.object(pilot.os, "listdir", side_effect=listdir_and_signal):
+                self.assertEqual(pilot.take_revive_signals(), ["Первая"])
+            self.assertTrue(os.path.exists(pilot.revive_signal_path("Вторая")))
 
 
 class PlanCardCleanupTest(unittest.TestCase):

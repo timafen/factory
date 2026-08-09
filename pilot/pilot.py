@@ -1476,6 +1476,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1511,6 +1512,30 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, work.encode().hex())
+
+
+def take_revive_signals():
+    """Consume the signals present at scan time without rewriting a shared file."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            work = bytes.fromhex(name).decode()
+        except (TypeError, ValueError, UnicodeDecodeError):
+            continue
+        try:
+            os.unlink(os.path.join(REVIVE_DIR, name))
+        except FileNotFoundError:
+            continue
+        result.append(work)
+    return result
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1523,6 +1548,10 @@ def pipeline_watch(conf, tasks, workflows, workers):
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in take_revive_signals():
+        mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
