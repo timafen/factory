@@ -99,6 +99,9 @@ fx — разрешённые операции:
   fx staging logs [строк]         последние логи staging (по умолчанию 80)
   fx staging restart [что]        gunicorn | worker | notifications | order-reconcile | all
   fx staging manage <команда>     check | migrate | showmigrations | collectstatic
+  fx staging sandbox <что> [флаги]  живые заготовки песочницы на стенде:
+                                  bootstrap-accounts | seller-policies | listings
+                                  флаги вида --tenant-id=... --account-id=...
   fx staging env-names            только ИМЕНА переменных окружения, без значений
   fx staging release-info         какой релиз сейчас выкачен
 
@@ -184,6 +187,36 @@ case "$scope" in
         systemctl restart "${units[@]}" && echo "перезапущено: ${units[*]}"
         sleep 3
         systemctl is-active "${units[@]}"
+        ;;
+      sandbox)
+        # Заготовки песочницы: только эти три команды, только на стенде.
+        case "$arg" in
+          bootstrap-accounts) cmd=bootstrap_sandbox_accounts ;;
+          seller-policies)    cmd=prepare_sandbox_seller_policies ;;
+          listings)           cmd=prepare_sandbox_listings ;;
+          *) die "sandbox: можно bootstrap-accounts | seller-policies | listings" ;;
+        esac
+        # Параметры: только известные флаги и простые значения.
+        extra_args=""
+        shift 3 2>/dev/null || true
+        for token in "$@"; do
+          case "$token" in
+            --tenant-id=*|--account-id=*|--fulfillment-policy-id=*|--payment-policy-id=*|--return-policy-id=*|--listing-count=*|--dry-run|--force)
+              value="${token#*=}"
+              case "$value" in
+                *[!A-Za-z0-9_.-]*) die "sandbox: значение параметра может содержать только буквы, цифры, дефис, точку и подчёркивание" ;;
+              esac
+              extra_args="$extra_args $token"
+              ;;
+            *) die "sandbox: непонятный параметр '$token'" ;;
+          esac
+        done
+        say staging sandbox "$arg$extra_args"
+        runuser -u "$STAGING_USER" -- /bin/bash -c "
+          set -a; . '$STAGING_ENV'; set +a
+          cd '$STAGING_ROOT/current/django' || exit 9
+          exec '$STAGING_ROOT/current/.venv/bin/python' manage.py $cmd $extra_args
+        " 2>&1 | tail -80
         ;;
       manage)
         case "$arg" in
