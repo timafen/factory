@@ -1204,6 +1204,35 @@ def gh_json(args, timeout=30):
         return None
 
 
+# --------------------------------------------------- обещания «готово, когда»
+# Спецификация записывает проверяемые машиной факты. Дальше их сверяет код,
+# а не мнение модели: список файлов приходит из GitHub, сравнение — точное.
+PROMISES_PATH = f"{HOME}/pilot/promises.json"
+PROMISE_LINE = re.compile(
+    r"^\s*(?:[-*]\s*)?ГОТОВО-КОГДА:\s*(файл|команда)\s*[:\-]?\s*(.+?)\s*$",
+    re.M | re.I)
+
+
+def save_promises(base, text):
+    """Разбирает строки «ГОТОВО-КОГДА: файл …» и «ГОТОВО-КОГДА: команда …»."""
+    files, cmds = [], []
+    for kind, val in PROMISE_LINE.findall(text or ""):
+        val = val.strip().strip("`")
+        if not val:
+            continue
+        if kind.lower().startswith("файл"):
+            files.append(val)
+        else:
+            cmds.append(val)
+    if not files and not cmds:
+        return
+    d = load(PROMISES_PATH, {}) or {}
+    d[base] = {"files": files[:40], "commands": cmds[:5],
+               "at": time.strftime("%Y-%m-%d %H:%M")}
+    save(PROMISES_PATH, d)
+    log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
+
+
 def branch_report(repo_identity, branch):
     """Что реально лежит в хранилище: ('нет'|'есть', [файлы диффа])."""
     repo = repo_identity.split("github.com/")[-1]
@@ -1239,9 +1268,45 @@ def review_gate(conf, base, branch, repo_identity):
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
+
+        # Область: файлы вне заявленной зоны — возврат кодом, без Ревью.
+        known = load(AREAS_PATH, {}) or {}
+        mine = set()
+        for p in known.get(base) or []:
+            mine.add(p.split("::", 1)[1] if "::" in p else p)
+        foreign = sorted(f for f in files if mine and f not in mine)
+        if foreign and cap_rescues(base, "DIRT") < 1:
+            note_cap_rescue(base, "DIRT")
+            log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
+            return {"back": True,
+                    "note": ("Машинная проверка перед Ревью: в поставке файлы ВНЕ "
+                             "заявленной области работы:\n"
+                             + "\n".join("  - " + f for f in foreign)
+                             + "\nЗаявленная область:\n"
+                             + "\n".join("  - " + f for f in sorted(mine))
+                             + "\nУбери чужое из ветки: git checkout origin/main -- <файл>; "
+                             "запушь и сдай снова. Если область расширилась осознанно — "
+                             "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
+
+        # Обещания: что Спецификация записала как «готово, когда».
+        prom = (load(PROMISES_PATH, {}) or {}).get(base) or {}
+        missing = [f for f in (prom.get("files") or []) if f not in files]
+        prom_note = ""
+        if prom.get("files") or prom.get("commands"):
+            prom_note = "\nОбещания Спецификации («готово, когда»):"
+            for f in prom.get("files") or []:
+                mark = "НЕ ТРОНУТ!" if f in missing else "есть в поставке"
+                prom_note += f"\n  - файл {f} — {mark}"
+            for c in prom.get("commands") or []:
+                prom_note += f"\n  - команда должна пройти: {c} — ПРОГОНИ ЕЁ и покажи вывод"
+            if missing:
+                prom_note += ("\nОбещанные, но не тронутые файлы — повод вернуть работу, "
+                              "если в отчёте нет внятного объяснения.")
+
         return {"back": False,
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
-                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}\n"
+                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}"
+                         + prom_note + "\n"
                          "Сверяй записку с этим списком, а не с памятью. "
                          "Возвращай работу только по правилам из инструкций: чужие файлы, "
                          "нет заявленного поведения, сломано работавшее. "
@@ -3130,6 +3195,11 @@ def cycle(conf, state):
                           base_title(title))
         except Exception as e:
             log("ideas_error", repr(e))
+        if wf == "Specification":
+            try:
+                save_promises(base_title(title), result)
+            except Exception as e:
+                log("promises_error", repr(e))
         verdict = decide(conf, wf, next_stage, title, result,
                          detail["task"].get("repository_id") or "")
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
