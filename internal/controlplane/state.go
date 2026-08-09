@@ -698,6 +698,9 @@ type ExpiredLease struct {
 
 func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 	now := s.now().UnixMilli()
+	if err := s.cleanupPendingAttachments(ctx, now-pendingAttachmentTTL.Milliseconds()); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, unavailable(err)
