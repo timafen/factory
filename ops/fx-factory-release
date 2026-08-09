@@ -45,6 +45,15 @@ as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
 step "проверяю типы интерфейса"
 as_user bash -c "cd '$work/src/web' && npx tsc -p tsconfig.app.json --noEmit" \
   || { fail "в интерфейсе есть ошибки типов — релиз не поеду"; cleanup; exit 5; }
+step "гоняю тесты интерфейса"
+as_user bash -c "cd '$work/src/web' && npm test" \
+  || { fail "тесты интерфейса не прошли — релиз не поеду"; cleanup; exit 5; }
+step "гоняю тесты Go"
+as_user bash -c "cd '$work/src' && go test ./..." \
+  || { fail "тесты Go не прошли — релиз не поеду"; cleanup; exit 5; }
+step "проверяю сценарий выката и отката"
+as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release.sh" \
+  || { fail "проверка выката и отката не прошла — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
