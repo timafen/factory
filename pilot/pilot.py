@@ -694,7 +694,7 @@ def brain(conf, prompt, timeout=180):
                     pass
                 return out, eng
             if LIMIT_SIGNS.search(both):
-                note_limit(eng.get("provider", ""), both[:200])
+                note_limit(conf, eng.get("provider", ""), both[:200])
                 problems.append(f"{eng.get('model')}: упёрлись в лимит")
             else:
                 problems.append(f"{eng.get('model')}: пустой ответ")
