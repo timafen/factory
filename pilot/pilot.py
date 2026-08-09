@@ -20,8 +20,7 @@ Planner layer (epics):
 """
 import calendar
 import io
-import glob
-import json, re, subprocess, time, urllib.request, urllib.error, uuid, sys, os
+import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -1959,6 +1958,208 @@ DIAG_PROMPT = (
     "владельца или выбор продукта. Всё остальное чинится без него.\n\n"
     "РАБОТА: {base}\n\nПОСЛЕДНЕЕ:\n{tail}")
 
+DIAG_REPAIR_PATH = f"{HOME}/pilot/diagnosis_repairs.json"
+TERMINAL_TASK_STATES = ("succeeded", "failed", "cancelled")
+
+
+def _save_diag_repair(base, repair):
+    repairs = load(DIAG_REPAIR_PATH, {}) or {}
+    repairs[base] = repair
+    save(DIAG_REPAIR_PATH, repairs)
+
+
+def _fail_diag_repair(conf, base, repair, reason):
+    repair["status"] = "failed"
+    repair["failure"] = str(reason)[:500]
+    _save_diag_repair(base, repair)
+    log(f"DIAG REPAIR STOP base={base!r}: {repair['failure']}")
+    notify(conf, "Автопочинка остановлена",
+           f"{base}\n\nПричина: {repair['failure']}\n"
+           "Повторно отменять или продолжать эту работу автоматически не буду.",
+           priority="high", tags="warning", click=f"{UI_BASE}/work")
+
+
+def _all_tasks_for_diag_repair():
+    """Read every task page before making an irreversible repair decision."""
+    tasks = []
+    cursor = ""
+    seen_cursors = set()
+    while True:
+        path = "/tasks?limit=200"
+        if cursor:
+            path += "&cursor=" + urllib.parse.quote(cursor, safe="")
+        page = api(path)
+        tasks.extend(page.get("tasks") or [])
+        cursor = page.get("next_cursor") or ""
+        if not cursor:
+            return tasks
+        if cursor in seen_cursors:
+            raise RuntimeError("API повторил курсор списка задач")
+        seen_cursors.add(cursor)
+
+
+def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
+    """Cancel one proven looping run. A later sweep resumes it after terminal state."""
+    repairs = load(DIAG_REPAIR_PATH, {}) or {}
+    if base in repairs:
+        return
+    try:
+        all_tasks = _all_tasks_for_diag_repair()
+    except Exception as e:
+        repair = {"status": "failed", "task_id": candidate.get("id", "")}
+        _fail_diag_repair(conf, base, repair,
+                          f"не удалось проверить все активные запуски: {e}")
+        return
+    live = [t for t in all_tasks
+            if base_title(t.get("title", "")) == base
+            and t.get("state") in ("running", "queued", "preparing")]
+    if (candidate.get("state") != "running" or len(live) != 1
+            or live[0].get("id") != candidate.get("id")):
+        reason = ("нельзя достоверно выбрать единственный выполняющийся запуск: "
+                  f"найдено активных запусков — {len(live)}")
+        repair = {"status": "failed", "task_id": candidate.get("id", ""),
+                  "failure": reason}
+        _save_diag_repair(base, repair)
+        log(f"DIAG REPAIR SKIP base={base!r}: {reason}")
+        notify(conf, "Автопочинка не начата", f"{base}\n\nПричина: {reason}",
+               priority="high", tags="warning", click=f"{UI_BASE}/work")
+        return
+    try:
+        detail = api(f"/tasks/{candidate['id']}")
+    except Exception as e:
+        repair = {"status": "failed", "task_id": candidate["id"]}
+        _fail_diag_repair(conf, base, repair,
+                          f"не удалось прочитать зациклившийся запуск: {e}")
+        return
+    task = detail.get("task") or {}
+    workflow = detail.get("workflow") or {}
+    branch = (extract_branch(detail.get("context") or task.get("context") or "", "")
+              or branch_from_history(tasks, base))
+    repair = {
+        "status": "cancel_pending",
+        "task_id": candidate["id"],
+        "title": candidate.get("title", ""),
+        "stage": stage,
+        "repository_id": task.get("repository_id", ""),
+        "worker_id": task.get("worker_id", ""),
+        "workflow_revision_id": workflow.get("revision_id", ""),
+        "context": (detail.get("context") or task.get("context") or "")[:20000],
+        "branch": branch,
+        "reason": str(verdict.get("причина") or "")[:1000],
+        "solution": str(verdict.get("решение") or "")[:2000],
+        "request_key": str(uuid.uuid4()),
+    }
+    required = {
+        "название задачи": repair["title"],
+        "репозиторий": repair["repository_id"],
+        "исполнитель": repair["worker_id"],
+        "версия процесса": repair["workflow_revision_id"],
+        "прежняя ветка": repair["branch"],
+    }
+    missing = [label for label, value in required.items() if not value]
+    if missing:
+        _fail_diag_repair(
+            conf, base, repair,
+            "до отмены не удалось сохранить данные для безопасного продолжения: "
+            + ", ".join(missing))
+        return
+    # Persist before the HTTP call: after an uncertain response we must never
+    # cancel a second time. Cancelling the same identified task is idempotent.
+    _save_diag_repair(base, repair)
+    try:
+        api(f"/tasks/{candidate['id']}/cancel", {})
+    except Exception as e:
+        _fail_diag_repair(conf, base, repair,
+                          f"отмена зациклившегося запуска не подтверждена: {e}")
+        return
+    repair["status"] = "cancellation_requested"
+    _save_diag_repair(base, repair)
+    log(f"DIAG REPAIR CANCEL task={candidate['id']} base={base!r}")
+    notify(conf, "Чиню застрявшую работу",
+           f"{base}\n\nПричина: {cut(repair['reason'], 220)}\n"
+           "Останавливаю только зациклившийся запуск; после его остановки "
+           "один раз продолжу ту же работу.",
+           tags="wrench", click=f"{UI_BASE}/work")
+
+
+def reconcile_diag_repairs(conf, tasks):
+    """Resume each diagnosed repair once, and only after its source is terminal."""
+    repairs = load(DIAG_REPAIR_PATH, {}) or {}
+    by_id = {t.get("id"): t for t in tasks}
+    for base, repair in list(repairs.items()):
+        status = repair.get("status")
+        if status == "cancel_pending":
+            # A restart may happen after the control plane accepted the cancel
+            # but before we persisted its result. Cancelling the same task is
+            # idempotent, so replay the exact operation instead of abandoning
+            # the repair in its durable transition state.
+            try:
+                api(f"/tasks/{repair['task_id']}/cancel", {})
+            except Exception as e:
+                _fail_diag_repair(conf, base, repair,
+                                  f"отмена зациклившегося запуска не подтверждена: {e}")
+                continue
+            repair["status"] = "cancellation_requested"
+            _save_diag_repair(base, repair)
+            status = "cancellation_requested"
+            log(f"DIAG REPAIR CANCEL RECOVERED task={repair['task_id']} base={base!r}")
+        if status not in ("cancellation_requested", "resume_pending"):
+            continue
+        if status == "cancellation_requested":
+            source = by_id.get(repair.get("task_id"))
+            if not source:
+                try:
+                    detail = api(f"/tasks/{repair['task_id']}")
+                    source = detail.get("task") or {}
+                except Exception as e:
+                    log(f"DIAG REPAIR SOURCE READ WAIT base={base!r}: {e}")
+                    continue
+            if source.get("state") not in TERMINAL_TASK_STATES:
+                continue
+        branch = repair.get("branch") or ""
+        branch_note = ""
+        if branch:
+            branch_note = (
+                f"\n\nПродолжай прежнюю ветку {branch}: оставайся на назначенной "
+                f"ветке, выполни `git fetch origin {branch} && git reset --hard "
+                "FETCH_HEAD`, затем внеси исправление и перед сдачей перебазируйся "
+                "на свежий origin/main.")
+        context = (
+            repair.get("context", "")[:15000]
+            + "\n\nАВТОМАТИЧЕСКИЙ РЕМОНТ ПОСЛЕ ТЕХНИЧЕСКОГО ЗАЦИКЛИВАНИЯ:\n"
+            + "Причина: " + repair.get("reason", "") + "\n"
+            + "Утверждённое исправление: " + repair.get("solution", "")
+            + branch_note
+        )[:20000]
+        body = {
+            "request_key": repair["request_key"],
+            "title": repair.get("title", "")[:200],
+            "context": context,
+            "worker_id": repair.get("worker_id", ""),
+            "repository_id": repair.get("repository_id", ""),
+            "timeout_seconds": conf.get("timeout_seconds", 7200),
+            "workflow_revision_id": repair.get("workflow_revision_id", ""),
+        }
+        # Persist before creation. After a restart, resume_pending replays this
+        # exact body; the stable request key makes task creation idempotent.
+        if status == "cancellation_requested":
+            repair["status"] = "resume_pending"
+            _save_diag_repair(base, repair)
+        try:
+            result = create_task(body, conf)
+        except Exception as e:
+            _fail_diag_repair(conf, base, repair,
+                              f"одноразовое продолжение не удалось: {e}")
+            continue
+        repair["status"] = "resumed"
+        repair["resumed_task_id"] = (result.get("task") or {}).get("id", "")
+        _save_diag_repair(base, repair)
+        log(f"DIAG REPAIR RESUMED base={base!r} task={repair['resumed_task_id']}")
+        notify(conf, "Застрявшая работа продолжена",
+               f"{base}\n\nЗапуск остановлен, найденное исправление передано "
+               "в ту же работу. Повторного автопродолжения не будет.",
+               tags="arrow_forward", click=f"{UI_BASE}/work")
+
 
 def load_tasks_safe(limit=60):
     try:
@@ -1989,12 +2190,14 @@ def recent_stage_text(tasks, base, limit=3):
     return "\n\n".join(out)[:9000]
 
 
-def deep_diagnose(conf, base, stage, rounds, tasks):
+def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     """Зовём сильную модель разобраться и говорим владельцу по-человечески.
     Один разбор на работу — дальше конвейер действует по найденному решению."""
-    if cap_rescues(base, "DIAG") >= 1:
+    diag_already_counted = cap_rescues(base, "DIAG") >= 1
+    if diag_already_counted and repair_task is None:
         return None
-    note_cap_rescue(base, "DIAG")
+    if not diag_already_counted:
+        note_cap_rescue(base, "DIAG")
     tail = recent_stage_text(tasks, base)
     try:
         text, eng = brain(conf, DIAG_PROMPT.format(n=rounds, base=base, tail=tail),
@@ -2015,11 +2218,14 @@ def deep_diagnose(conf, base, stage, rounds, tasks):
                "Без твоего решения дальше не пойдёт.",
                priority="high", tags="warning", click=f"{UI_BASE}/answer")
     else:
-        notify(conf, "Разобрался в застрявшей",
-               f"{base}\n\nБуксовала {rounds} кругов. Причина: {cut(why, 220)}\n"
-               f"Делаю: {cut(what, 220)}\n"
-               "Твоего участия не нужно.",
-               tags="mag", click=f"{UI_BASE}/work")
+        if repair_task is not None:
+            begin_diag_repair(conf, base, stage, verdict, tasks, repair_task)
+        else:
+            notify(conf, "Разобрался в застрявшей",
+                   f"{base}\n\nБуксовала {rounds} кругов. Причина: {cut(why, 220)}\n"
+                   f"Делаю: {cut(what, 220)}\n"
+                   "Твоего участия не нужно.",
+                   tags="mag", click=f"{UI_BASE}/work")
     return verdict
 
 
@@ -2046,7 +2252,8 @@ def diag_sweep(conf, tasks):
         if rounds < diag_at:
             continue
         try:
-            deep_diagnose(conf, base, m.group(1).strip(), rounds, tasks)
+            deep_diagnose(conf, base, m.group(1).strip(), rounds, tasks,
+                          repair_task=t)
         except Exception as e:
             log("diag_sweep_error", repr(e))
 
@@ -2061,7 +2268,13 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
     diag_at = int(conf.get("deep_diag_rounds", 5))
     if attempts_so_far >= diag_at:
         try:
-            v = deep_diagnose(conf, base, stage, attempts_so_far, load_tasks_safe())
+            diag_tasks = load_tasks_safe()
+            active = [t for t in diag_tasks
+                      if base_title(t.get("title", "")) == base
+                      and t.get("state") == "running"]
+            repair_task = active[0] if len(active) == 1 else None
+            v = deep_diagnose(conf, base, stage, attempts_so_far, diag_tasks,
+                              repair_task=repair_task)
             if v and str(v.get("решение") or "").strip():
                 situation = (situation + "\n\nРАЗБОР СТАРШЕЙ МОДЕЛИ: "
                              + str(v.get("причина") or "") + " Решение: "
@@ -2823,169 +3036,6 @@ PRICE = {"opus": (15.0, 75.0), "fable": (15.0, 75.0),
          # GPT-5.6, официальные цены OpenAI за миллион токенов
          "sol": (5.0, 30.0), "terra": (2.50, 15.0), "luna": (1.0, 6.0)}
 _usage_cache = {}          # путь файла -> (смещение, накопленный расход)
-_codex_rollout_cache = {}  # путь -> состояние парсера и уже найденные события
-
-# Версия тарифа намеренно привязана к точным API-именам. Похожее имя нельзя
-# оценивать ценой соседней модели: в таком случае интерфейс показывает, что
-# стоимость не определена. Суммы — USD за миллион токенов standard processing.
-OPENAI_API_PRICE_VERSIONS = ({
-    "effective_from": "2026-08-09",
-    "source": "https://openai.com/api/pricing/",
-    "models": {
-        "gpt-5.6-sol": {"input": 5.0, "cached_input": 0.50, "output": 30.0},
-        "gpt-5.6-terra": {"input": 2.50, "cached_input": 0.25, "output": 15.0},
-        "gpt-5.6-luna": {"input": 1.0, "cached_input": 0.10, "output": 6.0},
-    },
-},)
-
-
-def openai_api_cost(model, input_tokens, cached_input_tokens, output_tokens,
-                    cache_write_tokens=0):
-    """Расчётная API-стоимость или None для модели без точного тарифа."""
-    price = OPENAI_API_PRICE_VERSIONS[-1]["models"].get(model)
-    if not price:
-        return None
-    long_context = input_tokens + cached_input_tokens + cache_write_tokens > 272000
-    input_multiplier = 2.0 if long_context else 1.0
-    output_multiplier = 1.5 if long_context else 1.0
-    return (input_tokens * price["input"] * input_multiplier
-            + cached_input_tokens * price["cached_input"] * input_multiplier
-            + cache_write_tokens * price["input"] * 1.25 * input_multiplier
-            + output_tokens * price["output"] * output_multiplier) / 1e6
-
-
-def _event_epoch(value):
-    try:
-        return calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S"))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _codex_usage_events(path):
-    """Досчитать события Codex, читая у неизменённого rollout только хвост."""
-    state = _codex_rollout_cache.get(path)
-    try:
-        size = os.path.getsize(path)
-        if state is None or size < state["offset"]:
-            state = {"offset": 0, "model": "", "previous_total": None,
-                     "events": []}
-        if size == state["offset"]:
-            return state["events"]
-        with open(path, errors="ignore") as fh:
-            fh.seek(state["offset"])
-            while True:
-                line_offset = fh.tell()
-                line = fh.readline()
-                if not line:
-                    break
-                if not line.endswith("\n"):
-                    fh.seek(line_offset)
-                    break
-                if '"model"' not in line and '"token_count"' not in line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(obj, dict):
-                    continue
-                payload = obj.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                if obj.get("type") == "turn_context":
-                    model = payload.get("model")
-                    if isinstance(model, str) and model:
-                        state["model"] = model
-                    continue
-                if obj.get("type") != "event_msg" or payload.get("type") != "token_count":
-                    continue
-                info = payload.get("info")
-                if not isinstance(info, dict):
-                    continue
-                usage = info.get("last_token_usage")
-                total = info.get("total_token_usage")
-                if usage is not None and not isinstance(usage, dict):
-                    continue
-                if total is not None and not isinstance(total, dict):
-                    continue
-                keys = ("input_tokens", "cached_input_tokens", "output_tokens",
-                        "cache_write_input_tokens")
-                containers = [value for value in (usage, total) if value is not None]
-                model = usage.get("model") if usage is not None else None
-                values = [container.get(key, 0) for container in containers for key in keys]
-                if (model is not None and not isinstance(model, str)) or any(
-                        isinstance(value, bool) or not isinstance(value, int) or value < 0
-                        for value in values):
-                    continue
-                cache_write_known = any("cache_write_input_tokens" in value
-                                        for value in containers)
-                current = tuple(total.get(k, 0) for k in keys) if total is not None else None
-                if not usage:
-                    if current is None:
-                        continue
-                    if state["previous_total"] is None:
-                        usage = dict(zip(keys, current))
-                    else:
-                        usage = dict(zip(keys, (max(0, n - old)
-                                               for n, old in zip(current, state["previous_total"]))))
-                if current is not None:
-                    state["previous_total"] = current
-                raw_input = usage.get("input_tokens", 0)
-                cached = usage.get("cached_input_tokens", 0)
-                cache_write = usage.get("cache_write_input_tokens", 0)
-                output = usage.get("output_tokens", 0)
-                if raw_input or cached or cache_write or output:
-                    state["events"].append({"at": _event_epoch(obj.get("timestamp")),
-                                            "model": model or state["model"],
-                                            "input": max(0, raw_input - cached - cache_write),
-                                            "cache_read": cached, "cache_write": cache_write,
-                                            "cache_write_known": cache_write_known,
-                                            "output": output})
-            state["offset"] = fh.tell()
-        _codex_rollout_cache[path] = state
-    except OSError:
-        pass
-    return state["events"] if state else []
-
-
-def codex_usage_snapshot(*since_epochs):
-    """Один снимок журналов Codex сразу для всех запрошенных периодов."""
-    paths = set(glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"))
-    paths.update(glob.glob(f"{HOME}/.codex-*/sessions/*/*/*/rollout-*.jsonl"))
-    events = [event for path in paths for event in _codex_usage_events(path)]
-    result = {}
-    for since_epoch in since_epochs:
-        totals = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0,
-                  "total_tokens": 0, "cost_usd": 0.0, "cost_defined": True,
-                  "base_estimate": False, "unknown_models": []}
-        unknown = set()
-        for event in events:
-            if event["at"] < since_epoch:
-                continue
-            totals["input"] += event["input"]
-            totals["cache_read"] += event["cache_read"]
-            totals["cache_write"] += event["cache_write"]
-            totals["output"] += event["output"]
-            cost = openai_api_cost(event["model"], event["input"],
-                                   event["cache_read"], event["output"],
-                                   event["cache_write"])
-            if not event["cache_write_known"]:
-                totals["base_estimate"] = True
-            if cost is None:
-                unknown.add(event["model"] or "неизвестная модель")
-            else:
-                totals["cost_usd"] += cost
-        totals["total_tokens"] = (totals["input"] + totals["cache_read"]
-                                  + totals["cache_write"] + totals["output"])
-        totals["cost_defined"] = not unknown
-        totals["unknown_models"] = sorted(unknown)
-        result[since_epoch] = totals
-    return result
-
-
-def codex_usage_since(since_epoch):
-    """Общий расход Codex с указанного момента, без ложной связи с задачей."""
-    return codex_usage_snapshot(since_epoch)[since_epoch]
 
 
 def _scan_usage(path):
@@ -3169,16 +3219,14 @@ def work_spent(tasks, base):
     return task_cost_usd(atts)
 
 
-def day_spent(tasks, codex_day=None):
+def day_spent(tasks):
     today = time.strftime("%Y-%m-%d", time.gmtime())
     atts = []
     for t in tasks:
         if (t.get("created_at") or "")[:10] != today:
             continue
         atts += attempts_of(t["id"], not _live(t))
-    start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
-    codex_day = codex_day or codex_usage_since(start)
-    return task_cost_usd(atts) + codex_day["cost_usd"]
+    return task_cost_usd(atts)
 
 
 def branch_head(branch):
@@ -3343,12 +3391,12 @@ def budget_guard(conf, tasks, workers=None):
         save(BUDGET_PATH, st)
 
 
-def day_budget_blocks(conf, tasks, codex_day=None):
+def day_budget_blocks(conf, tasks):
     """Дневной потолок на всё сразу. Начатое доигрывается, новое не берётся."""
     cap = float(conf.get("day_cap_usd") or 0)
     if cap <= 0:
         return False
-    spent = day_spent(tasks, codex_day)
+    spent = day_spent(tasks)
     if spent < cap:
         return False
     st = load(BUDGET_PATH, {})
@@ -3723,7 +3771,7 @@ def pipeline_health(tasks):
     return out
 
 
-def write_dashboard(conf, tasks, workers, codex_snapshot=None):
+def write_dashboard(conf, tasks, workers):
     """Снимок состояния фабрики одним файлом: интерфейсу остаётся только показать."""
     now = time.time()
     by_state = {}
@@ -3737,10 +3785,7 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None):
             return 1e9
 
     spend = {"day_usd": 0.0, "day_tokens": 0, "week_usd": 0.0, "week_tokens": 0,
-             "wasted_usd": 0.0, "worst": None, "day_cost_defined": True,
-             "week_cost_defined": True, "day_base_estimate": False,
-             "week_base_estimate": False, "day_unknown_models": [],
-             "week_unknown_models": []}
+             "wasted_usd": 0.0, "worst": None}
     for t in tasks[:60]:
         h = age_h(t)
         if h > 24 * 7:
@@ -3763,23 +3808,6 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None):
             if not spend["worst"] or usd > spend["worst"]["usd"]:
                 spend["worst"] = {"usd": round(usd, 2), "title": (t.get("title") or "")[:70],
                                   "id": t["id"]}
-
-    today = time.strftime("%Y-%m-%d", time.gmtime())
-    day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
-    week_start = time.time() - 7 * 86400
-    codex_snapshot = codex_snapshot or codex_usage_snapshot(day_start, week_start)
-    day_codex = codex_snapshot[day_start]
-    week_codex = codex_snapshot[week_start]
-    spend["day_usd"] += day_codex["cost_usd"]
-    spend["week_usd"] += week_codex["cost_usd"]
-    spend["day_tokens"] = day_codex["total_tokens"]
-    spend["week_tokens"] = week_codex["total_tokens"]
-    spend["day_cost_defined"] = day_codex["cost_defined"]
-    spend["week_cost_defined"] = week_codex["cost_defined"]
-    spend["day_base_estimate"] = day_codex["base_estimate"]
-    spend["week_base_estimate"] = week_codex["base_estimate"]
-    spend["day_unknown_models"] = day_codex["unknown_models"]
-    spend["week_unknown_models"] = week_codex["unknown_models"]
 
     prov = {}
     for w in workers.values() if isinstance(workers, dict) else workers:
@@ -4095,15 +4123,9 @@ def cycle(conf, state):
         workflows[rev.get("title")] = {"workflow_id": w["id"], "revision_id": rev.get("id"),
                                        "enabled": w.get("enabled")}
 
-    today = time.strftime("%Y-%m-%d", time.gmtime())
-    day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
-    week_start = time.time() - 7 * 86400
-    codex_snapshot = codex_usage_snapshot(day_start, week_start)
-
     # Снимок для главного экрана. Никогда не должен ломать цикл.
     try:
-        write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]},
-                        codex_snapshot)
+        write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]})
     except Exception as e:
         log("dashboard_error", repr(e))
 
@@ -4134,7 +4156,7 @@ def cycle(conf, state):
 
     # Дневной потолок: начатое доигрывается, новое не берётся.
     try:
-        if day_budget_blocks(conf, tasks, codex_snapshot[day_start]):
+        if day_budget_blocks(conf, tasks):
             return
     except Exception as e:
         log("day_cap_error", repr(e))
@@ -4166,6 +4188,14 @@ def cycle(conf, state):
         handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id)
     except Exception as e:
         log("epic_error", repr(e))
+
+    # Уже начатый ремонт сначала дожидается остановки исходного запуска.
+    # Это отдельный проход: после отмены исходная задача больше не «живая» и
+    # обычный диагностический обход её уже не увидит.
+    try:
+        reconcile_diag_repairs(conf, tasks)
+    except Exception as e:
+        log("diag_repair_reconcile_error", repr(e))
 
     # Работа, которая крутится дольше порога, разбирается старшей моделью —
     # независимо от того, задавал ли конвейер вопрос.
