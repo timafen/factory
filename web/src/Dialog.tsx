@@ -50,6 +50,8 @@ export function Dialog() {
   const [reading, setReading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [standURL, setStandURL] = useState("https://staging-automation.tarser.net/");
+  const [capturing, setCapturing] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -167,6 +169,21 @@ export function Dialog() {
           )}
         </div>
       </header>
+
+      <div className="dlg-browser">
+        <input aria-label="Адрес страницы стенда" value={standURL} disabled={capturing || pending}
+          onChange={(event) => setStandURL(event.target.value)} />
+        <button type="button" disabled={capturing || pending} onClick={async () => {
+          setCapturing(true); setError("");
+          try {
+            const capture = await api.browserCapture(standURL);
+            setStandURL(capture.url);
+            setScreenshot({ name: "стенд.png", content_type: capture.content_type, data: capture.data });
+          } catch (cause) {
+            setError(cause instanceof APIError ? cause.message : "Не удалось открыть тестовый стенд");
+          } finally { setCapturing(false); }
+        }}>{capturing ? "Открываю…" : "Посмотреть стенд"}</button>
+      </div>
 
       <div className="dlg-feed">
         {messages.length === 0 && !pending && (
