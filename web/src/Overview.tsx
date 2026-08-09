@@ -14,7 +14,10 @@ type Dash = {
     questions_count?: number;
   };
   spend?: {
-    day_usd?: number; week_usd?: number; wasted_usd?: number;
+    day_usd?: number; week_usd?: number; day_tokens?: number; week_tokens?: number;
+    wasted_usd?: number; day_cost_defined?: boolean; week_cost_defined?: boolean;
+    day_base_estimate?: boolean; week_base_estimate?: boolean;
+    day_unknown_models?: string[]; week_unknown_models?: string[];
     worst?: { usd: number; title: string; id: string } | null;
   };
   workers?: Record<string, { total: number; healthy: number }>;
@@ -344,13 +347,19 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         <section style={{ ...card, flex: 1, minWidth: 280 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <Coins size={16} color="#e0cf9f" /><strong>Расход</strong>
-            <span style={{ fontSize: 11, color: muted }}>по прайсу API, справочно — пока учитываются только задачи на Клоде, кодекс в плане</span>
+            <span style={{ fontSize: 11, color: muted }}>
+              {d.spend?.day_base_estimate || d.spend?.week_base_estimate
+                ? "базовая оценка по API-тарифу (журнал не сообщает запись кэша)"
+                : "оценка по API-тарифу"} · Клод по задачам, Codex общим итогом
+            </span>
           </div>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", fontSize: 13 }}>
             <div><div style={{ color: muted, fontSize: 12 }}>за сутки</div>
-                 <strong style={{ fontSize: 18 }}>${(d.spend?.day_usd ?? 0).toFixed(2)}</strong></div>
+                 <strong style={{ fontSize: 18 }}>{d.spend?.day_cost_defined === false ? "стоимость не определена" : `$${(d.spend?.day_usd ?? 0).toFixed(2)}`}</strong>
+                 {(d.spend?.day_tokens ?? 0) > 0 && <div style={{ color: muted, fontSize: 11 }}>{(d.spend?.day_tokens ?? 0).toLocaleString("ru-RU")} токенов Codex</div>}</div>
             <div><div style={{ color: muted, fontSize: 12 }}>за неделю</div>
-                 <strong style={{ fontSize: 18 }}>${(d.spend?.week_usd ?? 0).toFixed(2)}</strong></div>
+                 <strong style={{ fontSize: 18 }}>{d.spend?.week_cost_defined === false ? "стоимость не определена" : `$${(d.spend?.week_usd ?? 0).toFixed(2)}`}</strong>
+                 {(d.spend?.week_tokens ?? 0) > 0 && <div style={{ color: muted, fontSize: 11 }}>{(d.spend?.week_tokens ?? 0).toLocaleString("ru-RU")} токенов Codex</div>}</div>
             <div><div style={{ color: muted, fontSize: 12 }}>впустую за сутки</div>
                  <strong style={{ fontSize: 18, color: (d.spend?.wasted_usd ?? 0) > 0 ? "#e0cf9f" : undefined }}>
                    ${(d.spend?.wasted_usd ?? 0).toFixed(2)}</strong></div>
@@ -358,6 +367,11 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           {d.spend?.worst && (
             <div style={{ marginTop: 10, fontSize: 12.5, color: muted }}>
               самая дорогая за сутки: ${d.spend.worst.usd} — {d.spend.worst.title}
+            </div>
+          )}
+          {d.spend?.week_cost_defined === false && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: "#e0cf9f" }}>
+              Нет точного API-тарифа: {(d.spend.week_unknown_models ?? []).join(", ")}
             </div>
           )}
         </section>
