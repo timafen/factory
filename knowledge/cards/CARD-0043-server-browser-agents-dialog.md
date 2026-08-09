@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — три замечания Review устранены; ожидает повторный Review.
-- Branch: `factory/37c847f9-61d-7557734f-b24`.
-- Head commit: `a5b0be5` (`Закрыть браузер песочницей и лимитами сервера`).
+- Status: Implemented — блокирующие замечания Review устранены; ожидает повторный Review.
+- Branch: `factory/d3e9c5c4-bd2-2f11b55e-d51`.
+- Head commit: `ecb3d19` (`Дать агентам защищённый просмотр стендов`).
 - Specification: `knowledge/specs/server-browser-for-agents-and-dialog.md`.
-- What changed: Chromium использует штатную sandbox; сетевой фильтр блокирует
-  CGNAT и специальные IPv4/IPv6; API ограничен 4 KiB и одним запуском.
-- Evidence: целевые Go-тесты PASS; тесты API с race detector PASS; oversized
-  request получает 413, занятый browser-slot — 429 до второго запуска.
-- One next action: Review проверяет трёхточечный diff опубликованной ветки.
+- What changed: Chromium принудительно запрещает непроксируемый WebRTC/UDP;
+  CLI атомарно заменяет снимок файлом с правами 0600, даже после прежнего 0644.
+- Evidence: целевые Go-тесты PASS; тесты API/протокола/worker и «Диалога» PASS.
+- One next action: повторный Review проверяет сетевую границу и трёхточечный diff.
 
 ## LOG
 
@@ -42,3 +41,10 @@ Go- и UI-тесты, TypeScript и production-сборка прошли.
 CGNAT и специальные IPv4/IPv6 закреплены deny-list и тестами, HTTP API получил
 лимит тела 4 KiB и единственный browser-slot. Целевые Go-тесты и тесты API с
 race detector прошли; превышение размера возвращает 413, занятый слот — 429.
+
+### 2026-08-09 — Implement
+
+После блокирующего Review Chromium получил обязательную политику
+`disable_non_proxied_udp`, которую закрепляет тест попытки WebRTC-доступа к
+внутреннему адресу. CLI теперь атомарно подменяет PNG приватным файлом; тест
+начинает с существующего `0644` и подтверждает итоговые права `0600`.
