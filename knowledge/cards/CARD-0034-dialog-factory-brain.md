@@ -4,7 +4,7 @@
 
 - Status: Implement + Test — блокеры ревью устранены, целевые проверки зелёные.
 - Branch: `factory/b331cb36-760-3b73ea2b-615`.
-- Head commit: `d912004`.
+- Head commit: `a757fcf`.
 - What changed: `/dialog` однозначно выбирает конкретную строку `brain_chain`,
   даже если имена моделей совпадают; лимит провайдера показан отдельной ошибкой.
 - Evidence: `go test ./internal/controlplane -run TestDialog` — PASS;
