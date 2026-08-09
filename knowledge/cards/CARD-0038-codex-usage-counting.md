@@ -2,20 +2,15 @@
 
 ## HEAD
 
-- Status: реализовано; обе находки Review исправлены, готово к повторной проверке.
+- Status: Verified PASS — ожидает слияния человеком.
 - Branch: `factory/36aa43da-9c7-fc0f4ad4-2c2`.
-- Head commit: `7f0f49b` (реализация и исправления Review).
-- What changed: счётчик читает rollout-журналы Codex и показывает дневные
-  токены и расчётную API-стоимость; неизвестные тарифы помечаются честно.
-- What changed: восстановлены `area_extend`, `other_areas` и удаление только
-  чужих файлов/служебного мусора без потери допустимого расширения поставки.
-- Evidence: весь `pilot.test_pilot` → 47/47 OK, включая интеграционную
-  проверку сохранения дополнительных файлов и защиту заголовка.
-- Evidence: целевые UI-тесты → 9/9 passed; typecheck и Vite build → passed.
-- Evidence: `dist/index.html` ссылается на собранный `index-D4r1I9JT.js`.
-- Evidence: общий `just check` остановлен двумя прежними staticcheck-ошибками
-  вне области; полный UI-набор — тремя прежними сбоями `Dialog.test.tsx`.
-- Next action: повторить Review CARD-0038 для поставки `7f0f49b`.
+- Head commit: `16043f3` (поставка после Review).
+- Evidence: `CodexUsageTests` — 8/8 OK; весь `pilot.test_pilot` — 47/47 OK;
+  UI-проверка карточки — 9/9 passed. Проверены точные тарифы, долгий контекст,
+  кэш, накопительные итоги, неизвестная модель, дневной предохранитель и UI.
+- Evidence: `just check` из чистого дерева остановился только на двух
+  существующих staticcheck-ошибках `internal/controlplane`, не входящих в diff.
+- Next action: слить поставку в `main`.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -24,6 +19,20 @@
 ГОТОВО-КОГДА: команда cd web && npm test -- --run src/Overview.test.ts
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Rollout Codex, кэш, долгий контекст и точный тариф | `python3 -m unittest pilot.test_pilot.CodexUsageTests` | 8/8 OK |
+| Нет двойного счёта, неизвестная модель честно показана, дневной итог включает Codex | тот же набор целевых тестов | OK |
+| Общий итог не приписан отдельной задаче, UI показывает токены и отсутствие цены | `cd web && npm test -- --run src/Overview.test.ts` | 9/9 passed |
+| Смежное поведение пилота | `python3 -m unittest pilot.test_pilot` | 47/47 OK |
+| Полный проектный gate | `just check` | остановлен на двух прежних staticcheck-ошибках вне CARD-0038: `cards_http.go` и `pilot_config.go` |
+
+Дерево перед записью карточки чистое; `git diff --check origin/main...HEAD`
+не нашёл пробельных ошибок. Расход неизвестных моделей намеренно не оценивается,
+а расход Codex остаётся общим итогом без атрибуции задаче.
 
 ### 2026-08-09 — Implement
 
