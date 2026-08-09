@@ -1294,7 +1294,7 @@ def autostart_plan(conf, tasks, workflows, workers):
         "Это этап Triage: проверь готовность работы, границы и риски; "
         "продолжай только с вердиктом READY."
     )[:60000]
-    created = create_task({"request_key": str(uuid.uuid4()), "title": title,
+    created = create_task({"request_key": f"plan-autostart:{rec['id']}", "title": title,
                            "context": context, "worker_id": worker["id"],
                            "repository_id": rec.get("repo") or "",
                            "timeout_seconds": conf.get("timeout_seconds", 7200),
@@ -3568,13 +3568,6 @@ def cycle(conf, state):
     except Exception as e:
         log("host_load_error", repr(e))
 
-    # Свободный слот получает верхнюю карточку Плана. Ошибка создания не
-    # переводит карточку в работу и не мешает уже запущенному конвейеру.
-    try:
-        autostart_plan(conf, tasks, workflows, workers)
-    except Exception as e:
-        log("plan_autostart_error", repr(e))
-
     # Сторож конвейера: молча умерших работ быть не должно.
     try:
         pipeline_watch(conf, tasks, workflows, workers)
@@ -3975,6 +3968,14 @@ def cycle(conf, state):
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
+
+    # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
+    # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
+    try:
+        fresh_tasks = api("/tasks?limit=100").get("tasks") or []
+        autostart_plan(conf, fresh_tasks, workflows, workers)
+    except Exception as e:
+        log("plan_autostart_error", repr(e))
 
 
 def main():

@@ -1,3 +1,4 @@
+import contextlib
 import time
 import unittest
 import urllib.error
@@ -395,6 +396,81 @@ class PlanAutostartTest(unittest.TestCase):
             pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
 
         set_idea.assert_not_called()
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_retry_after_uncertain_post_uses_same_card_request_key(
+            self, _limits, _questions, ideas, set_idea, _note_work, _notify):
+        ideas.return_value = self.cards
+        seen_keys = []
+
+        def uncertain_then_idempotent(body, _conf):
+            seen_keys.append(body["request_key"])
+            if len(seen_keys) == 1:
+                raise TimeoutError("response lost after create")
+            return {"task": {"id": "created-on-first-post"}}
+
+        with mock.patch.object(pilot, "create_task", side_effect=uncertain_then_idempotent):
+            with self.assertRaises(TimeoutError):
+                pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+            result = pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(result, "created-on-first-post")
+        self.assertEqual(seen_keys, ["plan-autostart:top", "plan-autostart:top"])
+        set_idea.assert_called_once_with(
+            "top", state="in_work", task_id="created-on-first-post")
+
+    def test_cycle_recounts_slots_after_pipeline_continuation(self):
+        tasks = [
+            {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
+            {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
+        ]
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path == "/workers":
+                return {"workers": list(self.workers.values())}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": [{"id": "workflow", "enabled": True,
+                    "current_revision": {"id": "wf-triage", "title": "Triage"}}]}
+            raise AssertionError(path)
+
+        def continue_pipeline(*_args):
+            tasks.append({"id": "c", "title": "[auto] [2/2 Implement] C",
+                          "state": "queued"})
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics")
+        state = {"processed": [], "epics_processed": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers",
+                                                  return_value=self.workers))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_overloaded",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "pipeline_watch",
+                                                  side_effect=continue_pipeline))
+            create = stack.enter_context(mock.patch.object(pilot, "create_task"))
+            ideas = stack.enter_context(mock.patch.object(pilot, "ideas_all",
+                return_value=self.cards))
+            stack.enter_context(mock.patch.object(pilot, "load_questions", return_value=[]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, state)
+
+        ideas.assert_not_called()
+        create.assert_not_called()
 
 
 if __name__ == "__main__":
