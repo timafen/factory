@@ -1,7 +1,11 @@
 import contextlib
+import importlib
+import sys
 import time
+import types
 import unittest
 import urllib.error
+import uuid
 from unittest import mock
 
 from pilot import pilot
@@ -525,6 +529,62 @@ class PlanAutostartTest(unittest.TestCase):
 
         ideas.assert_not_called()
         create.assert_not_called()
+
+
+class PlanManualTaskTest(unittest.TestCase):
+    def test_task_action_promotes_card_and_creates_task(self):
+        fastapi = types.ModuleType("fastapi")
+        responses = types.ModuleType("fastapi.responses")
+
+        class Router:
+            def get(self, *_args, **_kwargs):
+                return lambda func: func
+
+            post = get
+
+        fastapi.APIRouter = Router
+        fastapi.Form = lambda default, **_kwargs: default
+        fastapi.HTTPException = RuntimeError
+        responses.HTMLResponse = object
+        responses.RedirectResponse = object
+        with mock.patch.dict(sys.modules, {
+                "pilot": pilot, "fastapi": fastapi,
+                "fastapi.responses": responses}):
+            plan = importlib.import_module("intake.plan")
+
+        card = {
+            "id": "manual-card",
+            "title": "Запустить вручную",
+            "why": "владелец выбрал эту работу",
+            "kind": "idea",
+            "repo": "repo-1",
+        }
+        conf = {"stages": [{"workflow": "Triage"}], "timeout_seconds": 900}
+        created = {"task": {"id": "manual-task"}}
+        with mock.patch.object(plan.pilot, "ideas_all", return_value=[card]), \
+                mock.patch.object(plan.pilot, "load", return_value=conf), \
+                mock.patch.object(plan.pilot, "api", side_effect=[
+                    {"workers": [{"id": "worker-1"}]},
+                    {"workflows": [{"enabled": True, "current_revision": {
+                        "id": "workflow-1", "title": "Triage"}}]},
+                ]), \
+                mock.patch.object(plan.pilot, "best_workers", return_value={
+                    "triager": {"id": "worker-1"}}), \
+                mock.patch.object(plan.pilot, "first_stage", return_value=("Triage", 1)), \
+                mock.patch.object(plan.pilot, "stage_worker", return_value="triager"), \
+                mock.patch.object(plan.pilot, "create_task", return_value=created) as create, \
+                mock.patch.object(plan.pilot, "note_work") as note_work, \
+                mock.patch.object(plan.pilot, "set_idea") as set_idea:
+            result = plan.idea_action("manual-card", action="task")
+
+        self.assertEqual(result, {"ok": True})
+        body = create.call_args.args[0]
+        self.assertEqual(body["title"], "[auto] [1/1 Triage] Запустить вручную")
+        self.assertEqual(body["repository_id"], "repo-1")
+        uuid.UUID(body["request_key"])
+        note_work.assert_called_once()
+        set_idea.assert_called_once_with(
+            "manual-card", state="in_work", task_id="manual-task")
 
 
 if __name__ == "__main__":
