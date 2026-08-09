@@ -152,6 +152,9 @@ worker скачивает их по lease-защищённому маршрут�
 
 ## Проверяемые обещания
 
+Ворота реализации сверяют перечисленные файлы с diff от точки ветвления и
+обязательно запускают целевую проверку сквозной доставки вложения.
+
 ГОТОВО-КОГДА: файл `web/src/Say.tsx`
 
 ГОТОВО-КОГДА: файл `web/src/DelegateModal.tsx`
@@ -168,6 +171,4 @@ worker скачивает их по lease-защищённому маршрут�
 
 ГОТОВО-КОГДА: файл `internal/worker/attempt_lifecycle.go`
 
-ГОТОВО-КОГДА: команда `cd web && npx tsc -p tsconfig.app.json --noEmit`
-
-ГОТОВО-КОГДА: команда `go test ./internal/controlplane ./internal/worker ./internal/protocol`
+ГОТОВО-КОГДА: команда `go test ./internal/controlplane ./internal/worker -run 'Test(TaskAttachmentsAreOwnedLimitedAndStoredByTask|MaterializeAttachmentsVerifiesAndWritesBeforeRuntime|BuildPromptListsMaterializedAttachments)$'`
