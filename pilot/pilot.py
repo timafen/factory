@@ -1184,6 +1184,9 @@ def collect_ideas(result, repo_id="", source=""):
 STALL_PATH = f"{HOME}/pilot/stalled.json"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
+PIPELINE_LIVE_STATES = frozenset(
+    ("running", "queued", "pending", "created", "starting")
+)
 
 
 def stage_names(conf):
@@ -1226,9 +1229,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
-    live = ("running", "queued", "pending", "created", "starting")
     for base, lst in groups.items():
-        if any(t.get("state") in live for _, t in lst):
+        if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
             continue
         if base in stopped:
