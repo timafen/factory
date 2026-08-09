@@ -22,6 +22,7 @@ const response: PilotSettingsResponse = {
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
     complexity_factor:{low:1,medium:2,high:3}, work_cap_usd:{low:2,medium:4,high:8}, ntfy_topic:"factory", ntfy_server:"https://ntfy.sh", ntfy_owner_topic:"owner",
     notify_groups:{questions:true,stuck:false,money:true,done:true,routine:false},
+    project_providers:[{remote_identity:"github.com/acme/factory",type:"factory"}],
     brain_chain:[{cli:"codex",model:"gpt",provider:"openai",note:"first"},{cli:"claude",model:"sonnet",provider:"anthropic",note:"second"}],
   },
 };
@@ -45,6 +46,21 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
   const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
+});
+
+it("edits and saves only a known product provider type", async () => {
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({...response,settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  expect(await screen.findByText("Источники данных о продуктах")).toBeVisible();
+  await user.selectOptions(screen.getByLabelText("Тип источника"),"trade");
+  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
+  const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
+  expect(JSON.parse(String(put![1]!.body)).settings.project_providers).toEqual([{remote_identity:"github.com/acme/factory",type:"trade"}]);
+  expect(screen.queryByRole("textbox",{name:"Команда источника"})).not.toBeInTheDocument();
 });
 
 it("gives every settings field a Russian name and a non-empty explanation", async () => {

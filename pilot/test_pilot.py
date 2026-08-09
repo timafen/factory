@@ -1471,5 +1471,57 @@ class PostMergeDeployTest(unittest.TestCase):
         run_shell.assert_called_once_with("fx factory release")
 
 
+class DashboardProjectsTest(unittest.TestCase):
+    def setUp(self):
+        pilot._dash_slow = {"at": 0, "data": {}}
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command")
+    @mock.patch.object(pilot, "api")
+    def test_enabled_projects_keep_api_order_and_use_only_fixed_providers(self, api, command, _repo):
+        api.return_value = {"repositories": [
+            {"id": "a", "remote_identity": "github.com/acme/shop", "enabled": True},
+            {"id": "b", "remote_identity": "github.com/acme/factory", "enabled": True},
+            {"id": "c", "remote_identity": "github.com/acme/disabled", "enabled": False},
+            {"id": "d", "remote_identity": "github.com/acme/plain", "enabled": True},
+        ]}
+        command.side_effect = lambda args, timeout=25: (
+            (True, "current -> /releases/release-one") if args[-1] == "release-info"
+            else (True, "HTTP 200"))
+        conf = {"project_providers": [
+            {"remote_identity": "github.com/acme/shop", "type": "trade"},
+            {"remote_identity": "github.com/acme/factory", "type": "factory"},
+        ]}
+
+        projects = pilot.dashboard_slow(conf)
+
+        self.assertEqual([p["id"] for p in projects], ["a", "b", "d"])
+        self.assertEqual([e["name"] for e in projects[0]["environments"]], ["Стейдж", "Прод"])
+        self.assertEqual([e["name"] for e in projects[1]["environments"]], ["Прод"])
+        self.assertEqual(projects[2]["provider_status"], "not_configured")
+        scopes = [call.args[0][3] for call in command.call_args_list]
+        self.assertEqual(scopes, ["staging", "staging", "prod", "prod", "factory", "factory"])
+        self.assertTrue(all(call.args[0][:3] == ["sudo", "-n", "/usr/local/bin/fx"]
+                            for call in command.call_args_list))
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[(True, "current -> release"), (False, "")])
+    def test_failed_health_is_unavailable_not_a_false_outage(self, command, _repo):
+        snapshot = pilot._environment_snapshot("Прод", "factory", "repo")
+        self.assertEqual(snapshot, {"name": "Прод", "status": "unavailable"})
+        self.assertNotIn("health", snapshot)
+        self.assertEqual(command.call_count, 2)
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
+    @mock.patch.object(pilot, "_fixed_command", side_effect=[
+        (True, "релиз от 9 августа, 16:22, из main: Исправлен обзор\nточка сборки: abc"),
+        (True, "интерфейс: HTTP 200\nданные: HTTP 200"),
+    ])
+    def test_factory_human_release_format_is_recognized(self, _command, _repo):
+        snapshot = pilot._environment_snapshot("Прод", "factory", "repo")
+        self.assertEqual(snapshot["status"], "available")
+        self.assertEqual(snapshot["release_label"], "релиз от 9 августа, 16:22, из main: Исправлен обзор")
+
+
 if __name__ == "__main__":
     unittest.main()

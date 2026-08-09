@@ -240,6 +240,20 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 			return nil, invalid("invalid_pilot_settings", "each brain_chain entry requires cli, model, and provider")
 		}
 	}
+	providers := map[string]bool{}
+	for _, provider := range settings.ProjectProviders {
+		identity := strings.ToLower(strings.TrimSpace(provider.RemoteIdentity))
+		if identity == "" {
+			return nil, invalid("invalid_pilot_settings", "each project provider requires remote_identity")
+		}
+		if provider.Type != "trade" && provider.Type != "factory" {
+			return nil, invalid("unknown_project_provider", "unknown project provider type: "+provider.Type)
+		}
+		if providers[identity] {
+			return nil, invalid("invalid_pilot_settings", "duplicate project provider: "+identity)
+		}
+		providers[identity] = true
+	}
 	sort.Strings(warnings)
 	return warnings, nil
 }

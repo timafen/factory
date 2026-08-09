@@ -825,6 +825,14 @@ type PilotSettings struct {
 	NtfyServer       string             `json:"ntfy_server"`
 	NtfyOwnerTopic   string             `json:"ntfy_owner_topic"`
 	BrainChain       []PilotBrain       `json:"brain_chain"`
+	ProjectProviders []ProjectProvider  `json:"project_providers,omitempty"`
+}
+
+// ProjectProvider selects a server-implemented, read-only product provider.
+// Commands are deliberately not part of the configuration.
+type ProjectProvider struct {
+	RemoteIdentity string `json:"remote_identity"`
+	Type           string `json:"type"`
 }
 
 // Этапы конвейера идут списком, а не набором: порядок здесь и есть
