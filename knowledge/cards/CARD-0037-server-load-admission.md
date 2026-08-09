@@ -9,7 +9,8 @@
   пропускает `Triage`, `Specification`, `Review` и откладывает тяжёлые стадии.
   Авария памяти или диска остаётся полной блокировкой.
 - Evidence: `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` → 7 tests, OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0.
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0;
+  `go build ./...` → exit 0.
 - Next action: Verify прогоняет полный `python3 -m unittest pilot.test_pilot`.
 
 ## LOG
@@ -27,4 +28,4 @@
 Единый допуск встроен перед `create_task`, поэтому применяется к переходам,
 ответам владельца, сторожу, эпикам и автозапуску без дублирования политики.
 Целевой класс: 7 тестов, OK; соседний `CreateTaskFallbackTest`: 1 тест, OK;
-компиляция `pilot/pilot.py` и `pilot/test_pilot.py`: exit 0.
+компиляция `pilot/pilot.py` и `pilot/test_pilot.py`: exit 0; `go build ./...`: exit 0.
