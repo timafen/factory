@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implement complete — сквозная доставка готова и проверена.
-- Branch: `factory/335b5459-8af-a4f82608-cd4`.
-- Head commit: `491165b` (реализация после перебазирования на свежий main).
+- Status: Implement complete — два блокера Review исправлены и проверены.
+- Branch: `factory/76333948-0cd-b45ac5cb-7c6`.
+- Head commit: `9cdee1e` (исправление коллизий и компенсация файловых операций после rebase).
 - What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
-  `/opt/factory-data/attachments/<id-задачи>/` и добавляет каждый путь в context
-  строкой `ВЛОЖЕНИЕ:`. Карточка показывает этот context, worker получает файл.
-- Evidence: `go test ./internal/controlplane ./internal/worker ./internal/protocol`,
-  полный Vitest, TypeScript, production build и `go build ./cmd/factory-server` → PASS.
-- One next action: провести Review сквозного контракта и пользовательских ошибок.
+  `/opt/factory-data/attachments/<id-задачи>/`; worker сохраняет одноимённые файлы
+  как `<id>-<имя>`, а сбой привязки возвращает все уже перемещённые blob назад.
+- Evidence: полный `go test ./...`, две целевые регрессии, TypeScript,
+  `TaskFilePicker` Vitest, production web build и обе Go-сборки → PASS.
+- One next action: повторить Review двух исправленных блокеров.
 
 ## LOG
 
@@ -49,3 +49,12 @@ TypeScript и production build прошли после слияния со св�
 `/opt/factory-data/attachments/<id-задачи>/` и добавляет абсолютный путь каждого
 файла в context строкой `ВЛОЖЕНИЕ:`. Изолированный тест проверяет путь хранения
 и его видимость в возвращаемой карточке задачи.
+
+### 2026-08-08 — Implement
+
+После Review устранены коллизии одинаковых исходных имён: worker использует
+имя `<id-вложения>-<исходное-имя>` и показывает тот же путь агенту. Перемещения
+blob при создании задачи теперь компенсируются в обратном порядке при ошибке
+`Rename`, обновления БД или `Commit`; тест с удалённым вторым source-файлом
+доказывает возврат первого blob и откат `task_id`. Полный Go-набор, целевые
+регрессии, TypeScript, picker-тест и production web build прошли.
