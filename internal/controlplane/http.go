@@ -21,10 +21,11 @@ import (
 )
 
 type API struct {
-	store       *Store
-	logger      *slog.Logger
-	automations *AutomationService
-	pilotConfig *PilotConfigStore
+	store        *Store
+	logger       *slog.Logger
+	automations  *AutomationService
+	pilotConfig  *PilotConfigStore
+	dialogRunner dialogRunner
 }
 
 type workerRegistrationRequest struct {
@@ -75,7 +76,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -131,6 +132,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
 	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
+	mux.HandleFunc("POST /api/v1/dialog/messages", api.postDialogMessage)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
 	mux.HandleFunc("POST /api/v1/task-attachments", api.uploadTaskAttachment)

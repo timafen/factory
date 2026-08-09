@@ -26,6 +26,8 @@ import type {
   CardSummary,
   PilotSettings,
   PilotSettingsResponse,
+	DialogMessage,
+	DialogResponse,
 	TaskAttachment,
 } from "./types";
 
@@ -72,6 +74,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
+  dialogMessage: (model: string, messages: DialogMessage[]) =>
+    request<DialogResponse>("/api/v1/dialog/messages", {
+      method: "POST",
+      body: JSON.stringify({ model, messages }),
+    }),
   updatePilotSettings: (version: string, settings: PilotSettings) =>
     request<PilotSettingsResponse>("/api/v1/settings/pilot", {
       method: "PUT",
