@@ -4,7 +4,7 @@
 
 - Status: Implemented — awaiting repeat review.
 - Branch: `factory/ada68038-96a-93e0787a-7f1`.
-- Head commit: `2a30034` (функциональный снимок поставки на свежем `origin/main`).
+- Head commit: `2a5a0aa` (проверенный функциональный снимок с пересобранным `web/dist` на свежем `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
 - What changed: восстановлены 18 обязательных Playwright-сценариев для актуальных экранов и API; Dialog использует каталог доступных моделей, а длинный runbook больше не растягивает мобильный экран. `web/dist` пересобран.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit` → OK; `npm --prefix web test` → 101 passed; `npm --prefix web run test:browser` → 18 passed; lint и build → OK.
