@@ -72,7 +72,6 @@
   "medium": 1
  },
  "day_cap_usd": 150,
- "day_task_cap": 120,
  "deploy_staging_cmd": "sudo -n /usr/local/bin/fx staging release",
  "enabled": true,
  "respect_host_load": true,
@@ -142,7 +141,6 @@
   "Экран «Настройки»: поведение фабрики видно и правится из интерфейса"
  ],
  "timeout_seconds": 7200,
- "work_day_cap": 12,
  "work_cap_usd": {
   "high": 90,
   "low": 15,

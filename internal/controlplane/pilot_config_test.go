@@ -128,12 +128,6 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	if got := string(fields["respect_host_load"]); got != "true" {
 		t.Fatalf("example respect_host_load = %s, want true", got)
 	}
-	if got := string(fields["work_day_cap"]); got != "12" {
-		t.Fatalf("example work_day_cap = %s, want 12", got)
-	}
-	if got := string(fields["day_task_cap"]); got != "120" {
-		t.Fatalf("example day_task_cap = %s, want 120", got)
-	}
 
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, example, 0o600); err != nil {
@@ -146,9 +140,6 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 	if !current.Settings.RespectHostLoad {
 		t.Fatal("example respect_host_load was not decoded as true")
-	}
-	if current.Settings.WorkDayCap != 12 || current.Settings.DayTaskCap != 120 {
-		t.Fatalf("example task caps = %d/%d, want 12/120", current.Settings.WorkDayCap, current.Settings.DayTaskCap)
 	}
 
 	current.Settings.RespectHostLoad = false
