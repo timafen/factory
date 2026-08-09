@@ -4,11 +4,12 @@
 
 - Status: Implement complete — сквозная доставка готова и проверена.
 - Branch: `factory/335b5459-8af-a4f82608-cd4`.
-- Head commit: pending (будет заменён фактическим коммитом поставки).
+- Head commit: `491165b` (реализация после перебазирования на свежий main).
 - What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
   `/opt/factory-data/attachments/<id-задачи>/` и добавляет каждый путь в context
   строкой `ВЛОЖЕНИЕ:`. Карточка показывает этот context, worker получает файл.
-- Evidence: pending — целевые Go-тесты и web-проверки запускаются перед поставкой.
+- Evidence: `go test ./internal/controlplane ./internal/worker ./internal/protocol`,
+  полный Vitest, TypeScript, production build и `go build ./cmd/factory-server` → PASS.
 - One next action: провести Review сквозного контракта и пользовательских ошибок.
 
 ## LOG
