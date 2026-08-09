@@ -268,9 +268,11 @@ AGENT_RULES = """
 1. Ветка: режь от свежего origin/main (git fetch origin). НИКОГДА не делай
    checkout другой ветки в рабочей копии — это ломает воркера. Чужую работу
    забирай так: git fetch origin <ветка> && git reset --hard FETCH_HEAD.
-2. Сдача: перед «готово» выполни git diff --name-only origin/main — в списке
-   ТОЛЬКО твои файлы (ворота сверят с областью автоматически). Запушь ветку:
-   git push -u origin HEAD. Непушенная работа не существует.
+2. Сдача: сначала перебазируй на свежий main (git fetch origin main,
+   затем git rebase origin/main), потом проверь список файлов командой
+   git diff --name-only origin/main...HEAD — именно ТРИ точки, сравнение от
+   точки ветвления. В списке ТОЛЬКО твои файлы. Запушь:
+   git push --force-with-lease -u origin HEAD. Непушенная работа не существует.
 3. Отчёт заканчивай строками:
    ОБЛАСТЬ: <файлы через запятую, ровно как в git>
    TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
@@ -287,8 +289,11 @@ AGENT_RULES = """
 5. Пиши для человека: первая строка коммита — по-русски, что и зачем.
    Голые хеши/ID на экранах и в текстах для владельца запрещены — только
    со словесной подписью. Ревью возвращает работу за голый хеш на экране.
-6. Ревью: возвращай только за чужие файлы, отсутствие ветки, несделанное
-   или сломанное — с конкретным списком. За формулировки не возвращай.
+6. Ревью: меряй поставку ТОЛЬКО диффом от точки ветвления
+   (git diff origin/main...HEAD, три точки). Файлы, отличающиеся лишь потому,
+   что ветка отстала от main, — НЕ замечание, main движется быстро. Возвращай
+   только за чужие файлы в ЭТОМ диффе, отсутствие ветки, несделанное или
+   сломанное — с конкретным списком. За формулировки не возвращай.
    Побочные идеи — строкой «ПРЕДЛОЖЕНИЕ: что — зачем», не делай их молча.
 === КОНЕЦ ПРАВИЛ ===
 """
@@ -936,7 +941,26 @@ LOOP_NOTE = (
     "Прими решение сам: либо назови ДРУГОЙ способ закрыть замечание, либо разреши "
     "принять работу с этим замечанием и записать его в долги, либо укажи, что именно "
     "починить в окружении. К владельцу это уходит ТОЛЬКО если вопрос про деньги, "
-    "про боевую систему или про выбор продукта — тогда так и скажи прямым текстом.")
+    "про боевую систему или про выбор продукта — тогда так и скажи прямым текстом. "
+    "Если работа по сути СДЕЛАНА (код запушен, тесты зелёные), а замечание можно "
+    "записать в долги — начни ответ ровно словом ПРИНЯТО: и одной фразой почему; "
+    "тогда конвейер двинет работу вперёд, а не на новый круг.")
+
+ACCEPT_MARK = re.compile(
+    r"^\s*[«\"']?(ПРИНЯТО\b|Принимаем\s+работу|Принимаю\s+работу|"
+    r"Работа\s+выполнена|Считаю\s+выполненн)", re.I)
+NEXT_STAGE = {"Implement + Test": "Review", "Review": "Verify"}
+
+
+def accept_forward(stage, answer):
+    """«Принято» оркестратора — движение ВПЕРЁД: принятая разработка идёт в
+    Ревью, принятое Ревью — в Проверку. Раньше «принято» рождало ещё один
+    круг той же стадии, и работа крутилась вечно."""
+    nxt = NEXT_STAGE.get(str(stage))
+    if nxt and ACCEPT_MARK.match(answer or ""):
+        log(f"ACCEPT FORWARD {stage} -> {nxt}")
+        return nxt
+    return None
 
 
 CAP_NOTE = (
@@ -1579,7 +1603,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
             set_loop_baseline(base, attempts_so_far)
-            rec = write_question(task_id, stage, resume_stage, base, repo_id,
+            rec = write_question(task_id, stage,
+                                 accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                 base, repo_id,
                                  situation, question, options, prior_result, branch,
                                  status="answered")
             rec["answer"] = v["answer"]
@@ -1638,7 +1664,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 note_cap_rescue(base, stage)
-                rec = write_question(task_id, stage, resume_stage, base, repo_id,
+                rec = write_question(task_id, stage,
+                                     accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                     base, repo_id,
                                      situation, question, options, prior_result, branch,
                                      status="answered")
                 rec["answer"] = v["answer"]
@@ -1662,7 +1690,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-                rec = write_question(task_id, stage, resume_stage, base, repo_id,
+                rec = write_question(task_id, stage,
+                                     accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                     base, repo_id,
                                      situation, question, options, prior_result, branch,
                                      status="answered")
                 rec["answer"] = v["answer"]
@@ -1964,10 +1994,12 @@ def handle_answers(conf, workflows, workers, tasks):
             cx_hint = "high"
             now_ = stage_worker(conf, stage, cx_hint, workers)
             log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — {was} -> {now_}")
-            notify(conf, "Исполнитель повышен",
-                   (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
-                   + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
-                   tags="arrow_double_up", click=f"{UI_BASE}/work")
+            if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
+                note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                notify(conf, "Исполнитель повышен",
+                       (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
+                       + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
+                       tags="arrow_double_up", click=f"{UI_BASE}/work")
         worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
