@@ -1407,7 +1407,7 @@ def active_auto_works(tasks):
 
 def autostart_plan(conf, tasks, workflows, workers):
     """Start at most one top planned card when the pipeline has a free slot."""
-    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 3)):
+    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 4)):
         return None
     planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
                      key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
@@ -4285,6 +4285,15 @@ def stage_worker(conf, stage_name, complexity, workers=None):
         w = workers.get(name)
         return bool(w and w.get("online") and w.get("health") == "healthy")
 
+    def available(name):
+        """Prefer a worker with a free execution slot instead of queueing on a busy one."""
+        if not workers:
+            return True
+        w = workers.get(name) or {}
+        capacity = int(w.get("capacity") or 1)
+        active = int(w.get("active_count") or 0)
+        return active < capacity
+
     tiers, ordered = None, []
     for s in conf["stages"]:
         if s["workflow"] == stage_name:
@@ -4296,7 +4305,7 @@ def stage_worker(conf, stage_name, complexity, workers=None):
                 ordered = [s.get("worker")]
             break
     for name in ordered:
-        if name and healthy(name):
+        if name and healthy(name) and available(name):
             return name
     # Последний резерв — только внутри нашей же конфигурации и от ДЕШЁВЫХ к дорогим,
     # иначе подмена больного воркера сама по себе разоряет (fable/opus в 5 раз дороже).
@@ -4305,8 +4314,16 @@ def stage_worker(conf, stage_name, complexity, workers=None):
         t = s.get("workers")
         pool += (list(t.values()) if isinstance(t, dict) else [s.get("worker")])
     for name in sorted({n for n in pool if n}, key=worker_price_rank):
-        if healthy(name):
+        if healthy(name) and available(name):
             log(f"stage_worker: {stage_name}/{complexity} -> подменён на здорового {name}")
+            return name
+    # All configured workers are full. Keep the preferred healthy route queued
+    # instead of treating temporary saturation as a provider failure.
+    for name in ordered:
+        if name and healthy(name):
+            return name
+    for name in sorted({n for n in pool if n}, key=worker_price_rank):
+        if healthy(name):
             return name
     return next((n for n in ordered if n), None)
 

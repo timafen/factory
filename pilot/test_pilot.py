@@ -1009,6 +1009,29 @@ class PlanAutostartTest(unittest.TestCase):
                                                self.workers))
         create.assert_not_called()
 
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "fourth-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_default_limit_starts_a_fourth_independent_work(
+            self, _limits, _questions, ideas, _create, _set_idea,
+            _note_work, _notify):
+        conf = dict(self.conf)
+        conf.pop("max_parallel_works")
+        ideas.return_value = self.cards
+        tasks = [
+            {"id": "a", "title": "[auto] [1/5 Triage] A", "state": "running"},
+            {"id": "b", "title": "[auto] [2/5 Specification] B", "state": "queued"},
+            {"id": "c", "title": "[auto] [3/5 Implement + Test] C", "state": "running"},
+        ]
+
+        result = pilot.autostart_plan(conf, tasks, self.workflows, self.workers)
+
+        self.assertEqual(result, "fourth-task")
+
     @mock.patch.object(pilot, "set_idea")
     @mock.patch.object(pilot, "ideas_all")
     @mock.patch.object(pilot, "load_questions", return_value=[])
@@ -1289,6 +1312,38 @@ class PlanManualTaskTest(unittest.TestCase):
         note_work.assert_called_once()
         set_idea.assert_called_once_with(
             "manual-card", state="in_work", task_id="manual-task")
+
+
+class StageWorkerCapacityTests(unittest.TestCase):
+    def setUp(self):
+        self.conf = {"stages": [{
+            "workflow": "Implement + Test",
+            "workers": {"low": "preferred", "medium": "preferred", "high": "spare"},
+        }]}
+
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_saturated_preferred_worker_uses_available_configured_worker(self, _limits):
+        workers = {
+            "preferred": {"online": True, "health": "healthy", "capacity": 1, "active_count": 1},
+            "spare": {"online": True, "health": "healthy", "capacity": 2, "active_count": 0},
+        }
+
+        selected = pilot.stage_worker(
+            self.conf, "Implement + Test", "medium", workers)
+
+        self.assertEqual(selected, "spare")
+
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_all_saturated_workers_keep_preferred_route_queued(self, _limits):
+        workers = {
+            "preferred": {"online": True, "health": "healthy", "capacity": 1, "active_count": 1},
+            "spare": {"online": True, "health": "healthy", "capacity": 1, "active_count": 1},
+        }
+
+        selected = pilot.stage_worker(
+            self.conf, "Implement + Test", "medium", workers)
+
+        self.assertEqual(selected, "preferred")
 
 
 class HostLoadAdmissionTests(unittest.TestCase):

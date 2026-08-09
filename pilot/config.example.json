@@ -76,6 +76,7 @@
  "enabled": true,
  "respect_host_load": true,
  "max_parallel_subtasks": 3,
+ "max_parallel_works": 4,
  "max_stage_attempts": 3,
  "max_work_rounds": 8,
  "ntfy_owner_topic": "ЗАМЕНИ_МЕНЯ",
