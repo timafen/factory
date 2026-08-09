@@ -4,7 +4,7 @@
 
 - Status: Implemented, tests green.
 - Branch: `factory/58c76aa1-b85-1ccdbaaa-beb`.
-- Head commit: (см. коммит с этой правкой карточки).
+- Head commit: `3dc894e`.
 - What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
   срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
   Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
