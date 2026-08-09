@@ -2,9 +2,9 @@
 
 ## HEAD
 
-- Status: READY: поставка проверена, новых падений относительно `origin/main` нет.
-- Branch: `factory/ea2c212d-a7e-9ef69ff9-6b3`.
-- Head commit: `efd81ec` (перебазированная реализация перед этой записью).
+- Status: Verified PASS — awaiting human merge.
+- Branch: `factory/dbcc6265-0d0-cb982264-7b2`.
+- Head commit: `b4ffcbf` (проверенная поставка экрана диалога).
 - What changed: `/dialog` ведёт многоходовый разговор с мозгом фабрики на
   выбранной разрешённой модели; ошибки и лимиты безопасно объясняются человеку.
 - Evidence: `go test ./...`, web build и полный Vitest (101/101) — PASS.
@@ -96,3 +96,17 @@ destinations as the current page` (нет кнопки «Главное»), `Ove
 Свежий `origin/main` получил отдельное исправление четырёх базовых web-тестов.
 После финального rebase `npx vitest run` — 101/101 PASS, `go test ./...` — PASS,
 `npm run build` — PASS. Область поставки диалога осталась без посторонних файлов.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Выбранная модель и история | `go test ./internal/controlplane -run TestDialog -count=1`; `npx vitest run src/Dialog.test.tsx` | PASS: сервер запускает разрешённую выбранную строку, UI передаёт выбранную строку и упорядоченную многоходовую историю; 3/3 Vitest. |
+| Валидация и безопасные сбои | те же Go-тесты | PASS: неизвестная модель, недопустимая роль и размер запроса не доходят до runner; timeout, rate limit и ошибка runner возвращают безопасный ответ. |
+| Полная поставка | чистые `go test ./...`; `cd web && npm ci && npm run build && npx vitest run` | PASS: Go-набор, production build и 101/101 Vitest. |
+
+Проверен diff `origin/main...HEAD`: область поставки ограничена экраном, API,
+контрактными тестами, production bundle и карточкой; пробельных ошибок и
+отладочных следов нет. Миграций и ручных шагов нет. Владелец принял как долг
+риск смены `brain_chain` во время открытого диалога и отсутствие объяснения
+лимита 40 сообщений; он записан в CARD-0030.
