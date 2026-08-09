@@ -858,8 +858,15 @@ type DialogMessage struct {
 }
 
 type DialogRequest struct {
-	BrainIndex *int            `json:"brain_index"`
-	Messages   []DialogMessage `json:"messages"`
+	BrainIndex *int              `json:"brain_index"`
+	Messages   []DialogMessage   `json:"messages"`
+	Screenshot *DialogScreenshot `json:"screenshot,omitempty"`
+}
+
+type DialogScreenshot struct {
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Data        string `json:"data"`
 }
 
 type DialogResponse struct {
