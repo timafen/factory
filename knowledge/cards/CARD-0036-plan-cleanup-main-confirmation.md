@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: BLOCKED: полный web-набор уже падает вне области поставки.
-- Branch: `factory/3186123f-6f9-b8870d0a-3ae`
-- Head commit: `7cc9feb` (проверка и её доказательства).
+- Status: done — владелец разрешил поставку отдельно от старых UI-ошибок.
+- Branch: `factory/782a636d-9df-c8866ea0-458`
+- Head commit: `c499d01` (перебазированный снимок проверки).
 - What changed: подтверждено, что очистка завершённых карточек уже поставлена в
   `main`; повторная реализация не создавалась.
 - Evidence: 5 целевых сценариев `PlanCardCleanupTest`, все 12 Python-тестов,
   `go test ./...`, `go build ./...`, TypeScript-проверка и web-сборка прошли.
-  `npm test` падает в двух сценариях Overview/Settings, `npm run lint` — на 9
-  старых UI-ошибках; карточка не меняет эти файлы.
-- Next action: владельцу решить, исправлять ли существующие web-падения отдельной
-  карточкой, затем повторить полную проверку.
+  Ранее падавшие сценарии `Overview active work` и `Settings` теперь проходят
+  14/14; `npm run lint` всё ещё сообщает 9 старых UI-ошибок вне поставки.
+- Next action: влить карточку; lint-долг исправить отдельно по CARD-0037.
 
 ## LOG
 
@@ -33,3 +32,10 @@ pilot.test_pilot.PlanCardCleanupTest` прошёл 5 тестов; `go test ./..
 | Смежные серверные части не сломаны | `python3 -m unittest pilot/test_pilot.py`, `go test ./...`, `go build ./...` | 12 Python-тестов и все Go-пакеты прошли. |
 | Web-поставка собирается | `npx tsc -p tsconfig.app.json --noEmit`, `npm run build` | Обе команды завершились успешно. |
 | Полный web-набор зелёный | `npm test -- --run`, `npm run lint` | Заблокировано: 2 падения тестов Overview/Settings и 9 lint-ошибок в неизменённых UI-файлах. |
+
+### 2026-08-09 — Implement
+
+Владелец разрешил поставку, не связывая её со старыми UI-поломками. После
+перебазирования целевой запуск `Overview.test.ts` и `Settings.test.tsx` прошёл
+14/14: ранее падавшие `Overview active work` и `Settings` уже исправлены.
+Оставшиеся девять lint-ошибок точно перечислены в отдельной CARD-0037.
