@@ -1,6 +1,9 @@
 import contextlib
 import importlib
+import json
+import os
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -42,6 +45,212 @@ class AgentRulesScopeTests(unittest.TestCase):
         pilot.create_task(body)
 
         self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
+
+class DeliveryAreaTests(unittest.TestCase):
+    def test_stage_report_extends_delivery_area(self):
+        known = {"Счётчик": ["repo::pilot/pilot.py"]}
+
+        with mock.patch.object(pilot, "load", return_value=known), \
+                mock.patch.object(pilot, "save") as save:
+            added = pilot.area_extend(
+                "Счётчик",
+                "ОБЛАСТЬ: pilot/pilot.py, web/src/Overview.tsx",
+                "repo",
+            )
+
+        self.assertEqual(added,
+                         {"repo::pilot/pilot.py", "repo::web/src/Overview.tsx"})
+        save.assert_called_once_with(
+            pilot.AREAS_PATH,
+            {"Счётчик": ["repo::pilot/pilot.py", "repo::web/src/Overview.tsx"]},
+        )
+
+    def test_review_gate_removes_only_other_area_and_service_noise(self):
+        known = {
+            "Счётчик": ["repo::pilot/pilot.py", "repo::web/src/Overview.tsx"],
+            "Другая работа": ["repo::docs/foreign.md"],
+        }
+        files = ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md",
+                 "docs/foreign.md", "pilot/__pycache__/pilot.pyc"]
+
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "load", return_value=known), \
+                mock.patch.object(pilot, "rebuild_clean_branch",
+                                  return_value="task-clean") as rebuild:
+            result = pilot.review_gate({}, "Счётчик", "task", "repo")
+
+        self.assertEqual(result["branch"], "task-clean")
+        rebuild.assert_called_once_with(
+            "repo", "task",
+            ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md"],
+            "Счётчик",
+        )
+
+
+class CodexUsageTests(unittest.TestCase):
+    def setUp(self):
+        pilot._codex_rollout_cache.clear()
+
+    def write_rollout(self, events):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = os.path.join(temporary.name, "rollout-test.jsonl")
+        with open(path, "w") as fh:
+            for event in events:
+                fh.write(json.dumps(event) + "\n")
+        return path
+
+    @staticmethod
+    def event(at, usage, total=None):
+        info = {"last_token_usage": usage}
+        if total is not None:
+            info["total_token_usage"] = total
+        return {"timestamp": at, "type": "event_msg",
+                "payload": {"type": "token_count", "info": info}}
+
+    def test_codex_rollout_uses_exact_model_and_separate_cached_price(self):
+        # Поля ниже взяты из настоящего event_msg/token_count rollout-журнала.
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-5.6-terra"}},
+            self.event("2026-08-09T10:00:01Z",
+                       {"input_tokens": 1200, "cached_input_tokens": 200,
+                        "cache_write_input_tokens": 100, "output_tokens": 100}),
+        ])
+        with mock.patch.object(pilot.glob, "glob", side_effect=[[path], []]):
+            usage = pilot.codex_usage_since(0)
+
+        self.assertEqual((usage["input"], usage["cache_read"], usage["output"]),
+                         (900, 200, 100))
+        self.assertEqual(usage["cache_write"], 100)
+        self.assertAlmostEqual(usage["cost_usd"], 0.0041125)
+        self.assertTrue(usage["cost_defined"])
+        self.assertFalse(usage["base_estimate"])
+
+    def test_snapshot_reuses_offsets_and_reads_unchanged_rollout_once(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-5.6-terra"}},
+            self.event("2026-08-09T10:00:01Z",
+                       {"input_tokens": 100, "cached_input_tokens": 20,
+                        "cache_write_input_tokens": 10, "output_tokens": 5}),
+        ])
+        real_open = open
+        opened = []
+
+        def tracked_open(filename, *args, **kwargs):
+            if filename == path:
+                opened.append(filename)
+            return real_open(filename, *args, **kwargs)
+
+        with mock.patch.object(pilot.glob, "glob",
+                               side_effect=[[path], [], [path], []]), \
+                mock.patch("builtins.open", side_effect=tracked_open):
+            snapshot = pilot.codex_usage_snapshot(0, 1)
+            repeated = pilot.codex_usage_since(0)
+
+        self.assertEqual(snapshot[0]["total_tokens"], 105)
+        self.assertEqual(snapshot[1], snapshot[0])
+        self.assertEqual(repeated, snapshot[0])
+        self.assertEqual(opened, [path])
+
+    def test_incomplete_jsonl_line_is_read_after_it_is_finished(self):
+        path = self.write_rollout([])
+        event = self.event("2026-08-09T10:00:01Z",
+                           {"input_tokens": 100, "output_tokens": 5})
+        encoded = json.dumps(event)
+        split = len(encoded) // 2
+        with open(path, "a") as fh:
+            fh.write(encoded[:split])
+
+        self.assertEqual(pilot._codex_usage_events(path), [])
+        self.assertEqual(pilot._codex_rollout_cache[path]["offset"], 0)
+
+        with open(path, "a") as fh:
+            fh.write(encoded[split:] + "\n")
+
+        events = pilot._codex_usage_events(path)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["input"], 100)
+        self.assertEqual(events[0]["output"], 5)
+
+    def test_malformed_json_types_are_skipped_without_stopping_rollout(self):
+        malformed = [
+            [],
+            {"type": "turn_context", "payload": []},
+            {"type": "turn_context", "payload": {"model": 56}},
+            {"type": "event_msg", "payload": {"type": "token_count", "info": []}},
+            self.event("2026-08-09T10:00:01Z", "not-an-object"),
+            self.event("2026-08-09T10:00:02Z", {"input_tokens": "100"}),
+            self.event("2026-08-09T10:00:03Z", {"input_tokens": True}),
+            self.event("2026-08-09T10:00:04Z", {"input_tokens": -1}),
+            self.event("2026-08-09T10:00:05Z", {"input_tokens": 10, "model": 56}),
+            self.event("2026-08-09T10:00:06Z", None, "not-an-object"),
+            self.event("2026-08-09T10:00:07Z", {"input_tokens": 7,
+                                                  "output_tokens": 2}),
+        ]
+        path = self.write_rollout(malformed)
+
+        events = pilot._codex_usage_events(path)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0]["input"], events[0]["output"]), (7, 2))
+
+    def test_cumulative_counts_are_deltas_and_unknown_price_is_not_zero(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-future-exact"}},
+            self.event("2026-08-09T10:00:01Z", None,
+                       {"input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 10}),
+            self.event("2026-08-09T10:00:02Z", None,
+                       {"input_tokens": 150, "cached_input_tokens": 30, "output_tokens": 25}),
+        ])
+        with mock.patch.object(pilot.glob, "glob", side_effect=[[path], []]):
+            usage = pilot.codex_usage_since(0)
+
+        self.assertEqual(usage["total_tokens"], 175)
+        self.assertFalse(usage["cost_defined"])
+        self.assertTrue(usage["base_estimate"])
+        self.assertEqual(usage["unknown_models"], ["gpt-future-exact"])
+        self.assertIsNone(pilot.openai_api_cost("gpt-future-exact", 1, 1, 1))
+
+    def test_mixed_last_and_cumulative_usage_does_not_repeat_total(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-5.6-sol"}},
+            self.event("2026-08-09T10:00:01Z",
+                       {"input_tokens": 100, "cached_input_tokens": 20,
+                        "output_tokens": 10},
+                       {"input_tokens": 100, "cached_input_tokens": 20,
+                        "output_tokens": 10}),
+            self.event("2026-08-09T10:00:02Z", None,
+                       {"input_tokens": 150, "cached_input_tokens": 30,
+                        "output_tokens": 25}),
+        ])
+
+        events = pilot._codex_usage_events(path)
+
+        self.assertEqual([(event["input"], event["cache_read"], event["output"])
+                          for event in events], [(80, 20, 10), (40, 10, 15)])
+
+    def test_long_context_and_cache_writes_use_gpt_56_multipliers(self):
+        # 273K prompt: input/read/write all use the long-context multiplier;
+        # writes additionally cost 1.25x and output costs 1.5x.
+        cost = pilot.openai_api_cost("gpt-5.6-sol", 200000, 50000, 23000,
+                                     cache_write_tokens=23000)
+
+        self.assertAlmostEqual(cost, 3.3725)
+
+    def test_day_total_adds_global_codex_estimate_without_task_attribution(self):
+        with mock.patch.object(pilot, "attempts_of", return_value=["claude-attempt"]), \
+                mock.patch.object(pilot, "task_cost_usd", return_value=2.0), \
+                mock.patch.object(pilot, "codex_usage_since",
+                                  return_value={"cost_usd": 1.25}):
+            spent = pilot.day_spent([{"id": "task", "created_at":
+                                      time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime()),
+                                      "state": "succeeded"}])
+        self.assertEqual(spent, 3.25)
 
 
 class CreateTaskFallbackTest(unittest.TestCase):
@@ -171,15 +380,6 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
 
-    def test_ignores_task_without_canonical_pipeline_title(self):
-        task = self.task()
-        task["title"] = "Implement Встроенный патруль"
-
-        self.watch([task])
-
-        self.assertEqual(self.created, [])
-        self.assertEqual(self.memory, {})
-
     def test_owner_pause_is_not_resumed(self):
         self.conf["stopped_pipelines"] = ["Встроенный патруль"]
         self.watch()
@@ -193,6 +393,15 @@ class PipelineWatchTests(unittest.TestCase):
         self.watch([self.task(stage="Review")])
 
         self.assertNotIn("Встроенный патруль", self.memory)
+        self.assertEqual(self.created, [])
+
+    def test_ignores_task_without_canonical_pipeline_title(self):
+        task = self.task()
+        task["title"] = "Implement Встроенный патруль"
+
+        self.watch([task])
+
+        self.assertEqual(self.memory, {})
         self.assertEqual(self.created, [])
 
     def test_gives_up_after_two_nudges_and_notifies_only_once(self):
@@ -571,6 +780,62 @@ class PlanAutostartTest(unittest.TestCase):
 
         ideas.assert_not_called()
         create.assert_not_called()
+
+    def test_successful_stage_preserves_files_declared_in_report(self):
+        report = "ОБЛАСТЬ: pilot/pilot.py, docs/additional.md"
+        task = {"id": "done", "title": "[auto] [1/2 Implement] Счётчик",
+                "state": "succeeded"}
+        detail = {"task": {"repository_id": "repo-1"},
+                  "workflow": {"title": "Implement"},
+                  "attempts": [{"result": report}]}
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/tasks/done":
+                return detail
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        conf = {"stages": [{"workflow": "Implement"}, {"workflow": "Review"}],
+                "auto_plan": False}
+        state = {"processed": [], "epics_processed": []}
+        saved = {}
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "pipeline_watch", "collect_ideas", "route_question")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_overloaded",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "load", side_effect=lambda path, default=None:
+                saved.get(path, default)))
+            stack.enter_context(mock.patch.object(
+                pilot, "save", side_effect=lambda path, value:
+                saved.__setitem__(path, value)))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "stop", "reason": "test"}))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "load_questions", return_value=[]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        self.assertEqual(saved[pilot.AREAS_PATH]["Счётчик"], [
+            "repo-1::docs/additional.md", "repo-1::pilot/pilot.py",
+        ])
 
 
 class PlanManualTaskTest(unittest.TestCase):
