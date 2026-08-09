@@ -1,0 +1,162 @@
+{
+ "_note": "Model+effort routing per Anthropic guidance (Aug 2026). Effort is the primary lever within a model: -think workers = higher effort/thinking on hard tiers; plain workers = low effort on trivial tiers. Haiku for classification/trivial, Sonnet workhorse, Opus(+think) for hard reasoning, Fable as orchestrator. Codex tiers return after ChatGPT limit resets.",
+ "allow_any_worker": false,
+ "allowed_workers": [
+  "1c370b98-3e63-4951-9378-67c6fcda4a7e",
+  "21e598f2-5375-4f2a-a5d2-b15ffebd581c",
+  "2e41a584-ef4e-434d-b06f-18ec1b6dde06",
+  "40ee0c61-8199-4444-b49a-1714b5528bd9",
+  "45033fb6-fe8c-48df-9f5e-d2392e56c575",
+  "4a3a76e5-a5cf-41a5-a347-ca4da9992f6e",
+  "5a9563d7-2ed7-4457-baa2-8d30def7e1f1",
+  "5b096155-aecd-4a86-b4e8-26060b34e2f5",
+  "5c5417af-5a32-4a2b-87e0-26bd2206a15f",
+  "6b0ce412-4638-4ace-8c2a-8001fa9b9d1b",
+  "72e8e0c6-b5d5-46ec-8452-81c6d49039f1",
+  "80671ed3-7c06-476f-bb61-62c882f93dac",
+  "80b9b2f4-0cea-48b8-a369-fa5b8622de56",
+  "89785326-b692-4481-8618-276a30bfa547",
+  "8d0985f0-eaf1-458a-a28d-f8d0502ec798",
+  "a1732242-927e-4691-8a0c-a8493ea4ba7d",
+  "a636bc02-e869-4a76-850f-dd85e674b8c2",
+  "a646a949-5e3d-4ec0-80a5-6aeb8278ce2d",
+  "be8ae6b6-857a-44c8-9bd2-0d4f526cd6cb",
+  "c5c719a2-1a78-4f56-b8fa-c8e1d2ae5618",
+  "c8291563-2719-4f5d-acc3-2ff4dac78d80",
+  "cd806631-61ff-4a1e-a503-0c156a899313",
+  "claude-sonnet-think",
+  "codex-luna-low",
+  "codex-luna-medium",
+  "codex-sol-low",
+  "codex-terra-high",
+  "codex-terra-low",
+  "codex-terra-medium",
+  "dc244279-a2fc-4745-8eb6-e0797ebe4a50",
+  "ed8414fb-f78b-487d-a7cf-d8faa413e3ba",
+  "ee9ca7df-7986-4c3f-bc06-9bf09df63ff3",
+  "f23454ac-959a-4058-933c-f26ec9084464",
+  "f50f5e92-41bb-4134-95e3-741dd70f637a",
+  "fd08e9ef-0b65-40d4-95a9-c4e50c9ba061",
+  "codex-sol-medium"
+ ],
+ "auto_answer": true,
+ "auto_merge": true,
+ "brain_chain": [
+  {
+   "cli": "claude",
+   "model": "fable",
+   "provider": "claude",
+   "note": "\u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439: \u0441\u0438\u043b\u044c\u043d\u0430\u044f \u043c\u043e\u0434\u0435\u043b\u044c \u041a\u043b\u043e\u0434\u0430"
+  },
+  {
+   "cli": "codex",
+   "model": "gpt-5.6-sol",
+   "provider": "codex",
+   "note": "\u0437\u0430\u043f\u0430\u0441\u043d\u043e\u0439: \u0444\u043b\u0430\u0433\u043c\u0430\u043d \u041a\u043e\u0434\u0435\u043a\u0441\u0430, \u0432\u0442\u0440\u043e\u0435 \u0434\u0435\u0448\u0435\u0432\u043b\u0435 Opus"
+  },
+  {
+   "cli": "claude",
+   "model": "opus",
+   "provider": "claude",
+   "note": "\u0437\u0430\u043f\u0430\u0441\u043d\u043e\u0439: \u0435\u0441\u043b\u0438 \u041a\u043e\u0434\u0435\u043a\u0441 \u0442\u043e\u0436\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"
+  },
+  {
+   "cli": "codex",
+   "model": "gpt-5.6-terra",
+   "provider": "codex",
+   "note": "\u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u0440\u0443\u0431\u0435\u0436: \u0441\u043b\u0430\u0431\u0435\u0435, \u043d\u043e \u0434\u0435\u0448\u0451\u0432\u044b\u0439 \u0438 \u0436\u0438\u0432\u0443\u0447\u0438\u0439"
+  }
+ ],
+ "complexity_factor": {
+  "high": 2,
+  "low": 0.6,
+  "medium": 1
+ },
+ "day_cap_usd": 150,
+ "deploy_staging_cmd": "sudo -n /usr/local/bin/fx staging release",
+ "enabled": true,
+ "max_parallel_subtasks": 3,
+ "max_stage_attempts": 3,
+ "max_work_rounds": 8,
+ "ntfy_owner_topic": "timafen-a8523d037f21",
+ "ntfy_server": "https://ntfy.sh",
+ "ntfy_topic": "tarser-factory-16f5fe6f",
+ "owner_chat_url": "https://claude.ai/code/session_01NMZVSSJpRQfYECuiG8T3hn",
+ "owner_ui_url": "https://factory.timafen.com/work",
+ "poll_seconds": 30,
+ "skip_stages_for_low": [
+  "Triage",
+  "Specification"
+ ],
+ "stage_base_usd": {
+  "Implement + Test": 8,
+  "Review": 3,
+  "Specification": 2.5,
+  "Triage": 1.5,
+  "Verify": 3
+ },
+ "stages": [
+  {
+   "workflow": "Triage",
+   "workers": {
+    "low": "codex-luna-low",
+    "medium": "codex-luna-medium",
+    "high": "codex-terra-low"
+   }
+  },
+  {
+   "workflow": "Specification",
+   "workers": {
+    "low": "codex-luna-medium",
+    "medium": "codex-terra-low",
+    "high": "codex-terra-high"
+   }
+  },
+  {
+   "workflow": "Implement + Test",
+   "workers": {
+    "low": "codex-terra-medium",
+    "medium": "codex-sol-medium",
+    "high": "codex-sol-low"
+   }
+  },
+  {
+   "workflow": "Review",
+   "workers": {
+    "low": "codex-terra-low",
+    "medium": "codex-terra-medium",
+    "high": "codex-sol-medium"
+   }
+  },
+  {
+   "workflow": "Verify",
+   "workers": {
+    "low": "codex-terra-low",
+    "medium": "codex-terra-medium",
+    "high": "codex-sol-low"
+   }
+  }
+ ],
+ "stopped_pipelines": [
+  "\u042d\u043a\u0440\u0430\u043d \u00ab\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438\u00bb: \u043f\u043e\u0432\u0435\u0434\u0435\u043d\u0438\u0435 \u0444\u0430\u0431\u0440\u0438\u043a\u0438 \u0432\u0438\u0434\u043d\u043e \u0438 \u043f\u0440\u0430\u0432\u0438\u0442\u0441\u044f \u0438\u0437 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0430",
+  "\u0410\u0432\u0442\u043e\u043f\u043e\u0434\u0431\u043e\u0440 \u0440\u0430\u0431\u043e\u0442 \u0438\u0437 \u041f\u043b\u0430\u043d\u0430: \u043a\u043e\u043d\u0432\u0435\u0439\u0435\u0440 \u0441\u0430\u043c \u0431\u0435\u0440\u0451\u0442 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443"
+ ],
+ "timeout_seconds": 7200,
+ "work_cap_usd": {
+  "high": 90,
+  "low": 15,
+  "medium": 40
+ },
+ "notify_groups": {
+  "questions": true,
+  "stuck": true,
+  "money": true,
+  "done": true,
+  "routine": false,
+  "diag": true
+ },
+ "max_loop_rescues": 2,
+ "work_day_cap": 12,
+ "day_task_cap": 120,
+ "deep_diag_rounds": 5
+}
