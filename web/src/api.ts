@@ -27,6 +27,7 @@ import type {
   PilotSettings,
   PilotSettingsResponse,
 	DialogMessage,
+	DialogScreenshot,
 	DialogResponse,
 	TaskAttachment,
 } from "./types";
@@ -74,10 +75,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
-  dialogMessage: (brainIndex: number, messages: DialogMessage[]) =>
+  dialogMessage: (brainIndex: number, messages: DialogMessage[], screenshot?: DialogScreenshot) =>
     request<DialogResponse>("/api/v1/dialog/messages", {
       method: "POST",
-      body: JSON.stringify({ brain_index: brainIndex, messages }),
+      body: JSON.stringify({ brain_index: brainIndex, messages, ...(screenshot ? { screenshot } : {}) }),
     }),
   updatePilotSettings: (version: string, settings: PilotSettings) =>
     request<PilotSettingsResponse>("/api/v1/settings/pilot", {

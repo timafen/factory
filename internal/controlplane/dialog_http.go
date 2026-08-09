@@ -3,6 +3,7 @@ package controlplane
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -16,26 +17,35 @@ import (
 )
 
 const (
-	dialogMaxMessages = 40
-	dialogMaxBytes    = 64 << 10
-	dialogMaxOutput   = 1 << 20
-	dialogTimeout     = 45 * time.Second
+	dialogMaxMessages        = 40
+	dialogMaxBytes           = 64 << 10
+	dialogMaxScreenshotBytes = 4 << 20
+	dialogMaxOutput          = 1 << 20
+	dialogTimeout            = 45 * time.Second
 )
 
 type dialogRunner interface {
-	Run(context.Context, protocol.PilotBrain, []protocol.DialogMessage) (string, error)
+	Run(context.Context, protocol.PilotBrain, []protocol.DialogMessage, string) (string, error)
 }
 
 type commandDialogRunner struct{}
 
-func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage) (string, error) {
+func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage, screenshotPath string) (string, error) {
 	prompt := serializeDialog(messages)
 	var command *exec.Cmd
 	switch brain.CLI {
 	case "codex":
-		command = exec.CommandContext(ctx, "codex", "exec", "-m", brain.Model, "--skip-git-repo-check", "-")
+		args := []string{"exec", "-m", brain.Model, "--skip-git-repo-check"}
+		if screenshotPath != "" {
+			args = append(args, "--image", screenshotPath)
+		}
+		args = append(args, "-")
+		command = exec.CommandContext(ctx, "codex", args...)
 		command.Stdin = strings.NewReader(prompt)
 	case "claude":
+		if screenshotPath != "" {
+			prompt += "\nК последнему вопросу приложен скриншот: " + screenshotPath + ". Изучи этот файл перед ответом.\n"
+		}
 		command = exec.CommandContext(ctx, "claude", "-p", prompt, "--output-format", "text")
 		command.Env = append(os.Environ(), "ANTHROPIC_MODEL="+brain.Model)
 	default:
@@ -88,7 +98,7 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request protocol.DialogRequest
-	r.Body = http.MaxBytesReader(w, r.Body, dialogMaxBytes+(4<<10))
+	r.Body = http.MaxBytesReader(w, r.Body, dialogMaxBytes+(6<<20))
 	if !decodeJSON(w, r, &request) {
 		return
 	}
@@ -119,7 +129,15 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dialogTimeout)
 	defer cancel()
-	answer, err := a.dialogRunner.Run(ctx, *selected, request.Messages)
+	screenshotPath, err := prepareDialogScreenshot(request.Screenshot)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if screenshotPath != "" {
+		defer os.Remove(screenshotPath)
+	}
+	answer, err := a.dialogRunner.Run(ctx, *selected, request.Messages, screenshotPath)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			writeError(w, &ServiceError{Code: "dialog_timeout", Message: "Модель не ответила вовремя. Попробуйте ещё раз", Status: http.StatusGatewayTimeout})
@@ -143,6 +161,36 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, protocol.DialogResponse{Message: protocol.DialogMessage{Role: "assistant", Content: answer}, ModelLabel: dialogModelLabel(*selected)})
+}
+
+func prepareDialogScreenshot(screenshot *protocol.DialogScreenshot) (string, error) {
+	if screenshot == nil {
+		return "", nil
+	}
+	extensions := map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+	extension, ok := extensions[screenshot.ContentType]
+	if !ok {
+		return "", invalid("invalid_dialog_screenshot", "Прикрепите PNG, JPEG или WebP размером до 4 МБ")
+	}
+	data, err := base64.StdEncoding.DecodeString(screenshot.Data)
+	if err != nil || len(data) == 0 || len(data) > dialogMaxScreenshotBytes || http.DetectContentType(data) != screenshot.ContentType {
+		return "", invalid("invalid_dialog_screenshot", "Прикрепите PNG, JPEG или WebP размером до 4 МБ")
+	}
+	file, err := os.CreateTemp("", "factory-dialog-*"+extension)
+	if err != nil {
+		return "", &ServiceError{Code: "dialog_failed", Message: "Не удалось обработать скриншот. Попробуйте ещё раз", Status: http.StatusInternalServerError}
+	}
+	path := file.Name()
+	if _, err = file.Write(data); err == nil {
+		err = file.Close()
+	} else {
+		_ = file.Close()
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return "", &ServiceError{Code: "dialog_failed", Message: "Не удалось обработать скриншот. Попробуйте ещё раз", Status: http.StatusInternalServerError}
+	}
+	return path, nil
 }
 
 func validateDialogRequest(request protocol.DialogRequest) error {

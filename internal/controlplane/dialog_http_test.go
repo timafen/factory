@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -61,18 +62,60 @@ func TestHTTPServerDeliversDialogResponseAfterReadTimeoutWindow(t *testing.T) {
 }
 
 type fakeDialogRunner struct {
-	calls    int
-	brain    protocol.PilotBrain
-	messages []protocol.DialogMessage
-	answer   string
-	err      error
+	calls          int
+	brain          protocol.PilotBrain
+	messages       []protocol.DialogMessage
+	answer         string
+	err            error
+	screenshotPath string
+	screenshotData []byte
 }
 
-func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage) (string, error) {
+func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage, screenshotPath string) (string, error) {
 	f.calls++
 	f.brain = brain
 	f.messages = append([]protocol.DialogMessage(nil), messages...)
+	f.screenshotPath = screenshotPath
+	if screenshotPath != "" {
+		f.screenshotData, _ = os.ReadFile(screenshotPath)
+	}
 	return f.answer, f.err
+}
+
+func TestDialogPassesValidatedScreenshotToRunnerAndRemovesTemporaryFile(t *testing.T) {
+	runner := &fakeDialogRunner{answer: "Вижу снимок"}
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n"))
+	body := `{"brain_index":0,"messages":[{"role":"user","content":"Что здесь?"}],"screenshot":{"name":"screen.png","content_type":"image/png","data":"` + png + `"}}`
+	recorder := runDialogRequest(t, dialogTestAPI(t, runner), body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	if string(runner.screenshotData) != "\x89PNG\r\n\x1a\n" {
+		t.Fatalf("runner got %q", runner.screenshotData)
+	}
+	if runner.screenshotPath == "" {
+		t.Fatal("runner did not receive screenshot path")
+	}
+	if _, err := os.Stat(runner.screenshotPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary screenshot remains: %v", err)
+	}
+}
+
+func TestDialogRejectsInvalidScreenshotsBeforeRunner(t *testing.T) {
+	for name, screenshot := range map[string]string{
+		"unsupported type": `{"name":"x.gif","content_type":"image/gif","data":"R0lGODlh"}`,
+		"bad base64":       `{"name":"x.png","content_type":"image/png","data":"%%%"}`,
+		"wrong signature":  `{"name":"x.png","content_type":"image/png","data":"aGVsbG8="}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeDialogRunner{}
+			body := `{"brain_index":0,"messages":[{"role":"user","content":"x"}],"screenshot":` + screenshot + `}`
+			recorder := runDialogRequest(t, dialogTestAPI(t, runner), body)
+			if recorder.Code != http.StatusBadRequest || runner.calls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", recorder.Code, runner.calls, recorder.Body)
+			}
+		})
+	}
 }
 
 func dialogTestAPI(t *testing.T, runner dialogRunner) *API {
