@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/54e78a31-548-7d379441-212`.
-- Head commit: `3810b71` (проверенный снимок поставки после перебазирования на `origin/main`).
+- Status: Implemented and tested — ready for Verify.
+- Branch: `factory/ce7b2ab2-4dd-39014c8b-5c2`.
+- Head commit: `dd53a14` (коммит реализации на свежем `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника. Базовый 404 каталога исполнителя устранён отдельным минимальным коммитом.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `go test ./internal/controlplane/... -run '^TestHTTPManagedRepositoryCatalog$' -count=1` → OK; `go test -timeout 5m ./...` → OK; `npm --prefix web run build` → OK.
-- One next action: человеку влить проверенную поставку в `main`.
+- What changed: сторож явно распознаёт все живые состояния задач и не создаёт дубли; браузерные ожидания соответствуют текущему русскому интерфейсу и API моделей; мобильная карточка автоматизации не переполняет экран.
+- Evidence: `python3 -m unittest pilot.test_pilot` → 36 OK; `npm --prefix web test -- --run` → 101 OK; `npm --prefix web run test:browser` → 18 OK; `just test`, `just vet`, `just ui-check`, `npm --prefix web run build` → OK.
+- One next action: запустить Verify на доставленной чистой ветке.
 
 ## LOG
 
@@ -43,3 +43,7 @@
 | Патруль автономен | та же команда | заглушка внешнего оркестратора не вызвана; все 6 сценариев прошли без сети и второго процесса |
 
 Регрессии: `python3 -m unittest pilot.test_pilot` — 7 OK; `go test -timeout 5m ./...` — OK; `go test ./internal/controlplane/... -run '^TestHTTPManagedRepositoryCatalog$' -count=1` — OK; после `npm ci --prefix web` команда `npm --prefix web run build` — OK. Дифф от `origin/main...HEAD` содержит пять заявленных файлов, `git diff --check` чист.
+
+### 2026-08-09 — Implement
+
+На чистой ветке от свежего `origin/main` закреплён полный контракт сторожа: все пять живых состояний блокируют повторный запуск, ожидание, пауза владельца, завершение и две попытки остаются покрыты тестами. Экранные сценарии переведены на текущие русские подписи, тест диалога использует фактический API доступных моделей, а узкий экран автоматизации защищён от горизонтального переполнения. Прошли 36 Python-проверок, 101 компонентная UI-проверка, все 18 браузерных сценариев, Go test/vet, UI lint/typecheck и production build.
