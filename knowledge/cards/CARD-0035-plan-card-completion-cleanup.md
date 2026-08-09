@@ -2,17 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented
-- Branch: `factory/e0248b84-690-dc358de5-fdf`
-- Head commit: `909804e`
-- What changed: связанная карточка `planned`/`in_work` становится `done` после
-  строгого успеха последней стадии; старые, незавершённые и неоднозначные
-  прогоны её не закрывают. Сверка вызывается в начале цикла до автоподбора.
-- Evidence: `python3 -m unittest pilot.test_pilot.PlanCardCleanupTest` — 5 tests,
-  OK; `python3 -m unittest pilot.test_pilot` — 6 tests, OK;
-  `go test -timeout 5m ./...` и `FACTORY_BUILD_DIR=/tmp/card0035-build just build`
-  — успешно.
-- Next action: Verify проверяет поставленную ветку и зависимость от CARD-0034.
+- Status: Specified
+- Branch: `factory/56c8af14-e0b-430a7e59-b54`
+- Head commit: `27da7ac`
+- What changed: в этой поставке сохранены карточка и спецификация; реализация и
+  целевые проверки в `pilot` исключены, поскольку они вне заявленной области.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 1 test, OK; итоговый diff
+  от `origin/main` содержит только карточку и спецификацию.
+- Next action: реализовать спецификацию отдельной веткой с разрешёнными
+  `pilot/pilot.py` и `pilot/test_pilot.py`.
 
 ## LOG
 
@@ -27,3 +25,9 @@
 Пять целевых сценариев подтверждают успешное закрытие и защиту от старого
 прогона, отсутствующего `task_id`, неуспеха, отмены и открытого вопроса.
 Полный модуль pilot (6 тестов), Go-тесты и сборка бинарников прошли успешно.
+
+### 2026-08-08 — Implement
+
+Из этой ветки исключены попавшие в неё файлы `pilot`: машинные ворота ограничили
+поставку карточкой и спецификацией. Карточка возвращена в статус спецификации,
+чтобы не заявлять о реализации, которой в ветке нет.
