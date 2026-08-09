@@ -587,5 +587,96 @@ class PlanManualTaskTest(unittest.TestCase):
             "manual-card", state="in_work", task_id="manual-task")
 
 
+class HostLoadAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.cpu_over = {
+            "state": "over", "cpu": {"state": "over"},
+            "memory": {"state": "ok"}, "disk": {"state": "ok"},
+        }
+
+    def test_guaranteed_slot_allows_any_stage(self):
+        for stage in ("Triage", "Specification", "Review",
+                      "Implement + Test", "Verify", "Unlisted stage"):
+            with self.subTest(stage=stage):
+                self.assertTrue(pilot.host_load_admits([], stage, self.cpu_over))
+
+    def test_after_guaranteed_slot_only_light_stages_are_allowed(self):
+        tasks = [{"state": "running"}]
+        for stage in ("Triage", "Specification", "Review"):
+            with self.subTest(stage=stage):
+                self.assertTrue(pilot.host_load_admits(tasks, stage, self.cpu_over))
+        for stage in ("Implement + Test", "Verify", "Unlisted stage", ""):
+            with self.subTest(stage=stage):
+                self.assertFalse(pilot.host_load_admits(tasks, stage, self.cpu_over))
+
+    def test_all_active_states_count_towards_the_minimum(self):
+        for state in ("running", "queued", "pending", "created", "starting"):
+            with self.subTest(state=state):
+                self.assertFalse(pilot.host_load_admits(
+                    [{"state": state}], "Verify", self.cpu_over))
+
+    def test_memory_or_disk_emergency_blocks_even_the_guaranteed_slot(self):
+        for resource in ("memory", "disk"):
+            load = dict(self.cpu_over)
+            load[resource] = {"state": "over"}
+            with self.subTest(resource=resource):
+                self.assertFalse(pilot.host_load_admits([], "Triage", load))
+
+    def test_normal_load_or_disabled_guard_preserves_previous_admission(self):
+        active = [{"state": "running"}]
+        self.assertTrue(pilot.host_load_admits(
+            active, "Verify", {"state": "tight"}))
+        self.assertTrue(pilot.host_load_admits(
+            active, "Verify", self.cpu_over, respect_host_load=False))
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "one"}})
+    def test_successful_create_consumes_guaranteed_slot(self, api, _money):
+        conf = {"_host_load_snapshot": self.cpu_over, "_host_load_tasks": []}
+        body = {"title": "[auto] [3/5 Implement + Test] A"}
+
+        pilot.create_task(body, conf)
+
+        with self.assertRaisesRegex(RuntimeError, "stage deferred"):
+            pilot.create_task(body, conf)
+        api.assert_called_once()
+
+    def test_overload_does_not_stop_cycle_services(self):
+        conf = {"stages": [{"workflow": "Triage", "workers": {}}]}
+        state = {"processed": [], "epics_processed": [],
+                 "epic_starts_processed": []}
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": []}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value=self.cpu_over))
+            watch = stack.enter_context(mock.patch.object(pilot, "pipeline_watch"))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        watch.assert_called_once()
+        self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
+
+
 if __name__ == "__main__":
     unittest.main()
