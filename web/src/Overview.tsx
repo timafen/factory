@@ -169,7 +169,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>Главное</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>Обзор</h1>
         <span style={{ fontSize: 12, color: muted }}>
           {d.updated_at ? `снимок ${new Date(d.updated_at).toLocaleTimeString("ru-RU")}` : ""}
         </span>
@@ -205,16 +205,6 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <span style={{ fontSize: 12, color: muted }}>нажми, чтобы ответить ›</span>
           </div>
         )}
-        {(d.now?.running ?? []).length > 0 && (
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-            {(d.now?.running ?? []).map((t) => (
-              <div key={t.id} style={{ fontSize: 13, color: muted, cursor: "pointer" }}
-                   onClick={(e) => { e.stopPropagation(); onNav?.("work"); }}>
-                ▸ {t.title}
-              </div>
-            ))}
-          </div>
-        )}
       </section>
 
       <section style={card} aria-labelledby="active-work-title">
@@ -226,22 +216,24 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         {activeWork.length === 0 ? (
           <div style={{ fontSize: 13, color: muted }}>Активных работ нет.</div>
         ) : activeWork.map((work) => (
-          <button
+          <div
             key={work.id}
-            className="button"
             onClick={() => onNav?.("work")}
-            style={{ width: "100%", height: "auto", display: "grid",
-                     gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "baseline",
-                     gap: "4px 16px", textAlign: "left", marginTop: 6, padding: "10px 12px" }}
+            style={{ cursor: "pointer", marginTop: 8, padding: "10px 14px",
+                     background: "#151b26", border: "1px solid #242e3f",
+                     borderRadius: 10, display: "flex", flexDirection: "column", gap: 6 }}
           >
-            <strong style={{ overflow: "hidden", textOverflow: "ellipsis",
-                             whiteSpace: "nowrap", minWidth: 0 }}>{work.title}</strong>
-            <Pill text={work.state === "running" ? "выполняется" : "в очереди"}
-                  tone={work.state === "running" ? "ok" : "muted"} />
-            <span style={{ fontSize: 12, color: muted }}>{work.origin}</span>
-            <span style={{ fontSize: 12, color: "#8ec5ff", whiteSpace: "nowrap",
-                           justifySelf: "end" }}>этап: {work.stage}</span>
-          </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <strong style={{ flex: 1, minWidth: 0, overflow: "hidden",
+                               textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{work.title}</strong>
+              <Pill text={work.state === "running" ? "выполняется" : "в очереди"}
+                    tone={work.state === "running" ? "ok" : "muted"} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12, color: muted, flex: 1 }}>{work.origin}</span>
+              <span style={{ fontSize: 12, color: "#8ec5ff", whiteSpace: "nowrap" }}>этап: {work.stage}</span>
+            </div>
+          </div>
         ))}
       </section>
 
@@ -415,8 +407,8 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                       tone={off || blocked ? "bad" : "ok"} />
                 {typeof l.used_percent === "number" && (
                   <span style={{ fontSize: 12.5, color: l.used_percent >= 80 ? "#e0b877" : muted }}
-                        title="Израсходовано от недельного лимита подписки — настоящий счётчик провайдера">
-                    израсходовано {Math.round(l.used_percent)}%
+                        title="Остаток недельного лимита подписки — настоящий счётчик провайдера">
+                    осталось {Math.max(0, Math.round(100 - l.used_percent))}%
                   </span>
                 )}
                 <span style={{ fontSize: 12.5, color: muted }}>

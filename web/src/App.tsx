@@ -237,7 +237,7 @@ export function App() {
             aria-current={route.page === "overview" ? "page" : undefined}
             onClick={() => navigate({ page: "overview" })}
           >
-            <Gauge size={17} /> Главное
+            <Gauge size={17} /> Обзор
           </button>
           <button
             className={`nav-item ${route.page === "work" || route.page === "task" ? "active" : ""}`}
@@ -313,7 +313,7 @@ export function App() {
             {mobileNavOpen ? <X size={19} /> : <Menu size={19} />}
           </button>
           <div className="topbar-title">
-            {route.page === "overview" && "Главное"}
+            {route.page === "overview" && "Обзор"}
             {route.page === "say" && "Say"}
             {route.page === "epics" && "Epics"}
             {route.page === "answer" && "Нужен ответ"}

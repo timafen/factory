@@ -3040,6 +3040,11 @@ def limits_view():
         r = real.get(prov) or {}
         if isinstance(r.get("used_percent"), (int, float)):
             rec["used_percent"] = r["used_percent"]
+        else:
+            pc = r.get("percents") or {}
+            wk = pc.get("seven_day.utilization")
+            if isinstance(wk, (int, float)):
+                rec["used_percent"] = wk
         out[prov] = rec
     return out
 
