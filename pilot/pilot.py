@@ -2778,7 +2778,8 @@ LIMITS_PATH = f"{HOME}/pilot/limits.json"
 LIMIT_SIGNS = re.compile(
     r"(usage limit reached|rate.?limit|429|too many requests|quota exceeded|"
     r"weekly limit|limit reached|out of (?:credits|usage)|resets? at|try again (?:later|at)|"
-    r"upgrade to increase|плат[её]жный лимит|лимит исчерпан)", re.I)
+    r"upgrade to increase|плат[её]жный лимит|лимит исчерпан|"
+    r"reached your [^.]{0,40}limit|usage-credits|out of usage limits)", re.I)
 RESET_AT = re.compile(
     r"(?:resets?(?:\s+at)?|try again at|available again at)\s*[:\-]?\s*"
     r"([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?Z?|[0-9]{1,2}:[0-9]{2}\s*(?:AM|PM)?)", re.I)
