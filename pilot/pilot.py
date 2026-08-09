@@ -99,7 +99,8 @@ NOTIFY_GROUPS = {
     "done": ("Задача выполнена", "Задача завершена", "Эпик завершён", "Задача заведена",
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
-    "routine": ("Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
+    "routine": ("Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
+                "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
 NOTIFY_DEFAULTS = {"questions": True, "stuck": True, "money": True,
@@ -1317,6 +1318,10 @@ def review_gate(conf, base, branch, repo_identity):
         note_cap_rescue(base, "GATE")
         log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
         return {"back": True,
+                "alert": "Вернул сам: разработка не загрузила работу",
+                "alert_msg": ("Агент сказал «готово», но не загрузил свою работу "
+                              "в хранилище — проверять нечего. Вернул в разработку "
+                              "с инструкцией. Твоего участия не нужно."),
                 "note": (f"Машинная проверка перед Ревью: ветки {branch} НЕТ в хранилище. "
                          "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
                          "Сделай: git push -u origin " + (branch or "<ветка>") +
@@ -1334,6 +1339,10 @@ def review_gate(conf, base, branch, repo_identity):
             note_cap_rescue(base, "DIRT")
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
+                    "alert": "Вернул сам: в поставке чужие файлы",
+                    "alert_msg": ("В работе оказались файлы, не относящиеся к задаче "
+                                  "(%d шт.) — вернул в разработку с точным списком, "
+                                  "что убрать. Твоего участия не нужно." % len(foreign)),
                     "note": ("Машинная проверка перед Ревью: в поставке файлы ВНЕ "
                              "заявленной области работы:\n"
                              + "\n".join("  - " + f for f in foreign)
@@ -3463,7 +3472,7 @@ def cycle(conf, state):
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
-                    create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                    created_g = create_task({"request_key": str(uuid.uuid4()), "title": back_title,
                                  "context": (f"Pipeline: {base}\nPrevious stage: {wf}\n"
                                              f"Branch: {branch}\n\n" + g["note"])[:20000],
                                  "worker_id": worker["id"],
@@ -3471,7 +3480,11 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
                                      or nw["revision_id"]}, conf)
-                    notify(conf, "Вернул без Ревью: ветка не запушена", base, tags="wrench")
+                    new_tid = (created_g.get("task") or {}).get("id", "") if isinstance(created_g, dict) else ""
+                    notify(conf, g.get("alert") or "Вернул сам: поставка не прошла машинную проверку",
+                           base + chr(10) + (g.get("alert_msg") or ""),
+                           tags="wrench",
+                           click=(f"{UI_BASE}/tasks/{new_tid}" if new_tid else f"{UI_BASE}/work"))
                     continue
                 except Exception as e:
                     log("gate_return_error", repr(e))
