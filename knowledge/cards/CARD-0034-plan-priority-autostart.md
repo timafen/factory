@@ -3,8 +3,8 @@
 ## HEAD
 
 - Status: Implemented and verified
-- Branch: `factory/57b33e53-c9b-bc7d7672-0d6`
-- Head commit: `82ab016` — реализация автоподбора на свежем `origin/main`.
+- Branch: `factory/e53d2ce9-2ca-23b73a38-32e`
+- Head commit: `fe71d45` — реализация и знания перед финальной доставкой.
 - What changed: пилот запускает одну верхнюю `planned`-карточку при свободном
   слоте, учитывает ожидание владельца и меняет карточку лишь после создания задачи.
 - Evidence: `python3 -m unittest pilot.test_pilot` — PASS, 4 tests;
@@ -12,6 +12,13 @@
 - Next action: влить поставленную ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Implement
+
+Убрана посторонняя правка `web/src/Overview.tsx`; трёхточечный diff от
+`origin/main` содержит только четыре заявленных файла. Автоподбор подтверждён
+командой `python3 -m unittest pilot.test_pilot` (4 tests, OK), весь Go-код —
+`go test ./...` (PASS) и `go build ./...` (PASS).
 
 ### 2026-08-08 — Specification
 
