@@ -3,12 +3,14 @@ package controlplane
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,26 +18,41 @@ import (
 )
 
 const (
-	dialogMaxMessages = 40
-	dialogMaxBytes    = 64 << 10
-	dialogMaxOutput   = 1 << 20
-	dialogTimeout     = 45 * time.Second
+	dialogMaxMessages   = 40
+	dialogMaxBytes      = 64 << 10
+	dialogMaxOutput     = 1 << 20
+	dialogMaxScreenshot = 4 << 20
+	dialogTimeout       = 45 * time.Second
 )
 
 type dialogRunner interface {
-	Run(context.Context, protocol.PilotBrain, []protocol.DialogMessage) (string, error)
+	Run(context.Context, protocol.PilotBrain, []protocol.DialogMessage, *protocol.DialogScreenshot) (string, error)
 }
 
 type commandDialogRunner struct{}
 
-func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage) (string, error) {
+func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage, screenshot *protocol.DialogScreenshot) (string, error) {
 	prompt := serializeDialog(messages)
+	imagePath, err := materializeDialogScreenshot(screenshot)
+	if err != nil {
+		return "", err
+	}
+	if imagePath != "" {
+		defer os.Remove(imagePath)
+	}
 	var command *exec.Cmd
 	switch brain.CLI {
 	case "codex":
-		command = exec.CommandContext(ctx, "codex", "exec", "-m", brain.Model, "--skip-git-repo-check", "-")
+		args := []string{"exec", "-m", brain.Model, "--skip-git-repo-check"}
+		if imagePath != "" {
+			args = append(args, "--image", imagePath)
+		}
+		command = exec.CommandContext(ctx, "codex", append(args, "-")...)
 		command.Stdin = strings.NewReader(prompt)
 	case "claude":
+		if imagePath != "" {
+			prompt += "\n\nК последнему вопросу приложен скриншот: " + imagePath + ". Открой его и учти в ответе."
+		}
 		command = exec.CommandContext(ctx, "claude", "-p", prompt, "--output-format", "text")
 		command.Env = append(os.Environ(), "ANTHROPIC_MODEL="+brain.Model)
 	default:
@@ -50,6 +67,35 @@ func (commandDialogRunner) Run(ctx context.Context, brain protocol.PilotBrain, m
 		return "", fmt.Errorf("dialog CLI failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+func materializeDialogScreenshot(screenshot *protocol.DialogScreenshot) (string, error) {
+	if screenshot == nil {
+		return "", nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(screenshot.Data)
+	if err != nil || len(decoded) == 0 || len(decoded) > dialogMaxScreenshot {
+		return "", errors.New("invalid screenshot")
+	}
+	extension := map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[screenshot.ContentType]
+	if extension == "" {
+		return "", errors.New("invalid screenshot")
+	}
+	file, err := os.CreateTemp("", "factory-dialog-*"+extension)
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err = file.Write(decoded); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err = file.Close(); err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return filepath.Clean(path), nil
 }
 
 type limitedWriter struct {
@@ -88,7 +134,9 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request protocol.DialogRequest
-	r.Body = http.MaxBytesReader(w, r.Body, dialogMaxBytes+(4<<10))
+	// The text conversation stays small, but a single screenshot is carried as
+	// base64 JSON and needs its own bounded allowance.
+	r.Body = http.MaxBytesReader(w, r.Body, int64(dialogMaxBytes+base64.StdEncoding.EncodedLen(dialogMaxScreenshot)+(4<<10)))
 	if !decodeJSON(w, r, &request) {
 		return
 	}
@@ -119,7 +167,7 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dialogTimeout)
 	defer cancel()
-	answer, err := a.dialogRunner.Run(ctx, *selected, request.Messages)
+	answer, err := a.dialogRunner.Run(ctx, *selected, request.Messages, request.Screenshot)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			writeError(w, &ServiceError{Code: "dialog_timeout", Message: "Модель не ответила вовремя. Попробуйте ещё раз", Status: http.StatusGatewayTimeout})
@@ -164,6 +212,14 @@ func validateDialogRequest(request protocol.DialogRequest) error {
 	}
 	if total > dialogMaxBytes {
 		return invalid("dialog_too_large", "История диалога слишком велика")
+	}
+	if request.Screenshot != nil {
+		if _, err := base64.StdEncoding.DecodeString(request.Screenshot.Data); err != nil || request.Screenshot.Data == "" || len(request.Screenshot.Data) > base64.StdEncoding.EncodedLen(dialogMaxScreenshot) {
+			return invalid("invalid_dialog_screenshot", "Скриншот должен быть изображением до 4 МБ")
+		}
+		if request.Screenshot.ContentType != "image/png" && request.Screenshot.ContentType != "image/jpeg" && request.Screenshot.ContentType != "image/webp" {
+			return invalid("invalid_dialog_screenshot", "Поддерживаются PNG, JPEG и WebP")
+		}
 	}
 	return nil
 }

@@ -61,18 +61,33 @@ func TestHTTPServerDeliversDialogResponseAfterReadTimeoutWindow(t *testing.T) {
 }
 
 type fakeDialogRunner struct {
-	calls    int
-	brain    protocol.PilotBrain
-	messages []protocol.DialogMessage
-	answer   string
-	err      error
+	calls      int
+	brain      protocol.PilotBrain
+	messages   []protocol.DialogMessage
+	screenshot *protocol.DialogScreenshot
+	answer     string
+	err        error
 }
 
-func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage) (string, error) {
+func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage, screenshot *protocol.DialogScreenshot) (string, error) {
 	f.calls++
 	f.brain = brain
 	f.messages = append([]protocol.DialogMessage(nil), messages...)
+	f.screenshot = screenshot
 	return f.answer, f.err
+}
+
+func TestDialogPassesSupportedScreenshotOnlyWithCurrentQuestion(t *testing.T) {
+	runner := &fakeDialogRunner{answer: "Вижу"}
+	body := `{"brain_index":0,"messages":[{"role":"user","content":"Что на экране?"}],"screenshot":{"name":"screen.png","content_type":"image/png","data":"aGVsbG8="}}`
+	recorder := runDialogRequest(t, dialogTestAPI(t, runner), body)
+	if recorder.Code != http.StatusOK || runner.screenshot == nil || runner.screenshot.Name != "screen.png" {
+		t.Fatalf("status=%d screenshot=%#v", recorder.Code, runner.screenshot)
+	}
+	bad := runDialogRequest(t, dialogTestAPI(t, &fakeDialogRunner{}), `{"brain_index":0,"messages":[{"role":"user","content":"x"}],"screenshot":{"content_type":"text/plain","data":"aGVsbG8="}}`)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", bad.Code, bad.Body)
+	}
 }
 
 func dialogTestAPI(t *testing.T, runner dialogRunner) *API {
