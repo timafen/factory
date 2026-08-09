@@ -171,6 +171,15 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
 
+    def test_ignores_task_without_canonical_pipeline_title(self):
+        task = self.task()
+        task["title"] = "Implement Встроенный патруль"
+
+        self.watch([task])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory, {})
+
     def test_owner_pause_is_not_resumed(self):
         self.conf["stopped_pipelines"] = ["Встроенный патруль"]
         self.watch()
