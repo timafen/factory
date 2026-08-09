@@ -52,6 +52,7 @@ export function DelegateModal({
   const [startStage, setStartStage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const selectedWorker = workers.find((worker) => worker.id === workerID);
   const repositories = selectedWorker?.repositories ?? [];
   const workflows = useQuery({
@@ -95,6 +96,7 @@ export function DelegateModal({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isSubmitting) return;
     const form = new FormData(event.currentTarget);
     const rawTitle = String(form.get("title") ?? "").trim();
     const cleanedTitle = rawTitle.replace(/^\[auto\]\s*/i, "");
@@ -134,12 +136,17 @@ export function DelegateModal({
     } as CreateTaskInput;
 	void (async () => {
 		const attachments = [];
+		let creatingTask = false;
+		setIsSubmitting(true);
 		try {
 			for (const file of attachmentFiles) attachments.push(await api.uploadTaskAttachment(input.request_key, file));
+			creatingTask = true;
 			await create.mutateAsync({ ...input, attachment_ids: attachments.map((item) => item.id) });
 		} catch (error) {
 			await Promise.allSettled(attachments.map((item) => api.deleteTaskAttachment(input.request_key,item.id)));
-			setErrors((current) => ({ ...current, attachments: error instanceof Error ? error.message : "Не удалось загрузить вложения." }));
+			if (!creatingTask) setErrors((current) => ({ ...current, attachments: error instanceof Error ? error.message : "Не удалось загрузить вложения." }));
+		} finally {
+			setIsSubmitting(false);
 		}
 	})();
   };
@@ -279,8 +286,8 @@ export function DelegateModal({
           </div>
           <div className="modal-footer">
             <button type="button" className="button button-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="button button-primary" disabled={create.isPending || workers.length === 0}>
-              {create.isPending ? <><LoaderCircle size={16} className="spin" /> Delegating…</> : <><Plus size={16} /> Delegate task</>}
+            <button type="submit" className="button button-primary" disabled={isSubmitting || workers.length === 0}>
+              {isSubmitting ? <><LoaderCircle size={16} className="spin" /> Delegating…</> : <><Plus size={16} /> Delegate task</>}
             </button>
           </div>
         </form>

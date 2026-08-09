@@ -1284,6 +1284,18 @@ func TestUploadAttachmentRejectsExecutableAndOversizedFiles(t *testing.T) {
 	}
 }
 
+func TestUploadAttachmentDetectsContentTypeInsteadOfTrustingClient(t *testing.T) {
+	store := newTestStore(t)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	attachment, err := store.UploadAttachment(context.Background(), "mime", "screen.bin", "text/html", strings.NewReader(string(png)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachment.ContentType != "image/png" {
+		t.Fatalf("content type = %q, want image/png", attachment.ContentType)
+	}
+}
+
 type repeatReader struct{ remaining int }
 
 func (r *repeatReader) Read(p []byte) (int, error) {

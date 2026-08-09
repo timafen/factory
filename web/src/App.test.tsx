@@ -721,8 +721,19 @@ describe("App", () => {
     });
   });
 
-  it("does not create a partial task when files have not been delivered", async () => {
+  it("keeps task submission disabled throughout attachment upload and creation", async () => {
     const fetch = mockControlPlane();
+    const fixtureImplementation = fetch.getMockImplementation()!;
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    fetch.mockImplementation(async (input, init) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path === "/api/v1/task-attachments" && init?.method === "POST") {
+        await uploadGate;
+        return Response.json({ id: "attachment-1", name: "screen.png", content_type: "image/png", size: 5, sha256: "hash" }, { status: 201 });
+      }
+      return fixtureImplementation(input, init);
+    });
     const user = userEvent.setup();
     renderApp();
 
@@ -735,8 +746,14 @@ describe("App", () => {
     await user.upload(within(dialog).getByLabelText("Files"), new File(["image"], "screen.png", { type: "image/png" }));
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
 
-    expect(screen.getByText("File delivery is not enabled yet, so this task has not been created.")).toBeVisible();
+    const submitting = within(dialog).getByRole("button", { name: "Delegating…" });
+    expect(submitting).toBeDisabled();
     expect(fetch.mock.calls.some(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST")).toBe(false);
+    await user.click(submitting);
+    expect(fetch.mock.calls.filter(([input]) => input === "/api/v1/task-attachments")).toHaveLength(1);
+
+    releaseUpload();
+    expect(await screen.findByRole("heading", { name: "Inspect screenshot" })).toBeVisible();
   });
 
   it("renders every task status in the operational board", async () => {

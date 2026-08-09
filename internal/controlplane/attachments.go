@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func safeAttachmentName(name string) (string, error) {
 	return name, nil
 }
 
-func (s *Store) UploadAttachment(ctx context.Context, requestKey, name, contentType string, source io.Reader) (protocol.TaskAttachment, error) {
+func (s *Store) UploadAttachment(ctx context.Context, requestKey, name, _ string, source io.Reader) (protocol.TaskAttachment, error) {
 	requestKey = strings.TrimSpace(requestKey)
 	if requestKey == "" || len(requestKey) > 200 {
 		return protocol.TaskAttachment{}, invalid("invalid_request_key", "request_key is required")
@@ -65,7 +66,10 @@ func (s *Store) UploadAttachment(ctx context.Context, requestKey, name, contentT
 		return protocol.TaskAttachment{}, unavailable(err)
 	}
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(f, hash), io.LimitReader(source, protocol.MaxAttachmentBytes+1))
+	bufferedSource := bufio.NewReader(source)
+	header, _ := bufferedSource.Peek(512)
+	contentType := http.DetectContentType(header)
+	written, copyErr := io.Copy(io.MultiWriter(f, hash), io.LimitReader(bufferedSource, protocol.MaxAttachmentBytes+1))
 	closeErr := f.Close()
 	if copyErr != nil || closeErr != nil {
 		os.RemoveAll(dir)
@@ -78,12 +82,6 @@ func (s *Store) UploadAttachment(ctx context.Context, requestKey, name, contentT
 	if written > protocol.MaxAttachmentBytes {
 		os.RemoveAll(dir)
 		return protocol.TaskAttachment{}, invalid("attachment_too_large", fmt.Sprintf("файл %q больше 10 МБ", name))
-	}
-	if contentType == "" {
-		contentType = mime.TypeByExtension(filepath.Ext(name))
-	}
-	if contentType == "" {
-		contentType = "application/octet-stream"
 	}
 	attachment := protocol.TaskAttachment{ID: id, Name: name, ContentType: contentType, Size: written, SHA256: hex.EncodeToString(hash.Sum(nil))}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO task_attachments(id, request_key, name, content_type, size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, requestKey, name, contentType, written, attachment.SHA256, path, s.now().UnixMilli())
