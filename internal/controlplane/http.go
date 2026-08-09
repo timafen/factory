@@ -97,6 +97,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("DELETE /api/v1/epics/{epic_id}", api.deleteEpic)
 	mux.HandleFunc("GET /api/v1/dashboard", api.getDashboard)
 	mux.HandleFunc("GET /api/v1/works", api.getWorks)
+	mux.HandleFunc("GET /api/v1/work-history", api.getWorkHistory)
 	mux.HandleFunc("GET /api/v1/work-status", api.getWorkStatus)
 	mux.HandleFunc("GET /api/v1/promises", api.getPromises)
 	mux.HandleFunc("GET /api/v1/limits", api.getLimits)
