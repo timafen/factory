@@ -2,15 +2,20 @@
 
 ## HEAD
 
-- Status: Specification ready for implementation.
-- Branch: `factory/022b43d8-410-8534c8bf-4a2`.
+- Status: Implemented and verified.
+- Branch: `factory/d8a613ea-e92-846a1fee-219`.
+- Head commit: `463b875`.
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- Scope: автономный контракт `pipeline_watch` в `pilot/pilot.py` и целевые тесты в `pilot/test_pilot.py`; без нового демона, cron, API или миграции данных.
-- Acceptance proof: `python3 -m unittest pilot.test_pilot.PipelineWatchTests`.
-- One next action: реализовать и доказать идемпотентное возобновление потерянного перехода тестами.
+- What changed: встроенный `pipeline_watch` сам возобновляет потерянный переход, не дублирует живую работу и прекращает попытки после двух толчков.
+- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests, OK; `python3 -m unittest pilot.test_pilot` → 7 tests, OK; `go test ./...` → OK; `npm --prefix web run build` → built.
+- One next action: принять реализацию в `main`.
 
 ## LOG
 
 ### 2026-08-08 — Specification
 
 Зафиксирован минимальный путь: существующий pilot патрулирует переходы сам, ждёт безопасное окно, не дублирует живую работу и после двух толчков сообщает владельцу об остановке. Внешний LLM-помощник, отдельный процесс и новый планировщик не участвуют. Спецификация содержит проверяемые обещания по двум файлам реализации и целевой команде теста.
+
+### 2026-08-08 — Implement
+
+Патруль получил явно закреплённый контракт живых состояний и шесть изолированных сценариев: безопасное ожидание, одиночное продолжение с тем же репозиторием, подавление дубля, пауза владельца, завершённый конвейер и однократная эскалация после двух толчков. Автономность проверена запретом вызова внешнего оркестратора. Целевые и полные тесты pilot, Go-регрессия и web-сборка прошли.
