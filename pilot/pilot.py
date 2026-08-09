@@ -104,6 +104,7 @@ NOTIFY_GROUPS = {
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
     "diag": ("Разобрался в застрявшей", "Застряла — нужен ты"),
+    "plan": ("Новое в Плане",),
     "routine": ("Повторяю этап", "Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
                 "Взял из Плана",
                 "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
@@ -1214,6 +1215,18 @@ def add_idea(kind, title, repo="", why="", origin="agent", source="",
            "created": now, "updated": now}
     items.append(rec)
     save(IDEAS_PATH, items)
+    try:
+        conf_now = load(CONF_PATH, {}) or {}
+        kind_ru = "Находка" if kind == "finding" else "Предложение"
+        who = {"agent": "нашёл агент", "patrol": "нашёл Клод",
+               "owner": "поставил ты"}.get(origin, "нашёл конвейер")
+        body = kind_ru + " · " + who + chr(10) + title[:200]
+        if why:
+            body += chr(10) + chr(10) + cut(why, 260)
+        notify(conf_now, "Новое в Плане", body,
+               tags="bulb", click=f"{UI_BASE}/intake/plan")
+    except Exception as e:
+        log("idea_notify_error", repr(e))
     log("IDEA + [" + kind + "] " + repr(title[:70]) + " repo=" + (repo or "-"))
     return rec
 
