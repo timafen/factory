@@ -2,12 +2,15 @@ package controlplane
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -22,7 +25,7 @@ func validPilotSettings() protocol.PilotSettings {
 	}
 	return protocol.PilotSettings{
 		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true,
-		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2, MaxParallelWorks: 4,
+		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2,
 		DayCapUSD: 20, DeployStagingCmd: "deploy", OwnerChatURL: "https://example.test/chat", OwnerUIURL: "https://example.test/ui",
 		Stages: stages, SkipStagesForLow: []string{}, StoppedPipelines: []string{}, StageBaseUSD: costs,
 		ComplexityFactor: map[string]float64{"low": 1, "medium": 2, "high": 3}, WorkCapUSD: map[string]float64{"low": 2, "medium": 4, "high": 8},
@@ -141,9 +144,6 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	if !current.Settings.RespectHostLoad {
 		t.Fatal("example respect_host_load was not decoded as true")
 	}
-	if current.Settings.MaxParallelWorks != 4 {
-		t.Fatalf("example max_parallel_works = %d, want 4", current.Settings.MaxParallelWorks)
-	}
 
 	current.Settings.RespectHostLoad = false
 	if _, err := store.Write(current.Version, current.Settings); err != nil {
@@ -165,7 +165,6 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 
 	delete(fields, "respect_host_load")
-	delete(fields, "max_parallel_works")
 	legacy, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatal(err)
@@ -179,9 +178,6 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 	if !legacySettings.Settings.RespectHostLoad {
 		t.Fatal("legacy config did not receive respect_host_load=true")
-	}
-	if legacySettings.Settings.MaxParallelWorks != 4 {
-		t.Fatalf("legacy max_parallel_works = %d, want 4", legacySettings.Settings.MaxParallelWorks)
 	}
 
 	fields["unknown_config_field"] = json.RawMessage("true")
@@ -243,4 +239,117 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 		t.Fatalf("PUT status %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestReviveWorkRemovesOnlyExactPauseAndIsIdempotent(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+
+	first, err := store.Revive("Работа")
+	if err != nil || first.State != "reviving" {
+		t.Fatalf("first revive = %#v, %v", first, err)
+	}
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatalf("idempotent revive: %v", err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Работа рядом" {
+		t.Fatalf("stopped pipelines = %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "revive", hex.EncodeToString([]byte("Работа")))); err != nil {
+		t.Fatalf("revive signal: %v", err)
+	}
+}
+
+func TestReviveWorkConcurrentSignalsAreNotLost(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Первая", "Вторая"}
+	store, path := writePilotFixture(t, settings)
+	var wg sync.WaitGroup
+	for _, work := range []string{"Первая", "Вторая"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Revive(work); err != nil {
+				t.Errorf("revive %q: %v", work, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for _, work := range []string{"Первая", "Вторая"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), "revive", hex.EncodeToString([]byte(work)))); err != nil {
+			t.Fatalf("signal for %q: %v", work, err)
+		}
+	}
+}
+
+func TestReviveWorkAcceptsStuckAndRejectsUnknown(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	stall := []byte(`{"Застрявшая":{"why":"give_up"},"Другая":{"why":"nudged"}}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "stalled.json"), stall, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revive("Застрявшая"); err != nil {
+		t.Fatalf("stuck revive: %v", err)
+	}
+	if _, err := store.Revive("Неизвестная"); err == nil {
+		t.Fatal("unknown work was accepted")
+	}
+}
+
+func TestReviveWorkHTTPValidatesPathAndReturnsStatus(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа с пробелом"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+
+	response, err := server.Client().Post(server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var got ReviveWorkResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil || got.Work != "Работа с пробелом" || got.State != "reviving" {
+		t.Fatalf("response = %#v, %v", got, err)
+	}
+}
+
+func TestReviveWorkHTTPRejectsCrossOriginAndNonJSON(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+	for _, test := range []struct {
+		origin, contentType string
+		status              int
+	}{
+		{"https://evil.example", "application/json", http.StatusForbidden},
+		{"", "application/x-www-form-urlencoded", http.StatusUnsupportedMediaType},
+	} {
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/works/"+url.PathEscape("Работа")+"/revive", bytes.NewReader([]byte(`{}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", test.contentType)
+		req.Header.Set("Origin", test.origin)
+		response, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status {
+			t.Fatalf("status = %d, want %d", response.StatusCode, test.status)
+		}
+	}
 }

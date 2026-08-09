@@ -1407,7 +1407,7 @@ def active_auto_works(tasks):
 
 def autostart_plan(conf, tasks, workflows, workers):
     """Start at most one top planned card when the pipeline has a free slot."""
-    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 4)):
+    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 3)):
         return None
     planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
                      key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
@@ -1476,6 +1476,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1511,6 +1512,30 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, work.encode().hex())
+
+
+def take_revive_signals():
+    """Consume the signals present at scan time without rewriting a shared file."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            work = bytes.fromhex(name).decode()
+        except (TypeError, ValueError, UnicodeDecodeError):
+            continue
+        try:
+            os.unlink(os.path.join(REVIVE_DIR, name))
+        except FileNotFoundError:
+            continue
+        result.append(work)
+    return result
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1523,6 +1548,10 @@ def pipeline_watch(conf, tasks, workflows, workers):
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in take_revive_signals():
+        mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
@@ -4285,15 +4314,6 @@ def stage_worker(conf, stage_name, complexity, workers=None):
         w = workers.get(name)
         return bool(w and w.get("online") and w.get("health") == "healthy")
 
-    def available(name):
-        """Prefer a worker with a free execution slot instead of queueing on a busy one."""
-        if not workers:
-            return True
-        w = workers.get(name) or {}
-        capacity = int(w.get("capacity") or 1)
-        active = int(w.get("active_count") or 0)
-        return active < capacity
-
     tiers, ordered = None, []
     for s in conf["stages"]:
         if s["workflow"] == stage_name:
@@ -4305,7 +4325,7 @@ def stage_worker(conf, stage_name, complexity, workers=None):
                 ordered = [s.get("worker")]
             break
     for name in ordered:
-        if name and healthy(name) and available(name):
+        if name and healthy(name):
             return name
     # Последний резерв — только внутри нашей же конфигурации и от ДЕШЁВЫХ к дорогим,
     # иначе подмена больного воркера сама по себе разоряет (fable/opus в 5 раз дороже).
@@ -4314,16 +4334,8 @@ def stage_worker(conf, stage_name, complexity, workers=None):
         t = s.get("workers")
         pool += (list(t.values()) if isinstance(t, dict) else [s.get("worker")])
     for name in sorted({n for n in pool if n}, key=worker_price_rank):
-        if healthy(name) and available(name):
-            log(f"stage_worker: {stage_name}/{complexity} -> подменён на здорового {name}")
-            return name
-    # All configured workers are full. Keep the preferred healthy route queued
-    # instead of treating temporary saturation as a provider failure.
-    for name in ordered:
-        if name and healthy(name):
-            return name
-    for name in sorted({n for n in pool if n}, key=worker_price_rank):
         if healthy(name):
+            log(f"stage_worker: {stage_name}/{complexity} -> подменён на здорового {name}")
             return name
     return next((n for n in ordered if n), None)
 

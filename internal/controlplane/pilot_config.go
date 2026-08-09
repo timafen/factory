@@ -28,6 +28,11 @@ type PilotConfigStore struct {
 	mu   sync.Mutex
 }
 
+type ReviveWorkResponse struct {
+	Work  string `json:"work"`
+	State string `json:"state"`
+}
+
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
 
 func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
@@ -59,6 +64,114 @@ func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings
 		return protocol.PilotSettingsResponse{}, err
 	}
 	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+// Revive removes only the requested owner pause and leaves an idempotent signal
+// for pipeline_watch. Task selection remains entirely in the pilot.
+func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
+	work = strings.TrimSpace(work)
+	if work == "" {
+		return ReviveWorkResponse{}, invalid("invalid_work", "work name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, _, err := s.read()
+	if err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	known := s.hasReviveSignal(work)
+	stopped := make([]string, 0, len(settings.StoppedPipelines))
+	for _, name := range settings.StoppedPipelines {
+		if name == work {
+			known = true
+			continue
+		}
+		stopped = append(stopped, name)
+	}
+	if !known {
+		stalls, readErr := s.readStalls()
+		if readErr != nil {
+			return ReviveWorkResponse{}, readErr
+		}
+		if rec, ok := stalls[work]; ok && rec.Why == "give_up" {
+			known = true
+		}
+	}
+	if !known {
+		return ReviveWorkResponse{}, &ServiceError{Code: "work_not_stopped", Message: "work is not stopped", Status: 404}
+	}
+	settings.StoppedPipelines = stopped
+	body, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return ReviveWorkResponse{}, unavailable(err)
+	}
+	if err := s.atomicWrite(append(body, '\n')); err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	if err := s.createReviveSignal(work); err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	return ReviveWorkResponse{Work: work, State: "reviving"}, nil
+}
+
+type pilotStall struct {
+	Why string `json:"why"`
+}
+
+func (s *PilotConfigStore) revivePath() string {
+	return filepath.Join(filepath.Dir(s.path), "revive")
+}
+func (s *PilotConfigStore) stallPath() string {
+	return filepath.Join(filepath.Dir(s.path), "stalled.json")
+}
+
+func (s *PilotConfigStore) reviveSignalPath(work string) string {
+	return filepath.Join(s.revivePath(), hex.EncodeToString([]byte(work)))
+}
+
+func (s *PilotConfigStore) hasReviveSignal(work string) bool {
+	_, err := os.Stat(s.reviveSignalPath(work))
+	return err == nil
+}
+
+// createReviveSignal creates one file per work. O_EXCL makes a concurrent
+// request for another work independent, and makes a repeated request safe.
+func (s *PilotConfigStore) createReviveSignal(work string) error {
+	if err := os.MkdirAll(s.revivePath(), 0o700); err != nil {
+		return unavailable(err)
+	}
+	f, err := os.OpenFile(s.reviveSignalPath(work), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return unavailable(err)
+	}
+	return f.Close()
+}
+
+func (s *PilotConfigStore) readStalls() (map[string]pilotStall, error) {
+	result := map[string]pilotStall{}
+	body, err := os.ReadFile(s.stallPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil || json.Unmarshal(body, &result) != nil {
+		return nil, &ServiceError{Code: "pilot_state_invalid", Message: "pilot stall state is unavailable", Status: 503}
+	}
+	return result, nil
+}
+
+func (s *PilotConfigStore) atomicWritePath(path string, value any) error {
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return unavailable(err)
+	}
+	original := s.path
+	s.path = path
+	err = s.atomicWrite(append(body, '\n'))
+	s.path = original
+	return err
 }
 
 func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
@@ -98,10 +211,6 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	// Compatibility default: pilot.py treated an absent key as enabled.
 	if !present["respect_host_load"] {
 		settings.RespectHostLoad = true
-	}
-	// Compatibility default: Pilot historically kept this limit only in Python.
-	if !present["max_parallel_works"] {
-		settings.MaxParallelWorks = 4
 	}
 	return settings, body, nil
 }
@@ -170,7 +279,7 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 			return nil, invalid("invalid_pilot_settings", field.name+" must be positive")
 		}
 	}
-	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 || settings.MaxParallelWorks <= 0 {
+	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 {
 		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
 	}
 	if len(settings.Stages) != len(pilotStages) || len(settings.StageBaseUSD) != len(pilotStages) {
