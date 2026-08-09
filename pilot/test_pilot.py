@@ -677,6 +677,38 @@ class HostLoadAdmissionTests(unittest.TestCase):
         watch.assert_called_once()
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
+    @mock.patch.object(pilot, "_age_min", return_value=10)
+    @mock.patch.object(pilot, "stage_worker", return_value="healthy-worker")
+    @mock.patch.object(pilot, "create_task")
+    def test_overload_defers_rescue_without_cancelling_original(
+            self, create, stage_worker, _age):
+        task = {
+            "id": "queued-task", "state": "queued", "worker_id": "sick-id",
+            "created_at": "2026-08-09T00:00:00", "title": "Pipeline task",
+        }
+        detail = {
+            "workflow": {"title": "Implement + Test"},
+            "context": "keep me queued",
+            "task": {"repository_id": "repo-id"},
+        }
+        conf = {"_host_load_snapshot": self.cpu_over}
+        workflows = {
+            "Implement + Test": {"enabled": True, "revision_id": "revision-id"}
+        }
+        workers = {
+            "sick-worker": {"id": "sick-id", "online": False},
+            "healthy-worker": {
+                "id": "healthy-id", "online": True, "health": "healthy",
+            },
+        }
+
+        with mock.patch.object(pilot, "api", return_value=detail) as api:
+            pilot.rescue_queued(conf, [task], workflows, workers)
+
+        api.assert_called_once_with("/tasks/queued-task")
+        stage_worker.assert_not_called()
+        create.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

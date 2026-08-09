@@ -3514,6 +3514,10 @@ def rescue_queued(conf, tasks, workflows, workers):
             nw = workflows.get(stage)
             if not nw or not nw.get("enabled"):
                 continue
+            if not host_load_admits(
+                    tasks, stage, conf.get("_host_load_snapshot"),
+                    conf.get("respect_host_load", True)):
+                continue
             cx = complexity_of(conf, stage, (sick or {}).get("name", "")) or "medium"
             name = stage_worker(conf, stage, cx, workers)
             fresh = workers.get(name) if isinstance(workers, dict) else None
