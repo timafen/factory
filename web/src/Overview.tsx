@@ -245,9 +245,9 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       {/* 2. Продукт: что где живёт */}
       <section style={card}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <Server size={16} color="#8ec5ff" /><strong>Продукт</strong>
+          <Server size={16} color="#8ec5ff" /><strong>Продукт — торговая система (automation.tarser.net)</strong>
           <span style={{ flex: 1 }} />
-          {rel.main_head && <span style={{ fontSize: 12, color: muted }}>main: {rel.main_head}</span>}
+          {rel.main_subject && <span style={{ fontSize: 12, color: muted }}>последнее изменение: {rel.main_subject}</span>}
         </div>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
           {([["Стейдж", rel.staging_release_human || (rel.staging_release ? `сборка ${rel.staging_release.slice(0, 8)} — описание недоступно` : ""), rel.staging_health, rel.staging_in_main, rel.staging_commit_known],
@@ -288,7 +288,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         <section style={{ ...card, flex: 1, minWidth: 280 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <Coins size={16} color="#e0cf9f" /><strong>Расход</strong>
-            <span style={{ fontSize: 11, color: muted }}>по прайсу API, справочно</span>
+            <span style={{ fontSize: 11, color: muted }}>по прайсу API, справочно — пока учитываются только задачи на Клоде, кодекс в плане</span>
           </div>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", fontSize: 13 }}>
             <div><div style={{ color: muted, fontSize: 12 }}>за сутки</div>

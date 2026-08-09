@@ -71,12 +71,14 @@ type Group = {
   reached: Record<string, "done" | "live" | "bad" | "skipped" | "again">;
   lap?: number;
   meta?: WorkMeta;
+  promise?: { files?: string[]; commands?: string[] };
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
                       works: Record<string, WorkMeta> = {},
-                      statuses: Record<string, { state: string; text: string }> = {}): Group[] {
+                      statuses: Record<string, { state: string; text: string }> = {},
+                      promises: Record<string, { files?: string[]; commands?: string[] }> = {}): Group[] {
   const openQ = new Set(
     questions.filter((q) => q.status === "open").map((q) => q.task_id),
   );
@@ -125,6 +127,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     g.lap = lap;
 
     g.meta = works[g.base];
+    g.promise = promises[g.base];
     const recorded = g.meta?.skipped;
     if (recorded && recorded.length) {
       // Записано при заведении работы — гадать не нужно.
@@ -251,6 +254,7 @@ export function WorkView({
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const [works, setWorks] = useState<Record<string, WorkMeta>>({});
   const [statuses, setStatuses] = useState<Record<string, { state: string; text: string }>>({});
+  const [promises, setPromises] = useState<Record<string, { files?: string[]; commands?: string[] }>>({});
   const [showArchive, setShowArchive] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [byStage, setByStage] = useState(false);
@@ -265,6 +269,10 @@ export function WorkView({
           fetch("/api/v1/work-status"),
         ]);
         if (ws.ok && alive) setStatuses((await ws.json()) as Record<string, { state: string; text: string }>);
+        try {
+          const pr = await fetch("/api/v1/promises");
+          if (pr.ok && alive) setPromises((await pr.json()) as Record<string, { files?: string[]; commands?: string[] }>);
+        } catch { /* обещаний может не быть */ }
         if (wk.ok && alive) setWorks((await wk.json()) as Record<string, WorkMeta>);
         if (v.ok && alive) setVerdicts(((await v.json()) as { verdicts?: Record<string, Verdict> }).verdicts ?? {});
         if (q.ok && alive) setQuestions(((await q.json()) as { questions?: Question[] }).questions ?? []);
@@ -283,7 +291,7 @@ export function WorkView({
   if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
 
   const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
-  const groups = build(tasks ?? [], verdicts, questions, works, statuses);
+  const groups = build(tasks ?? [], verdicts, questions, works, statuses, promises);
 
   return (
     <div className="page page-work">
@@ -388,12 +396,25 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
     .filter((it) => it.stage === st).map((it) => it.verdict?.try_url).find(Boolean);
   const tryUrl = byStage("Verify") ?? byStage("Review") ?? [...g.items].reverse()
     .map((it) => it.verdict?.try_url).find(Boolean) ?? "";
+  // «Готово, когда» — перевод сути в проверяемые факты. Показываем сразу
+  // после Спецификации: владелец может сказать «я просил другое» до того,
+  // как потрачен хоть один круг разработки.
+  const promiseLine = g.promise && ((g.promise.files?.length ?? 0) + (g.promise.commands?.length ?? 0) > 0)
+    ? [...(g.promise.files ?? []).map((f) => `файл ${f}`),
+       ...(g.promise.commands ?? []).map((c) => `команда: ${c}`)].join(" · ")
+    : "";
   return (
     <section style={{
       background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
       borderColor: g.status.tone === "live" ? "#2a4560" : g.status.tone === "warn" ? "#4a3f22" : "var(--border, #262c38)",
       borderRadius: 12, padding: "12px 16px",
     }}>
+      {promiseLine && (
+        <div style={{ fontSize: 12, color: "#9fb4d8", margin: "0 0 6px", lineHeight: 1.5 }}
+             title="Обещания Спецификации: по ним машина сверяет дифф, а Проверка гоняет команды">
+          готово, когда: {promiseLine}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
         {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (
