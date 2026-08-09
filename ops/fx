@@ -196,8 +196,11 @@ case "$scope" in
           listings)           cmd=prepare_sandbox_listings ;;
           *) die "sandbox: можно bootstrap-accounts | seller-policies | listings" ;;
         esac
-        # Параметры: только известные флаги и простые значения.
+        # Параметры: только известные флаги и простые значения. Согласие eBay
+        # намеренно имеет единственный путь: seller на staging; код и токены
+        # остаются в Django и не проходят через этот мост.
         extra_args=""
+        interactive=false; seller_role=false; consent_status=false
         shift 3 2>/dev/null || true
         for token in "$@"; do
           case "$token" in
@@ -208,9 +211,27 @@ case "$scope" in
               esac
               extra_args="$extra_args $token"
               ;;
+            --consent-status=*)
+              [ "$arg" = bootstrap-accounts ] || die "sandbox: статус согласия доступен только для bootstrap-accounts"
+              value="${token#*=}"
+              case "$value" in *[!A-Za-z0-9_.-]*) die "sandbox: недопустимый идентификатор операции" ;; esac
+              consent_status=true; extra_args="$extra_args $token"
+              ;;
+            --interactive-bootstrap)
+              [ "$arg" = bootstrap-accounts ] || die "sandbox: согласие eBay доступно только при bootstrap-accounts"
+              interactive=true; extra_args="$extra_args $token"
+              ;;
+            --role=seller)
+              [ "$arg" = bootstrap-accounts ] || die "sandbox: роль доступна только при bootstrap-accounts"
+              seller_role=true; extra_args="$extra_args $token"
+              ;;
+            --role=*) die "sandbox: для согласия eBay разрешена только роль seller" ;;
             *) die "sandbox: непонятный параметр '$token'" ;;
           esac
         done
+        if $interactive && ! $seller_role; then die "sandbox: интерактивное согласие доступно только для seller"; fi
+        if $seller_role && ! $interactive; then die "sandbox: роль seller требует интерактивного согласия"; fi
+        if $consent_status && { $interactive || $seller_role; }; then die "sandbox: статус нельзя сочетать с началом согласия"; fi
         say staging sandbox "$arg$extra_args"
         runuser -u "$STAGING_USER" -- /bin/bash -c "
           set -a; . '$STAGING_ENV'; set +a
