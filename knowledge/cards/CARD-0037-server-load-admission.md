@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented and tested — ready for Review
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/6b60b7e9-46c-2c414c5b-c50`
-- Head commit: `79ed59b` (`Не отменять тяжёлую задачу при перегрузке`)
-- What changed: допуск перенесён перед отменой queued-задачи на нездоровом
-  исполнителе. При перегрузке тяжёлая стадия остаётся в исходной очереди и
-  повторно рассматривается следующим циклом.
-- Evidence: `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` →
-  8 tests, OK; регрессионный тест подтверждает отсутствие `/cancel` и замены.
-- Next action: провести повторный Review исправления сохранности queued-задачи.
+- Head commit: `3972208` (`Обновить карточку сохранения отложенной задачи`)
+- What changed: при обычной перегрузке допускается один запуск, после чего
+  продолжаются только лёгкие стадии; отложенная тяжёлая queued-задача не
+  отменяется и будет рассмотрена следующим циклом.
+- Evidence: после перебазирования на `origin/main` прошли `python3 -m unittest
+  pilot.test_pilot` (32 tests, OK) и `go test ./...` (exit 0); проверены все
+  критерии спецификации и чистота диффа из четырёх заявленных файлов.
+- Next action: владельцу выполнить merge этой ветки в `main`.
 
 ## LOG
 
@@ -50,3 +51,21 @@
 `rescue_queued`. Теперь перегрузка откладывает перенос тяжёлой стадии, не удаляя
 исходную queued-задачу; отдельный регрессионный сценарий проверяет отсутствие
 отмены и создания замены. Целевой класс: 8 тестов, OK.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Наблюдение |
+| --- | --- | --- |
+| Один гарантированный запуск, затем блокировка тяжёлых | `HostLoadAdmissionTests.test_guaranteed_slot_allows_any_stage`, `test_successful_create_consumes_guaranteed_slot` | первый `Implement + Test` создаётся, второй отклонён до API-вызова |
+| Память и диск остаются жёсткой блокировкой | `test_memory_or_disk_emergency_blocks_even_the_guaranteed_slot` | запуск не допускается даже без активных задач |
+| Лёгкие стадии продолжаются при одной активной работе | `test_after_guaranteed_slot_only_light_stages_are_allowed` | разрешены `Triage`, `Specification`, `Review` |
+| Тяжёлые и неизвестные стадии отложены | `test_after_guaranteed_slot_only_light_stages_are_allowed` | `Implement + Test`, `Verify` и неизвестная стадия не создаются |
+| Цикл и queued-задача сохраняют работоспособность | `test_overload_does_not_stop_cycle_services`, `test_overload_defers_rescue_without_cancelling_original` | сторож вызывается; `/cancel` и замена тяжёлой queued-задачи отсутствуют |
+| Обычная нагрузка и выключенный предохранитель совместимы | `test_normal_load_or_disabled_guard_preserves_previous_admission` | `Verify` допускается по прежнему правилу |
+| Полный набор и смежный Go-код | `python3 -m unittest pilot.test_pilot`; `go test ./...` | 32 tests, OK; exit 0 |
+
+Дифф после перебазирования на свежий `origin/main` содержит только
+`knowledge/cards/CARD-0037-server-load-admission.md`,
+`knowledge/specs/server-load-admission.md`, `pilot/pilot.py` и
+`pilot/test_pilot.py`; `git diff --check origin/main...HEAD` завершился без
+замечаний.
