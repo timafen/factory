@@ -2,17 +2,31 @@
 
 ## HEAD
 
-- Status: Specification ready — ждёт подтверждения зависимости
-  `tarser-operations`.
-- What changes: Factory начнёт только запускать staging seller consent, открывать
-  ссылку eBay и показывать безопасный статус. Callback и зашифрованное хранение
-  токена остаются у торговой системы.
+- Status: Blocked — в `tarser-operations` нет безопасного start/status-контракта
+  для Factory.
+- Branch: `factory/802cfd44-f99-d37f5434-47d`.
+- Head commit: `bdd0589`.
+- What changed: подтверждён callback
+  `/marketplaces/ebay/oauth/callback/`; реализация Factory остановлена до
+  появления структурированных start/status операций в торговой системе.
 - Boundary: production, OAuth-код, access/refresh tokens и client secrets не
   попадают в Factory.
-- One next action: сначала проверить и при необходимости реализовать callback
-  и безопасный контракт в `tarser-operations`, затем передать его Implement.
+- Evidence: `tarser-operations@6f6e286` содержит session-bound begin/callback;
+  `bootstrap_sandbox_accounts` ждёт redirect URL через `input()`, status API
+  отсутствует; staging объявляет точное имя callback-настройки.
+- One next action: реализовать и выпустить в `tarser-operations` staging-only
+  start/status-контракт без OAuth-кода и токенов в ответах.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+Проверен актуальный `tarser-operations@6f6e286` и доступный staging-контракт.
+Публичный путь callback существует, но `ebay_oauth_begin` и callback привязаны
+к Django-сессии, CLI интерактивно принимает полный redirect URL, а отдельной
+операции и безопасного статуса для polling нет. По утверждённой границе Factory
+не может принимать OAuth-код или подменять торговую систему, поэтому изменения
+`ops/fx`, server API и UI не начаты до устранения этой блокирующей зависимости.
 
 ### 2026-08-09 — Specification
 
