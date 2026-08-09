@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Статус: реализация завершена, поставка пересобрана без посторонних изменений.
+- Статус: Verified PASS — ожидает слияния человеком.
 - Ветка: `factory/50c9d642-37b-0abf132d-63e`.
-- Head commit: `23d6185` — коммит реализации на свежем `origin/main`.
-- Что изменилось: из общего `AGENT_RULES` удалены требования только для Specification и Review; универсальные правила сохранены.
-- Evidence: целевые тесты → 3 tests, OK; все тесты пилота → 35 tests, OK; `just build` → Factory binaries built.
-- Следующее действие: провести Review поставки из трёх файлов CARD-0039.
+- Head commit: `9f7a346` — проверенная вершина поставки после перебазирования на свежий `origin/main`.
+- Что изменилось: из общего `AGENT_RULES` удалены требования только для Specification и Review; универсальные правила и добавленное в `main` правило о внешних красных проверках сохранены.
+- Evidence: `python3 -m unittest pilot.test_pilot.AgentRulesScopeTests` → 3 tests, OK; `just test` → все Go-пакеты OK; `just ui-check`, `just test-tooling`, `just build`, `just test-release`, `just test-launcher` → OK.
+- Следующее действие: человеку слить проверенную поставку.
 
 ## LOG
 
@@ -20,3 +20,14 @@
 ### 2026-08-09 — Implement
 
 Ветка задачи повторно собрана от актуального `origin/main`: перенесены только два удаления из `AGENT_RULES`, профильные тесты и эта карточка. Проверки после очистки: целевые 3 теста — OK, все 35 тестов пилота — OK, `just build` — успешно; трёхточечный diff содержит только три файла CARD-0039.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| В общих инструкциях нет правила Specification | `python3 -m unittest pilot.test_pilot.AgentRulesScopeTests` | `ГОТОВО-КОГДА` отсутствует; OK |
+| В общих инструкциях нет правила Review | та же команда | требование о трёхточечном diff осталось только в универсальной сдаче; OK |
+| Универсальные правила не потеряны и не дублируются | та же команда | маркеры и семь универсальных требований сохранены, правила в авто-задаче добавляются один раз; OK |
+| Полный набор | `just test`; `just ui-check`; `just test-tooling`; `just build`; `just test-release`; `just test-launcher` | OK |
+
+`just check` останавливается на двух существующих предупреждениях `staticcheck` в `internal/controlplane/cards_http.go` и `internal/controlplane/pilot_config.go`, вне области CARD-0039. `just test-browser` не находит заголовок `Factory overview` в существующем E2E-сценарии; затронутые файлы не связаны с экраном обзора.
