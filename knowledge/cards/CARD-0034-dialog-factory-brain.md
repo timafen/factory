@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: BLOCKED: полный Vitest-набор имеет 4 падения вне области диалога.
-- Branch: `factory/c7d42304-437-ac09919f-7e3`.
-- Head commit: `1562fc5` (перебазированная поставка перед записью проверки).
-- Evidence: после перебазирования `go test ./...` — PASS; `TestDialog` — PASS;
-  TypeScript, production build и 3 сценария Vitest Dialog — PASS. Полный Vitest
-  выявил 4 несвязанных падения в Overview, Settings и App.
-- One next action: устранить либо подтвердить базовые падения Overview, Settings
-  и App, затем повторить полный Vitest-набор.
+- Status: READY: поставка проверена, новых падений относительно `origin/main` нет.
+- Branch: `factory/ea2c212d-a7e-9ef69ff9-6b3`.
+- Head commit: `84c1bca` (перебазированная реализация перед этой записью).
+- What changed: `/dialog` ведёт многоходовый разговор с мозгом фабрики на
+  выбранной разрешённой модели; ошибки и лимиты безопасно объясняются человеку.
+- Evidence: `go test ./...`, `TestDialog`, web build и 3 теста Dialog — PASS.
+  Полный Vitest: 97/101 PASS; те же 4 падения воспроизведены на чистом main.
+- One next action: влить назначенную ветку в `main`.
 
 ## LOG
 
@@ -78,3 +78,15 @@ Vitest сохраняет несвязанные падения старых т�
 рабочее дерево очищено от результатов production build. Миграций и ручных шагов
 нет. Внешний proxy может иметь собственный timeout, который не задаётся в этом
 репозитории.
+
+### 2026-08-09 — Implement
+
+После ответа владельца полный `npx vitest run` сравнен с чистым `origin/main`:
+на main падают те же проверки `App > renders the renamed main screen on the
+default route` (нет заголовка «Главное»), `App > marks only exact navigation
+destinations as the current page` (нет кнопки «Главное»), `Overview active work
+> loads active work from the server and opens the work screen` (нет кнопки
+«Новый обзор») и `Settings > shows every notification group...` (в ответе есть
+дополнительный `escalate: true`). На ветке 97/101 PASS, включая 3/3 Dialog;
+`go test ./...`, `TestDialog` и `npm run build` — PASS. Эти базовые падения не
+исправлялись; production bundle пересобран после rebase на свежий main.
