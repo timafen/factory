@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implement + Test complete — implementation is already in `main`.
-- Branch: `factory/37ef9633-d06-a9e210c0-048`.
-- Head commit: `a40c5a0` (проверенный снимок свежего `origin/main`).
+- Status: Implement + Test complete — обязательная UI-проверка зелёная.
+- Branch: `factory/fda81935-551-a358c458-2b4`.
+- Head commit: `7520deb` (реализация и проверки поверх `origin/main` `f18970a`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: на свежем `main` подтверждены встроенный патруль и шесть его сценариев; дополнительная реализация не понадобилась.
-- Evidence: целевой набор → 6 tests OK; весь pilot → 32 tests OK; `go test -timeout 5m ./...` → OK; web build → OK.
-- One next action: Review сверяет карточку и отсутствие лишнего кодового диффа.
+- What changed: браузерный контракт синхронизирован с текущими экранами и API; узкий Automation-экран больше не растягивает длинный runbook.
+- Evidence: Playwright → 18 passed; отдельный app `tsc` → exit 0; web unit → 101 passed; pilot → 32 OK; Go → OK; build/lint → OK.
+- One next action: Review сверяет поставку и передаёт её в Verify.
 
 ## LOG
 
@@ -47,3 +47,31 @@
 ### 2026-08-09 — Implement
 
 На свежем `origin/main` повторно проверено, что обещанные `pilot/pilot.py` и `pilot/test_pilot.py` уже содержат автономный сторож и шесть предметных сценариев; дублировать реализацию в этой ветке не потребовалось. `python3 -m unittest pilot.test_pilot.PipelineWatchTests` — 6 OK, `python3 -m unittest pilot.test_pilot` — 32 OK, `go test -timeout 5m ./...` — OK, после `npm ci --prefix web` команда `npm --prefix web run build` — OK. Открытым остаётся заявленный в спецификации риск: несколько одновременно запущенных процессов pilot не координируются распределённой арендой.
+
+### 2026-08-09 — Implement
+
+По ответу владельца на снимке `origin/main` `fe7704b` выполнена отдельная обязательная проверка интерфейса. Первый прогон обнаружил устаревшие ожидания Playwright, старый формат `stages` в e2e-fixture, устаревший mock списка моделей и горизонтальный выход Automation detail на 390 px; контракт и узкая раскладка исправлены. Полный успешный результат `npm run test:browser`:
+
+```text
+✓  1 shows the Factory status and active work on the overview (1.2s)
+✓  2 creates, pins, revises, and disables a reusable Workflow (3.1s)
+✓  3 runs the complete UI to real-worker and Git-worktree workflow (4.6s)
+✓  4 cancels active work running in the real worker (16.9s)
+✓  5 renders every state and saves the desktop Work view (1.4s)
+✓  6 confirms and deletes terminal task history (1.9s)
+✓  7 shows worker capacity, current work, retained cleanup, and saves Workers (2.6s)
+✓  8 delegates with worker-specific repositories and preserves the task on refresh (1.8s)
+✓  9 confirms queued cancellation and explicitly retries a failure (1.3s)
+✓ 10 shows ordered progress and long task detail (3.2s)
+✓ 11 supports narrow grouped layouts and saves narrow screenshots (3.3s)
+✓ 12 opens and closes delegation from the keyboard (1.2s)
+✓ 13 manages repository routing end to end and preserves add input while polling (13.2s)
+✓ 14 previews and dispatches one typed GitHub issue Automation without duplication (9.6s)
+✓ 15 previews and dispatches one typed GitHub pull-request Automation without duplication (10.7s)
+✓ 16 previews, enables, and runs a schedule Automation through the ordinary task path (4.2s)
+✓ 17 migrates a locked legacy snapshot through Resume and Finalize (3.2s)
+✓ 18 edits pilot settings from the Settings screen (1.4s)
+18 passed (2.0m)
+```
+
+Дополнительные ворота: `npx tsc -p tsconfig.app.json --noEmit --pretty false` — exit 0; `npm test -- --reporter=dot` — 101 passed; `npm run lint` — exit 0; `npm run build` — exit 0; `python3 -m unittest pilot.test_pilot.PipelineWatchTests` — 6 OK; `python3 -m unittest pilot.test_pilot` — 32 OK; `go test -timeout 5m ./...` — OK. После финального rebase на новый свежий `origin/main` `f18970a` отдельно повторены Playwright — 18 passed (2.1m), app `tsc` — exit 0 и сторож — 6 OK. Открытый риск прежний: одновременно запущенные процессы pilot не координируются распределённой арендой.
