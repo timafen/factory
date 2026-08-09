@@ -4,9 +4,9 @@
 
 - Status: Implemented, awaiting review
 - Branch: `factory/c9c32048-035-d1e1007f-e6b`
-- Head commit: `90c4fb2`
+- Head commit: `1b4ec3e`
 - What changed: диалог показывает выбранный скриншот и отправляет его вместе с вопросом; сервер проверяет изображение, передаёт его выбранной модели и удаляет временный файл.
-- Evidence: `npx tsc -p tsconfig.app.json --noEmit` → exit 0; `npm test -- --run src/Dialog.test.tsx --reporter=verbose` → 4 passed; `go test ./internal/controlplane -run 'TestDialog(DeliversScreenshot|RejectsInvalidScreenshot)' -count=1 -v` → passed.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit` → exit 0; `npm test -- --run` → 102 passed; `npm run build` → built; `go test ./...` → passed.
 - Next action: проверить поставку на Review и открыть `/dialog` на стенде.
 
 ГОТОВО-КОГДА: файл `web/src/Dialog.tsx`
