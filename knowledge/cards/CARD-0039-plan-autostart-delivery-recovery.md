@@ -4,12 +4,12 @@
 
 - Status: Implemented — восстановление подтверждено, ветка готова к Verify.
 - Branch: `factory/7d59dbc9-8ee-3f833f88-27b`.
-- Head commit: будет зафиксирован после коммита карточки.
+- Head commit: `c71c5b1` — проверенное восстановление на свежем `origin/main`.
 - What changed: подтверждено, что реализация CARD-0034 уже вошла в свежий
   `origin/main` коммитом `c544784`; повторное изменение кода не требуется.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 32 tests, OK; сценарии
-  автоподбора находятся в `pilot/pilot.py`, `pilot/test_pilot.py` и
-  `intake/plan.py`.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 32 tests, OK;
+  `go build ./...` — PASS. Сценарии автоподбора находятся в `pilot/pilot.py`,
+  `pilot/test_pilot.py` и `intake/plan.py`.
 - Next action: Verify проверяет опубликованную ветку и целевой тест.
 
 ## LOG
@@ -19,3 +19,4 @@
 После потери прежней ветки работа восстановлена от свежего `origin/main`.
 Проверка истории показала, что функциональность уже слита как PR #20, поэтому
 код не дублировался. Целевой набор прошёл: 32 теста, `OK`.
+Сборка `go build ./...` также завершилась успешно.
