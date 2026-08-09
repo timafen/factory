@@ -10,15 +10,16 @@ Factory не переносит исходный код Bernstein и не зам
 Claude Code.
 
 Основание сравнения: Factory `origin/main` на `4b9c5d2`; Bernstein 3.13.0,
-исходный commit `f6bc3b43fa4f398bf7104aae6fd906380e089470`, лицензия Apache-2.0. Репозиторий
+исходный commit тега `v3.13.0` — `f683ce8dbc6b89d3f91e578cd641d5882bf489dd`,
+лицензия Apache-2.0. Репозиторий
 `chernistry/bernstein` перенаправляет на `sipyourdrink-ltd/bernstein`; commit
 фиксирует исследованный снимок независимо от переименования владельца.
 
 Первичные источники: [репозиторий и README](https://github.com/sipyourdrink-ltd/bernstein),
-[архитектура](https://github.com/sipyourdrink-ltd/bernstein/blob/f6bc3b43fa4f398bf7104aae6fd906380e089470/docs/architecture/ARCHITECTURE.md),
-[plans](https://github.com/sipyourdrink-ltd/bernstein/blob/f6bc3b43fa4f398bf7104aae6fd906380e089470/docs/architecture/plans.md),
-[workflow manifests](https://github.com/sipyourdrink-ltd/bernstein/blob/f6bc3b43fa4f398bf7104aae6fd906380e089470/docs/operations/workflow-manifests.md) и
-[quality pipeline](https://github.com/sipyourdrink-ltd/bernstein/blob/f6bc3b43fa4f398bf7104aae6fd906380e089470/docs/architecture/quality-pipeline.md).
+[архитектура](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/architecture/ARCHITECTURE.md),
+[plans](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/architecture/plans.md),
+[workflow manifests](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/operations/workflow-manifests.md) и
+[quality pipeline](https://github.com/sipyourdrink-ltd/bernstein/blob/f683ce8dbc6b89d3f91e578cd641d5882bf489dd/docs/architecture/quality-pipeline.md).
 
 ## Что уже есть в Factory
 

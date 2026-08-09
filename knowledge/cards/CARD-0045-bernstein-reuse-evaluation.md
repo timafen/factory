@@ -2,16 +2,16 @@
 
 ## HEAD
 
-- Status: Specification — готова к решению владельца.
-- Branch: `factory/b189d8fe-629-235403a3-37c`.
-- Head commit: `53907ab` (`Определить границу переиспользования Bernstein в Factory`).
+- Status: Specification — повторная проверка после исправлений.
+- Branch: `factory/541568ab-47f-3c577e8a-a3a`.
 - Specification: `knowledge/specs/bernstein-reuse-evaluation.md`.
 - What changed: сопоставлены Factory и Bernstein 3.13.0; предложен только
   выключенный по умолчанию PoC Bernstein как подчинённого движка одного Attempt.
 - Evidence: спецификация фиксирует снимок upstream, матрицу владения, восемь
   проверяемых критериев, условия продолжения и отказа; проверки структуры и
   `git diff --check` прошли.
-- One next action: владельцу решить, разрешать ли отдельный offline PoC адаптера.
+- One next action: повторно проверить оба документа; интеграцию не
+  разрешать до успешного отдельного offline PoC.
 
 ## LOG
 
@@ -30,3 +30,11 @@ durable state, fleet routing, permissions, provider actions и UI. Для Bernst
 этапа — новая спецификация сравнения. Проверки обязательных разделов, исходного
 commit и лицензионной отметки прошли; трёхточечный diff содержит только карточку
 и спецификацию, `git diff --check` не нашёл ошибок.
+
+### 2026-08-09 — Implement
+
+Привязка Bernstein 3.13.0 и все четыре ссылки на исходники исправлены
+на фактический commit тега `v3.13.0` — `f683ce8dbc6b89d3f91e578cd641d5882bf489dd`.
+Связь тега подтверждена `git ls-remote`; проверки структуры документов и
+`git diff --check` прошли. Документы возвращены на повторную проверку;
+интеграция до успешного отдельного offline PoC не разрешена.
