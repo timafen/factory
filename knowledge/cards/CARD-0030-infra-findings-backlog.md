@@ -109,3 +109,8 @@ One next action: влить ветку в `main`.
 Замечание про тест закрыто: тест `gives every settings field a Russian name and a non-empty explanation` в цикле проверяет все ~43 подписанных поля экрана (aria-label на русском) и наличие непустого `.field-hint` у каждого, плюс отдельно 15 селектов таблицы маршрутизации и оба групповых пояснения.
 Доказательство: `npx vitest run src/Settings.test.tsx` (6/6); `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build`; `npx eslint src/Settings.tsx src/Settings.test.tsx`; `go build ./...`; `npx vitest run` — 15 известных падений только в неизменённом `App.test.tsx`, остальное PASS; `git diff --name-only origin/main` — ровно 6 файлов задачи (два — сборка `web/dist`).
 Открытый риск: несвязанная поломка `go vet ./internal/controlplane/...` (рассинхронизация `PilotConfig.Stages` map/list в `pilot_config_test.go` и `web/e2e/server.mjs`) остаётся не починенной — уже неоднократно отмечена как отдельная задача вне этого пайплайна.
+
+### 2026-08-08 — Implement: UI-тесты приведены к новым названиям экранов
+На ветке `factory/8c403f0f-741-e39c1023-e85` ожидания в `web/src/App.test.tsx` обновлены под актуальные русские названия экранов и элементов управления.
+Доказательство: предметный Vitest — 60/60, typecheck и production build — PASS; дифф от точки ветвления содержит только тест и эту обязательную запись.
+Отдельная задача: исправить старое ожидание `Settings.test.tsx` для `escalate: true` и 10 существующих lint-ошибок, включая `Say.tsx`; эти сбои не блокируют текущую поставку по решению владельца.
