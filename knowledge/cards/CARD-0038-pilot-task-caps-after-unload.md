@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: implemented — готово к повторному Review, оба живых лимита подтверждены.
-- Branch: `factory/df20549b-76b-d63337d0-0c3`.
-- Head commit: `89aa76e` — применение лимитов и фактические проверки.
+- Status: implemented — оба живых лимита применены и подтверждены повторно.
+- Branch: `factory/b86d7cb2-eba-80507bc6-3d1`.
+- Head commit: `HEAD` — последний коммит поставки в указанной ветке.
 - What changed: в `/opt/factory-data/pilot/config.json` фактические значения
   `work_day_cap=30` и `day_task_cap=400` заменены на утверждённые 12 и 120.
 - Evidence: точная JSON-проверка вывела `JSON caps: 12 120`; целевой набор
   `python3 -m unittest pilot.test_pilot -q` — 24 теста, `OK`.
-- Next action: Review подтверждает оба значения живого конфига.
+- Next action: влить поставку после успешной проверки.
 
 ГОТОВО-КОГДА: файл /opt/factory-data/pilot/config.json
 ГОТОВО-КОГДА: команда python3 -c 'import json; c=json.load(open("/opt/factory-data/pilot/config.json")); assert (c["work_day_cap"], c["day_task_cap"]) == (12, 120)'
@@ -81,3 +81,10 @@
 карточке значений там были `work_day_cap=30` и `day_task_cap=400`. Оба ключа
 атомарно заменены на 12 и 120 с сохранением исходного файла в резервной копии.
 Точная JSON-проверка подтвердила `12 120`; целевой набор выполнил 24 теста с `OK`.
+
+### 2026-08-09 — Implement
+
+На итоговой ветке исправлены оба фактически действовавших ограничения живого
+конфига: `work_day_cap` с 30 до 12 и `day_task_cap` с 400 до 120. До изменения
+сохранена резервная копия `config.json.bak-card-0038-review-20260809`. Точная
+JSON-проверка вывела `JSON caps: 12 120`; целевой набор выполнил 24 теста с `OK`.
