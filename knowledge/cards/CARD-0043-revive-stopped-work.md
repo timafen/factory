@@ -2,10 +2,19 @@
 
 ## HEAD
 
-- Stage: Specification
-- Status: accepted; implementation pending
-- Branch: `factory/9a54a2e3-dda-25137fff-052`
-- Current truth: экран «Работа агентов» показывает причины `stopped_owner` и `stuck`, но из карточки работу продолжить нельзя; повтор отдельной failed/cancelled Task в `TaskDetail.tsx` не возобновляет весь конвейер.
+- Stage: Implement + Test
+- Status: implemented; targeted checks and UI build pass
+- Branch: `factory/e477cd70-fcf-03efd720-f35`
+- Head commit: `4f88aec`
+- What changed: карточки `stopped_owner` и `stuck` получили кнопку «Оживить»; API снимает только точную паузу, а пилот сбрасывает попытки и продолжает со следующего незавершённого этапа.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, pilot, 5 UI tests); `npm --prefix web run typecheck` и `npm --prefix web run build` → PASS.
+- Next action: провести Review реализации и границ конкурентного обновления файлов состояния.
+
+## LOG
+
+### 2026-08-09 — Specification
+
+Зафиксирован проверяемый контракт API, пилота, интерфейса и целевого шлюза.
 
 ## Goal and user impact
 
@@ -72,3 +81,7 @@
 ГОТОВО-КОГДА: файл web/src/WorkHistory.test.tsx
 ГОТОВО-КОГДА: файл Justfile
 ГОТОВО-КОГДА: команда just test-revive-stopped-work
+
+### 2026-08-09 — Implement
+
+Добавлена команда `POST /api/v1/works/{work}/revive`, идемпотентный сигнал пилоту и кнопка на остановленных карточках с pending/error-состояниями. Точное имя удаляется из `stopped_pipelines`, `give_up` сбрасывается только для выбранной работы, а Task создаёт существующий `pipeline_watch` со следующего этапа. `just test-revive-stopped-work`, полный пакет `internal/controlplane`, класс `PipelineWatchTests`, TypeScript-проверка и UI-сборка прошли.
