@@ -266,6 +266,7 @@ class BrainFallbackTest(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load_limits", side_effect=lambda: dict(self.limits_store)),
             mock.patch.object(pilot, "note_limit", side_effect=fake_note_limit),
+            mock.patch.object(pilot, "engine_down", return_value=False),
             mock.patch.object(pilot, "save"),
             mock.patch.object(pilot.subprocess, "run", side_effect=counting_run),
         ]
@@ -293,6 +294,24 @@ class BrainFallbackTest(unittest.TestCase):
         self.assertEqual(len(self.note_limit_calls), 1, "codex не должен снова получать запись лимита")
         self.assertEqual(len(self.codex_calls), 1, "codex не должен запускаться повторно, пока блок активен")
         self.assertEqual(len(self.claude_calls), 2)
+
+    def test_expired_provider_is_skipped_later_in_same_chain(self):
+        self.conf["brain_chain"] = [
+            {"cli": "codex", "model": "gpt-5.6-sol", "provider": "codex"},
+            {"cli": "codex", "model": "gpt-5.6-terra", "provider": "codex"},
+            {"cli": "claude", "model": "fable", "provider": "claude"},
+        ]
+
+        out, eng = pilot.brain(self.conf, "прогони задачу")
+
+        self.assertEqual(out, "ответ мозга")
+        self.assertEqual(eng["provider"], "claude")
+        self.assertEqual(len(self.note_limit_calls), 1)
+        self.assertEqual(len(self.codex_calls), 1,
+                         "вторая модель исчерпанного провайдера должна быть пропущена")
+        self.assertEqual(len(self.claude_calls), 1)
+
+
 class PlanAutostartTest(unittest.TestCase):
     def setUp(self):
         self.conf = {
@@ -362,22 +381,6 @@ class PlanAutostartTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "day_task_cap"):
                 pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
         set_idea.assert_not_called()
-
-    def test_expired_provider_is_skipped_later_in_same_chain(self):
-        self.conf["brain_chain"] = [
-            {"cli": "codex", "model": "gpt-5.6-sol", "provider": "codex"},
-            {"cli": "codex", "model": "gpt-5.6-terra", "provider": "codex"},
-            {"cli": "claude", "model": "fable", "provider": "claude"},
-        ]
-
-        out, eng = pilot.brain(self.conf, "прогони задачу")
-
-        self.assertEqual(out, "ответ мозга")
-        self.assertEqual(eng["provider"], "claude")
-        self.assertEqual(len(self.note_limit_calls), 1)
-        self.assertEqual(len(self.codex_calls), 1,
-                         "вторая модель исчерпанного провайдера должна быть пропущена")
-        self.assertEqual(len(self.claude_calls), 1)
 
     @mock.patch.object(pilot, "set_idea")
     @mock.patch.object(pilot, "create_task", return_value={"task": {}})
