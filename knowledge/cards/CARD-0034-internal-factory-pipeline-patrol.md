@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Specification ready; implementation is not in this delivery.
-- Branch: `factory/ccfc263a-816-00be866a-bc5`.
-- Head commit: `0a8746d`.
+- Status: Implemented and target tests pass.
+- Branch: `factory/047fa875-4d2-18a62485-e6b`.
+- Head commit: `8100690` (implementation commit after rebase onto `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: зафиксирован автономный патруль и его проверяемые критерии; изменения `pilot` исключены как не входящие в заявленную область.
-- Evidence: `git diff --name-only origin/main...HEAD` → только карточка и спецификация; `git diff --check origin/main...HEAD` → без ошибок пробелов.
-- One next action: реализовать обещания спецификации отдельной поставкой с файлами `pilot/pilot.py` и `pilot/test_pilot.py`.
+- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника.
+- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `npm --prefix web run build` → OK. `go test -timeout 5m ./...` доходит до не затронутого `internal/controlplane` и падает на `TestHTTPManagedRepositoryCatalog`: 404 вместо 200.
+- One next action: влить поставку; базовую Go-поломку `internal/controlplane` исправить отдельно.
 
 ## LOG
 
@@ -23,3 +23,7 @@
 ### 2026-08-08 — Scope correction
 
 Из поставки исключены `pilot/pilot.py` и `pilot/test_pilot.py`: задача этой ветки ограничена карточкой и спецификацией, поэтому реализация патруля должна прийти отдельной поставкой. Проверка трёхточечного диффа относительно `origin/main` подтверждает ровно два заявленных файла; проверка пробелов проходит.
+
+### 2026-08-08 — Implement
+
+Отдельная поставка вернула только обещанную реализацию `pilot`: живые состояния закреплены как контракт, а шесть тестов доказывают автономное и идемпотентное возобновление. Целевой и полный pilot-наборы, а также web-сборка прошли. Полная Go-регрессия зафиксировала базовую ошибку маршрута каталога репозиториев вне области этой карточки.
