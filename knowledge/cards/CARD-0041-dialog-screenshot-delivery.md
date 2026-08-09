@@ -3,15 +3,19 @@
 ## HEAD
 
 - Status: Implemented, ready for Review
-- Branch: `factory/22c5a874-65b-cb0cc973-333`
-- Head commit: `4f93d21`
+- Branch: `factory/3fe4740d-52e-6db7d063-54f`
+- Head commit: `b5213e6`
 - What changed: диалог принимает PNG/JPEG/WebP до 4 МБ, показывает предпросмотр и передаёт снимок выбранной модели.
 - What changed: после успешной отправки браузер очищает выбор, а сервер всегда удаляет временный файл после вызова модели.
-- Evidence: `go test ./...` → PASS; `npm test` → 103 tests PASS.
+- Evidence: `go test ./...` → PASS; `npm test` → PASS.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit` and `npm run build` → PASS.
 - Next action: проверить экран и контракт на Review.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+Работа заново собрана на свежем `origin/main` полным изолированным набором. Дополнительно закреплён отказ для корректного по сигнатуре PNG, который превышает лимит на один байт. Целевые проверки и финальные полные наборы `go test ./...` и `npm test`, TypeScript-проверка и production-сборка прошли.
 
 ### 2026-08-09 — Implement
 
