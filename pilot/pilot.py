@@ -2788,7 +2788,9 @@ def detect_limits(conf, tasks, workers_by_id):
         err_only = " ".join(str(a.get("error") or "") for a in atts[-2:])
         real = (load(PROVIDER_LIMITS_PATH, {}) or {}).get(prov) or {}
         up = real.get("used_percent")
-        fresh = time.time() - (real.get("at") or 0) < 10800
+        if not isinstance(up, (int, float)):
+            up = (real.get("percents") or {}).get("seven_day.utilization")
+        fresh = time.time() - (real.get("at") or real.get("asked_at") or 0) < 10800
         if (isinstance(up, (int, float)) and up < 80 and fresh
                 and not LIMIT_SIGNS.search(err_only)):
             continue
