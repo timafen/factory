@@ -243,6 +243,14 @@ def money_guard(conf, title):
     rec = _recent_tasks()
     wcap = int(conf.get("work_day_cap", 12))
     dcap = int(conf.get("day_task_cap", 120))
+    # Живой темп важнее цифры из настроек: если фабрика уже сутки работает
+    # быстрее потолка, значит потолок занижен — иначе она душит сама себя.
+    try:
+        pace = int(load(f"{HOME}/pilot/day_pace.json", {}).get("tasks") or 0)
+        if pace > dcap:
+            dcap = pace + 50
+    except Exception:
+        pass
     mine = sum(1 for t in rec if base_title(t.get("title", "")) == base)
     if mine >= wcap:
         if not is_stopped(conf, base):
@@ -2380,15 +2388,27 @@ def handle_answers(conf, workflows, workers, tasks):
             # всего из-за лимита подписки, а он проходит сам. Поэтому не
             # сдаёмся навсегда, а пробуем раз в десять минут, честно
             # подписав состояние: «жду свободного исполнителя».
+            last = str(q.get("last_error") or "")
+            cap_hit = "day_task_cap" in last or "work_day_cap" in last
             if q.get("status") != "no_worker":
                 q["status"] = "no_worker"
-                q["escalation_reason"] = ("ответ есть; жду свободного исполнителя "
-                                          "(лимит подписки или воркеры недоступны)")
+                q["escalation_reason"] = (
+                    "ответ есть; упёрлись в дневной потолок задач — жду, пока окно освободится"
+                    if cap_hit else
+                    "ответ есть; жду свободного исполнителя (лимит подписки или воркеры недоступны)")
                 save(f"{QUESTION_DIR}/{q['id']}.json", q)
-                log(f"answer resume: {q['id']} ждёт свободного исполнителя (после {tries} попыток)")
-                notify(conf, "Ответ есть, исполнителей нет — жду",
-                       f"{q['title']}\nПродолжу сам, как только освободится исполнитель для {stage}.",
-                       tags="hourglass", click=f"{UI_BASE}/work")
+                log(f"answer resume: {q['id']} ждёт ({'потолок' if cap_hit else 'исполнителя'}) "
+                    f"после {tries} попыток :: {last[:80]}")
+                if cap_hit:
+                    notify(conf, "Уперлись в дневной потолок задач",
+                           f"{q['title']}\nОтвет есть, но на сегодня выбран потолок числа задач. "
+                           "Продолжу сам, как только окно освободится. Потолок правится "
+                           "в настройках: day_task_cap.",
+                           tags="hourglass", click=f"{UI_BASE}/settings")
+                else:
+                    notify(conf, "Ответ есть, исполнителей нет — жду",
+                           f"{q['title']}\nПродолжу сам, как только освободится исполнитель для {stage}.",
+                           tags="hourglass", click=f"{UI_BASE}/work")
             if time.time() - float(q.get("last_resume_try") or 0) < 600:
                 continue
             q["last_resume_try"] = time.time()
@@ -2405,6 +2425,7 @@ def handle_answers(conf, workflows, workers, tasks):
                    click=f"{UI_BASE}/tasks/{tid}")
         except Exception as e:
             q["resume_tries"] = tries + 1
+            q["last_error"] = repr(e)[:200]
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer resume failed for {q['id']} (попытка {tries+1}/5): {e}")
 
