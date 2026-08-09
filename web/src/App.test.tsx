@@ -717,6 +717,24 @@ describe("App", () => {
     });
   });
 
+  it("does not create a partial task when files have not been delivered", async () => {
+    const fetch = mockControlPlane();
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
+    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
+    await user.type(within(dialog).getByLabelText("Title"), "Inspect screenshot");
+    await user.type(within(dialog).getByLabelText("Context"), "Use the supplied screenshot.");
+    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
+    await user.upload(within(dialog).getByLabelText("Files"), new File(["image"], "screen.png", { type: "image/png" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+
+    expect(screen.getByText("File delivery is not enabled yet, so this task has not been created.")).toBeVisible();
+    expect(fetch.mock.calls.some(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST")).toBe(false);
+  });
+
   it("renders every task status in the operational board", async () => {
     mockControlPlane();
     renderApp();
