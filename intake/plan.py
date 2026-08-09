@@ -335,3 +335,59 @@ def plan_add(title: str = Form(...), why: str = Form(""), repo: str = Form(""),
              kind: str = Form("idea"), back: str = Form("/intake/plan")):
     pilot.add_idea(kind, title, repo, why, origin="owner")
     return RedirectResponse(back, status_code=303)
+
+
+# ------------------------------------------------------------- уведомления ---
+
+GROUP_RU = {"questions": "вопрос ко мне", "stuck": "работа встала",
+            "money": "деньги и лимиты", "done": "завершения и запуски",
+            "escalate": "исполнитель повышен", "routine": "рутина"}
+
+
+@router.get("/alerts", response_class=HTMLResponse)
+def alerts_page(group: str = "", n: int = 100):
+    import json as _json
+    path = "/opt/factory-data/pilot/notifications.jsonl"
+    items = []
+    try:
+        for line in open(path, encoding="utf-8").readlines()[-800:]:
+            try:
+                items.append(_json.loads(line))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    items.reverse()
+    if group:
+        items = [i for i in items if i.get("group") == group]
+    items = items[:max(10, min(n, 300))]
+
+    tabs = ['<div class="tabs">',
+            f'<a class="{"on" if not group else ""}" href="alerts">Все</a>']
+    for k, v in GROUP_RU.items():
+        tabs.append(f'<a class="{"on" if group == k else ""}" href="alerts?group={k}">{v}</a>')
+    tabs.append("</div>")
+
+    body = []
+    for i in items:
+        quiet = "" if i.get("delivered") else " (тихое: группа выключена)"
+        click = i.get("click") or ""
+        link = (f'<a class="back" href="{esc(click)}">открыть</a>' if click else "")
+        body.append(
+            f'<div class="card{"" if i.get("delivered") else " done"}">'
+            f'<div class="t">{esc(i.get("title"))}</div>'
+            f'<div class="why">{esc(i.get("message"))}</div>'
+            f'<div class="meta">{esc(i.get("at"))} · {GROUP_RU.get(i.get("group"), i.get("group"))}'
+            f'{quiet} {link}</div></div>')
+    if not body:
+        body.append('<div class="empty">Уведомлений пока нет.</div>')
+
+    return HTMLResponse(
+        "<!doctype html><html lang=ru><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>Уведомления</title><style>{CSS}</style></head><body>"
+        '<a class="back" href="/work">&#8592; к работам</a>'
+        "<h1>Уведомления</h1><p class=sub>Всё, что фабрика присылала на телефон, "
+        "и тихие события из выключенных групп. Настройка групп — на экране "
+        "«Настройки».</p>"
+        + "".join(tabs) + "".join(body) + "</body></html>")

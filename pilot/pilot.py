@@ -98,11 +98,12 @@ NOTIFY_GROUPS = {
               "Упёрлись в лимит", "Продлил бюджет"),
     "done": ("Задача выполнена", "Задача завершена", "Эпик завершён", "Задача заведена",
              "Голосовая задача", "Эпик запущен"),
+    "escalate": ("Исполнитель повышен",),
     "routine": ("Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
 NOTIFY_DEFAULTS = {"questions": True, "stuck": True, "money": True,
-                   "done": True, "routine": False}
+                   "done": True, "escalate": True, "routine": False}
 
 
 def notify_group(title):
@@ -131,9 +132,30 @@ def no_bare_hashes(text):
     return HEX_TOKEN.sub("(служебный код)", str(text or ""))
 
 
+NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"
+
+
+def _notify_journal(title, message, group, delivered, click):
+    """Каждое уведомление остаётся в журнале — экран «Уведомления» читает его.
+    Тихие (выключенная группа) тоже пишутся, с пометкой."""
+    try:
+        rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "title": title, "message": message[:1500],
+               "group": group, "delivered": bool(delivered), "click": click}
+        with open(NOTIFY_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        if os.path.getsize(NOTIFY_LOG_PATH) > 1_500_000:
+            lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-800:]
+            io.open(NOTIFY_LOG_PATH, "w", encoding="utf-8").writelines(lines)
+    except Exception as e:
+        log("notify_journal_error", repr(e))
+
+
 def notify(conf, title, message, priority="default", tags="", click=""):
     title = no_bare_hashes(title)
     message = no_bare_hashes(message)
+    _notify_journal(title, message, notify_group(title),
+                    notify_allowed(conf, title), click)
     if not notify_allowed(conf, title):
         log("QUIET[" + notify_group(title) + "] " + str(title)
             + " :: " + str(message)[:80].replace("\n", " "))
@@ -1926,6 +1948,10 @@ def handle_answers(conf, workflows, workers, tasks):
         if rounds >= 2 and cx_hint != "high":
             cx_hint = "high"
             log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — исполнитель уровнем выше")
+            notify(conf, "Исполнитель повышен",
+                   (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
+                   + str(rounds) + " раз(а) — третий заход делает исполнитель уровнем выше.",
+                   tags="arrow_double_up", click=f"{UI_BASE}/work")
         worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
