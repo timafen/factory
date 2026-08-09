@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: specified — план готов к реализации.
-- Branch: `factory/79249e81-6cc-316823f3-528`.
-- Head commit: `41b6e68` (ревизия спецификации; следующий коммит обновляет
-  только эту ссылку в карточке).
-- What changes: сервер принимает и без потерь сохраняет `respect_host_load`, а
-  эталонный конфиг проверяется строгой серверной схемой.
-- Evidence: код сейчас читает флаг в `pilot/pilot.py`, но JSON-тега
-  `respect_host_load` нет в `protocol.PilotSettings`; целевой тест описан в
-  спецификации.
-- Next action: реализовать
-  `knowledge/specs/pilot-config-server-schema-sync.md`.
+- Status: implemented — код и регрессионные проверки готовы к ревью.
+- Branch: `factory/20848c54-cb3-6431baf7-158`.
+- Head commit: `2e23a41` (проверенная ревизия реализации).
+- What changed: серверная схема принимает и сохраняет `respect_host_load`,
+  старые конфиги без ключа получают совместимое значение `true`, а эталонный
+  конфиг теперь служит входом строгого регрессионного теста.
+- Evidence: `go test ./internal/controlplane -run
+  TestPilotConfigExampleMatchesServerSchema` → `ok`; `go test ./...` → все
+  пакеты `ok`; `go build ./...` → exit 0.
+- Next action: провести Review диффа от `origin/main`.
 
 ГОТОВО-КОГДА: файл internal/protocol/types.go
 ГОТОВО-КОГДА: файл internal/controlplane/pilot_config.go
@@ -29,3 +28,10 @@
 регрессионные ворота на полном репозиторном примере конфигурации. Исходная ветка
 принятой спецификации была удалена с `origin`, поэтому документ восстановлен по
 актуальному коду на свежем `origin/main`.
+
+### 2026-08-09 — Implement
+
+В строгую модель сервера и эталонный конфиг добавлен `respect_host_load`.
+Совместимость старых файлов и сохранение явного `false` закреплены тестом на
+полном `pilot/config.example.json`; целевой тест, `go test ./...` и
+`go build ./...` завершились успешно. Проверенная ревизия реализации: `2e23a41`.
