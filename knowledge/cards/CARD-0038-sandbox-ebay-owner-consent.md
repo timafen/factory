@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: Specification ready — ждёт подтверждения зависимости
-  `tarser-operations`.
-- What changes: Factory начнёт только запускать staging seller consent, открывать
-  ссылку eBay и показывать безопасный статус. Callback и зашифрованное хранение
-  токена остаются у торговой системы.
-- Boundary: production, OAuth-код, access/refresh tokens и client secrets не
-  попадают в Factory.
-- One next action: сначала проверить и при необходимости реализовать callback
-  и безопасный контракт в `tarser-operations`, затем передать его Implement.
+- Status: Implemented — ждёт выката Factory и smoke на staging.
+- Branch: `factory/0f6cde34-11f-6563214b-b6d`.
+- Head commit: `6c0518a` — владелец сам подтверждает eBay продавца в песочнице.
+- What changed: добавлены `/sandbox-keys`, серверные start/status endpoints и
+  строгий staging-only seller bridge. UI открывает consent URL только по клику
+  и опрашивает безопасный статус; OAuth-поля отбрасываются на сервере.
+- Evidence: `go test ./internal/controlplane`, Vitest и `tsc --noEmit` — успешно.
+- One next action: выкатить Factory на staging и пройти eBay consent тестовым seller.
 
 ## LOG
 
@@ -24,3 +23,12 @@
 staging-only allowlist, server-side прокси фиксированной операции, отдельный
 экран и polling безопасного статуса. Точный callback/API намеренно оставлен
 зависимостью торгового репозитория, чтобы не переносить OAuth в Factory.
+
+### 2026-08-09 — Implement
+
+На ветке `factory/0f6cde34-11f-6563214b-b6d` добавлены экран ключей песочницы,
+узкие server start/status endpoints и allowlist только для интерактивного seller
+bootstrap на staging. Сервер передаёт UI только operation ID, consent URL, status
+и безопасное сообщение; OAuth code, state и токены отсекаются. Проверены
+`go test ./internal/controlplane`, `npx vitest run src/SandboxKeys.test.tsx src/App.test.tsx`
+и `npx tsc -p tsconfig.app.json --noEmit`.
