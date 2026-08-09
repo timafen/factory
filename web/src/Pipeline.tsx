@@ -28,6 +28,8 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
 
   const [draft, setDraft] = useState<PipelineConfig | null>(null);
   useEffect(() => {
+    // Seed the editable copy only when the asynchronously loaded config arrives.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (pipeline.data && !draft) setDraft(structuredClone(pipeline.data));
   }, [pipeline.data, draft]);
 

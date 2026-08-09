@@ -14,6 +14,7 @@ function detectLang(text: string): Lang {
 /** Whitelist cleaner: keep only letters (any language), digits, whitespace and
  *  readable punctuation. Backslashes, braces, quotes, escape artifacts can
  *  never survive this. Exported so the UI can SHOW what will be spoken. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function cleanForSpeech(text: string): string {
   try {
     return text
@@ -37,6 +38,7 @@ const SILENT_WAV =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
 
 /** Fire-and-forget telemetry so speech problems can be debugged from the server. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function speechLog(event: string, detail = ""): void {
   try {
     void fetch("/intake/log", {
@@ -48,6 +50,7 @@ export function speechLog(event: string, detail = ""): void {
 }
 
 /** Must be called inside a user tap once (iOS unlocks audio only in a gesture). */
+// eslint-disable-next-line react-refresh/only-export-components
 export function unlockAudio(): void {
   if (!sharedAudio) sharedAudio = new Audio();
   sharedAudio.src = SILENT_WAV;
@@ -72,6 +75,7 @@ function browserSpeak(clean: string, onDone?: () => void): void {
 
 /** Speak via the server (neural voice, same on every device); falls back to the
  *  browser voice if the server is unreachable. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function speakText(text: string, onDone?: () => void): void {
   const clean = cleanForSpeech(text);
   if (!clean) { onDone?.(); return; }
@@ -99,6 +103,7 @@ export function speakText(text: string, onDone?: () => void): void {
   })();
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function cancelSpeech(): void {
   if (sharedAudio) {
     sharedAudio.pause();
