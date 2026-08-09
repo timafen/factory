@@ -3,8 +3,8 @@
 ## HEAD
 
 - Status: Implemented, tests green.
-- Branch: `factory/58c76aa1-b85-1ccdbaaa-beb`.
-- Head commit: `3dc894e`.
+- Branch: `factory/14902703-a11-c9268e6a-7b6`.
+- Head commit: `4f727b4` (перенесённая и проверенная реализация до этой записи).
 - What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
   срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
   Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
@@ -44,4 +44,14 @@
 до фикса (`AssertionError: 0 != 1` — запись лимита не происходила).
 
 Проверено: `python3 -m unittest pilot.test_pilot` → OK;
+`python3 -m py_compile pilot/pilot.py` → без ошибок.
+
+### 2026-08-08 — Implement
+
+После устранения внешнего сбоя продолжена ранее остановленная стадия: готовая
+реализация перенесена на `factory/14902703-a11-c9268e6a-7b6` и проверена на
+свежем `origin/main`. Дифф от точки ветвления по-прежнему ограничен карточкой,
+спецификацией, `pilot/pilot.py` и `pilot/test_pilot.py`.
+
+Проверено повторно: `python3 -m unittest pilot.test_pilot` → OK (2 теста);
 `python3 -m py_compile pilot/pilot.py` → без ошибок.
