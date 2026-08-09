@@ -2150,7 +2150,15 @@ TRY_ALIASES = (("staging.ops.tarser.net", "staging-automation.tarser.net"),)
 TRY_NONE = ("none", "нет", "-", "n/a")
 PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
 # служебные страницы: человек там результата не увидит
-TRY_USELESS = ("/health", "/login", "/admin/login")
+TRY_USELESS = ("/health", "/login", "/admin/login", "/work", "/answer",
+               "/settings", "/workers", "/epics")
+
+
+def _generic_screen(u):
+    """Общий экран панели — не результат: жмёшь «посмотреть» и попадаешь
+    туда же, откуда нажал."""
+    tail = (u or "").rstrip("/")
+    return any(tail.endswith(g) for g in TRY_USELESS)
 
 
 def proof_of(result):
@@ -2173,7 +2181,7 @@ def try_url(result, repo_id=""):
     m = TRY_LINE.search(result or "")
     if not m:
         return ""
-    path = m.group(1).strip()
+    path = m.group(1).strip().strip(chr(96) + chr(34) + chr(39) + "«»")
     if path.lower() in TRY_NONE:
         return ""
     if path.startswith("http"):
@@ -2181,13 +2189,13 @@ def try_url(result, repo_id=""):
             return ""
         for was, now in TRY_ALIASES:
             path = path.replace(was, now)
-        return path
+        return "" if _generic_screen(path) else path
     ident = _identity_of(repo_id)
     base = next((url for key, url in TRY_BASE.items() if key in ident), "")
     if not base:
         return ""
     _u = base + (path if path.startswith("/") else "/" + path)
-    return "" if _is_bare_root(_u) else _u
+    return "" if (_is_bare_root(_u) or _generic_screen(_u)) else _u
 
 
 BRANCH_LINE = re.compile(r"^\s*BRANCH:\s*(\S+)\s*$", re.M)

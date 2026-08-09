@@ -230,14 +230,17 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             key={work.id}
             className="button"
             onClick={() => onNav?.("work")}
-            style={{ width: "100%", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto",
+            style={{ width: "100%", height: "auto", display: "grid",
+                     gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "baseline",
                      gap: "4px 16px", textAlign: "left", marginTop: 6, padding: "10px 12px" }}
           >
-            <strong style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{work.title}</strong>
+            <strong style={{ overflow: "hidden", textOverflow: "ellipsis",
+                             whiteSpace: "nowrap", minWidth: 0 }}>{work.title}</strong>
             <Pill text={work.state === "running" ? "выполняется" : "в очереди"}
                   tone={work.state === "running" ? "ok" : "muted"} />
             <span style={{ fontSize: 12, color: muted }}>{work.origin}</span>
-            <span style={{ fontSize: 12, color: "#8ec5ff" }}>этап: {work.stage}</span>
+            <span style={{ fontSize: 12, color: "#8ec5ff", whiteSpace: "nowrap",
+                           justifySelf: "end" }}>этап: {work.stage}</span>
           </button>
         ))}
       </section>
