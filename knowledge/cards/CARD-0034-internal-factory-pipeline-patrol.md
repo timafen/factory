@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented and verified.
-- Branch: `factory/d8a613ea-e92-846a1fee-219`.
-- Head commit: `463b875`.
+- Status: Specification ready; implementation is not in this delivery.
+- Branch: `factory/ccfc263a-816-00be866a-bc5`.
+- Head commit: `0a8746d`.
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: встроенный `pipeline_watch` сам возобновляет потерянный переход, не дублирует живую работу и прекращает попытки после двух толчков.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests, OK; `python3 -m unittest pilot.test_pilot` → 7 tests, OK; `go test ./...` → OK; `npm --prefix web run build` → built.
-- One next action: принять реализацию в `main`.
+- What changed: зафиксирован автономный патруль и его проверяемые критерии; изменения `pilot` исключены как не входящие в заявленную область.
+- Evidence: `git diff --name-only origin/main...HEAD` → только карточка и спецификация; `git diff --check origin/main...HEAD` → без ошибок пробелов.
+- One next action: реализовать обещания спецификации отдельной поставкой с файлами `pilot/pilot.py` и `pilot/test_pilot.py`.
 
 ## LOG
 
@@ -19,3 +19,7 @@
 ### 2026-08-08 — Implement
 
 Патруль получил явно закреплённый контракт живых состояний и шесть изолированных сценариев: безопасное ожидание, одиночное продолжение с тем же репозиторием, подавление дубля, пауза владельца, завершённый конвейер и однократная эскалация после двух толчков. Автономность проверена запретом вызова внешнего оркестратора. Целевые и полные тесты pilot, Go-регрессия и web-сборка прошли.
+
+### 2026-08-08 — Scope correction
+
+Из поставки исключены `pilot/pilot.py` и `pilot/test_pilot.py`: задача этой ветки ограничена карточкой и спецификацией, поэтому реализация патруля должна прийти отдельной поставкой. Проверка трёхточечного диффа относительно `origin/main` подтверждает ровно два заявленных файла; проверка пробелов проходит.
