@@ -43,6 +43,99 @@ class CreateTaskFallbackTest(unittest.TestCase):
             self.assertEqual(payload["attachment_ids"], ["screenshot-id", "document-id"])
 
 
+class HostLoadAdmissionTests(unittest.TestCase):
+    def test_minimum_slot_allows_even_heavy_stage(self):
+        self.assertTrue(pilot.host_load_allows_stage(
+            [], "Implement + Test", overloaded=True))
+
+    def test_light_stages_are_allowed_after_minimum_is_reached(self):
+        tasks = [{"state": "running"}]
+        for stage in ("Triage", "Specification", "Review"):
+            with self.subTest(stage=stage):
+                self.assertTrue(pilot.host_load_allows_stage(
+                    tasks, stage, overloaded=True))
+
+    def test_heavy_and_unknown_stages_wait_after_minimum_is_reached(self):
+        tasks = [{"state": "queued"}]
+        for stage in ("Implement + Test", "Verify", "New workflow"):
+            with self.subTest(stage=stage):
+                self.assertFalse(pilot.host_load_allows_stage(
+                    tasks, stage, overloaded=True))
+
+    def test_normal_load_and_disabled_guard_keep_previous_admission(self):
+        tasks = [{"state": "running"}]
+        self.assertTrue(pilot.host_load_allows_stage(
+            tasks, "Verify", overloaded=False))
+        self.assertTrue(pilot.host_load_allows_stage(
+            tasks, "Verify", overloaded=True, respect_host_load=False))
+
+    def test_memory_or_disk_emergency_blocks_even_minimum_slot(self):
+        self.assertFalse(pilot.host_load_allows_stage(
+            [], "Triage", overloaded=True, emergency=True))
+        self.assertTrue(pilot.host_load_emergency({
+            "memory": {"state": "over"}, "disk": {"state": "ok"}}))
+        self.assertTrue(pilot.host_load_emergency({
+            "memory": {"state": "ok"}, "disk": {"state": "over"}}))
+        self.assertFalse(pilot.host_load_emergency({
+            "cpu": {"state": "over"}, "memory": {"state": "ok"},
+            "disk": {"state": "ok"}}))
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "created"}})
+    def test_one_shared_admission_applies_to_every_create_path(self, api, _money):
+        admission = {"tasks": [], "started": 0, "overloaded": True,
+                     "respect_host_load": True, "emergency": False}
+        conf = {"_host_load_admission": admission}
+
+        pilot.create_task({"title": "[auto] [3/5 Implement + Test] Первая"}, conf)
+        with self.assertRaises(pilot.HostLoadDeferred):
+            pilot.create_task({"title": "[auto] [5/5 Verify] Вторая"}, conf)
+        pilot.create_task({"title": "[auto] [4/5 Review] Третья"}, conf)
+
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(admission["started"], 2)
+
+    def test_cpu_overload_keeps_cycle_services_running(self):
+        conf = {"stages": [{"workflow": "Triage"}], "respect_host_load": True}
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [{"id": "active", "title": "manual",
+                                    "state": "running"}]}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_overloaded",
+                                                  return_value=True))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={
+                "state": "over", "cpu": {"state": "over", "percent": 250},
+                "memory": {"state": "ok", "percent": 40},
+                "disk": {"state": "ok", "percent": 50},
+            }))
+            watch = stack.enter_context(mock.patch.object(pilot, "pipeline_watch"))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(conf, {"processed": [], "epics_processed": [],
+                               "epic_starts_processed": []})
+
+        watch.assert_called_once()
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
