@@ -2,16 +2,16 @@
 
 ## HEAD
 
-- Status: Implement complete — три согласованные правки Review выполнены.
-- Branch: `factory/38e17944-2a9-e1fa3a51-af1`.
-- Head commit: `000ea85` (блокировка полного цикла отправки и серверное определение MIME).
+- Status: Implement complete — голосовые вложения сохраняются при fallback.
+- Branch: `factory/f1b8f0c0-6e1-b2ec863a-c27`.
+- Head commit: `fe4ef29` (исправление fallback и его регрессионный тест).
 - What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
   `/opt/factory-data/attachments/<id-задачи>/`; worker сохраняет одноимённые файлы
-  как `<id>-<имя>`, а сбой привязки возвращает все уже перемещённые blob назад.
-- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, production web build,
-  целевой `App.test.tsx` и заданные пакеты Go → PASS; полный Vitest сохраняет
-  известный baseline-сбой notification groups в `Settings.test.tsx`.
-- One next action: выполнить Verify трёх исправлений Review.
+  как `<id>-<имя>`; fallback пилота сохраняет исходный ключ привязки файлов.
+- Evidence: Python fallback-регрессия, TypeScript и production web build → PASS;
+  полный Vitest сохраняет известный baseline-сбой notification groups, а полный
+  Go-набор — несвязанный 404 в `TestHTTPManagedRepositoryCatalog`.
+- One next action: выполнить Verify исправления голосового fallback.
 
 ## LOG
 
@@ -67,3 +67,11 @@ blob при создании задачи теперь компенсируют�
 клиентом MIME и определяет его по первым байтам содержимого. UI- и Go-регрессии,
 TypeScript, production build и заданные пакеты Go прошли; полный Vitest сохраняет
 известный несвязанный сбой ожидания notification groups.
+
+### 2026-08-08 — Implement
+
+Fallback-маршрутизация пилота больше не создаёт новый `request_key`: голосовая
+задача во всех трёх попытках сохраняет ключ, к которому Control Plane привязал
+файлы. Новый Python-тест проводит два вложения через обе fallback-ступени.
+TypeScript и production build прошли; полный Vitest сохраняет известный сбой
+notification groups, полный Go-набор — несвязанный 404 managed catalog.
