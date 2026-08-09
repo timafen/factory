@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: Implement + Test — блокеры ревью устранены, целевые проверки зелёные.
-- Branch: `factory/b331cb36-760-3b73ea2b-615`.
-- Head commit: `a757fcf`.
-- What changed: `/dialog` однозначно выбирает конкретную строку `brain_chain`,
-  даже если имена моделей совпадают; лимит провайдера показан отдельной ошибкой.
-- Evidence: `go test ./internal/controlplane -run TestDialog` — PASS;
-  `npm --prefix web test -- --run src/Dialog.test.tsx` — 3 PASS;
-  typecheck и Vite build — PASS.
-- One next action: открыть `/dialog` в среде владельца и проверить реальный ответ
-  доступной CLI-модели.
+- Status: Implement + Test — блокер таймаута устранён, проверки зелёные.
+- Branch: `factory/dba823a7-502-a344208c-6e1`.
+- Head commit: `be6fa62` (исправление выполнено поверх проверенного `b4a9694`).
+- What changed: `WriteTimeout` сервера поднят до 60 секунд при лимите диалога
+  45 секунд; допустимое соотношение закреплено регрессионным тестом.
+- Evidence: целевой тест контракта и тесты диалога — PASS;
+  `go build ./...`, Vitest (3 теста) и web build — PASS.
+- One next action: вручную проверить на `/dialog` живой ответ модели дольше
+  15 секунд.
 
 ## LOG
 
@@ -48,3 +47,11 @@ src/Dialog.test.tsx` — 2 PASS; `npx tsc --noEmit` и `npx vite build` — PASS
 ./internal/controlplane -run TestDialog -count=1` — PASS; Vitest — 3 PASS;
 TypeScript и production build — PASS. Полный `go test ./...` имеет только
 известное падение `TestHTTPManagedRepositoryCatalog`, зафиксированное выше.
+
+### 2026-08-08 — Implement (таймаут длинного ответа)
+
+Проверенный HEAD предыдущей поставки исправлен на `b4a9694`. Сервер теперь даёт
+60 секунд на запись ответа при 45-секундном лимите диалога; тест запрещает
+снова сделать серверный таймаут короче. Целевой тест, тесты диалога,
+`go build ./...`, Vitest и web build прошли. Полный пакет controlplane сохраняет
+ранее известное падение `TestHTTPManagedRepositoryCatalog`.
