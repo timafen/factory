@@ -1946,11 +1946,13 @@ def handle_answers(conf, workflows, workers, tasks):
         except Exception:
             rounds = 0
         if rounds >= 2 and cx_hint != "high":
+            was = stage_worker(conf, stage, cx_hint, workers)
             cx_hint = "high"
-            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — исполнитель уровнем выше")
+            now_ = stage_worker(conf, stage, cx_hint, workers)
+            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — {was} -> {now_}")
             notify(conf, "Исполнитель повышен",
                    (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
-                   + str(rounds) + " раз(а) — третий заход делает исполнитель уровнем выше.",
+                   + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
                    tags="arrow_double_up", click=f"{UI_BASE}/work")
         worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
