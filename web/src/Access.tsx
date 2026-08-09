@@ -1,5 +1,4 @@
 import { Check, Copy, Gauge, KeyRound, Loader2, Lock, Power, PowerOff, ShieldAlert, ShieldCheck, Terminal } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { SpeakButton } from "./Speak";
 
@@ -15,22 +14,25 @@ type Scope = {
 /** Рубильники доступа фабрики к серверу. Верхний потолок: что здесь выключено,
  *  того не получит ни один агент, что бы он себе ни напридумывал. */
 export function AccessView() {
-  const queryClient = useQueryClient();
-  const scopesQuery = useQuery({
-    queryKey: ["access"],
-    queryFn: async (): Promise<Scope[]> => {
-      const r = await fetch("/api/v1/access");
-      if (!r.ok) throw new Error(`access ${r.status}`);
-      return ((await r.json()) as { scopes?: Scope[] }).scopes ?? [];
-    },
-  });
-  const scopes = scopesQuery.data ?? [];
-  const loadErr = scopesQuery.error ? String(scopesQuery.error) : "";
+  const [scopes, setScopes] = useState<Scope[]>([]);
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState("");
   const [shown, setShown] = useState<string>("");
   const [limits, setLimits] = useState<Record<string, Limit>>({});
   const [copied, setCopied] = useState("");
+
+  const load = async () => {
+    try {
+      const r = await fetch("/api/v1/access");
+      if (!r.ok) throw new Error(`access ${r.status}`);
+      setScopes(((await r.json()) as { scopes?: Scope[] }).scopes ?? []);
+      setErr("");
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -71,7 +73,7 @@ export function AccessView() {
         body: JSON.stringify({ enabled: !s.enabled }),
       });
       if (!r.ok) setErr((await r.json())?.error?.message ?? `не удалось (${r.status})`);
-      await queryClient.refetchQueries({ queryKey: ["access"] });
+      await load();
     } finally {
       setBusy("");
     }
@@ -93,9 +95,9 @@ export function AccessView() {
         Отдельная задача может попросить доступ, но выше этого потолка не поднимется.
       </p>
 
-      {(loadErr || err) && (
+      {err && (
         <div className="panel" style={{ borderColor: "#5a2b2b", marginBottom: 14 }}>
-          <ShieldAlert size={14} color="#ffb4b4" /> {loadErr || err}
+          <ShieldAlert size={14} color="#ffb4b4" /> {err}
         </div>
       )}
 
