@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — рабочие потолки снижены до 12 и 120.
-- Branch: `factory/e29a7c36-54f-5df81054-80b`.
-- Head commit: `115f50d` (рабочая конфигурация с новыми потолками).
+- Status: Implemented — репозиторный и живой конфиги используют потолки 12/120.
+- Branch: `factory/d4192151-ef7-c8668e5f-af6`.
+- Head commit: `a9aad58` (состояние поставки, проверенное перед этой записью).
 - What changed: в `pilot/config.json` фактический предел на одну работу снижен
   с 40 до 12 задач, а общий дневной предел — с 600 до 120.
-- Evidence: проверка JSON подтвердила 12/120; `python3 -m unittest
-  pilot.test_pilot` — 32 теста, OK.
-- Next action: повторить Review поставки относительно свежего `origin/main`.
+- Evidence: оба JSON подтвердили 12/120; живой процесс перечитывает абсолютный
+  `CONF_PATH` каждый цикл; `python3 -m unittest pilot.test_pilot` — 32 теста, OK.
+- Next action: передать поставку на Review.
 
 ГОТОВО-КОГДА: файл pilot/config.json
 ГОТОВО-КОГДА: файл knowledge/cards/CARD-0038-pilot-task-caps-after-unload.md
@@ -30,3 +30,11 @@
 Исправлена рабочая конфигурация: `work_day_cap=12`, `day_task_cap=120` вместо
 40/600. Значения подтверждены прямой проверкой JSON; все 32 целевых теста
 `pilot.test_pilot` прошли. Поставка ограничена конфигом и этой карточкой.
+
+### 2026-08-09 — Implement
+
+По разрешению владельца синхронизирован живой
+`/opt/factory-data/pilot/config.json`: потолки теперь 12/120. Запущенный процесс
+исполняет `/opt/factory-data/pilot/pilot.py`, где этот абсолютный путь задан как
+`CONF_PATH` и перечитывается каждый цикл. Репозиторный JSON и 32 целевых теста
+также подтвердили поставку.
