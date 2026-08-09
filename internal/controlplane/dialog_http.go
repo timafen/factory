@@ -110,11 +110,11 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if engineResting(selected.Model) {
-		writeError(w, &ServiceError{Code: dialog_rate_limited, Message: У этой модели сейчас исчерпана квота. Выберите другую модель, Status: http.StatusTooManyRequests})
+		writeError(w, &ServiceError{Code: "dialog_rate_limited", Message: "У этой модели сейчас исчерпана квота. Выберите другую модель", Status: http.StatusTooManyRequests})
 		return
 	}
 	if providerBlocked(selected.Provider) {
-		writeError(w, &ServiceError{Code: dialog_rate_limited, Message: Подписка этой модели сейчас заблокирована. Выберите другую модель, Status: http.StatusTooManyRequests})
+		writeError(w, &ServiceError{Code: "dialog_rate_limited", Message: "Подписка этой модели сейчас заблокирована. Выберите другую модель", Status: http.StatusTooManyRequests})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dialogTimeout)
