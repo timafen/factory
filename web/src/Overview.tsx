@@ -410,6 +410,12 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                 </span>
                 <Pill text={off ? "выключен" : blocked ? "лимит" : "свободна"}
                       tone={off || blocked ? "bad" : "ok"} />
+                {typeof l.used_percent === "number" && (
+                  <span style={{ fontSize: 12.5, color: l.used_percent >= 80 ? "#e0b877" : muted }}
+                        title="Израсходовано от недельного лимита подписки — настоящий счётчик провайдера">
+                    израсходовано {Math.round(l.used_percent)}%
+                  </span>
+                )}
                 <span style={{ fontSize: 12.5, color: muted }}>
                   <Users size={12} style={{ verticalAlign: -2 }} />{" "}
                   {wk ? `${wk.healthy} здоровых из ${wk.total}` : "нет исполнителей"}

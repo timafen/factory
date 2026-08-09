@@ -1458,6 +1458,18 @@ def provider_limits_tick(conf):
         if isinstance(cx.get("used_percent"), (int, float)):
             st["alerted"] = limits_alert(conf, "codex", cx["used_percent"],
                                          cx.get("resets_at"))
+    if cx and isinstance(cx.get("used_percent"), (int, float)) and cx["used_percent"] >= 95:
+        # Не ждём, пока агенты начнут падать: настоящий счётчик уже сказал,
+        # что подписка на дне. Блокируем провайдера сами, до пожара.
+        reset_iso = ""
+        try:
+            reset_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                      time.gmtime(int(cx.get("resets_at") or 0)))
+        except Exception:
+            pass
+        note_limit(conf, "codex",
+                   "настоящий счётчик подписки: израсходовано %d%%" % int(cx["used_percent"]),
+                   reset_iso)
     cl = claude_real_limits(st.get("claude"))
     if cl:
         st["claude"] = cl
@@ -1465,6 +1477,9 @@ def provider_limits_tick(conf):
                     if isinstance(v, (int, float)) and 0 <= v <= 100] or [0])
         if best:
             st["alerted"] = limits_alert(conf, "claude", best, None)
+            if best >= 95:
+                note_limit(conf, "claude",
+                           "настоящий счётчик подписки: израсходовано %d%%" % int(best), "")
     st["checked"] = int(time.time())
     save(PROVIDER_LIMITS_PATH, st)
 
@@ -1869,6 +1884,15 @@ def handle_answers(conf, workflows, workers, tasks):
         idx = stages.index(stage)
         nw = workflows.get(stage)
         cx_hint = q.get("complexity_hint") or "medium"
+        # Модель, которая дважды не справилась с этапом, третий раз денег
+        # не заслужила: третий заход отдаём исполнителю уровнем выше.
+        try:
+            rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")))
+        except Exception:
+            rounds = 0
+        if rounds >= 2 and cx_hint != "high":
+            cx_hint = "high"
+            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — исполнитель уровнем выше")
         worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
@@ -3226,6 +3250,13 @@ def cycle(conf, state):
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity:
+                    # Замок: если ветка уже в main (второй PASS той же работы),
+                    # второй PR не открываем — «Обзор» так влился дважды.
+                    repo_short = repo_identity.split("github.com/")[-1]
+                    cmp_ = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
+                    if cmp_ is not None and cmp_.get("ahead_by") == 0:
+                        log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
+                        continue
                     ok, out = gh_merge(repo_identity, branch, base_title(title))
                     log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
                     if ok:
