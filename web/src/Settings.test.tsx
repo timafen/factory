@@ -10,7 +10,7 @@ const response: PilotSettingsResponse = {
   warnings: ["Unknown worker: worker-new"],
   settings: {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
-    max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2,
+    max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2, max_parallel_works: 4,
     day_cap_usd: 20, deploy_staging_cmd: "deploy", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
     stages: [
       {workflow:"Triage",workers:{low:"worker-1",medium:"worker-1",high:"worker-new"}},

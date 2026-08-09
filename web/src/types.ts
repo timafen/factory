@@ -67,6 +67,7 @@ export interface PilotSettings {
   allow_any_worker: boolean;
   allowed_workers: string[];
   max_parallel_subtasks: number;
+  max_parallel_works: number;
   day_cap_usd: number;
   deploy_staging_cmd: string;
   owner_chat_url: string;
