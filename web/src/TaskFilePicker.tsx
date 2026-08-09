@@ -1,4 +1,5 @@
 import { Paperclip, X } from "lucide-react";
+import React from "react";
 
 export function TaskFilePicker({
   files,
@@ -9,6 +10,15 @@ export function TaskFilePicker({
   onChange: (files: File[]) => void;
   error?: string;
 }) {
+	const validate = (next: File[]) => {
+		if (next.length > 5) return "Можно прикрепить не больше 5 файлов.";
+		const oversized = next.find((file) => file.size > 10 * 1024 * 1024);
+		if (oversized) return `Файл «${oversized.name}» больше 10 МБ.`;
+		const executable = next.find((file) => /\.(exe|com|bat|cmd|msi|scr|ps1|sh|app|apk)$/i.test(file.name));
+		if (executable) return `Файл «${executable.name}» исполняемый и не принимается.`;
+		return undefined;
+	};
+	const [localError, setLocalError] = React.useState<string>();
   return (
     <div className="task-file-picker">
       <input
@@ -17,7 +27,9 @@ export function TaskFilePicker({
         multiple
         aria-label="Files"
         onChange={(event) => {
-          onChange([...files, ...Array.from(event.currentTarget.files ?? [])]);
+		  const next = [...files, ...Array.from(event.currentTarget.files ?? [])];
+		  const problem = validate(next); setLocalError(problem);
+		  if (!problem) onChange(next);
           event.currentTarget.value = "";
         }}
       />
@@ -39,7 +51,7 @@ export function TaskFilePicker({
           ))}
         </ul>
       )}
-      {error && <span className="field-error">{error}</span>}
+	  {(error || localError) && <span className="field-error">{error || localError}</span>}
     </div>
   );
 }

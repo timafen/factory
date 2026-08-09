@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -132,6 +133,9 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
+	mux.HandleFunc("POST /api/v1/task-attachments", api.uploadTaskAttachment)
+	mux.HandleFunc("DELETE /api/v1/task-attachments/{attachment_id}", api.deleteTaskAttachment)
+	mux.HandleFunc("GET /api/v1/attempts/{attempt_id}/attachments/{attachment_id}", api.downloadTaskAttachment)
 	mux.HandleFunc("GET /api/v1/tasks/{task_id}", api.getTask)
 	mux.HandleFunc("DELETE /api/v1/tasks/{task_id}", api.deleteTask)
 	mux.HandleFunc("POST /api/v1/tasks/{task_id}/cancel", api.cancelTask)
@@ -143,6 +147,60 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/attempts/{attempt_id}/events", api.appendEvents)
 	mux.HandleFunc("POST /api/v1/attempts/{attempt_id}/complete", api.completeAttempt)
 	return api.requestLog(mux)
+}
+
+func (a *API) uploadTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxAttachmentBytes+(1<<20))
+	if err := r.ParseMultipartForm(protocol.MaxAttachmentBytes + (1 << 20)); err != nil {
+		writeError(w, invalid("invalid_attachment", "файл не прочитан или больше 10 МБ"))
+		return
+	}
+	requestKey := r.FormValue("request_key")
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, invalid("missing_attachment", "выберите файл для загрузки"))
+		return
+	}
+	defer file.Close()
+	attachment, err := a.store.UploadAttachment(r.Context(), requestKey, header.Filename, header.Header.Get("Content-Type"), file)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, attachment)
+}
+
+func (a *API) deleteTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.DeletePendingAttachment(r.Context(), r.PathValue("attachment_id"), r.URL.Query().Get("request_key")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) downloadTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("X-Factory-Lease-Token")
+	if token == "" {
+		writeError(w, invalid("lease_token_required", "lease token is required"))
+		return
+	}
+	path, attachment, err := a.store.AttachmentForAttempt(r.Context(), r.PathValue("attempt_id"), r.PathValue("attachment_id"), token)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		writeError(w, unavailable(err))
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", attachment.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(attachment.Size, 10))
+	w.Header().Set("X-Content-SHA256", attachment.SHA256)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.Name}))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, file)
 }
 
 func (a *API) listWorkflows(w http.ResponseWriter, r *http.Request) {

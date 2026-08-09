@@ -26,6 +26,7 @@ import type {
   CardSummary,
   PilotSettings,
   PilotSettingsResponse,
+	TaskAttachment,
 } from "./types";
 
 export class APIError extends Error {
@@ -42,7 +43,7 @@ export class APIError extends Error {
 async function requestWithStatus<T>(path: string, init?: RequestInit): Promise<{ data: T; status: number }> {
   const response = await fetch(path, {
     ...init,
-    headers: init?.body
+    headers: init?.body && !(init.body instanceof FormData)
       ? { "Content-Type": "application/json", ...init.headers }
       : init?.headers,
   });
@@ -273,6 +274,11 @@ export const api = {
     request<PipelineConfig>("/api/v1/pipeline", { method: "PUT", body: JSON.stringify(config) }),
   createTask: (input: CreateTaskInput) =>
     request<TaskDetail>("/api/v1/tasks", { method: "POST", body: JSON.stringify(input) }),
+	uploadTaskAttachment: (requestKey: string, file: File) => {
+		const form = new FormData(); form.append("request_key", requestKey); form.append("file", file);
+		return request<TaskAttachment>("/api/v1/task-attachments", { method: "POST", body: form });
+	},
+	deleteTaskAttachment: (requestKey: string, id: string) => request<void>(`/api/v1/task-attachments/${encodeURIComponent(id)}?${new URLSearchParams({ request_key: requestKey })}`, { method: "DELETE" }),
   cancelTask: (id: string) =>
     request<TaskDetail>(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {
       method: "POST",

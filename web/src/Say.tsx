@@ -2,6 +2,8 @@ import { Mic, Square, Loader2, CheckCircle2, RotateCcw, Volume2, VolumeX } from 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { SpeakButton, speakText, cancelSpeech, cleanForSpeech, unlockAudio } from "./Speak";
+import { TaskFilePicker } from "./TaskFilePicker";
+import { api } from "./api";
 
 type Subtask = { title: string; detail?: string; complexity?: string };
 type Proposal = {
@@ -30,6 +32,9 @@ export function SayView() {
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+	const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+	const [attachmentError, setAttachmentError] = useState<string>();
+	const requestKeyRef = useRef(crypto.randomUUID());
   const [refining, setRefining] = useState<null | "rec" | "stt" | "think">(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const refineFlag = useRef(false);
@@ -145,6 +150,7 @@ export function SayView() {
     setProposal(null);
     setResult(null);
     setError(null);
+	setAttachmentFiles([]); setAttachmentError(undefined); requestKeyRef.current = crypto.randomUUID();
   };
 
   const startRecording = async () => {
@@ -264,11 +270,14 @@ export function SayView() {
     if (!proposal) return;
     setPhase("committing");
     setError(null);
+	const attachments = [];
     try {
+	  if (proposal.mode === "epic" && attachmentFiles.length) throw new Error("epic_attachments");
+	  for (const file of attachmentFiles) attachments.push(await api.uploadTaskAttachment(requestKeyRef.current, file));
       const r = await fetch("/intake/commit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proposal }),
+		body: JSON.stringify({ proposal, request_key: requestKeyRef.current, attachment_ids: attachments.map((item) => item.id) }),
       });
       if (!r.ok) throw new Error(`commit ${r.status}`);
       const res = (await r.json()) as CommitResult;
@@ -282,7 +291,8 @@ export function SayView() {
         ), 100);
       }
     } catch (e) {
-      setError("Не удалось завести задачу. Попробуй ещё раз.");
+	  await Promise.allSettled(attachments.map((item) => api.deleteTaskAttachment(requestKeyRef.current,item.id)));
+	  setAttachmentError(e instanceof Error && e.message === "epic_attachments" ? "Вложения можно отправить с одной задачей, но не с эпиком." : "Не удалось загрузить один из файлов или завести задачу.");
       setPhase("proposal");
     }
   };
@@ -339,6 +349,8 @@ export function SayView() {
       {error && (
         <div style={{ background: "#3b1d1d", color: "#ffb4b4", padding: "10px 14px", borderRadius: 8 }}>{error}</div>
       )}
+
+	  <TaskFilePicker files={attachmentFiles} onChange={setAttachmentFiles} error={attachmentError} />
 
       {/* Transcript review */}
       {(phase === "review" || phase === "dispatching") && (
