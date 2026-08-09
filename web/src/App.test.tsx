@@ -60,6 +60,16 @@ describe("App", () => {
     expect(fetch).toHaveBeenCalledWith("/api/v1/dashboard");
   });
 
+  it("opens sandbox keys directly and marks its navigation item", () => {
+    window.history.replaceState({}, "", "/sandbox-keys");
+    mockControlPlane();
+    renderApp();
+
+    expect(screen.getByRole("heading", { name: "Ключи песочницы" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ключи песочницы" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Получить ключи продавца" })).toBeVisible();
+  });
+
   it("marks only exact navigation destinations as the current page", async () => {
     mockControlPlane();
     const user = userEvent.setup();
