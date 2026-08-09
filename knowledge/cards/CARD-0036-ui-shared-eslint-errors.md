@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: BLOCKED — общий `just check` останавливается до UI на двух
-  диагностических сообщениях `staticcheck`, уже существующих в `origin/main`.
-- Branch: `factory/5b125661-f3a-208faf70-6d2`.
-- Head commit: `1e40870` (проверенная UI-поставка от `origin/main`).
+- Status: Verified PASS — awaiting human merge. Две диагностики `staticcheck`
+  приняты владельцем как отдельный базовый технический долг.
+- Branch: `factory/0ce1a2f4-025-f95cb48e-f89`.
+- Head commit: `95fe2f3` (проверенная UI-поставка от свежего `origin/main`).
 - What changed: восемь ESLint-ошибок и семь предупреждений Fast Refresh больше
   не блокируют UI; стартовая загрузка `Access.tsx` разрешена точечно.
-- Evidence: после `npm ci` успешно прошли `just ui-check` (9 файлов, 101 тест)
-  и `npm run build`; полный `just check` воспроизводимо завершается на
-  `internal/controlplane/cards_http.go:37` и `pilot_config.go:128` до UI.
-- Next action: исправить две базовые диагностики `staticcheck`, затем повторить
-  `just check` перед слиянием.
+- Evidence: после `cd web && npm ci` успешно прошли `just ui-check` (9 файлов,
+  101 тест) и `npm run build` (1735 модулей); полный `just check` дошёл до двух
+  принятых базовых ошибок, а затронутые Go-файлы идентичны `origin/main`.
+- Next action: выполнить человеческое слияние поставки.
 
 ## Acceptance criteria
 
@@ -71,3 +70,17 @@ UI-файлов и эта карточка, без `web/dist`, controlplane и �
 ветвления ограничена семью UI-файлами и этой карточкой. В рабочем дереве нет
 отладочных или посторонних файлов. Общий шлюз нельзя считать зелёным до
 устранения двух базовых диагностик `staticcheck`.
+
+### 2026-08-09 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Общие UI-проверки снова зелёные | `cd web && npm ci`, затем `just ui-check` | PASS: ESLint и TypeScript без ошибок; 9 файлов и 101 тест прошли. |
+| Production-сборка не регрессировала | `cd web && npm run build` | PASS: Vite собрал 1735 модулей. |
+| Выбранный голосовой режим сохраняется для запроса и интерфейса | дифф `origin/main...HEAD` для `web/src/Say.tsx` и полный UI-набор | PASS: state используется для рендера, синхронный ref — для тела запроса; 101 тест прошёл. |
+| Поставка не добавляет ошибок общего шлюза | `just check`; `git diff --exit-code origin/main -- internal/controlplane/cards_http.go internal/controlplane/pilot_config.go` | PASS для области поставки: шлюз воспроизвёл только принятые владельцем U1000 и SA4006; оба Go-файла совпадают с базой. |
+| Область и чистота поставки | `git diff --name-only origin/main...HEAD`; `git diff --check`; `git status --short` | PASS: только карточка и семь заявленных UI-файлов, пробельных ошибок и остатков сборки нет. |
+
+Регрессии проверены строгим lint, TypeScript, всеми 101 UI-тестами и production-
+сборкой. По решению владельца базовые U1000 и SA4006 не исправляются в этой
+ветке и должны быть оформлены отдельным техническим долгом.
