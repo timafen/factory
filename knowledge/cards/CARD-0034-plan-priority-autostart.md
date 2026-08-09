@@ -2,16 +2,28 @@
 
 ## HEAD
 
-- Status: READY: автоподбор перенесён на свежий `origin/main` и проверен.
+- Status: BLOCKED: полный набор проверок базовой ветки не проходит вне этой поставки.
 - Branch: `factory/594cebe6-bc5-a53d7879-41b`
-- Head commit: `a01619a` — ревизия кода и истории после rebase.
+- Head commit: `e1f2dc3` — проверенная ревизия автоподбора после rebase.
 - What changed: пилот запускает одну верхнюю `planned`-карточку при свободном
   слоте, учитывает ожидание владельца и меняет карточку лишь после создания задачи.
-- Evidence: 16 Python-тестов, `go test ./...`, Go-сборка,
-  TypeScript и production-сборка прошли. Веб-сбои воспроизведены на чистом main.
-- Next action: влить ветку автоподбора в `main`.
+- Evidence: целевые 17 Python-тестов, все Go- и компонентные UI-тесты прошли;
+  полный набор остановился на незатронутых ошибках форматирования, статического анализа и браузерного теста.
+- Next action: исправить известные проверки базовой ветки и повторить Verify.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+| Проверка | Команда / наблюдение | Результат |
+| --- | --- | --- |
+| Верхняя planned-карточка, лимит слотов, ожидание владельца и откат | `python3 -m unittest pilot.test_pilot` | 17/17 OK после rebase: запускается одна верхняя карточка; три уникальные активные/ожидающие работы блокируют старт; при ошибке или пустом `task.id` состояние остаётся `planned`. |
+| Интеграция с циклом и границы диффа | `git diff --name-only origin/main...HEAD`; вызов `autostart_plan` в основном цикле | В диффе только `pilot/pilot.py`, `pilot/test_pilot.py`, спецификация и CARD-0034; запуск обёрнут в обработку ошибки. |
+| Полный Go-набор | `go test -timeout 5m ./...` | PASS: все пакеты, включая `internal/controlplane` и `internal/worker`. |
+| Линтер, типы, сборка и запуск | `npm run lint`; `npm run typecheck`; `just test-tooling`; `just test-launcher` | PASS. |
+| Полный `just check` | `just check` | BLOCKED: `gofmt` на `internal/controlplane/limits_http.go`, который так же не отформатирован в `origin/main`; файл вне диффа. |
+| Статический анализ | `just staticcheck` | BLOCKED: существующие `U1000` в `internal/controlplane/cards_http.go` и `SA4006` в `internal/controlplane/pilot_config.go`; оба файла вне диффа. |
+| Компонентные и браузерные тесты | `npm test`; `npm run test:browser` | Компонентные: PASS, 98/98 после rebase. Браузерные: BLOCKED, Overview не находит ожидаемый заголовок; после первого сбоя 17 тестов не стартовали. UI-файлы вне поставки. |
 
 ### 2026-08-09 — Implement
 
