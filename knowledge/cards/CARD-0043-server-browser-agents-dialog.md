@@ -2,17 +2,19 @@
 
 ## HEAD
 
-- Status: Implemented — целевые проверки и сборка PASS, ожидает Verify.
-- Branch: `factory/8c4949df-c81-99c7ff78-cd0`.
-- Head commit: `c9363db` (`Дать агентам безопасный взгляд на тестовый стенд`).
+- Status: Implemented — целевые проверки, сборка и живая CLI-проверка PASS;
+  повторно ожидает Review.
+- Branch: `factory/d50664de-35c-f8775f0b-883`.
+- Head commit: `3b93f21` (`Проверить приватный снимок из команды браузера`).
 - Specification: `knowledge/specs/server-browser-for-agents-and-dialog.md`.
 - What changed: общий headless Chromium доступен агентам через
   `factory-worker browser`, а «Диалогу» — через экран и HTTP API.
 - Safety: разрешён только `https://staging-automation.tarser.net`; исходные URL,
   переходы, редиректы и разрешённый DNS защищены до сетевого соединения.
-- Evidence: целевые Go-тесты PASS; `Dialog.test.tsx` — 6/6 PASS; TypeScript и
-  Vite production build — PASS; shell-синтаксис установщика — PASS.
-- One next action: Verify устанавливает Chromium на стенде и открывает `/dialog`.
+- Evidence: CLI получила PNG 1440×1000 с approved staging и отклонила production
+  до запуска; целевые Go-тесты PASS; `Dialog.test.tsx` — 6/6 PASS; lint,
+  TypeScript, Vite production build и shell-синтаксис установщика — PASS.
+- One next action: Review проверяет трёхточечный diff опубликованной ветки.
 
 ## LOG
 
@@ -29,3 +31,11 @@
 элемент «Посмотреть стенд» в «Диалоге». Путь браузера определяется явно, через
 PATH или по pinned Playwright Chromium; добавлен серверный установщик. Целевые
 Go- и UI-тесты, TypeScript и production-сборка прошли.
+
+### 2026-08-09 — Implement
+
+Недоступная ветка прошлой реализации восстановлена из локальных объектов Git и
+перенесена только своими коммитами на свежий `origin/main`. Добавлен проверяемый
+запуск Chromium под ограничениями Ubuntu 24.04 и тест CLI-файла с правами 0600.
+Живая команда получила PNG 1440×1000 с approved staging; production origin был
+отклонён до запуска браузера. Целевые Go/UI-проверки и production-сборка прошли.
