@@ -5,7 +5,10 @@
 # -> проверить живьём -> при беде вернуть как было.
 set -uo pipefail
 SRC="${1:?путь к исходникам}"
-LIVE=/opt/factory-data
+LIVE="${FACTORY_BRAIN_LIVE:-/opt/factory-data}"
+INTAKE_URL="${FACTORY_BRAIN_INTAKE_URL:-http://127.0.0.1:7338}"
+INSTALL_OWNER="${FACTORY_BRAIN_OWNER:-factory}"
+INSTALL_GROUP="${FACTORY_BRAIN_GROUP:-factory}"
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 
@@ -18,7 +21,8 @@ install_one() {  # $1 файл в репо, $2 живой путь, $3 py|txt
   fi
   if cmp -s "$s" "$d"; then echo "   $1: без изменений"; return 0; fi
   cp -f "$d" "$d.prev" 2>/dev/null || true
-  install -o factory -g factory -m 644 "$s" "$d" || { fail "не смог поставить $1"; return 1; }
+  install -o "$INSTALL_OWNER" -g "$INSTALL_GROUP" -m 644 "$s" "$d" \
+    || { fail "не смог поставить $1"; return 1; }
   changed="$changed $d"
   echo "   $1: обновлён"
 }
@@ -50,8 +54,33 @@ if [ "$ok" = 1 ] && echo "$restart" | grep -q intake; then
   done
   [ "$code" = 200 ] || ok=0
 fi
+if [ "$ok" = 1 ]; then
+  step "задаю мозгу один контрольный вопрос"
+  smoke_body=$(mktemp)
+  code=$(curl -sS --max-time 180 -o "$smoke_body" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    --data '{"question":"Как безопасно продолжить выкат?","situation":"Контрольная проверка нового мозга после установки.","title":"Дымовая проверка выката","stage":"release","repository_id":""}' \
+    "$INTAKE_URL/suggest-answer" || echo 000)
+  if [ "$code" != 200 ] || ! python3 - "$smoke_body" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        value = json.load(stream)
+    ok = (isinstance(value, dict) and set(value) == {"answer"}
+          and isinstance(value["answer"], str) and bool(value["answer"].strip()))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    ok = False
+raise SystemExit(not ok)
+PY
+  then
+    ok=0
+  fi
+  rm -f "$smoke_body"
+fi
 if [ "$ok" != 1 ]; then
-  fail "мозг после обновления не поднялся — возвращаю прежние файлы"
+  fail "мозг после обновления не ответил правильно — возвращаю прежние файлы"
   for d in $changed; do [ -f "$d.prev" ] && cp -f "$d.prev" "$d"; done
   # shellcheck disable=SC2086
   systemctl restart $restart
