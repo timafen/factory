@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: READY FOR REVIEW — блокирующее замечание о торговом релизе исправлено.
-- Branch: `factory/be42d122-966-9726d71e-6cf`.
-- Head commit: `bb90cc2`.
+- Status: IMPLEMENTED — оба блокирующих замечания Review исправлены.
+- Branch: `factory/cef6e530-a39-15492f9b-484`.
+- Head commit: `b135518`.
 - Specification: `knowledge/specs/overview-project-products.md`.
-- What changed: торговый провайдер извлекает идентификатор сборки из пути
-  `current`, ищет по нему тему коммита и иначе показывает «Сборка <идентификатор>».
-- Evidence: 72 Python, 18 целевых UI и `PilotConfig` Go → PASS; frontend и
-  `factory-server` build → PASS; `git diff --check` → PASS.
-- One next action: повторно проверить исправление на стадии Review; не выкатывать.
+- What changed: основная ветка проекта определяется по remote и обновляется перед
+  снимком; здоровье среды требует успешного HTTP-кода от каждого компонента.
+- Evidence: 75 Python, 18 UI и Go-тесты → PASS; typecheck и frontend build → PASS.
+- One next action: повторить Review на чистом diff этой ветки.
 
 ## LOG
 
@@ -55,3 +54,10 @@ basename сборки, показывает тему найденного ком
 «Сборка <идентификатор>». Регрессия проверяет оба исхода на непустом репозитории.
 После rebase прошли 72 Python-теста, 18 UI-тестов, целевые Go-тесты, frontend и
 `factory-server` build; выкат не выполнялся.
+
+### 2026-08-09 — Implement
+
+Пилот теперь определяет настроенную или объявленную remote основную ветку и
+обновляет её перед чтением свежего коммита. Здоровье продукта учитывает все
+HTTP-коды обязательных компонентов, поэтому ответ 200/500 считается нездоровым.
+Прошли 75 Python-тестов, 18 UI-тестов, Go-тесты, typecheck и frontend build.
