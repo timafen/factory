@@ -1,9 +1,12 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -61,18 +64,69 @@ func TestHTTPServerDeliversDialogResponseAfterReadTimeoutWindow(t *testing.T) {
 }
 
 type fakeDialogRunner struct {
-	calls    int
-	brain    protocol.PilotBrain
-	messages []protocol.DialogMessage
-	answer   string
-	err      error
+	calls            int
+	brain            protocol.PilotBrain
+	messages         []protocol.DialogMessage
+	answer           string
+	err              error
+	screenshotPath   string
+	screenshotData   []byte
+	screenshotExists bool
 }
 
-func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage) (string, error) {
+func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, messages []protocol.DialogMessage, screenshotPath string) (string, error) {
 	f.calls++
 	f.brain = brain
 	f.messages = append([]protocol.DialogMessage(nil), messages...)
+	f.screenshotPath = screenshotPath
+	if screenshotPath != "" {
+		f.screenshotData, _ = os.ReadFile(screenshotPath)
+		_, err := os.Stat(screenshotPath)
+		f.screenshotExists = err == nil
+	}
 	return f.answer, f.err
+}
+
+func TestDialogDeliversScreenshotAndRemovesTemporaryFile(t *testing.T) {
+	runner := &fakeDialogRunner{answer: "Вижу изображение"}
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+	body := fmt.Sprintf(`{"brain_index":0,"messages":[{"role":"user","content":"Что на снимке?"}],"screenshot":{"name":"screen.png","content_type":"image/png","data":%q}}`, base64.StdEncoding.EncodeToString(png))
+	recorder := runDialogRequest(t, dialogTestAPI(t, runner), body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	if !runner.screenshotExists || !bytes.Equal(runner.screenshotData, png) {
+		t.Fatalf("runner did not receive screenshot: path=%q data=%x", runner.screenshotPath, runner.screenshotData)
+	}
+	if _, err := os.Stat(runner.screenshotPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary screenshot remains: %v", err)
+	}
+}
+
+func TestClaudeDialogAllowsTemporaryScreenshotDirectory(t *testing.T) {
+	screenshotPath := filepath.Join(t.TempDir(), "dialog-screenshot.png")
+	args := claudeDialogArgs("question", screenshotPath)
+	want := []string{"-p", "question", "--output-format", "text", "--add-dir", filepath.Dir(screenshotPath)}
+	if fmt.Sprint(args) != fmt.Sprint(want) {
+		t.Fatalf("claude args=%q, want %q", args, want)
+	}
+}
+
+func TestDialogRejectsInvalidScreenshotBeforeRunner(t *testing.T) {
+	for name, screenshot := range map[string]string{
+		"unknown content type": `{"name":"x.gif","content_type":"image/gif","data":"R0lG"}`,
+		"invalid base64":       `{"name":"x.png","content_type":"image/png","data":"%%%"}`,
+		"content mismatch":     `{"name":"x.png","content_type":"image/png","data":"aGVsbG8="}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeDialogRunner{}
+			body := `{"brain_index":0,"messages":[{"role":"user","content":"x"}],"screenshot":` + screenshot + `}`
+			recorder := runDialogRequest(t, dialogTestAPI(t, runner), body)
+			if recorder.Code != http.StatusBadRequest || runner.calls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", recorder.Code, runner.calls, recorder.Body)
+			}
+		})
+	}
 }
 
 func dialogTestAPI(t *testing.T, runner dialogRunner) *API {
