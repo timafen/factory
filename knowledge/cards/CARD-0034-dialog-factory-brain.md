@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implement + Test — два замечания ревью закрыты.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/c7d42304-437-ac09919f-7e3`.
-- Head commit: `a874fdf` (фактический коммит инженерной поставки).
-- What changed: `WriteTimeout` сервера поднят до 90 секунд; контракт явно
-  учитывает 15 секунд чтения, 45 секунд модели и 15 секунд запаса.
-- Evidence: живой HTTP-запрос к `/dialog` вернул ответ через 16 секунд — PASS;
-  `go test ./...`, Vitest Dialog (3 теста), web build и целевой lint — PASS.
-- One next action: пройти Review поставки на свежем `origin/main`.
+- Head commit: `1562fc5` (перебазированная поставка перед записью проверки).
+- Evidence: после перебазирования `go test ./...` — PASS; `TestDialog` — PASS;
+  TypeScript, production build и 3 сценария Vitest Dialog — PASS. Полный Vitest
+  выявил 4 несвязанных падения в Overview, Settings и App.
+- One next action: человек принимает решение о слиянии с учётом несвязанных
+  красных web-тестов и возможного внешнего proxy timeout.
 
 ## LOG
 
@@ -63,3 +63,18 @@ TypeScript и production build — PASS. Полный `go test ./...` имеет
 `go test ./...`, три теста Dialog, web build и целевой lint прошли. Полный
 Vitest сохраняет несвязанные падения старых тестов настроек, присутствующие
 вне области этого узкого исправления.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Модели и выбор | `npx vitest run src/Dialog.test.tsx` | PASS: первая модель, выбор второй и история в порядке проверены (3/3). |
+| Безопасный запрос | `go test ./internal/controlplane -run TestDialog -count=1` | PASS: allowlist, роли, лимиты, таймаут и безопасные ошибки покрыты. |
+| Сборка интерфейса | `npx tsc -p tsconfig.app.json --noEmit && npx vite build` | PASS. |
+| Полный Go-набор | `go test ./...` после rebase на `origin/main` | PASS. |
+| Полный web-набор | `npx vitest run` | 97/101 PASS; 4 падения: Overview (1), Settings (1), App (2), вне файлов диалога. |
+
+Дифф `origin/main...HEAD` содержит только заявленные файлы поставки и карточку;
+рабочее дерево очищено от результатов production build. Миграций и ручных шагов
+нет. Внешний proxy может иметь собственный timeout, который не задаётся в этом
+репозитории.
