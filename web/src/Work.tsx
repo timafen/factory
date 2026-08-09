@@ -420,12 +420,18 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
       background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
       borderColor: g.status.tone === "live" ? "#2a4560" : g.status.tone === "warn" ? "#4a3f22" : "var(--border, #262c38)",
       borderRadius: 12, padding: "12px 16px",
+      minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere",
     }}>
       {promiseLine && (
-        <div style={{ fontSize: 12, color: "#9fb4d8", margin: "0 0 6px", lineHeight: 1.5 }}
-             title="Обещания Спецификации: по ним машина сверяет дифф, а Проверка гоняет команды">
-          готово, когда: {promiseLine}
-        </div>
+        <details style={{ fontSize: 12, color: "#9fb4d8", margin: "0 0 6px" }}>
+          <summary style={{ cursor: "pointer", listStyle: "none", overflow: "hidden",
+                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                   title="Обещания Спецификации: по ним машина сверяет дифф, а Проверка гоняет команды">
+            готово, когда: {promiseLine}
+          </summary>
+          <div style={{ marginTop: 4, lineHeight: 1.5, overflowWrap: "anywhere",
+                        wordBreak: "break-all" }}>{promiseLine}</div>
+        </details>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
