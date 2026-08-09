@@ -74,7 +74,7 @@ printf '\211PNG\r\n\032\nproof' >"$output"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capture.URL != AllowedOrigin+"/orders" || !strings.Contains(string(arguments), "--proxy-server=http://127.0.0.1:") || !strings.Contains(string(arguments), "--disable-quic") {
+	if capture.URL != AllowedOrigin+"/orders" || !strings.Contains(string(arguments), "--proxy-server=http://127.0.0.1:") || !strings.Contains(string(arguments), "--disable-quic") || !strings.Contains(string(arguments), "--no-sandbox") {
 		t.Fatalf("capture=%+v args=%s", capture, arguments)
 	}
 }

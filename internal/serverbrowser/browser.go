@@ -59,7 +59,7 @@ func (runner Runner) Capture(ctx context.Context, value string) (Capture, error)
 	go func() { _ = proxy.Serve(listener) }()
 
 	arguments := []string{
-		"--headless=new", "--disable-gpu", "--disable-quic", "--disable-background-networking",
+		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-quic", "--disable-background-networking",
 		"--disable-component-update", "--no-first-run", "--no-default-browser-check",
 		"--proxy-server=http://" + listener.Addr().String(), "--proxy-bypass-list=<-loopback>",
 		"--window-size=1440,1000", "--hide-scrollbars", "--screenshot=" + output, parsed.String(),
