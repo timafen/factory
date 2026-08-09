@@ -32,7 +32,6 @@ func (a *API) getLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"limits": out})
 }
 
-
 type providerRequest struct {
 	Enabled bool `json:"enabled"`
 }
