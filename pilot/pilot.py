@@ -340,7 +340,7 @@ def create_task(body, conf=None):
     route_body["route"] = {"repository_remote_identity": identity,
                            "source_access": {"provider": "github", "hostname": "github.com"}}
 
-    b2 = dict(route_body, request_key=str(uuid.uuid4()))
+    b2 = dict(route_body)
     try:
         out = api("/tasks", b2)
         log(f"task create: acquired {identity} dynamically for pinned worker")
@@ -355,7 +355,6 @@ def create_task(body, conf=None):
             "create_task: chosen worker cannot take the repository and "
             "allow_any_worker is off (protects from routing to broken workers)")
     b3 = {k: v for k, v in route_body.items() if k != "worker_id"}
-    b3["request_key"] = str(uuid.uuid4())
     out = api("/tasks", b3)
     wid = (out.get("task") or {}).get("worker_id", "?")
     log(f"task create: routed to substitute worker {wid} (original tier unavailable)")
