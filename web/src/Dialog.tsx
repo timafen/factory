@@ -76,7 +76,7 @@ export function Dialog() {
     <div className="dialog-history" aria-live="polite">
       {messages.length === 0 && <p className="empty-state">Задайте первый вопрос мозгу фабрики.</p>}
       {messages.map((message,index)=><article className={`dialog-message dialog-${message.role}`} key={index}>
-        <strong>{message.role === "user" ? "Вы" : message.modelLabel || "Модель"}</strong><p>{message.content}</p>
+        <strong>{message.role === "user" ? "Вы" : (models[brainIndex ?? 0]?.model || "Модель")}</strong><p>{message.content}</p>
       </article>)}
     </div>
     {error && <div className="callout callout-error" role="alert">{error}</div>}
