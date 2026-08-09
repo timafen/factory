@@ -13,7 +13,7 @@ it("selects a configured model and sends the full multi-turn history",async()=>{
     return new Response(JSON.stringify({message:{role:"assistant",content:requests.length===1?"Ответ один":"Ответ два"},model_label:"Вторая модель"}),{status:200,headers:{"Content-Type":"application/json"}});
   }));
   render(<Dialog/>); const user=userEvent.setup();
-  const select=await screen.findByLabelText("Модель для диалога"); expect(select).toHaveValue("0"); await user.selectOptions(select,"1");
+  const select=await screen.findByLabelText("Модель для диалога"); await user.click(select); await user.click(screen.getAllByRole("option")[1]);
   const input=screen.getByLabelText("Ваш вопрос"); await user.type(input,"Первый вопрос"); await user.click(screen.getByRole("button",{name:"Отправить"}));
   expect(await screen.findByText("Ответ один")).toBeVisible(); await user.type(input,"Второй вопрос"); await user.click(screen.getByRole("button",{name:"Отправить"}));
   expect(await screen.findByText("Ответ два")).toBeVisible(); expect(requests[1]).toEqual({brain_index:1,messages:[{role:"user",content:"Первый вопрос"},{role:"assistant",content:"Ответ один"},{role:"user",content:"Второй вопрос"}]});
