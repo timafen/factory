@@ -285,6 +285,329 @@ class CreateTaskFallbackTest(unittest.TestCase):
             self.assertEqual(payload["attachment_ids"], ["screenshot-id", "document-id"])
 
 
+class DiagnosisRepairTests(unittest.TestCase):
+    def setUp(self):
+        self.repairs = {}
+        self.notifications = []
+        self.api_calls = []
+        self.created = []
+        self.conf = {"timeout_seconds": 900}
+        self.task = {
+            "id": "looping-task",
+            "title": "[auto] [3/5 Implement + Test] Починить отчёт",
+            "state": "running",
+        }
+
+        def load(path, default=None):
+            if path == pilot.DIAG_REPAIR_PATH:
+                return self.repairs
+            return default
+
+        def save(path, value):
+            if path == pilot.DIAG_REPAIR_PATH:
+                self.repairs = value
+
+        self.patches = [
+            mock.patch.object(pilot, "load", side_effect=load),
+            mock.patch.object(pilot, "save", side_effect=save),
+            mock.patch.object(pilot, "notify",
+                              side_effect=lambda *args, **kwargs:
+                              self.notifications.append((args, kwargs))),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def detail_api(self, path, body=None):
+        self.api_calls.append((path, body))
+        if path == "/tasks?limit=200":
+            return {"tasks": [self.task], "next_cursor": None}
+        if path == "/tasks/looping-task":
+            return {
+                "task": {
+                    "repository_id": "repo-id",
+                    "worker_id": "worker-id",
+                    "context": "Прошлая работа лежит в ветке factory/old-work",
+                },
+                "workflow": {"revision_id": "revision-id"},
+            }
+        if path == "/tasks/looping-task/cancel":
+            return {"task": {"id": "looping-task"}}
+        raise AssertionError(path)
+
+    def saved_repair(self, status):
+        return {
+            "status": status,
+            "task_id": "looping-task",
+            "request_key": "stable-repair-key",
+            "title": self.task["title"],
+            "context": "Прошлая работа лежит в ветке factory/old-work",
+            "branch": "factory/old-work",
+            "reason": "исполнитель повторяет один и тот же шаг",
+            "solution": "исправить проверку состояния",
+            "worker_id": "worker-id",
+            "repository_id": "repo-id",
+            "workflow_revision_id": "revision-id",
+        }
+
+    def test_cancel_once_wait_for_terminal_then_resume_once_on_same_branch(self):
+        verdict = {"причина": "исполнитель повторяет один и тот же шаг",
+                   "решение": "исправить проверку состояния", "нужен_владелец": False}
+        with mock.patch.object(pilot, "api", side_effect=self.detail_api):
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+
+        cancels = [call for call in self.api_calls if call[0].endswith("/cancel")]
+        self.assertEqual(len(cancels), 1)
+        with mock.patch.object(pilot, "create_task",
+                               side_effect=lambda body, _conf:
+                               self.created.append(body) or {"task": {"id": "repair-task"}}):
+            pilot.reconcile_diag_repairs(self.conf, [self.task])
+            self.assertEqual(self.created, [])
+            stopped = dict(self.task, state="cancelled")
+            pilot.reconcile_diag_repairs(self.conf, [stopped])
+            pilot.reconcile_diag_repairs(self.conf, [stopped])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], self.task["title"])
+        self.assertIn("factory/old-work", self.created[0]["context"])
+        self.assertIn("исправить проверку состояния", self.created[0]["context"])
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+    def test_restart_replays_cancel_pending_for_same_task(self):
+        self.repairs = {"Починить отчёт": self.saved_repair("cancel_pending")}
+
+        with mock.patch.object(pilot, "api", side_effect=self.detail_api):
+            pilot.reconcile_diag_repairs(self.conf, [self.task])
+
+        self.assertEqual(
+            [call for call in self.api_calls if call[0].endswith("/cancel")],
+            [("/tasks/looping-task/cancel", {})],
+        )
+        self.assertEqual(
+            self.repairs["Починить отчёт"]["status"], "cancellation_requested"
+        )
+
+    def test_restart_replays_resume_pending_with_same_request_key(self):
+        self.repairs = {"Починить отчёт": self.saved_repair("resume_pending")}
+
+        with mock.patch.object(
+                pilot, "create_task",
+                side_effect=lambda body, _conf:
+                self.created.append(body) or {"task": {"id": "repair-task"}}):
+            pilot.reconcile_diag_repairs(self.conf, [])
+            pilot.reconcile_diag_repairs(self.conf, [])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["request_key"], "stable-repair-key")
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+    def test_missing_source_in_short_list_is_read_by_saved_id(self):
+        self.repairs = {
+            "Починить отчёт": self.saved_repair("cancellation_requested")
+        }
+
+        def source_api(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks/looping-task":
+                return {"task": dict(self.task, state="cancelled")}
+            raise AssertionError(path)
+
+        with mock.patch.object(pilot, "api", side_effect=source_api), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=lambda body, _conf:
+                    self.created.append(body) or {"task": {"id": "repair-task"}}):
+            pilot.reconcile_diag_repairs(self.conf, [])
+
+        self.assertEqual(self.api_calls, [("/tasks/looping-task", None)])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+    def test_ambiguous_active_runs_are_not_cancelled(self):
+        other = dict(self.task, id="other-task", state="queued")
+        verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
+        with mock.patch.object(pilot, "api", return_value={
+                "tasks": [self.task, other], "next_cursor": None}) as api:
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task, other], self.task)
+        api.assert_called_once_with("/tasks?limit=200")
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("найдено активных запусков — 2", repair["failure"])
+
+    def test_active_run_beyond_first_page_prevents_any_cancellation(self):
+        other = dict(self.task, id="older-active-task", state="queued")
+        verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
+
+        def paged_api(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": [self.task], "next_cursor": "older/page"}
+            if path == "/tasks?limit=200&cursor=older%2Fpage":
+                return {"tasks": [other], "next_cursor": None}
+            raise AssertionError("cancel must not be called")
+
+        with mock.patch.object(pilot, "api", side_effect=paged_api):
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+
+        self.assertEqual([path for path, _ in self.api_calls], [
+            "/tasks?limit=200", "/tasks?limit=200&cursor=older%2Fpage",
+        ])
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("найдено активных запусков — 2", repair["failure"])
+
+    def test_missing_branch_fails_before_cancelling(self):
+        verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
+
+        def api_without_branch(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": [self.task], "next_cursor": None}
+            if path == "/tasks/looping-task":
+                return {
+                    "task": {"repository_id": "repo-id", "worker_id": "worker-id"},
+                    "workflow": {"revision_id": "revision-id"},
+                }
+            raise AssertionError("cancel must not be called")
+
+        with mock.patch.object(pilot, "api", side_effect=api_without_branch):
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+
+        self.assertFalse(any(path.endswith("/cancel") for path, _ in self.api_calls))
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("прежняя ветка", repair["failure"])
+
+    def test_cancel_failure_stops_without_second_attempt(self):
+        verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
+        calls = []
+
+        def failing_api(path, body=None):
+            calls.append(path)
+            if path in ("/tasks?limit=200", "/tasks/looping-task"):
+                return self.detail_api(path, body)
+            raise RuntimeError("control plane unavailable")
+
+        with mock.patch.object(pilot, "api", side_effect=failing_api):
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+
+        self.assertEqual(calls.count("/tasks/looping-task/cancel"), 1)
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("control plane unavailable", repair["failure"])
+
+    def test_resume_failure_is_reported_and_never_retried(self):
+        self.repairs = {
+            "Починить отчёт": {
+                "status": "cancellation_requested",
+                "task_id": "looping-task",
+                "request_key": "stable-repair-key",
+                "title": self.task["title"],
+            }
+        }
+        stopped = dict(self.task, state="cancelled")
+        with mock.patch.object(pilot, "create_task",
+                               side_effect=RuntimeError("worker unavailable")) as create:
+            pilot.reconcile_diag_repairs(self.conf, [stopped])
+            pilot.reconcile_diag_repairs(self.conf, [stopped])
+
+        create.assert_called_once()
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("worker unavailable", repair["failure"])
+
+    def test_owner_decision_never_starts_automatic_repair(self):
+        answer = '{"причина":"нужен выбор продукта","решение":"спросить",' \
+                 '"нужен_владелец":true}'
+        with mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "note_cap_rescue"), \
+                mock.patch.object(pilot, "brain", return_value=(answer, "brain")), \
+                mock.patch.object(pilot, "begin_diag_repair") as begin:
+            verdict = pilot.deep_diagnose(
+                self.conf, "Починить отчёт", "Implement + Test", 5,
+                [self.task], repair_task=self.task)
+
+        self.assertTrue(verdict["нужен_владелец"])
+        begin.assert_not_called()
+
+    def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
+        answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
+                 '"нужен_владелец":false}'
+
+        failed = dict(self.task, state="failed")
+
+        def api_for_cycle(path, body=None):
+            self.api_calls.append((path, body))
+            if path in ("/tasks?limit=100", "/tasks?limit=60",
+                        "/tasks?limit=200"):
+                return {"tasks": [failed], "next_cursor": None}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            if path == "/tasks/looping-task":
+                return {
+                    "task": {
+                        "repository_id": "repo-id",
+                        "worker_id": "worker-id",
+                        "context": "Прошлая работа лежит в ветке factory/old-work",
+                    },
+                    "workflow": {"title": "Implement + Test",
+                                 "revision_id": "revision-id"},
+                    "attempts": [{"error": "обычный повторный сбой"}],
+                }
+            raise AssertionError(path)
+
+        conf = dict(self.conf, stages=[{"workflow": "Implement + Test"}],
+                    deep_diag_rounds=5, max_stage_attempts=3,
+                    max_work_rounds=99, auto_plan=False)
+        state = {"processed": [], "epics_processed": []}
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "pipeline_watch", "handle_epics", "diag_sweep",
+                 "rescue_queued", "supersede_stale_questions", "handle_answers",
+                 "advance_epics")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=api_for_cycle))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                                                  return_value={0: 0}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_attempts", return_value=5))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                self.created.append(body) or {"task": {"id": "repair-task"}}))
+            stack.enter_context(mock.patch.object(pilot, "brain", return_value=(answer, "brain")))
+            stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=1))
+            note_diag = stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
+            stack.enter_context(mock.patch.object(pilot, "orchestrator_answer",
+                return_value={"decision": "owner", "reason": "нужен контроль"}))
+            stack.enter_context(mock.patch.object(pilot, "write_question", return_value={}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(conf, state)
+
+        note_diag.assert_not_called()
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], failed["title"])
+        self.assertIn("исправить", self.created[0]["context"])
+        self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
