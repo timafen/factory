@@ -3023,9 +3023,34 @@ def write_dashboard(conf, tasks, workers):
         "limits": limits_view(),
         "access": load(f"{HOME}/pilot/access.json", {}),
         "release": dashboard_slow(),
+        "recent_done": recent_done_block(),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],
     }
     save(DASH_PATH, data)
+
+
+def recent_done_block(n=5):
+    """Последние принятые работы — из журнала уведомлений, того же, откуда
+    идут пуши «Задача выполнена». Один источник — одна правда."""
+    out = []
+    try:
+        lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-400:]
+        for line in reversed(lines):
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("title") != "Задача выполнена":
+                continue
+            body = (r.get("message") or "").split(chr(10))
+            out.append({"title": body[0][:120],
+                        "detail": " ".join(x for x in body[1:] if x)[:180],
+                        "at": r.get("at") or ""})
+            if len(out) >= n:
+                break
+    except Exception:
+        pass
+    return out
 
 
 def limits_view():

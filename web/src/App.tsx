@@ -186,6 +186,13 @@ export function App() {
         </div>
         <nav aria-label="Primary navigation">
           <button
+            className={`nav-item ${route.page === "overview" ? "active" : ""}`}
+            aria-current={route.page === "overview" ? "page" : undefined}
+            onClick={() => navigate({ page: "overview" })}
+          >
+            <Gauge size={17} /> Обзор
+          </button>
+          <button
             className={`nav-item ${route.page === "say" ? "active" : ""}`}
             aria-current={route.page === "say" ? "page" : undefined}
             onClick={() => navigate({ page: "say" })}
@@ -232,13 +239,7 @@ export function App() {
           >
             <KeyRound size={17} /> Доступы
           </button>
-          <button
-            className={`nav-item ${route.page === "overview" ? "active" : ""}`}
-            aria-current={route.page === "overview" ? "page" : undefined}
-            onClick={() => navigate({ page: "overview" })}
-          >
-            <Gauge size={17} /> Обзор
-          </button>
+          
           <button
             className={`nav-item ${route.page === "work" || route.page === "task" ? "active" : ""}`}
             aria-current={route.page === "work" ? "page" : undefined}

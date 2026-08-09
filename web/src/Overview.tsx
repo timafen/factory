@@ -31,6 +31,7 @@ type Dash = {
   };
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
+  recent_done?: RecentDone[];
   release?: {
     staging_release?: string; prod_release?: string;
     staging_release_human?: string; prod_release_human?: string;
@@ -49,7 +50,8 @@ type ActiveTask = {
   created_at?: string;
 };
 type WorkMeta = { origin?: "owner" | "assistant" | "orchestrator" };
-export type OverviewWork = {
+export type RecentDone = { title: string; detail?: string; at?: string };
+type OverviewWork = {
   id: string;
   title: string;
   stage: string;
@@ -236,6 +238,28 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           </div>
         ))}
       </section>
+
+      {(d.recent_done ?? []).length > 0 && (
+        <section style={card} aria-label="Сделано недавно">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <CheckCircle2 size={16} color="#7ee2a8" /><strong>Сделано недавно</strong>
+          </div>
+          {(d.recent_done ?? []).map((r, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10,
+                                  padding: "7px 0",
+                                  borderTop: i ? "1px solid #1d2430" : "none" }}>
+              <span style={{ color: "#7ee2a8", fontSize: 13, flex: "none" }}>✓</span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
+                              whiteSpace: "nowrap" }}>{r.title}</div>
+                {r.detail && <div style={{ fontSize: 12, color: muted, overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.detail}</div>}
+              </div>
+              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{(r.at || "").slice(5, 16)}</span>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* 2. Продукт: что где живёт */}
       <section style={card}>
