@@ -20,6 +20,7 @@ Planner layer (epics):
 """
 import calendar
 import io
+import glob
 import json, re, subprocess, time, urllib.request, urllib.error, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
@@ -2780,6 +2781,169 @@ PRICE = {"opus": (15.0, 75.0), "fable": (15.0, 75.0),
          # GPT-5.6, официальные цены OpenAI за миллион токенов
          "sol": (5.0, 30.0), "terra": (2.50, 15.0), "luna": (1.0, 6.0)}
 _usage_cache = {}          # путь файла -> (смещение, накопленный расход)
+_codex_rollout_cache = {}  # путь -> состояние парсера и уже найденные события
+
+# Версия тарифа намеренно привязана к точным API-именам. Похожее имя нельзя
+# оценивать ценой соседней модели: в таком случае интерфейс показывает, что
+# стоимость не определена. Суммы — USD за миллион токенов standard processing.
+OPENAI_API_PRICE_VERSIONS = ({
+    "effective_from": "2026-08-09",
+    "source": "https://openai.com/api/pricing/",
+    "models": {
+        "gpt-5.6-sol": {"input": 5.0, "cached_input": 0.50, "output": 30.0},
+        "gpt-5.6-terra": {"input": 2.50, "cached_input": 0.25, "output": 15.0},
+        "gpt-5.6-luna": {"input": 1.0, "cached_input": 0.10, "output": 6.0},
+    },
+},)
+
+
+def openai_api_cost(model, input_tokens, cached_input_tokens, output_tokens,
+                    cache_write_tokens=0):
+    """Расчётная API-стоимость или None для модели без точного тарифа."""
+    price = OPENAI_API_PRICE_VERSIONS[-1]["models"].get(model)
+    if not price:
+        return None
+    long_context = input_tokens + cached_input_tokens + cache_write_tokens > 272000
+    input_multiplier = 2.0 if long_context else 1.0
+    output_multiplier = 1.5 if long_context else 1.0
+    return (input_tokens * price["input"] * input_multiplier
+            + cached_input_tokens * price["cached_input"] * input_multiplier
+            + cache_write_tokens * price["input"] * 1.25 * input_multiplier
+            + output_tokens * price["output"] * output_multiplier) / 1e6
+
+
+def _event_epoch(value):
+    try:
+        return calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _codex_usage_events(path):
+    """Досчитать события Codex, читая у неизменённого rollout только хвост."""
+    state = _codex_rollout_cache.get(path)
+    try:
+        size = os.path.getsize(path)
+        if state is None or size < state["offset"]:
+            state = {"offset": 0, "model": "", "previous_total": None,
+                     "events": []}
+        if size == state["offset"]:
+            return state["events"]
+        with open(path, errors="ignore") as fh:
+            fh.seek(state["offset"])
+            while True:
+                line_offset = fh.tell()
+                line = fh.readline()
+                if not line:
+                    break
+                if not line.endswith("\n"):
+                    fh.seek(line_offset)
+                    break
+                if '"model"' not in line and '"token_count"' not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                payload = obj.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if obj.get("type") == "turn_context":
+                    model = payload.get("model")
+                    if isinstance(model, str) and model:
+                        state["model"] = model
+                    continue
+                if obj.get("type") != "event_msg" or payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    continue
+                usage = info.get("last_token_usage")
+                total = info.get("total_token_usage")
+                if usage is not None and not isinstance(usage, dict):
+                    continue
+                if total is not None and not isinstance(total, dict):
+                    continue
+                keys = ("input_tokens", "cached_input_tokens", "output_tokens",
+                        "cache_write_input_tokens")
+                containers = [value for value in (usage, total) if value is not None]
+                model = usage.get("model") if usage is not None else None
+                values = [container.get(key, 0) for container in containers for key in keys]
+                if (model is not None and not isinstance(model, str)) or any(
+                        isinstance(value, bool) or not isinstance(value, int) or value < 0
+                        for value in values):
+                    continue
+                cache_write_known = any("cache_write_input_tokens" in value
+                                        for value in containers)
+                current = tuple(total.get(k, 0) for k in keys) if total is not None else None
+                if not usage:
+                    if current is None:
+                        continue
+                    if state["previous_total"] is None:
+                        usage = dict(zip(keys, current))
+                    else:
+                        usage = dict(zip(keys, (max(0, n - old)
+                                               for n, old in zip(current, state["previous_total"]))))
+                if current is not None:
+                    state["previous_total"] = current
+                raw_input = usage.get("input_tokens", 0)
+                cached = usage.get("cached_input_tokens", 0)
+                cache_write = usage.get("cache_write_input_tokens", 0)
+                output = usage.get("output_tokens", 0)
+                if raw_input or cached or cache_write or output:
+                    state["events"].append({"at": _event_epoch(obj.get("timestamp")),
+                                            "model": model or state["model"],
+                                            "input": max(0, raw_input - cached - cache_write),
+                                            "cache_read": cached, "cache_write": cache_write,
+                                            "cache_write_known": cache_write_known,
+                                            "output": output})
+            state["offset"] = fh.tell()
+        _codex_rollout_cache[path] = state
+    except OSError:
+        pass
+    return state["events"] if state else []
+
+
+def codex_usage_snapshot(*since_epochs):
+    """Один снимок журналов Codex сразу для всех запрошенных периодов."""
+    paths = set(glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"))
+    paths.update(glob.glob(f"{HOME}/.codex-*/sessions/*/*/*/rollout-*.jsonl"))
+    events = [event for path in paths for event in _codex_usage_events(path)]
+    result = {}
+    for since_epoch in since_epochs:
+        totals = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0,
+                  "total_tokens": 0, "cost_usd": 0.0, "cost_defined": True,
+                  "base_estimate": False, "unknown_models": []}
+        unknown = set()
+        for event in events:
+            if event["at"] < since_epoch:
+                continue
+            totals["input"] += event["input"]
+            totals["cache_read"] += event["cache_read"]
+            totals["cache_write"] += event["cache_write"]
+            totals["output"] += event["output"]
+            cost = openai_api_cost(event["model"], event["input"],
+                                   event["cache_read"], event["output"],
+                                   event["cache_write"])
+            if not event["cache_write_known"]:
+                totals["base_estimate"] = True
+            if cost is None:
+                unknown.add(event["model"] or "неизвестная модель")
+            else:
+                totals["cost_usd"] += cost
+        totals["total_tokens"] = (totals["input"] + totals["cache_read"]
+                                  + totals["cache_write"] + totals["output"])
+        totals["cost_defined"] = not unknown
+        totals["unknown_models"] = sorted(unknown)
+        result[since_epoch] = totals
+    return result
+
+
+def codex_usage_since(since_epoch):
+    """Общий расход Codex с указанного момента, без ложной связи с задачей."""
+    return codex_usage_snapshot(since_epoch)[since_epoch]
 
 
 def _scan_usage(path):
@@ -2963,14 +3127,16 @@ def work_spent(tasks, base):
     return task_cost_usd(atts)
 
 
-def day_spent(tasks):
+def day_spent(tasks, codex_day=None):
     today = time.strftime("%Y-%m-%d", time.gmtime())
     atts = []
     for t in tasks:
         if (t.get("created_at") or "")[:10] != today:
             continue
         atts += attempts_of(t["id"], not _live(t))
-    return task_cost_usd(atts)
+    start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+    codex_day = codex_day or codex_usage_since(start)
+    return task_cost_usd(atts) + codex_day["cost_usd"]
 
 
 def branch_head(branch):
@@ -3135,12 +3301,12 @@ def budget_guard(conf, tasks, workers=None):
         save(BUDGET_PATH, st)
 
 
-def day_budget_blocks(conf, tasks):
+def day_budget_blocks(conf, tasks, codex_day=None):
     """Дневной потолок на всё сразу. Начатое доигрывается, новое не берётся."""
     cap = float(conf.get("day_cap_usd") or 0)
     if cap <= 0:
         return False
-    spent = day_spent(tasks)
+    spent = day_spent(tasks, codex_day)
     if spent < cap:
         return False
     st = load(BUDGET_PATH, {})
@@ -3515,7 +3681,7 @@ def pipeline_health(tasks):
     return out
 
 
-def write_dashboard(conf, tasks, workers):
+def write_dashboard(conf, tasks, workers, codex_snapshot=None):
     """Снимок состояния фабрики одним файлом: интерфейсу остаётся только показать."""
     now = time.time()
     by_state = {}
@@ -3529,7 +3695,10 @@ def write_dashboard(conf, tasks, workers):
             return 1e9
 
     spend = {"day_usd": 0.0, "day_tokens": 0, "week_usd": 0.0, "week_tokens": 0,
-             "wasted_usd": 0.0, "worst": None}
+             "wasted_usd": 0.0, "worst": None, "day_cost_defined": True,
+             "week_cost_defined": True, "day_base_estimate": False,
+             "week_base_estimate": False, "day_unknown_models": [],
+             "week_unknown_models": []}
     for t in tasks[:60]:
         h = age_h(t)
         if h > 24 * 7:
@@ -3552,6 +3721,23 @@ def write_dashboard(conf, tasks, workers):
             if not spend["worst"] or usd > spend["worst"]["usd"]:
                 spend["worst"] = {"usd": round(usd, 2), "title": (t.get("title") or "")[:70],
                                   "id": t["id"]}
+
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+    week_start = time.time() - 7 * 86400
+    codex_snapshot = codex_snapshot or codex_usage_snapshot(day_start, week_start)
+    day_codex = codex_snapshot[day_start]
+    week_codex = codex_snapshot[week_start]
+    spend["day_usd"] += day_codex["cost_usd"]
+    spend["week_usd"] += week_codex["cost_usd"]
+    spend["day_tokens"] = day_codex["total_tokens"]
+    spend["week_tokens"] = week_codex["total_tokens"]
+    spend["day_cost_defined"] = day_codex["cost_defined"]
+    spend["week_cost_defined"] = week_codex["cost_defined"]
+    spend["day_base_estimate"] = day_codex["base_estimate"]
+    spend["week_base_estimate"] = week_codex["base_estimate"]
+    spend["day_unknown_models"] = day_codex["unknown_models"]
+    spend["week_unknown_models"] = week_codex["unknown_models"]
 
     prov = {}
     for w in workers.values() if isinstance(workers, dict) else workers:
@@ -3867,9 +4053,15 @@ def cycle(conf, state):
         workflows[rev.get("title")] = {"workflow_id": w["id"], "revision_id": rev.get("id"),
                                        "enabled": w.get("enabled")}
 
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+    week_start = time.time() - 7 * 86400
+    codex_snapshot = codex_usage_snapshot(day_start, week_start)
+
     # Снимок для главного экрана. Никогда не должен ломать цикл.
     try:
-        write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]})
+        write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]},
+                        codex_snapshot)
     except Exception as e:
         log("dashboard_error", repr(e))
 
@@ -3900,7 +4092,7 @@ def cycle(conf, state):
 
     # Дневной потолок: начатое доигрывается, новое не берётся.
     try:
-        if day_budget_blocks(conf, tasks):
+        if day_budget_blocks(conf, tasks, codex_snapshot[day_start]):
             return
     except Exception as e:
         log("day_cap_error", repr(e))
