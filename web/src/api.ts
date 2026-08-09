@@ -76,6 +76,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+	reviveWork: (work: string) => request<{ work: string; state: string }>(
+		`/api/v1/works/${encodeURIComponent(work)}/revive`, { method: "POST", body: "{}" },
+	),
 	startEbaySellerConsent: () => request<EbayConsent>("/api/v1/sandbox-keys/ebay-seller/consent", { method: "POST", body: "{}" }),
 	ebaySellerConsentStatus: (operationID: string) => request<EbayConsentStatus>(`/api/v1/sandbox-keys/ebay-seller/consent/${encodeURIComponent(operationID)}`),
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),

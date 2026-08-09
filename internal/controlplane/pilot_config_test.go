@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -236,4 +237,66 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 		t.Fatalf("PUT status %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestReviveWorkRemovesOnlyExactPauseAndIsIdempotent(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+
+	first, err := store.Revive("Работа")
+	if err != nil || first.State != "reviving" {
+		t.Fatalf("first revive = %#v, %v", first, err)
+	}
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatalf("idempotent revive: %v", err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Работа рядом" {
+		t.Fatalf("stopped pipelines = %#v", got)
+	}
+	var signals map[string]bool
+	body, _ := os.ReadFile(filepath.Join(filepath.Dir(path), "revive.json"))
+	if err := json.Unmarshal(body, &signals); err != nil || !signals["Работа"] || len(signals) != 1 {
+		t.Fatalf("signals = %#v, %v", signals, err)
+	}
+}
+
+func TestReviveWorkAcceptsStuckAndRejectsUnknown(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	stall := []byte(`{"Застрявшая":{"why":"give_up"},"Другая":{"why":"nudged"}}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "stalled.json"), stall, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revive("Застрявшая"); err != nil {
+		t.Fatalf("stuck revive: %v", err)
+	}
+	if _, err := store.Revive("Неизвестная"); err == nil {
+		t.Fatal("unknown work was accepted")
+	}
+}
+
+func TestReviveWorkHTTPValidatesPathAndReturnsStatus(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа с пробелом"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+
+	response, err := server.Client().Post(server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var got ReviveWorkResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil || got.Work != "Работа с пробелом" || got.State != "reviving" {
+		t.Fatalf("response = %#v, %v", got, err)
+	}
 }
