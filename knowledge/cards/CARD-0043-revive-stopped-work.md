@@ -3,12 +3,12 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: implemented; targeted checks and UI build pass
-- Branch: `factory/e477cd70-fcf-03efd720-f35`
-- Head commit: `4f88aec`
-- What changed: карточки `stopped_owner` и `stuck` получили кнопку «Оживить»; API снимает только точную паузу, а пилот сбрасывает попытки и продолжает со следующего незавершённого этапа.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, pilot, 5 UI tests); `npm --prefix web run typecheck` и `npm --prefix web run build` → PASS.
-- Next action: провести Review реализации и границ конкурентного обновления файлов состояния.
+- Status: три замечания Review исправлены; целевые проверки и UI-сборка проходят
+- Branch: `factory/a8a03a69-fdb-44e79352-274`
+- Head commit: `6438327`
+- What changed: оживление продолжает работу от последнего успешного этапа текущего круга, не снимает паузу при сбое записи сигнала и не показывается в архиве.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 2 pilot-сценария, 6 UI-тестов); `go test ./internal/controlplane` и 9 `PipelineWatchTests` → PASS; typecheck/build → PASS.
+- Next action: повторить Review, затем Verify перед слиянием.
 
 ## LOG
 
@@ -85,3 +85,7 @@
 ### 2026-08-09 — Implement
 
 Добавлена команда `POST /api/v1/works/{work}/revive`, идемпотентный сигнал пилоту и кнопка на остановленных карточках с pending/error-состояниями. Точное имя удаляется из `stopped_pipelines`, `give_up` сбрасывается только для выбранной работы, а Task создаёт существующий `pipeline_watch` со следующего этапа. `just test-revive-stopped-work`, полный пакет `internal/controlplane`, класс `PipelineWatchTests`, TypeScript-проверка и UI-сборка прошли.
+
+### 2026-08-09 — Implement
+
+После возврата Review исправлены три замечания: выбор следующей стадии учитывает последнюю успешную попытку и повторно запускает Review после доработки; сигнал revive сохраняется до снятия паузы; закрытые карточки не показывают кнопку. Регрессии закреплены отдельными Go, Python и UI-тестами. После rebase на `origin/main` прошли `just test-revive-stopped-work`, typecheck и production build; расширенные проверки пакета `internal/controlplane` и класса `PipelineWatchTests` также прошли.
