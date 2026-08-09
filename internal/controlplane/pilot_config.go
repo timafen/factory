@@ -95,6 +95,10 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["allow_any_worker"] {
 		settings.AllowAnyWorker = true
 	}
+	// Compatibility default: pilot.py treated an absent key as enabled.
+	if !present["respect_host_load"] {
+		settings.RespectHostLoad = true
+	}
 	return settings, body, nil
 }
 

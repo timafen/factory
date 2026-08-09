@@ -116,6 +116,80 @@ func TestPilotConfigStoreRejectsSymlinkAndInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "pilot", "config.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(example, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(fields["respect_host_load"]); got != "true" {
+		t.Fatalf("example respect_host_load = %s, want true", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, example, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewPilotConfigStore(path)
+	current, err := store.Read()
+	if err != nil {
+		t.Fatalf("strict decoder rejected config.example.json: %v", err)
+	}
+	if !current.Settings.RespectHostLoad {
+		t.Fatal("example respect_host_load was not decoded as true")
+	}
+
+	current.Settings.RespectHostLoad = false
+	if _, err := store.Write(current.Version, current.Settings); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Settings.RespectHostLoad {
+		t.Fatal("explicit respect_host_load=false was not preserved")
+	}
+	savedBody, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(savedBody, []byte(`"respect_host_load": false`)) {
+		t.Fatal("saved config omitted explicit respect_host_load=false")
+	}
+
+	delete(fields, "respect_host_load")
+	legacy, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacySettings, err := store.Read()
+	if err != nil {
+		t.Fatalf("legacy config was rejected: %v", err)
+	}
+	if !legacySettings.Settings.RespectHostLoad {
+		t.Fatal("legacy config did not receive respect_host_load=true")
+	}
+
+	fields["unknown_config_field"] = json.RawMessage("true")
+	unknown, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, unknown, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(); err == nil {
+		t.Fatal("strict decoder accepted an unknown config field")
+	}
+}
+
 func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 	settings := validPilotSettings()
 	settings.AllowAnyWorker = true

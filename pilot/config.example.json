@@ -74,6 +74,7 @@
  "day_cap_usd": 150,
  "deploy_staging_cmd": "sudo -n /usr/local/bin/fx staging release",
  "enabled": true,
+ "respect_host_load": true,
  "max_parallel_subtasks": 3,
  "max_stage_attempts": 3,
  "max_work_rounds": 8,

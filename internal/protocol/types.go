@@ -798,6 +798,7 @@ type PilotSettings struct {
 	AutoAnswer          bool         `json:"auto_answer"`
 	MaxStageAttempts    int          `json:"max_stage_attempts"`
 	AllowAnyWorker      bool         `json:"allow_any_worker"`
+	RespectHostLoad     bool         `json:"respect_host_load"`
 	AllowedWorkers      []string     `json:"allowed_workers"`
 	MaxParallelSubtasks int          `json:"max_parallel_subtasks"`
 	DayCapUSD           float64      `json:"day_cap_usd"`
