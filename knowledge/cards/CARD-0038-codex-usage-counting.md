@@ -2,18 +2,18 @@
 
 ## HEAD
 
-- Status: реализовано и проверено; поставка готова к повторному Review.
-- Branch: `factory/1625f0b2-021-4be58c96-986`.
-- Head commit: `2dc5be6` (реализация и согласованный production-бандл).
+- Status: реализовано и проверено; блокирующая поставка бандла исправлена.
+- Branch: `factory/b7fb6d94-dff-cdb06ab4-7ff`.
+- Head commit: `fc7f81b` (реализация и согласованный production-бандл).
 - What changed: rollout безопасно пропускает неверные JSON-типы и сохраняет
   смещение перед недописанной строкой, чтобы прочитать её после дозаписи.
 - What changed: production bundle пересобран и согласован с `dist/index.html`.
-- Evidence: `python3 -m unittest pilot.test_pilot` → 43/43 OK.
-- Evidence: `npm run typecheck`; `npm run build`; targeted eslint → passed.
+- Evidence: `python3 -m unittest pilot.test_pilot.CodexUsageTests` → 8/8 OK.
+- Evidence: `npm ci`; `npm run typecheck`; `npm run build`; targeted eslint → passed.
 - Evidence: `npm test -- --run src/Overview.test.ts` → 9/9 passed.
 - Evidence: `index-BHFgOwao.js` из `dist/index.html` присутствует в дереве
-  коммита `2dc5be6`.
-- Next action: повторить Review CARD-0038 по чистому diff от точки ветвления.
+коммита `fc7f81b`.
+- Next action: повторить Review CARD-0038 для поставки `fc7f81b`.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -102,3 +102,10 @@ cumulative total исправлено для смешанного потока. 
 посторонней CARD-0039. Парсер пропускает неверные типы, а незавершённая JSONL-
 строка читается после дозаписи; это подтверждают 8/8 серверных тестов. Проверка
 типов, 9/9 UI-тестов и production-сборка прошли, созданный JS-бандл существует.
+
+### 2026-08-09 — Implement
+
+Поставка собрана заново на `factory/b7fb6d94-dff-cdb06ab4-7ff` от свежего
+`origin/main`. После `npm ci` прошли точная TypeScript-проверка,
+Vite build, 8/8 серверных и 9/9 UI-тестов. Коммит `fc7f81b`
+содержит `dist/index.html` и указанный в нём `index-BHFgOwao.js`.
