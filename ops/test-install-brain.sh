@@ -62,6 +62,13 @@ run_case() {
     bash "$INSTALLER" "$case_dir/src" >"$case_dir/output" 2>&1
 }
 
+leave_only_pilot_py_changed() {
+  case_dir=$1
+  cp "$case_dir/src/pilot/context.md" "$case_dir/live/pilot/context.md"
+  cp "$case_dir/src/intake/app.py" "$case_dir/live/intake/app.py"
+  cp "$case_dir/src/intake/plan.py" "$case_dir/live/intake/plan.py"
+}
+
 success="$temporary/success"
 make_fixture "$success" success
 run_case "$success" success || fail "корректный ответ отклонён"
@@ -81,6 +88,23 @@ for mode in timeout http-error invalid-json empty-answer extra-field; do
   [ "$(grep -c '^restart factory-pilot factory-intake$' "$failed/events")" = 2 ] \
     || fail "$mode не перезапустил службы при установке и откате"
 done
+
+pilot_only="$temporary/pilot-only"
+make_fixture "$pilot_only" invalid-json
+leave_only_pilot_py_changed "$pilot_only"
+status=0
+run_case "$pilot_only" invalid-json || status=$?
+[ "$status" = 7 ] || fail "pilot-only завершился кодом $status вместо 7"
+expected_events=$(printf '%s\n' \
+  'restart factory-pilot factory-intake' \
+  '-q is-active factory-pilot' \
+  '-q is-active factory-intake' \
+  'smoke' \
+  'restart factory-pilot factory-intake')
+[ "$(cat "$pilot_only/events")" = "$expected_events" ] \
+  || fail "pilot-only не перезапустил intake до smoke и после отката"
+grep -Fx 'old = True' "$pilot_only/live/pilot/pilot.py" >/dev/null \
+  || fail "pilot-only не вернул прежний pilot.py"
 
 unchanged="$temporary/unchanged"
 make_fixture "$unchanged" success
