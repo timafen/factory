@@ -63,6 +63,30 @@ describe("Overview active work", () => {
   });
 });
 
+describe("Overview Codex spend", () => {
+  it("shows tokens but no invented price for an unknown exact model", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard"
+        ? { spend: { day_usd: 0, week_usd: 0, day_tokens: 1234, week_tokens: 5678,
+            day_cost_defined: false, week_cost_defined: false,
+            day_base_estimate: true, week_base_estimate: true,
+            day_unknown_models: ["gpt-future-exact"],
+            week_unknown_models: ["gpt-future-exact"] } }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null }
+        : path.endsWith("/works") ? {} : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, {}));
+
+    expect(await screen.findAllByText("стоимость не определена")).toHaveLength(2);
+    expect(screen.getByText("1 234 токенов Codex")).toBeVisible();
+    expect(screen.getByText("Нет точного API-тарифа: gpt-future-exact")).toBeVisible();
+    expect(screen.getByText(/базовая оценка по API-тарифу/)).toBeVisible();
+  });
+});
+
 describe("fetchAllTasks", () => {
   it("walks every page instead of stopping at the server's default limit", async () => {
     const pageSize = 200;
