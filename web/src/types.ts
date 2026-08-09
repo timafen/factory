@@ -86,6 +86,12 @@ export interface DialogMessage {
   content: string;
 }
 
+export interface DialogScreenshot {
+  name: string;
+  content_type: "image/png" | "image/jpeg" | "image/webp";
+  data: string;
+}
+
 export interface DialogResponse {
   message: DialogMessage;
   model_label: string;
