@@ -32,11 +32,6 @@ CONTEXT_PATH = f"{HOME}/pilot/context.md"
 VERDICT_DIR = f"{HOME}/pilot/verdicts"
 PREFIX = "[auto]"
 STAGE_TITLE_RE = re.compile(r"^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.*)$")
-HOST_LOAD_LIGHT_STAGES = frozenset(("Triage", "Specification", "Review"))
-HOST_LOAD_ACTIVE_STATES = frozenset(
-    ("running", "queued", "pending", "created", "starting")
-)
-HOST_LOAD_MIN_ACTIVE = 1
 EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
 EPIC_PLAN_PREFIX = "[epic-plan]"     # or any task titled like this
 EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
@@ -325,47 +320,7 @@ AGENT_RULES = """
 """
 
 
-class HostLoadDeferred(RuntimeError):
-    """The stage is safe to retry after ordinary host pressure subsides."""
-
-
-def host_load_allows_stage(tasks, stage, overloaded, respect_host_load=True,
-                           emergency=False):
-    """Pure admission policy for task creation during a pilot cycle."""
-    if not respect_host_load or not overloaded:
-        return True
-    if emergency:
-        return False
-    active = sum(1 for task in (tasks or [])
-                 if task.get("state") in HOST_LOAD_ACTIVE_STATES)
-    return active < HOST_LOAD_MIN_ACTIVE or stage in HOST_LOAD_LIGHT_STAGES
-
-
-def host_load_emergency(block):
-    """Memory and disk exhaustion are hard stops, unlike ordinary CPU load."""
-    return any((block.get(resource) or {}).get("state") == "over"
-               for resource in ("memory", "disk"))
-
-
-def _admit_task_for_host(body, conf):
-    admission = (conf or {}).get("_host_load_admission")
-    if not admission or not str(body.get("title", "")).startswith(PREFIX):
-        return None
-    match = STAGE_TITLE_RE.match(body.get("title", "") or "")
-    stage = match.group(1).strip() if match else ""
-    tasks = list(admission.get("tasks") or [])
-    tasks.extend({"state": "starting"} for _ in range(admission.get("started", 0)))
-    if not host_load_allows_stage(
-            tasks, stage, admission.get("overloaded", False),
-            respect_host_load=admission.get("respect_host_load", True),
-            emergency=admission.get("emergency", False)):
-        raise HostLoadDeferred(
-            f"нагрузка сервера: стадия {stage or 'неизвестная'} отложена")
-    return admission
-
-
 def create_task(body, conf=None):
-    admission = _admit_task_for_host(body, conf)
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
     if str(body.get("title", "")).startswith(PREFIX):
@@ -379,10 +334,7 @@ def create_task(body, conf=None):
        different model tier than a dead button).
     Every fallback is logged with the control-plane error that caused it."""
     try:
-        out = api("/tasks", body)
-        if admission is not None:
-            admission["started"] = admission.get("started", 0) + 1
-        return out
+        return api("/tasks", body)
     except urllib.error.HTTPError as e:
         msg = _http_err(e)
         if "repository_not_advertised" not in msg:
@@ -405,8 +357,6 @@ def create_task(body, conf=None):
     try:
         out = api("/tasks", b2)
         log(f"task create: acquired {identity} dynamically for pinned worker")
-        if admission is not None:
-            admission["started"] = admission.get("started", 0) + 1
         return out
     except urllib.error.HTTPError as e:
         log(f"task create: route+worker failed ({_http_err(e)}); trying any eligible worker")
@@ -419,8 +369,6 @@ def create_task(body, conf=None):
             "allow_any_worker is off (protects from routing to broken workers)")
     b3 = {k: v for k, v in route_body.items() if k != "worker_id"}
     out = api("/tasks", b3)
-    if admission is not None:
-        admission["started"] = admission.get("started", 0) + 1
     wid = (out.get("task") or {}).get("worker_id", "?")
     log(f"task create: routed to substitute worker {wid} (original tier unavailable)")
     return out
@@ -3727,27 +3675,15 @@ def cycle(conf, state):
     except Exception as e:
         log("day_cap_error", repr(e))
 
-    # Аварийная нехватка памяти/диска по-прежнему закрывает весь цикл. Обычная
-    # перегрузка CPU допускает минимум одну работу и лёгкие стадии; единый
-    # контекст ниже применяется непосредственно в create_task ко всем путям.
+    # Перегруженный сервер: начатое доигрывается, новое не берётся. Иначе
+    # мы просто замедляем всё сразу и получаем таймауты вместо результата.
     try:
         if host_overloaded(conf, workers):
             hb = host_block(workers)
-            emergency = host_load_emergency(hb)
-            if emergency:
-                log(f"HOST EMERGENCY: память {hb.get('memory', {}).get('percent')}%, "
-                    f"диск {hb.get('disk', {}).get('percent')}% — новую работу не беру")
-                return
-            conf = dict(conf)
-            conf["_host_load_admission"] = {
-                "tasks": tasks,
-                "started": 0,
-                "overloaded": True,
-                "respect_host_load": conf.get("respect_host_load", True),
-                "emergency": False,
-            }
-            log(f"HOST BUSY: процессор {hb.get('cpu', {}).get('percent')}% — "
-                "сохраняю одну работу и допускаю лёгкие стадии")
+            log(f"HOST BUSY: процессор {hb.get('cpu', {}).get('percent')}%, "
+                f"память {hb.get('memory', {}).get('percent')}%, "
+                f"диск {hb.get('disk', {}).get('percent')}% — новую работу не беру")
+            return
     except Exception as e:
         log("host_load_error", repr(e))
 
