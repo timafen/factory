@@ -18,6 +18,7 @@ type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  try_url?: string; proof?: string;
 };
 type Question = { task_id?: string; status?: string; question?: string };
+type HistoryEntry = { task_id: string; text: string };
 type WorkMeta = {
   origin?: "owner" | "assistant" | "orchestrator";
   start_stage?: string;
@@ -262,6 +263,7 @@ export function WorkView({
   const [promises, setPromises] = useState<Record<string, { files?: string[]; commands?: string[] }>>({});
   const [showArchive, setShowArchive] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [history, setHistory] = useState<Record<string, string>>({});
   const [byStage, setByStage] = useState(false);
   const [open, setOpen] = useState<string>("");
 
@@ -287,6 +289,20 @@ export function WorkView({
     const h = window.setInterval(() => void pull(), 20000);
     return () => { alive = false; window.clearInterval(h); };
   }, []);
+
+  useEffect(() => {
+    const ids = (tasks ?? []).map((task) => task.id);
+    if (!ids.length) return;
+    let alive = true;
+    const query = new URLSearchParams();
+    ids.forEach((id) => query.append("task_id", id));
+    void fetch(`/api/v1/work-history?${query}`).then(async (response) => {
+      if (!response.ok || !alive) return;
+      const data = await response.json() as { history?: HistoryEntry[] };
+      if (alive) setHistory(Object.fromEntries((data.history ?? []).map((item) => [item.task_id, item.text])));
+    }).catch(() => { /* без краткой истории остаётся обычный статус */ });
+    return () => { alive = false; };
+  }, [tasks]);
 
   // Хук обязан вызываться до любых ранних выходов, иначе на втором
   // рендере их станет меньше и React уронит весь экран.
@@ -343,6 +359,7 @@ export function WorkView({
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
+                            history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
@@ -368,6 +385,7 @@ export function WorkView({
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
+                            history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
@@ -387,9 +405,10 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
   onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void;
+  history: Record<string, string>;
   project?: string;
 }) {
   const worker = workerMap.get(g.latest.worker_id);
@@ -577,6 +596,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
                 {stage ? STAGE_RU[stage] ?? stage : "—"}
               </span>
               <Pill text={label} tone={tone as keyof typeof TONE} />
+              {history[task.id] && <span style={{ color: muted }}>{history[task.id]}</span>}
               <span style={{ color: muted }}>
                 {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgo(task.created_at)}
               </span>
