@@ -2,21 +2,19 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — исправление и тест восстановлены на свежем `main`,
-  обязательные проверки зелёные.
-- Branch: `factory/385e0906-a23-ef9c3cbc-e17`.
-- Head commit: HEAD кода в поставленной исходной ветке — `1d6a334`; эта
-  правка карточки лежит поверх.
+- Status: BLOCKED — общая UI-проверка не зелёная из-за 8 независимых
+  ESLint-ошибок.
+- Branch: `factory/ddc288cf-911-02e03dd3-859`.
+- Head commit: `14cedf9`.
 - What changed: `web/src/Access.tsx` больше не грузит рубильники через
   `useEffect` + прямой `setState` — читает `useQuery(["access"])`, а
   переключение (`toggle`) после POST рефетчит тот же запрос. Ошибка чтения
   списка по-прежнему видна пользователю. Новый `web/src/Access.test.tsx`
   закрепляет показ загруженного рубильника и повторный GET после переключения.
-- Evidence: `cd web && npm test -- --run src/Access.test.tsx` → 2 passed;
-  `cd web && npx eslint src/Access.tsx --max-warnings 0` → exit 0;
-  `cd web && npx tsc -p tsconfig.app.json --noEmit` → exit 0;
-  `cd web && npm run build` → exit 0.
-- Next action: влить поставку в `main` после проверки ветки.
+- Evidence: чистая установка `npm ci`; полный `npm test` — 100/100, включая
+  2/2 `Access.test.tsx`; `npm run build` — успешно. `just ui-check`
+  блокируется ошибками вне поставки.
+- Next action: исправить независимые ошибки общей UI-проверки и повторить её.
 
 ## Goal and user impact
 
@@ -139,12 +137,12 @@ ESLint, TypeScript и production-сборка повторно завершил�
 
 | Критерий | Проверка | Результат |
 | --- | --- | --- |
-| GET показывает scope и состояние | `cd web && npm test` | `Access.test.tsx`: 2/2 passed; в полном наборе 96/100 passed |
+| GET показывает scope и состояние | `cd web && npm test` | `Access.test.tsx`: 2/2 passed; в полном наборе 100/100 passed |
 | POST переключает и повторно читает список | `cd web && npm test` | `Access.test.tsx`: 2/2 passed |
 | В `Access.tsx` нет нарушения Hooks | `cd web && npm run build` | `tsc -b` и Vite завершились успешно |
 | Ошибка GET видима | проверка поставки и тестов | Реализация показывает `loadErr`, но отдельного сценария нет; принят как долг следующего малого среза |
 
 Полная команда `just ui-check` не проходит: до тестов она останавливается на 8
 ESLint-ошибках в `Live.tsx`, `Pipeline.tsx` и `Say.tsx`, вне поставки. Полный
-`cd web && npm test` также имеет 4 несвязанных падения в `App`, `Overview` и
-`Settings`; новый `Access.test.tsx` проходит. Production-сборка успешна.
+`cd web && npm test` проходит: 100/100; новый `Access.test.tsx` проходит.
+Production-сборка успешна.
