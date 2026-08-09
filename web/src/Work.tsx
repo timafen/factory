@@ -222,7 +222,7 @@ const FRESH_DAYS = 2;
 
 /** Куда попадёт работа. Порядок разделов — это порядок срочности:
  *  сначала то, что стоит без человека, потом живое, потом свежий итог. */
-function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
+function sectionOf(g: Group): "waiting" | "live" | "won" | "lost" | "archive" {
   // Закрытую работу владелец видеть в делах не должен, даже если она свежая:
   // от него по ней ничего не ждут и ждать не будут.
   if (g.meta?.closed) return "archive";
@@ -235,13 +235,17 @@ function sectionOf(g: Group): "waiting" | "live" | "done" | "archive" {
   const age = Date.now() - Date.parse(g.latest.created_at ?? "");
   const fresh = Number.isFinite(age) && age < FRESH_DAYS * 864e5;
   if (g.status.label === "остановлена" && fresh) return "waiting";
-  return fresh ? "done" : "archive";
+  if (!fresh) return "archive";
+  // Итог итогу рознь: принятая работа и брошенная — разные полки.
+  return g.status.tone === "ok" ? "won" : "lost";
 }
 
-const SECTIONS: { key: "waiting" | "live" | "done"; title: string; hint: string }[] = [
-  { key: "waiting", title: "Нужен ты", hint: "Без тебя не сдвинется" },
-  { key: "live", title: "Идёт сейчас", hint: "Работает или вот-вот продолжится — от тебя ничего не нужно" },
-  { key: "done", title: "Свежие итоги", hint: "Закончено за последние два дня" },
+const SECTIONS: { key: "waiting" | "live" | "won" | "lost"; title: string;
+                   hint: string; accent: string }[] = [
+  { key: "waiting", title: "Нужен ты", hint: "Без тебя не сдвинется", accent: "#ffb86b" },
+  { key: "live", title: "Идёт сейчас", hint: "Работает или вот-вот продолжится — от тебя ничего не нужно", accent: "#8ec5ff" },
+  { key: "won", title: "Сделано", hint: "Принято за последние два дня — результат можно смотреть", accent: "#7ee2a8" },
+  { key: "lost", title: "Не вышло / остановлено", hint: "Закончились без результата — реши, нужны ли они ещё", accent: "#ffb4b4" },
 ];
 
 export function WorkView({
@@ -325,8 +329,9 @@ export function WorkView({
             if (!rows.length) return null;
             return (
               <div key={sec.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                  <h2 style={{ fontSize: 15, margin: 0 }}>{sec.title}</h2>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10,
+                              borderLeft: "3px solid " + sec.accent, paddingLeft: 10 }}>
+                  <h2 style={{ fontSize: 15, margin: 0, color: sec.accent }}>{sec.title}</h2>
                   <span style={{
                     fontSize: 11, color: muted, border: "1px solid var(--border, #262c38)",
                     borderRadius: 999, padding: "1px 8px",
