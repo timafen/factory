@@ -3,12 +3,12 @@
 ## HEAD
 
 - Status: Implemented and verified
-- Branch: `factory/e53d2ce9-2ca-23b73a38-32e`
-- Head commit: `fe71d45` — реализация и знания перед финальной доставкой.
+- Branch: `factory/0d0f0993-b95-1314693d-743`
+- Head commit: `9683371` — кодовая ревизия исправления перед записью знаний.
 - What changed: пилот запускает одну верхнюю `planned`-карточку при свободном
   слоте, учитывает ожидание владельца и меняет карточку лишь после создания задачи.
-- Evidence: `python3 -m unittest pilot.test_pilot` — PASS, 4 tests;
-  `go test ./...` — PASS; `go build ./...` — PASS.
+- Evidence: `python3 -m unittest pilot.test_pilot` — PASS, 11 tests;
+  пустой `task.id` оставляет карточку в Плане.
 - Next action: влить поставленную ветку в `main`.
 
 ## LOG
@@ -31,3 +31,9 @@
 `origin/main`. Автоподбор, приоритет Плана, три уникальных слота, ожидание
 владельца и сохранение `planned` при отказе доказаны четырьмя Python-тестами;
 полные `go test ./...` и `go build ./...` также прошли.
+
+### 2026-08-08 — Implement
+
+После ревью автоподбор требует непустой `task.id` перед переводом карточки в
+`in_work`. Отсутствующий идентификатор вызывает ошибку и не меняет карточку;
+`python3 -m unittest pilot.test_pilot` подтвердил это в составе 11 тестов.
