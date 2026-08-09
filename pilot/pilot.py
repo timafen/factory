@@ -1034,11 +1034,17 @@ def area_of(base, context="", repo=""):
     known = load(AREAS_PATH, {}) or {}
     if base in known:
         return set(known[base])
-    m = AREA_LINE.search(context or "")
-    if not m:
+    files = set()
+    for m in AREA_LINE.finditer(context or ""):
+        for p in m.group(1).replace(";", ",").split(","):
+            p = p.strip()
+            if not p or "<" in p or ">" in p:
+                continue  # шаблонная строка из правил, не настоящий путь
+            if "/" not in p and "." not in p:
+                continue
+            files.add(repo + "::" + p)
+    if not files:
         return set()
-    files = {repo + "::" + p.strip()
-             for p in m.group(1).replace(";", ",").split(",") if p.strip()}
     known[base] = sorted(files)
     save(AREAS_PATH, known)
     log("AREA " + repr(base[:50]) + " -> " + ", ".join(sorted(files))[:120])
@@ -1472,14 +1478,35 @@ def claude_real_limits(prev):
     now = int(time.time())
     if prev and now - int(prev.get("asked_at") or 0) < 3900:
         return prev
-    tok, exp = "", 0
+    tok = ""
     try:
-        cred = json.load(io.open(HOME + "/.claude/.credentials.json"))
+        cp = HOME + "/.claude/.credentials.json"
+        cred = json.load(io.open(cp))
         o = cred.get("claudeAiOauth") or {}
         if int(o.get("expiresAt") or 0) / 1000 > now + 60:
             tok = o.get("accessToken") or ""
-    except Exception:
-        pass
+        elif o.get("refreshToken"):
+            # срок ключа вышел — обновляем сами, как официальный клиент
+            body = json.dumps({"grant_type": "refresh_token",
+                               "refresh_token": o.get("refreshToken"),
+                               "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e"}).encode()
+            rq = urllib.request.Request(
+                "https://platform.claude.com/v1/oauth/token", data=body,
+                headers={"content-type": "application/json",
+                         "User-Agent": "claude-code/2.0.0 (external, cli)",
+                         "Accept": "application/json"})
+            with urllib.request.urlopen(rq, timeout=20) as rr:
+                dd = json.loads(rr.read())
+            o["accessToken"] = dd.get("access_token") or ""
+            if dd.get("refresh_token"):
+                o["refreshToken"] = dd["refresh_token"]
+            o["expiresAt"] = int((now + int(dd.get("expires_in") or 3600)) * 1000)
+            cred["claudeAiOauth"] = o
+            io.open(cp, "w").write(json.dumps(cred))
+            tok = o["accessToken"]
+            log("CLAUDE TOKEN refreshed, живёт часов: " + str(int(dd.get("expires_in") or 0) // 3600))
+    except Exception as e:
+        log("claude_token_refresh_error " + repr(e)[:80])
     if not tok:
         try:
             for line in io.open(HOME + "/.claude/oauth.env"):
@@ -1492,7 +1519,8 @@ def claude_real_limits(prev):
     req = urllib.request.Request(
         "https://api.anthropic.com/api/oauth/usage",
         headers={"Authorization": "Bearer " + tok,
-                 "anthropic-beta": "oauth-2025-04-20"})
+                 "anthropic-beta": "oauth-2025-04-20",
+                 "User-Agent": "claude-code/2.0.0 (external, cli)"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             raw = json.loads(r.read())
