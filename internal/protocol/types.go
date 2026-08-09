@@ -856,8 +856,8 @@ type DialogMessage struct {
 }
 
 type DialogRequest struct {
-	Model    string          `json:"model"`
-	Messages []DialogMessage `json:"messages"`
+	BrainIndex *int            `json:"brain_index"`
+	Messages   []DialogMessage `json:"messages"`
 }
 
 type DialogResponse struct {

@@ -32,7 +32,7 @@ func (f *fakeDialogRunner) Run(_ context.Context, brain protocol.PilotBrain, mes
 func dialogTestAPI(t *testing.T, runner dialogRunner) *API {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pilot.json")
-	body := `{"brain_chain":[{"cli":"codex","model":"first","provider":"openai","note":"Первая модель"},{"cli":"claude","model":"second","provider":"anthropic","note":"Вторая модель"}]}`
+	body := `{"brain_chain":[{"cli":"codex","model":"same","provider":"openai","note":"Первая модель"},{"cli":"claude","model":"same","provider":"anthropic","note":"Вторая модель"}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -50,11 +50,11 @@ func runDialogRequest(t *testing.T, api *API, body string) *httptest.ResponseRec
 func TestDialogRunsSelectedModelWithOrderedHistory(t *testing.T) {
 	runner := &fakeDialogRunner{answer: "Новый ответ"}
 	api := dialogTestAPI(t, runner)
-	recorder := runDialogRequest(t, api, `{"model":"second","messages":[{"role":"user","content":"Первый вопрос"},{"role":"assistant","content":"Первый ответ"},{"role":"user","content":"Второй вопрос"}]}`)
+	recorder := runDialogRequest(t, api, `{"brain_index":1,"messages":[{"role":"user","content":"Первый вопрос"},{"role":"assistant","content":"Первый ответ"},{"role":"user","content":"Второй вопрос"}]}`)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
 	}
-	if runner.calls != 1 || runner.brain.CLI != "claude" || runner.brain.Model != "second" {
+	if runner.calls != 1 || runner.brain.CLI != "claude" || runner.brain.Model != "same" {
 		t.Fatalf("wrong runner call: %#v", runner)
 	}
 	if len(runner.messages) != 3 || runner.messages[0].Content != "Первый вопрос" || runner.messages[2].Content != "Второй вопрос" {
@@ -71,9 +71,9 @@ func TestDialogRunsSelectedModelWithOrderedHistory(t *testing.T) {
 
 func TestDialogRejectsInvalidInputBeforeRunner(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown model": `{"model":"other","messages":[{"role":"user","content":"x"}]}`,
-		"unknown role":  `{"model":"first","messages":[{"role":"system","content":"x"}]}`,
-		"oversize":      `{"model":"first","messages":[{"role":"user","content":"` + strings.Repeat("x", dialogMaxBytes) + `"}]}`,
+		"unknown model": `{"brain_index":2,"messages":[{"role":"user","content":"x"}]}`,
+		"unknown role":  `{"brain_index":0,"messages":[{"role":"system","content":"x"}]}`,
+		"oversize":      `{"brain_index":0,"messages":[{"role":"user","content":"` + strings.Repeat("x", dialogMaxBytes+1) + `"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			runner := &fakeDialogRunner{}
@@ -90,12 +90,13 @@ func TestDialogReturnsSafeRunnerErrors(t *testing.T) {
 		runner *fakeDialogRunner
 		status int
 	}{
-		"timeout": {&fakeDialogRunner{err: context.DeadlineExceeded}, http.StatusGatewayTimeout},
-		"failure": {&fakeDialogRunner{err: errors.New("secret stderr")}, http.StatusBadGateway},
-		"empty":   {&fakeDialogRunner{answer: "  "}, http.StatusBadGateway},
+		"timeout":    {&fakeDialogRunner{err: context.DeadlineExceeded}, http.StatusGatewayTimeout},
+		"rate limit": {&fakeDialogRunner{err: errors.New("provider: rate limit exceeded")}, http.StatusTooManyRequests},
+		"failure":    {&fakeDialogRunner{err: errors.New("secret stderr")}, http.StatusBadGateway},
+		"empty":      {&fakeDialogRunner{answer: "  "}, http.StatusBadGateway},
 	} {
 		t.Run(name, func(t *testing.T) {
-			recorder := runDialogRequest(t, dialogTestAPI(t, tc.runner), `{"model":"first","messages":[{"role":"user","content":"x"}]}`)
+			recorder := runDialogRequest(t, dialogTestAPI(t, tc.runner), `{"brain_index":0,"messages":[{"role":"user","content":"x"}]}`)
 			if recorder.Code != tc.status {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
 			}
