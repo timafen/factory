@@ -947,9 +947,9 @@ LOOP_NOTE = (
     "тогда конвейер двинет работу вперёд, а не на новый круг.")
 
 ACCEPT_MARK = re.compile(
-    r"^\s*[«\"']?(ПРИНЯТО\b|Принимаем\s+работу|Принимаю\s+работу|"
+    r"^\s*[«\"']?(ПРИНЯТО\b|Принима\w*|"
     r"Работа\s+выполнена|Считаю\s+выполненн)", re.I)
-NEXT_STAGE = {"Implement + Test": "Review", "Review": "Verify"}
+NEXT_STAGE = {"Implement + Test": "Review", "Review": "Verify", "Verify": "Verify"}
 
 
 def accept_forward(stage, answer):
