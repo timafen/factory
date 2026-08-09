@@ -4,7 +4,7 @@
 
 - Status: IMPLEMENTED: блокирующие находки Review исправлены, готово к Verify.
 - Branch: `factory/af3c948b-fb2-0755fcd4-718`
-- Head commit: `PENDING` — реализация исправлений автоподбора.
+- Head commit: `9e1ed36` — реализация исправлений автоподбора.
 - What changed: карточка без проекта больше не блокирует очередь; поколение
   запуска сохраняет идемпотентность повтора и меняется при новом планировании.
 - Evidence: `python3 -m unittest pilot.test_pilot` — 23/23 OK;
