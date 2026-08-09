@@ -100,6 +100,7 @@ NOTIFY_GROUPS = {
              "Голосовая задача", "Эпик запущен"),
     "escalate": ("Исполнитель повышен",),
     "routine": ("Повторяю этап", "Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
+                "Взял из Плана",
                 "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
@@ -1192,6 +1193,12 @@ def set_idea(idea_id, **fields):
     return None
 
 
+def plan_idea(idea_id):
+    """Schedule a fresh run while keeping retries of that run idempotent."""
+    return set_idea(idea_id, state="planned", task_id="", reason="",
+                    run_generation=str(uuid.uuid4()))
+
+
 def cleanup_completed_plan_cards(tasks, final_stage_no):
     """Close plan cards whose linked pipeline reached an accepted final stage.
 
@@ -1247,6 +1254,80 @@ def collect_ideas(result, repo_id="", source=""):
         if add_idea(kind, title or text, repo_id, why, origin="agent", source=source):
             n += 1
     return n
+
+
+PLAN_ACTIVE_STATES = ("running", "queued", "pending", "created", "starting", "preparing")
+
+
+def active_auto_works(tasks):
+    """Unique pipeline works that occupy an automatic-start slot."""
+    active = set()
+    for task in tasks:
+        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if match and task.get("state") in PLAN_ACTIVE_STATES:
+            active.add(match.group(2).strip())
+    open_questions = {q.get("task_id") for q in load_questions()
+                      if q.get("status") == "open"}
+    for task in tasks:
+        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if match and task.get("id") in open_questions:
+            active.add(match.group(2).strip())
+    return active
+
+
+def autostart_plan(conf, tasks, workflows, workers):
+    """Start at most one top planned card when the pipeline has a free slot."""
+    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 3)):
+        return None
+    planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
+                     key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
+    if not planned:
+        return None
+    rec = None
+    for candidate in planned:
+        if candidate.get("repo"):
+            rec = candidate
+            break
+        reason = "Не запущено автоматически: сначала выберите проект."
+        set_idea(candidate["id"], state="new", reason=reason)
+        log("PLAN skip " + repr(candidate.get("title", "")[:70]) + ": no repository")
+        notify(conf, "Не взял из Плана", candidate.get("title", ""),
+               body=reason, tags="warning", click=UI_BASE + "/intake/plan")
+    if rec is None:
+        return None
+    stage_name, nstages = first_stage(conf)
+    workflow = workflows.get(stage_name) or {}
+    worker_name = stage_worker(conf, stage_name, "medium", workers)
+    worker = workers.get(worker_name)
+    if not stage_name or not workflow.get("enabled") or not worker:
+        return None
+    title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
+    source = rec.get("source") or "не указан"
+    context = (
+        "Конвейер автоматически взял верхнюю карточку из Плана.\n\n"
+        f"Что разобрать: {rec['title']}\n\n"
+        f"Зачем: {rec.get('why') or 'не записано'}\n\n"
+        f"Источник: {source}.\n\n"
+        "Это этап Triage: проверь готовность работы, границы и риски; "
+        "продолжай только с вердиктом READY."
+    )[:60000]
+    generation = rec.get("run_generation")
+    if not generation:
+        generation = str(uuid.uuid4())
+        set_idea(rec["id"], run_generation=generation)
+        rec["run_generation"] = generation
+    created = create_task({"request_key": f"plan-autostart:{rec['id']}:{generation}", "title": title,
+                           "context": context, "worker_id": worker["id"],
+                           "repository_id": rec.get("repo") or "",
+                           "timeout_seconds": conf.get("timeout_seconds", 7200),
+                           "workflow_revision_id": workflow["revision_id"]}, conf)
+    task_id = (created.get("task") or {}).get("id", "")
+    if not task_id:
+        raise RuntimeError("create_task returned no task.id")
+    set_idea(rec["id"], state="in_work", task_id=task_id)
+    note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
+    notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
+    return task_id
 
 
 # --------------------------------------------------------- сторож конвейера ---
@@ -3909,6 +3990,14 @@ def cycle(conf, state):
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
+
+    # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
+    # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
+    try:
+        fresh_tasks = api("/tasks?limit=100").get("tasks") or []
+        autostart_plan(conf, fresh_tasks, workflows, workers)
+    except Exception as e:
+        log("plan_autostart_error", repr(e))
 
 
 def main():

@@ -121,7 +121,7 @@ def idea_action(idea_id: str, action: str = Form(...), reason: str = Form(""),
     if not rec:
         raise HTTPException(404, "карточка не найдена")
     if action == "plan":
-        pilot.set_idea(idea_id, state="planned")
+        pilot.plan_idea(idea_id)
     elif action == "new":
         pilot.set_idea(idea_id, state="new", reason="")
     elif action == "done":
