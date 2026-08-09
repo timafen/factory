@@ -5,7 +5,7 @@
 - Status: IMPLEMENTED: работа со своей стороны завершена; полный Verify после
   слияния зависимой задачи `f39669c8` в `origin/main`.
 - Branch: `factory/609c535a-844-ffa71c8e-92f`.
-- Head commit: `84fd361` (реальный HEAD после rebase, до этой записи evidence).
+- Head commit: `1eb0d52` (последний коммит с кодом и проверками).
 - What changed: `pilot.brain()` теперь передаёт `conf` в `note_limit()` при
   срабатывании rate-limit, поэтому блок реально сохраняется в `limits.json`.
   Добавлен тест `BrainFallbackTest`, который сначала бьёт исчерпанного Codex
@@ -105,3 +105,5 @@ TaskDetail). Эти результаты не затрагивают путь `b
 `python3 -m unittest pilot.test_pilot` → OK (8 тестов),
 `python3 -m py_compile pilot/pilot.py` → без ошибок. Полный Verify по-прежнему
 назначен после слияния `f39669c8` и в этом заходе не повторялся.
+
+Поверх снимка `1eb0d52` лежит только правка самой этой карточки.
