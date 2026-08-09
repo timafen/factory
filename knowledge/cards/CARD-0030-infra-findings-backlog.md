@@ -7,12 +7,21 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — ожидает слияния человеком. Branch: `factory/94811040-165-c6a8ffc6-85d`. Head commit: `f43d944`.
-What changed: экран Settings — русские названия всех полей и видимое пояснение под каждым (включая группы уведомлений, таблицу маршрутизации этапов и заметку конфигурации); e2e-сценарий `control-plane.spec.ts` обновлён под новый текст; узкая доставка поверх свежего `origin/main` — семь файлов задачи, включая собранный UI и карточку.
-Evidence: чистый `npm ci`; `npx vitest run src/Settings.test.tsx` (6/6, включая цикл по всем ~43 полям); `npm run typecheck`; `npm run build`; focused ESLint — PASS. Полные Vitest, ESLint, Go test и Settings E2E имеют известные независимые сбои, описанные в записи Verify ниже.
+Status: Verified PASS — ожидает слияния человеком. Branch: `factory/8c403f0f-741-e39c1023-e85`. Head commit: будет указан в завершающем коммите Verify.
+What changed: UI-тесты `App.test.tsx` сверены с переименованными экранами и элементами управления; дифф от точки ветвления содержит только этот тест и карточку.
+Evidence: после чистого `npm ci` пройдены `npx vitest run src/App.test.tsx` (60/60) и `npx tsc -p tsconfig.app.json --noEmit`; полный `npm test` — 93/94, единственное известное падение в неизменённом `src/Settings.test.tsx` ожидает старый набор `notify_groups` без ключа `escalate`.
 One next action: влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Тесты используют новые названия экранов и кнопок | `cd web && npx vitest run src/App.test.tsx` | PASS: 1 файл, 60/60 тестов; проверены «Главное», Workflows, «Показать ещё» и статусы доски. |
+| Типы frontend | `cd web && npx tsc -p tsconfig.app.json --noEmit` | PASS: ошибок нет. |
+| Смежный полный набор | `cd web && npm test` | Не блокирует поставку: 93/94; единственное падение — неизменённый `src/Settings.test.tsx`, ожидающий `notify_groups` без уже существующего ключа `escalate`. |
+| Состав и чистота поставки | `git rebase origin/main`; `git diff --name-only origin/main...HEAD`; `git diff --check origin/main...HEAD` | PASS: после rebase только `web/src/App.test.tsx` и эта карточка, пробельных ошибок нет. |
 
 ### 2026-08-08 — Verify
 
@@ -109,3 +118,8 @@ One next action: влить ветку в `main`.
 Замечание про тест закрыто: тест `gives every settings field a Russian name and a non-empty explanation` в цикле проверяет все ~43 подписанных поля экрана (aria-label на русском) и наличие непустого `.field-hint` у каждого, плюс отдельно 15 селектов таблицы маршрутизации и оба групповых пояснения.
 Доказательство: `npx vitest run src/Settings.test.tsx` (6/6); `npx tsc -p tsconfig.app.json --noEmit`; `npx vite build`; `npx eslint src/Settings.tsx src/Settings.test.tsx`; `go build ./...`; `npx vitest run` — 15 известных падений только в неизменённом `App.test.tsx`, остальное PASS; `git diff --name-only origin/main` — ровно 6 файлов задачи (два — сборка `web/dist`).
 Открытый риск: несвязанная поломка `go vet ./internal/controlplane/...` (рассинхронизация `PilotConfig.Stages` map/list в `pilot_config_test.go` и `web/e2e/server.mjs`) остаётся не починенной — уже неоднократно отмечена как отдельная задача вне этого пайплайна.
+
+### 2026-08-08 — Implement: UI-тесты приведены к новым названиям экранов
+На ветке `factory/8c403f0f-741-e39c1023-e85` ожидания в `web/src/App.test.tsx` обновлены под актуальные русские названия экранов и элементов управления.
+Доказательство: предметный Vitest — 60/60, typecheck и production build — PASS; дифф от точки ветвления содержит только тест и эту обязательную запись.
+Отдельная задача: исправить старое ожидание `Settings.test.tsx` для `escalate: true` и 10 существующих lint-ошибок, включая `Say.tsx`; эти сбои не блокируют текущую поставку по решению владельца.
