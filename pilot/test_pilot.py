@@ -111,6 +111,8 @@ class DiagnosisRepairTests(unittest.TestCase):
 
     def detail_api(self, path, body=None):
         self.api_calls.append((path, body))
+        if path == "/tasks?limit=200":
+            return {"tasks": [self.task], "next_cursor": None}
         if path == "/tasks/looping-task":
             return {
                 "task": {
@@ -218,10 +220,34 @@ class DiagnosisRepairTests(unittest.TestCase):
     def test_ambiguous_active_runs_are_not_cancelled(self):
         other = dict(self.task, id="other-task", state="queued")
         verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
-        with mock.patch.object(pilot, "api") as api:
+        with mock.patch.object(pilot, "api", return_value={
+                "tasks": [self.task, other], "next_cursor": None}) as api:
             pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
                                     verdict, [self.task, other], self.task)
-        api.assert_not_called()
+        api.assert_called_once_with("/tasks?limit=200")
+        repair = self.repairs["Починить отчёт"]
+        self.assertEqual(repair["status"], "failed")
+        self.assertIn("найдено активных запусков — 2", repair["failure"])
+
+    def test_active_run_beyond_first_page_prevents_any_cancellation(self):
+        other = dict(self.task, id="older-active-task", state="queued")
+        verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
+
+        def paged_api(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": [self.task], "next_cursor": "older/page"}
+            if path == "/tasks?limit=200&cursor=older%2Fpage":
+                return {"tasks": [other], "next_cursor": None}
+            raise AssertionError("cancel must not be called")
+
+        with mock.patch.object(pilot, "api", side_effect=paged_api):
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+                                    verdict, [self.task], self.task)
+
+        self.assertEqual([path for path, _ in self.api_calls], [
+            "/tasks?limit=200", "/tasks?limit=200&cursor=older%2Fpage",
+        ])
         repair = self.repairs["Починить отчёт"]
         self.assertEqual(repair["status"], "failed")
         self.assertIn("найдено активных запусков — 2", repair["failure"])
@@ -231,6 +257,8 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         def api_without_branch(path, body=None):
             self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": [self.task], "next_cursor": None}
             if path == "/tasks/looping-task":
                 return {
                     "task": {"repository_id": "repo-id", "worker_id": "worker-id"},
@@ -253,7 +281,7 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         def failing_api(path, body=None):
             calls.append(path)
-            if path == "/tasks/looping-task":
+            if path in ("/tasks?limit=200", "/tasks/looping-task"):
                 return self.detail_api(path, body)
             raise RuntimeError("control plane unavailable")
 

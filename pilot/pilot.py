@@ -20,7 +20,7 @@ Planner layer (epics):
 """
 import calendar
 import io
-import json, re, subprocess, time, urllib.request, urllib.error, uuid, sys, os
+import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -1979,12 +1979,38 @@ def _fail_diag_repair(conf, base, repair, reason):
            priority="high", tags="warning", click=f"{UI_BASE}/work")
 
 
+def _all_tasks_for_diag_repair():
+    """Read every task page before making an irreversible repair decision."""
+    tasks = []
+    cursor = ""
+    seen_cursors = set()
+    while True:
+        path = "/tasks?limit=200"
+        if cursor:
+            path += "&cursor=" + urllib.parse.quote(cursor, safe="")
+        page = api(path)
+        tasks.extend(page.get("tasks") or [])
+        cursor = page.get("next_cursor") or ""
+        if not cursor:
+            return tasks
+        if cursor in seen_cursors:
+            raise RuntimeError("API повторил курсор списка задач")
+        seen_cursors.add(cursor)
+
+
 def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
     """Cancel one proven looping run. A later sweep resumes it after terminal state."""
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
     if base in repairs:
         return
-    live = [t for t in tasks
+    try:
+        all_tasks = _all_tasks_for_diag_repair()
+    except Exception as e:
+        repair = {"status": "failed", "task_id": candidate.get("id", "")}
+        _fail_diag_repair(conf, base, repair,
+                          f"не удалось проверить все активные запуски: {e}")
+        return
+    live = [t for t in all_tasks
             if base_title(t.get("title", "")) == base
             and t.get("state") in ("running", "queued", "preparing")]
     if (candidate.get("state") != "running" or len(live) != 1
