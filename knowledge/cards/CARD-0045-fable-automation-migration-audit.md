@@ -4,7 +4,7 @@
 
 - Status: Implemented — awaiting review.
 - Branch: `factory/c0374ea5-1a3-be86f33e-138`.
-- Head commit: будет зафиксирован после первого коммита поставки.
+- Head commit: `e81b466` (проверенный снимок матрицы аудита).
 - Specification: `knowledge/specs/fable-automation-migration-audit.md`.
 - What changed: утверждённая владельцем матрица стала окончательным объёмом аудита; все известные и доступные механизмы сопоставлены с реализацией Factory и тестами.
 - Evidence: `PipelineWatchTests` → 7 tests OK; целевые Go-тесты автоматизаций → OK.
