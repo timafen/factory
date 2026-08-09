@@ -3344,7 +3344,32 @@ def budget_guard(conf, tasks, workers=None):
 
 
 def day_budget_blocks(conf, tasks, codex_day=None):
-    """Дневной потолок на всё сразу. Начатое доигрывается, новое не берётся."""
+    """Стоп-кран по подпискам. Доллары тут условные: агенты работают на
+    подписках, а не по счёту API. Настоящий предел — проценты, которые
+    провайдеры сообщают сами."""
+    pct_cap = float(conf.get("day_pct_cap") or 90)
+    real = load(PROVIDER_LIMITS_PATH, {}) or {}
+    hot = []
+    for prov in ("codex", "claude"):
+        rec = real.get(prov) or {}
+        up = rec.get("used_percent")
+        if not isinstance(up, (int, float)):
+            up = (rec.get("percents") or {}).get("seven_day.utilization")
+        if isinstance(up, (int, float)) and up >= pct_cap:
+            hot.append((prov, up))
+    if len(hot) >= 2:
+        st = load(BUDGET_PATH, {})
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if st.get("_day_notified") != today:
+            st["_day_notified"] = today
+            save(BUDGET_PATH, st)
+            names = ", ".join("%s %d%%" % (p, u) for p, u in hot)
+            log("DAY CAP по подпискам: " + names)
+            notify(conf, "Подписки на исходе",
+                   "Обе подписки почти израсходованы (" + names + "). "
+                   "Начатое доигрываю, новое не беру, пока лимит не обновится.",
+                   tags="moneybag", click=f"{UI_BASE}/")
+        return True
     cap = float(conf.get("day_cap_usd") or 0)
     if cap <= 0:
         return False

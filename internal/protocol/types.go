@@ -816,6 +816,7 @@ type PilotSettings struct {
 	WorkDayCap       int                `json:"work_day_cap,omitempty"`
 	DayTaskCap       int                `json:"day_task_cap,omitempty"`
 	DeepDiagRounds   int                `json:"deep_diag_rounds,omitempty"`
+	DayPctCap        float64            `json:"day_pct_cap,omitempty"`
 	NotifyGroups     map[string]bool    `json:"notify_groups,omitempty"`
 	StageBaseUSD     map[string]float64 `json:"stage_base_usd"`
 	ComplexityFactor map[string]float64 `json:"complexity_factor"`
