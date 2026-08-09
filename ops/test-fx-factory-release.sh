@@ -28,14 +28,19 @@ esac
 EOF
   cat >"$case_dir/bin/npm" <<'EOF'
 #!/bin/bash
+echo "npm $*" >>"$TEST_GATES"
+[ "$TEST_MODE" != ui-test-fail ] || [ "${1:-}" != test ] || exit 1
 exit 0
 EOF
   cat >"$case_dir/bin/npx" <<'EOF'
 #!/bin/bash
+echo "npx $*" >>"$TEST_GATES"
 exit 0
 EOF
   cat >"$case_dir/bin/go" <<'EOF'
 #!/bin/bash
+echo "go $*" >>"$TEST_GATES"
+[ "${1:-}" != test ] || { [ "$TEST_MODE" != go-test-fail ]; exit; }
 output=
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then output=$2; shift 2; else shift; fi
@@ -51,6 +56,15 @@ WORKER
   *) printf '#!/bin/bash\nexit 0\n' >"$output" ;;
 esac
 chmod +x "$output"
+EOF
+  cat >"$case_dir/bin/bash" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
+  echo "bash $1" >>"$TEST_GATES"
+  [ "$TEST_MODE" != release-test-fail ]
+  exit
+fi
+exec /bin/bash "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
@@ -105,7 +119,7 @@ EOF
 
 run_release() {
   case_dir=$1 mode=$2
-  TEST_EVENTS="$case_dir/events" TEST_MODE="$mode" \
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -116,12 +130,24 @@ run_release() {
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    bash "$RELEASE" main >"$case_dir/output" 2>&1
+    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
 }
 
 success="$temporary/success"
 make_fixture "$success" success
 run_release "$success" success || fail "successful release failed"
+diff -u <(printf '%s\n' \
+  'npm ci --no-audit --no-fund --silent' \
+  'npx tsc -p tsconfig.app.json --noEmit' \
+  'npm test' \
+  'go test ./...' \
+  'bash ops/test-fx-factory-release.sh' \
+  'npx vite build' \
+  'go build -o PLACEHOLDER ./cmd/factory-server' \
+  'go build -o PLACEHOLDER ./cmd/factory-worker') \
+  <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
+    -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' "$success/gates") >/dev/null \
+  || fail "release gates ran in the wrong order"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
@@ -150,4 +176,19 @@ assert_file "$build_failed/install/factory-server" old-server
 assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 
-echo "PASS: единая установка, регистрация и общий откат проверены"
+for mode in ui-test-fail go-test-fail release-test-fail; do
+  gate_failed="$temporary/$mode"
+  make_fixture "$gate_failed" "$mode"
+  set +e
+  run_release "$gate_failed" "$mode"
+  status=$?
+  set -e
+  [ "$status" -eq 5 ] || fail "$mode returned $status instead of build error 5"
+  assert_file "$gate_failed/install/factory-server" old-server
+  assert_file "$gate_failed/install/factory-worker" old-worker
+  [ ! -s "$gate_failed/events" ] || fail "services restarted after $mode"
+  ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
+    || fail "binaries were built after $mode"
+done
+
+echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
