@@ -321,7 +321,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                     ? <span style={{ color: "#ffb4b4" }}>коммита нет в репозитории</span>
                     : inMain
                       ? <span style={{ color: "#7ee2a8" }}>собран из main</span>
-                      : <span style={{ color: "#e0cf9f" }}>не из main — расхождение</span>}
+                      : <span style={{ color: "#e0cf9f" }}>сборка рабочей ветки — работа ещё не влита</span>}
                 </div>
               </div>
             ))}
