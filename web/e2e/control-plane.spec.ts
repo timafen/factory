@@ -715,7 +715,7 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Идёт сейчас" })).toBeVisible();
   const main = page.locator("main");
-  expect(await main.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await main.evaluate("element => element.scrollWidth <= element.clientWidth")).toBe(true);
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");

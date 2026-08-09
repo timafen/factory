@@ -3857,11 +3857,12 @@ def _environment_snapshot(label, scope, repository_id):
     health_match = re.search(r"HTTP\s+([1-5]\d\d)", health_out) if health_ok else None
     if not (match or factory_label) or not health_match:
         return {"name": label, "status": "unavailable"}
-    release_label = factory_label.group(1) if factory_label else "Выпуск определён"
+    release_id = os.path.basename(match.group(1).rstrip("/")) if match else ""
+    release_label = factory_label.group(1) if factory_label else f"Сборка {release_id}"
     if match:
         for repo in _project_repo_dirs(repository_id):
             subject_ok, subject = _fixed_command(
-                ["git", "-c", "safe.directory=*", "-C", repo, "log", "-1", "--format=%s", match.group(1)], 10)
+                ["git", "-c", "safe.directory=*", "-C", repo, "log", "-1", "--format=%s", release_id], 10)
             if subject_ok and subject:
                 release_label = subject[:90]
                 break

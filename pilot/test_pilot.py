@@ -1567,6 +1567,29 @@ class DashboardProjectsTest(unittest.TestCase):
         self.assertNotIn("health", snapshot)
         self.assertEqual(command.call_count, 2)
 
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
+    @mock.patch.object(pilot, "_fixed_command")
+    def test_trade_release_path_uses_build_id_for_git_and_fallback(self, command, _repo):
+        command.side_effect = [
+            (True, "current -> /srv/shop/releases/6f6e2863"),
+            (True, "HTTP 200"),
+            (True, "Исправить карточку товара"),
+            (True, "current -> /srv/shop/releases/a1b2c3d4"),
+            (True, "HTTP 200"),
+            (False, ""),
+        ]
+
+        resolved = pilot._environment_snapshot("Стейдж", "staging", "shop")
+        fallback = pilot._environment_snapshot("Прод", "prod", "shop")
+
+        self.assertEqual(resolved["release_label"], "Исправить карточку товара")
+        self.assertEqual(fallback["release_label"], "Сборка a1b2c3d4")
+        self.assertEqual(command.call_args_list[2], mock.call([
+            "git", "-c", "safe.directory=*", "-C", "/work/shop",
+            "log", "-1", "--format=%s", "6f6e2863",
+        ], 10))
+        self.assertEqual(command.call_args_list[5].args[0][-1], "a1b2c3d4")
+
     @mock.patch.object(pilot, "_project_repo_dirs", return_value=[])
     @mock.patch.object(pilot, "_fixed_command", side_effect=[
         (True, "релиз от 9 августа, 16:22, из main: Исправлен обзор\nточка сборки: abc"),
