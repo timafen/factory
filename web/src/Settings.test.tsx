@@ -78,7 +78,7 @@ it("shows every notification group in Russian with a hint and saves the changed 
   await user.click(screen.getByLabelText("Работа встала")); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
-  expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,routine:false});
+  expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,routine:false,escalate:true});
 });
 
 it("uses pilot defaults when notification groups are absent", async () => {

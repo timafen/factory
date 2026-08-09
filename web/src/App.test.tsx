@@ -52,8 +52,8 @@ describe("App", () => {
     const fetch = mockControlPlane();
     renderApp();
 
-    expect(await screen.findByRole("heading", { name: "Главное" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /^Главное$/ })).toHaveAttribute(
+    expect(await screen.findByRole("heading", { name: "Обзор" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Обзор$/ })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -67,7 +67,7 @@ describe("App", () => {
 
     const work = await screen.findByRole("button", { name: /^Work$/ });
     const workers = screen.getByRole("button", { name: /^Workers$/ });
-    expect(screen.getByRole("button", { name: /^Главное$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Обзор$/ })).not.toHaveAttribute("aria-current");
     expect(work).toHaveAttribute("aria-current", "page");
     expect(workers).not.toHaveAttribute("aria-current");
 

@@ -57,7 +57,7 @@ describe("Overview active work", () => {
     expect(within(section).getByText("Новый обзор")).toBeVisible();
     expect(within(section).getByText("поставил Клод")).toBeVisible();
     expect(within(section).getByText("этап: Review")).toBeVisible();
-    fireEvent.click(within(section).getByRole("button", { name: /Новый обзор/ }));
+    fireEvent.click(within(section).getByText("Новый обзор"));
     expect(onNav).toHaveBeenCalledWith("work");
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/tasks?limit=200"));
   });
