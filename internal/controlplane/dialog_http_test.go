@@ -10,9 +10,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+func TestHTTPServerWriteTimeoutCoversDialogTimeout(t *testing.T) {
+	server := NewHTTPServer("127.0.0.1:0", http.NotFoundHandler())
+	if server.WriteTimeout < dialogTimeout {
+		t.Fatalf("WriteTimeout=%s must cover dialog timeout=%s", server.WriteTimeout, dialogTimeout)
+	}
+	if server.WriteTimeout < 60*time.Second {
+		t.Fatalf("WriteTimeout=%s must leave enough time for a dialog response", server.WriteTimeout)
+	}
+}
 
 type fakeDialogRunner struct {
 	calls    int
