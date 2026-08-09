@@ -1656,8 +1656,13 @@ def provider_limits_tick(conf):
     cl = claude_real_limits(st.get("claude"))
     if cl:
         st["claude"] = cl
-        best = max([v for v in (cl.get("percents") or {}).values()
-                    if isinstance(v, (int, float)) and 0 <= v <= 100] or [0])
+        # Общий недельный счётчик подписки. Лимит ОТДЕЛЬНОЙ модели (например
+        # Fable) не значит, что подписка кончилась: соседние модели живы.
+        pc = cl.get("percents") or {}
+        best = pc.get("seven_day.utilization")
+        if not isinstance(best, (int, float)):
+            best = max([v for v in pc.values()
+                        if isinstance(v, (int, float)) and 0 <= v <= 100] or [0])
         if best:
             st["alerted"] = limits_alert(conf, "claude", best, None)
             if best >= 95:
@@ -2842,6 +2847,9 @@ def detect_limits(conf, tasks, workers_by_id):
                         for a in atts[-2:])
         if not text or not LIMIT_SIGNS.search(text):
             continue
+        # Сбой входа/сети — не лимит подписки, а поломка окружения.
+        if INFRA_SIGNS.search(text):
+            continue
         # Слова «rate limit» в чужом отчёте или в диффе — не лимит подписки.
         # Если настоящий счётчик говорит, что запас есть, а слова нашлись
         # только в тексте отчёта (не в ошибке запуска), — не верим словам.
@@ -2851,8 +2859,9 @@ def detect_limits(conf, tasks, workers_by_id):
         if not isinstance(up, (int, float)):
             up = (real.get("percents") or {}).get("seven_day.utilization")
         fresh = time.time() - (real.get("at") or real.get("asked_at") or 0) < 10800
-        if (isinstance(up, (int, float)) and up < 80 and fresh
-                and not LIMIT_SIGNS.search(err_only)):
+        # Живой счётчик провайдера главнее слов в чужом выводе: если подписка
+        # израсходована меньше чем на 80%, никакие фразы её не блокируют.
+        if isinstance(up, (int, float)) and up < 80 and fresh:
             continue
         m = RESET_AT.search(text)
         note_limit(conf, prov, text, m.group(1) if m else "")
