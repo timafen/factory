@@ -1,73 +1,114 @@
 #!/bin/bash
-# Собирает Фабрику из git и выкатывает её саму. Вызывается только из fx.
-# Смысл: без этого любое изменение Фабрики приходится ставить руками,
-# и система перестаёт быть самостоятельной.
+# Собирает Фабрику из git и выкатывает сервер и воркер одной ревизией.
 set -uo pipefail
-ref="${1:-main}"
-REPO=https://github.com/timafen/factory.git
-BIN=/opt/factory-data/bin/factory-server
-REL=/opt/factory-data/releases/factory
-INFO=/opt/factory-data/releases/factory-current.json
-AS="sudo -H -u factory"
 
-mkdir -p "$REL" && chown factory:factory "$REL"
-mkdir -p "$(dirname "$INFO")" && chown factory:factory "$(dirname "$INFO")"
+ref="${1:-main}"
+REPO="${FACTORY_RELEASE_REPO:-https://github.com/timafen/factory.git}"
+SERVER_BIN="${FACTORY_SERVER_BIN:-/opt/factory-data/bin/factory-server}"
+WORKER_BIN="${FACTORY_WORKER_BIN:-/opt/factory-data/bin/factory-worker}"
+REL="${FACTORY_RELEASE_DIR:-/opt/factory-data/releases/factory}"
+INFO="${FACTORY_RELEASE_INFO:-/opt/factory-data/releases/factory-current.json}"
+AS="${FACTORY_RELEASE_AS-sudo -H -u factory}"
+OWNER="${FACTORY_RELEASE_OWNER-factory:factory}"
+SERVER_SERVICE="${FACTORY_SERVER_SERVICE:-factory-server.service}"
+WORKER_SERVICE="${FACTORY_WORKER_SERVICE:-factory-worker.service}"
+WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
+API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
+REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
+REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
+as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
+set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 
-work=$($AS mktemp -d "$REL/build-XXXXXX") || { fail "не смог создать папку сборки"; exit 4; }
+mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
+mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
+  || { fail "не смог подготовить release-info"; exit 4; }
+work=$(as_user mktemp -d "$REL/build-XXXXXX") \
+  || { fail "не смог создать папку сборки"; exit 4; }
+cleanup() { rm -rf "$work"; }
 
 step "беру исходники: $ref"
-$AS git clone --quiet "$REPO" "$work/src" || { fail "не смог забрать репозиторий с GitHub"; rm -rf "$work"; exit 4; }
-$AS git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || $AS git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
-  || { fail "нет такой точки сборки: $ref"; rm -rf "$work"; exit 4; }
-sha=$($AS git -C "$work/src" rev-parse HEAD)
-subject=$($AS git -C "$work/src" log -1 --pretty=%s)
+as_user git clone --quiet "$REPO" "$work/src" \
+  || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
+as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+  || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
+sha=$(as_user git -C "$work/src" rev-parse HEAD)
+subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
 step "собираю ${sha:0:7} — $subject"
 
 step "ставлю зависимости интерфейса"
-$AS bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
-  || { fail "npm ci не прошёл"; rm -rf "$work"; exit 4; }
-
+as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
+  || { fail "npm ci не прошёл"; cleanup; exit 4; }
 step "проверяю типы интерфейса"
-$AS bash -c "cd '$work/src/web' && npx tsc -p tsconfig.app.json --noEmit" \
-  || { fail "в интерфейсе есть ошибки типов — релиз не поеду"; rm -rf "$work"; exit 5; }
-
+as_user bash -c "cd '$work/src/web' && npx tsc -p tsconfig.app.json --noEmit" \
+  || { fail "в интерфейсе есть ошибки типов — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"
-$AS bash -c "cd '$work/src/web' && npx vite build" \
-  || { fail "сборка интерфейса не прошла"; rm -rf "$work"; exit 5; }
+as_user bash -c "cd '$work/src/web' && npx vite build" \
+  || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
+step "собираю сервер и воркер"
+as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
+  && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
+  || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
 
-step "собираю сервер"
-$AS bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
-  || { fail "сборка сервера не прошла"; rm -rf "$work"; exit 5; }
+step "сохраняю работающую пару бинарей"
+cp -f "$SERVER_BIN" "$work/factory-server.prev" \
+  && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
+  || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
-step "сохраняю то, что работает сейчас"
-cp -f "$BIN" "$BIN.prev" || { fail "не смог сохранить текущую версию"; rm -rf "$work"; exit 4; }
+rollback() {
+  fail "$1 — возвращаю предыдущие сервер и воркер"
+  cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
+    && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
+  cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
+    && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
+  systemctl restart "$SERVER_SERVICE" || true
+  systemctl restart "$WORKER_SERVICE" || true
+  cleanup
+  exit "$2"
+}
 
-step "ставлю новую версию и перезапускаю"
-cp -f "$work/factory-server" "$BIN.new" && chown factory:factory "$BIN.new" \
-  && chmod 755 "$BIN.new" && mv -f "$BIN.new" "$BIN" \
-  || { fail "не смог поставить бинарь"; rm -rf "$work"; exit 4; }
-systemctl restart factory-server.service
+install_binary() {
+  source=$1 target=$2
+  cp -f "$source" "$target.new" && set_owner "$target.new" \
+    && chmod 755 "$target.new" && mv -f "$target.new" "$target"
+}
+
+step "ставлю новую пару и перезапускаю сервер"
+install_binary "$work/factory-server" "$SERVER_BIN" || rollback "не смог поставить сервер" 4
+install_binary "$work/factory-worker" "$WORKER_BIN" || rollback "не смог поставить воркер" 4
+systemctl restart "$SERVER_SERVICE" || rollback "сервер не перезапустился" 6
 sleep 5
 
-code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' http://127.0.0.1:7337/api/v1/dashboard || echo 000)
-if [ "$code" != "200" ]; then
-  fail "после перезапуска Фабрика отвечает $code — возвращаю предыдущую версию"
-  cp -f "$BIN.prev" "$BIN.new" && mv -f "$BIN.new" "$BIN"
-  systemctl restart factory-server.service
-  sleep 5
-  back=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' http://127.0.0.1:7337/api/v1/dashboard || echo 000)
-  echo "откат сделан, Фабрика отвечает $back"
-  rm -rf "$work"
-  exit 6
-fi
+code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
+[ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
+
+worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
+  || rollback "не удалось определить identity воркера" 6
+[ -n "$worker_id" ] || rollback "identity воркера пуст" 6
+systemctl restart "$WORKER_SERVICE" || rollback "воркер не перезапустился" 6
+
+step "жду здоровую регистрацию воркера $worker_id"
+registered=0
+attempt=1
+while [ "$attempt" -le "$REGISTER_ATTEMPTS" ]; do
+  body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+  if printf '%s' "$body" | python3 -c \
+    'import json,sys; w=json.load(sys.stdin); raise SystemExit(not (w.get("id") == sys.argv[1] and w.get("health") == "healthy" and w.get("online") is True))' \
+    "$worker_id" 2>/dev/null; then
+    registered=1
+    break
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || sleep "$REGISTER_DELAY"
+done
+[ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
 
 if [ -x "$work/src/ops/install-brain.sh" ]; then
   bash "$work/src/ops/install-brain.sh" "$work/src" \
-    || { fail "мозг не встал — сервер уже новый, мозг остался прежним"; }
+    || fail "мозг не встал — сервер и воркер уже обновлены"
 fi
 
 python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
@@ -83,8 +124,8 @@ json.dump({"name": "релиз от %s, из %s: %s" % (when, ref, subj),
           open(p, "w"), ensure_ascii=False, indent=2)
 print("== выкачено: релиз от %s, из %s: %s (%s)" % (when, ref, subj, sha[:7]))
 PY
-chown factory:factory "$INFO" 2>/dev/null
+set_owner "$INFO" 2>/dev/null || true
 
-rm -rf "$work"
+cleanup
 ls -1dt "$REL"/build-* 2>/dev/null | tail -n +3 | xargs -r rm -rf
 exit 0
