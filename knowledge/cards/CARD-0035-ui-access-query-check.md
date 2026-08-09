@@ -2,23 +2,20 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — начальная загрузка «Доступов» переведена на React
-  Query, точечный тест добавлен и зелёный.
-- Branch: `factory/fecba8dd-807-5efa334a-6df`.
-- Head commit: `6a7214b`.
+- Status: IMPLEMENTED — исправление и тест восстановлены на свежем `main`,
+  обязательные проверки зелёные.
+- Branch: `factory/97aa0a90-daf-ee24968d-25d`.
+- Head commit: `63e1ace` (коммит реализации; карточка обновлена следом).
 - What changed: `web/src/Access.tsx` больше не грузит рубильники через
   `useEffect` + прямой `setState` — читает `useQuery(["access"])`, а
   переключение (`toggle`) после POST рефетчит тот же запрос. Ошибка чтения
   списка по-прежнему видна пользователю. Новый `web/src/Access.test.tsx`
   закрепляет показ загруженного рубильника и повторный GET после переключения.
 - Evidence: `cd web && npm test -- --run src/Access.test.tsx` → 2 passed;
-  `cd web && npx eslint src/Access.tsx --max-warnings 0` → чисто (без ошибки
-  `react-hooks/set-state-in-effect`); `cd web && npx tsc -p tsconfig.app.json
-  --noEmit` → чисто; `just ui-check` — по-прежнему красный (ожидаемо: 8
-  посторонних lint-ошибок в `Live.tsx`, `Pipeline.tsx`, `Say.tsx` и устаревшие
-  тесты других экранов, не в этом срезе).
-- Next action: следующим маленьким срезом взять одну из оставшихся ошибок
-  `just ui-check` (например `Say.tsx` ref-during-render) отдельной карточкой.
+  `cd web && npx eslint src/Access.tsx --max-warnings 0` → exit 0;
+  `cd web && npx tsc -p tsconfig.app.json --noEmit` → exit 0;
+  `cd web && npm run build` → exit 0.
+- Next action: влить поставку в `main` после проверки ветки.
 
 ## Goal and user impact
 
@@ -116,3 +113,10 @@ React Hooks. Это возвращает один из девяти блокир
 `react-hooks/set-state-in-effect` ушла; `npx tsc -p tsconfig.app.json --noEmit`
 — чисто. `just ui-check` осознанно остаётся красным: 8 несвязанных
 lint-ошибок в других файлах и старые тесты других экранов — следующие срезы.
+
+### 2026-08-09 — Implement
+
+Коммиты реализации и теста восстановлены из истории прежней ветки поверх
+свежего `origin/main`. Трёхточечный diff содержит карточку, `Access.tsx` и
+`Access.test.tsx`. Проверено: целевые тесты — 2 passed; ESLint, обязательный
+`tsc -p tsconfig.app.json --noEmit` и production-сборка — exit 0.
