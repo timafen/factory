@@ -2,17 +2,27 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED: повторные модели исчерпанной подписки пропускаются уже
-  в текущем вызове мозга; ветка готова к проверке.
+- Status: VERIFIED PASS — повторные модели исчерпанной подписки пропускаются
+  уже в текущем вызове мозга; ветка ожидает вливания человеком.
 - Branch: `factory/990572e8-535-316754fd-1f2`.
-- Head commit: `bf433a3` (реализация и целевой тест после rebase на `origin/main`).
+- Head commit: `7d51f3b` (реализация и целевой тест на проверенной вершине ветки).
 - What changed: после `note_limit()` мозг обновляет снимок блокировок, поэтому
   цепочка Codex → Codex → Claude запускает только первый Codex и живой Claude.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (14 тестов),
-  `python3 -m py_compile pilot/pilot.py` → успешно.
-- Next action: проверить ветку и влить её в `main`.
+- Evidence: `go test ./...` → успешно (11 пакетов),
+  `python3 -m unittest pilot.test_pilot` → OK (14 тестов).
+- Next action: влить проверенную ветку в `main`.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Лимит первой модели Codex не тратит вторую модель той же подписки | `python3 -m unittest pilot.test_pilot` | OK, 14 тестов; `test_expired_provider_is_skipped_later_in_same_chain` подтверждает один вызов Codex и ответ Claude. |
+| Снимок блокировок обновляется после лимита | проверка `pilot/pilot.py` и тот же изолированный тест | После `note_limit()` вызывается `load_limits()`; вторая Codex-модель пропускается. |
+| Серверные регрессии | `go test ./...` | Успех, 11 Go-пакетов. |
+| Синтаксис пилота | `python3 -m py_compile pilot/pilot.py` | Успех. |
+
 
 ### 2026-08-09 — Implement
 
