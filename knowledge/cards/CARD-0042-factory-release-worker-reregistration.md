@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — блокирующие замечания Review устранены.
-- Branch: `factory/0814fdde-3bf-38c921c3-fdb`.
-- Head commit: `f98891d`.
+- Status: Implemented — гонка из Review устранена, готово к повторному Review.
+- Branch: `factory/7a2ccc17-37c-51cddb0d-174`.
+- Head commit: `f95b28f`.
 - Specification: `knowledge/specs/factory-release-worker-reregistration.md`.
-- What changed: успех требует нового heartbeat после рестарта; trap возвращает
-  оба бинаря при прерывании переключения пары.
-- Evidence: `bash ops/test-fx-factory-release.sh` → PASS (включая старую healthy
-  запись и TERM между установками); сборка сервера и воркера → PASS.
+- What changed: воркер полностью останавливается до снятия baseline; успех требует
+  heartbeat строго новее baseline после запуска нового процесса.
+- Evidence: `bash ops/test-fx-factory-release.sh` → PASS (включая heartbeat старого
+  процесса во время stop и общий откат); сборка сервера и воркера → PASS.
 - One next action: повторить Review до передачи на проверку.
 
 ## LOG
@@ -34,3 +34,10 @@ Release-скрипт теперь поставляет сервер и ворк�
 снятого до рестарта, а EXIT/signal trap сохраняет общий откат пары до подтверждения
 релиза. Целевой тест подтвердил отказ на старой healthy-записи и восстановление
 обоих бинарей при TERM между их установками; Go-компоненты собираются.
+
+### 2026-08-09 — Implement
+
+По ответу владельца порядок изменён на stop воркера, снятие baseline после
+подтверждённой остановки и отдельный start. Регрессия с последним heartbeat старого
+процесса во время stop подтвердила ошибку выката и откат обоих бинарей, если новый
+воркер не регистрируется; shell-проверки и сборка обоих Go-бинарей прошли.
