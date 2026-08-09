@@ -1,3 +1,4 @@
+import contextlib
 import time
 import unittest
 import urllib.error
@@ -266,6 +267,7 @@ class BrainFallbackTest(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load_limits", side_effect=lambda: dict(self.limits_store)),
             mock.patch.object(pilot, "note_limit", side_effect=fake_note_limit),
+            mock.patch.object(pilot, "engine_down", return_value=False),
             mock.patch.object(pilot, "save"),
             mock.patch.object(pilot.subprocess, "run", side_effect=counting_run),
         ]
@@ -309,6 +311,220 @@ class BrainFallbackTest(unittest.TestCase):
         self.assertEqual(len(self.codex_calls), 1,
                          "вторая модель исчерпанного провайдера должна быть пропущена")
         self.assertEqual(len(self.claude_calls), 1)
+
+
+class PlanAutostartTest(unittest.TestCase):
+    def setUp(self):
+        self.conf = {
+            "stages": [{"workflow": "Triage", "workers": {"medium": "triager"}}],
+            "max_parallel_works": 3,
+        }
+        self.workflows = {"Triage": {"enabled": True, "revision_id": "wf-triage"}}
+        self.workers = {"triager": {"id": "worker-triage", "online": True,
+                                    "health": "healthy"}}
+        self.cards = [
+            {"id": "later", "title": "Вторая", "state": "planned", "order": 20,
+             "run_generation": "later-run"},
+            {"id": "top", "title": "Первая", "why": "важнее", "source": "находка",
+             "repo": "repo-1", "origin": "agent", "state": "planned", "order": 10,
+             "run_generation": "first-run"},
+        ]
+
+    @mock.patch.object(pilot.uuid, "uuid4", side_effect=["generation-1", "generation-2"])
+    @mock.patch.object(pilot, "set_idea")
+    def test_each_explicit_planning_gets_a_new_generation(self, set_idea, _uuid):
+        pilot.plan_idea("top")
+        pilot.plan_idea("top")
+
+        generations = [call.kwargs["run_generation"] for call in set_idea.call_args_list]
+        self.assertEqual(generations, ["generation-1", "generation-2"])
+        for call in set_idea.call_args_list:
+            self.assertEqual(call.kwargs["state"], "planned")
+            self.assertEqual(call.kwargs["task_id"], "")
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "new-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_starts_top_planned_card_with_triage_context(self, _limits, _questions,
+                                                         ideas, create, set_idea,
+                                                         note_work, notify):
+        ideas.return_value = self.cards
+
+        result = pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(result, "new-task")
+        body, passed_conf = create.call_args.args
+        self.assertIs(passed_conf, self.conf)
+        self.assertEqual(body["title"], "[auto] [1/1 Triage] Первая")
+        self.assertIn("Это этап Triage", body["context"])
+        self.assertIn("Зачем: важнее", body["context"])
+        set_idea.assert_called_once_with("top", state="in_work", task_id="new-task")
+        note_work.assert_called_once()
+        notify.assert_called_once()
+        self.assertEqual(pilot.notify_group("Взял из Плана"), "routine")
+
+    @mock.patch.object(pilot, "create_task")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions")
+    def test_three_unique_active_or_owner_waiting_works_fill_slots(self, questions,
+                                                                  ideas, create):
+        ideas.return_value = self.cards
+        questions.return_value = [{"task_id": "waiting", "status": "open"}]
+        tasks = [
+            {"id": "a1", "title": "[auto] [1/5 Triage] A", "state": "running"},
+            {"id": "a2", "title": "[auto] [2/5 Specification] A", "state": "queued"},
+            {"id": "b", "title": "[auto] [1/5 Triage] B", "state": "preparing"},
+            {"id": "waiting", "title": "[auto] [2/5 Specification] C", "state": "failed"},
+        ]
+
+        self.assertIsNone(pilot.autostart_plan(self.conf, tasks, self.workflows,
+                                               self.workers))
+        create.assert_not_called()
+
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_creation_failure_leaves_card_planned(self, _limits, _questions, ideas,
+                                                  set_idea):
+        ideas.return_value = self.cards
+        with mock.patch.object(pilot, "create_task", side_effect=RuntimeError("day_task_cap")):
+            with self.assertRaisesRegex(RuntimeError, "day_task_cap"):
+                pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+        set_idea.assert_not_called()
+
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_missing_created_task_id_leaves_card_planned(self, _limits, _questions,
+                                                         ideas, _create, set_idea):
+        ideas.return_value = self.cards
+
+        with self.assertRaisesRegex(RuntimeError, "no task.id"):
+            pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        set_idea.assert_not_called()
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_retry_after_uncertain_post_uses_same_card_request_key(
+            self, _limits, _questions, ideas, set_idea, _note_work, _notify):
+        ideas.return_value = self.cards
+        seen_keys = []
+
+        def uncertain_then_idempotent(body, _conf):
+            seen_keys.append(body["request_key"])
+            if len(seen_keys) == 1:
+                raise TimeoutError("response lost after create")
+            return {"task": {"id": "created-on-first-post"}}
+
+        with mock.patch.object(pilot, "create_task", side_effect=uncertain_then_idempotent):
+            with self.assertRaises(TimeoutError):
+                pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+            result = pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(result, "created-on-first-post")
+        self.assertEqual(len(set(seen_keys)), 1)
+        self.assertTrue(seen_keys[0].startswith("plan-autostart:top:"))
+        self.assertEqual(set_idea.call_args_list[-1], mock.call(
+            "top", state="in_work", task_id="created-on-first-post"))
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "next-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_card_without_repository_is_explained_and_does_not_block_next(
+            self, _limits, _questions, ideas, create, set_idea, _note_work, notify):
+        self.cards[0]["order"] = 1
+        ideas.return_value = self.cards
+
+        result = pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(result, "next-task")
+        self.assertEqual(create.call_args.args[0]["repository_id"], "repo-1")
+        self.assertIn(mock.call("later", state="new",
+                                reason="Не запущено автоматически: сначала выберите проект."),
+                      set_idea.call_args_list)
+        self.assertIn("сначала выберите проект", notify.call_args_list[0].kwargs["body"])
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "new-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_new_planning_generation_creates_a_new_request_key(
+            self, _limits, _questions, ideas, create, _set_idea, _note_work, _notify):
+        card = self.cards[1]
+        card["run_generation"] = "second-run"
+        ideas.return_value = [card]
+
+        pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
+
+        self.assertEqual(create.call_args.args[0]["request_key"],
+                         "plan-autostart:top:second-run")
+
+    def test_cycle_recounts_slots_after_pipeline_continuation(self):
+        tasks = [
+            {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
+            {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
+        ]
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path == "/workers":
+                return {"workers": list(self.workers.values())}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": [{"id": "workflow", "enabled": True,
+                    "current_revision": {"id": "wf-triage", "title": "Triage"}}]}
+            raise AssertionError(path)
+
+        def continue_pipeline(*_args):
+            tasks.append({"id": "c", "title": "[auto] [2/2 Implement] C",
+                          "state": "queued"})
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics")
+        state = {"processed": [], "epics_processed": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers",
+                                                  return_value=self.workers))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_overloaded",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "pipeline_watch",
+                                                  side_effect=continue_pipeline))
+            create = stack.enter_context(mock.patch.object(pilot, "create_task"))
+            ideas = stack.enter_context(mock.patch.object(pilot, "ideas_all",
+                return_value=self.cards))
+            stack.enter_context(mock.patch.object(pilot, "load_questions", return_value=[]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, state)
+
+        ideas.assert_not_called()
+        create.assert_not_called()
 
 
 if __name__ == "__main__":
