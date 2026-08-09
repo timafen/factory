@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,11 +19,44 @@ import (
 
 func TestHTTPServerWriteTimeoutCoversDialogTimeout(t *testing.T) {
 	server := NewHTTPServer("127.0.0.1:0", http.NotFoundHandler())
-	if server.WriteTimeout < dialogTimeout {
-		t.Fatalf("WriteTimeout=%s must cover dialog timeout=%s", server.WriteTimeout, dialogTimeout)
+	const responseReserve = 15 * time.Second
+	minimum := server.ReadTimeout + dialogTimeout + responseReserve
+	if server.WriteTimeout < minimum {
+		t.Fatalf("WriteTimeout=%s must cover ReadTimeout=%s + dialog timeout=%s + reserve=%s", server.WriteTimeout, server.ReadTimeout, dialogTimeout, responseReserve)
 	}
-	if server.WriteTimeout < 60*time.Second {
-		t.Fatalf("WriteTimeout=%s must leave enough time for a dialog response", server.WriteTimeout)
+	if server.WriteTimeout != 90*time.Second {
+		t.Fatalf("WriteTimeout=%s, want the agreed 90s budget", server.WriteTimeout)
+	}
+}
+
+func TestHTTPServerDeliversDialogResponseAfterReadTimeoutWindow(t *testing.T) {
+	if os.Getenv("FACTORY_LIVE_TIMEOUT_TEST") == "" {
+		t.Skip("set FACTORY_LIVE_TIMEOUT_TEST=1 to run the 16-second live HTTP check")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /dialog", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(16 * time.Second)
+		_, _ = io.WriteString(w, "long dialog response")
+	})
+	server := NewHTTPServer("127.0.0.1:0", mux)
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _ = server.Serve(listener) }()
+
+	response, err := http.Post("http://"+listener.Addr().String()+"/dialog", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("dialog request failed after waiting beyond ReadTimeout: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "long dialog response" {
+		t.Fatalf("status=%d body=%q", response.StatusCode, body)
 	}
 }
 
