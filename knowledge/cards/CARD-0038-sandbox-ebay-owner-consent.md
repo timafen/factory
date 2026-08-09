@@ -2,20 +2,31 @@
 
 ## HEAD
 
-- Status: In progress — Factory готов, включая повтор polling после временного
-  сбоя; staging OAuth/callback заблокирован
-  зависимостью [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
-- Branch: `factory/68d22f71-9eb-9f354ab4-c8e`.
-- Head commit: `ea110b0` — экран, API, seller bridge и устойчивый polling.
-- What changed: `/sandbox-keys` запускает и проверяет согласие без передачи
-  секретов; временная ошибка status API теперь запускает ограниченный backoff
-  до конечного состояния или ухода со страницы.
-- Evidence: shell allowlist, Go, 70/70 UI, TypeScript, build и lint — успешно;
-  установленный staging `fx` пока отклоняет `--interactive-bootstrap`.
-- One next action: завершить `tarser-operations#24`, штатно установить на
-  staging и повторить только живой seller consent smoke.
+- Status: Verified PASS — awaiting human merge; staging OAuth/callback по-прежнему
+  заблокирован зависимостью [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
+- Branch: `factory/690fc9a4-327-84449332-328`.
+- Head commit: verification commit containing this card.
+- Evidence: Go-набор, 70 целевых UI-проверок, allowlist `fx`, tooling и launcher
+  успешно; общий UI-набор красный только в несвязанном `Dialog.test.tsx`, а e2e
+  останавливается на устаревшем заголовке главной страницы. Staging `fx` ещё не
+  содержит интерактивный флаг.
+- One next action: завершить `tarser-operations#24`, установить bridge на staging
+  и повторить живой seller consent smoke.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+Проверены экран `/sandbox-keys`, серверный контракт и staging-мост. Владелец
+явно открывает URL eBay; UI показывает pending, повторяет временно неудачный
+опрос с паузой до 12 секунд и прекращает его после ухода со страницы. HTTP
+тесты подтверждают фиксированную seller-операцию и отсутствие URL/секретов в
+status; shell-проверка отклоняет все добавочные и подменяющие аргументы.
+
+`go test -timeout 5m ./...`, целевые 70 UI-тестов, tooling и launcher прошли.
+Полный UI-набор имеет три несвязанных сбоя `Dialog.test.tsx`; e2e не дошёл до
+данного экрана, потому что первый сценарий ожидает устаревший заголовок. Живой
+staging smoke заблокирован: установленный `fx` отклоняет `--interactive-bootstrap`.
 
 ### 2026-08-09 — Implement
 
