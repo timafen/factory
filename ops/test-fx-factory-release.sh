@@ -57,6 +57,16 @@ EOF
 echo "restart $2" >>"$TEST_EVENTS"
 exit 0
 EOF
+  cat >"$case_dir/bin/mv" <<'EOF'
+#!/bin/bash
+/bin/mv "$@" || exit
+target=${@: -1}
+if [ "$TEST_MODE" = interrupt-between-install ] \
+  && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
+  : >"$TEST_INTERRUPT_MARK"
+  kill -TERM "$PPID"
+fi
+EOF
   cat >"$case_dir/bin/sleep" <<'EOF'
 #!/bin/bash
 exit 0
@@ -75,9 +85,13 @@ case "$*" in
     if [ "$TEST_MODE" = server-fail ]; then printf 503; else printf 200; fi ;;
   *'/api/v1/workers/worker-release-test'*)
     if [ "$TEST_MODE" = worker-fail ]; then
-      printf '{"id":"worker-release-test","health":"unhealthy","online":false}'
+      printf '{"id":"worker-release-test","health":"unhealthy","online":false,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+    elif [ "$TEST_MODE" = stale-healthy-worker ]; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+    elif grep -F 'restart factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
     else
-      printf '{"id":"worker-release-test","health":"healthy","online":true}'
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     fi ;;
 esac
 EOF
@@ -86,7 +100,9 @@ EOF
 
 run_release() {
   case_dir=$1 mode=$2
-  TEST_EVENTS="$case_dir/events" TEST_MODE="$mode" PATH="$case_dir/bin:$PATH" \
+  TEST_EVENTS="$case_dir/events" TEST_MODE="$mode" \
+    TEST_SERVER_BIN="$case_dir/install/factory-server" \
+    TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -109,7 +125,7 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
   || fail "worker was not restarted second"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 
-for mode in server-fail worker-fail worker-install-fail; do
+for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi

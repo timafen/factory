@@ -59,6 +59,8 @@ cp -f "$SERVER_BIN" "$work/factory-server.prev" \
   || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
 rollback() {
+  trap - EXIT HUP INT TERM
+  rollback_armed=0
   fail "$1 — возвращаю предыдущие сервер и воркер"
   cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
     && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
@@ -69,6 +71,19 @@ rollback() {
   cleanup
   exit "$2"
 }
+
+rollback_armed=1
+on_exit() {
+  status=$?
+  [ "$rollback_armed" = 1 ] || return
+  [ "$status" -ne 0 ] || status=130
+  rollback "выпуск прерван до подтверждения новой пары" "$status"
+}
+on_signal() { rollback "выпуск прерван сигналом $1" 130; }
+trap on_exit EXIT
+trap 'on_signal HUP' HUP
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 install_binary() {
   source=$1 target=$2
@@ -88,6 +103,11 @@ code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashbo
 worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
   || rollback "не удалось определить identity воркера" 6
 [ -n "$worker_id" ] || rollback "identity воркера пуст" 6
+previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
+  'import json,sys
+try: print(json.load(sys.stdin).get("last_heartbeat", ""))
+except Exception: print("")' 2>/dev/null)
 systemctl restart "$WORKER_SERVICE" || rollback "воркер не перезапустился" 6
 
 step "жду здоровую регистрацию воркера $worker_id"
@@ -96,8 +116,14 @@ attempt=1
 while [ "$attempt" -le "$REGISTER_ATTEMPTS" ]; do
   body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
   if printf '%s' "$body" | python3 -c \
-    'import json,sys; w=json.load(sys.stdin); raise SystemExit(not (w.get("id") == sys.argv[1] and w.get("health") == "healthy" and w.get("online") is True))' \
-    "$worker_id" 2>/dev/null; then
+    'import datetime,json,sys
+try:
+ w=json.load(sys.stdin); current=w.get("last_heartbeat", "")
+ fresh=bool(current) and (not sys.argv[2] or datetime.datetime.fromisoformat(current.replace("Z", "+00:00")) > datetime.datetime.fromisoformat(sys.argv[2].replace("Z", "+00:00")))
+ ok=w.get("id") == sys.argv[1] and w.get("health") == "healthy" and w.get("online") is True and fresh
+except Exception: ok=False
+raise SystemExit(not ok)' \
+    "$worker_id" "$previous_heartbeat" 2>/dev/null; then
     registered=1
     break
   fi
@@ -126,6 +152,7 @@ print("== выкачено: релиз от %s, из %s: %s (%s)" % (when, ref, 
 PY
 set_owner "$INFO" 2>/dev/null || true
 
+rollback_armed=0
 cleanup
 ls -1dt "$REL"/build-* 2>/dev/null | tail -n +3 | xargs -r rm -rf
 exit 0
