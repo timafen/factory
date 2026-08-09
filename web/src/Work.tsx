@@ -403,6 +403,9 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
   const proofTxt = [...g.items].reverse()
     .filter((it) => it.stage === "Verify")
     .map((it) => it.verdict?.proof).find(Boolean) ?? "";
+  const proofShort = proofTxt.length > 110
+    ? proofTxt.slice(0, Math.max(proofTxt.lastIndexOf(" ", 110), 80)) + "…"
+    : proofTxt;
   const promiseLine = g.promise && ((g.promise.files?.length ?? 0) + (g.promise.commands?.length ?? 0) > 0)
     ? [...(g.promise.files ?? []).map((f) => `файл ${f}`),
        ...(g.promise.commands ?? []).map((c) => `команда: ${c}`)].join(" · ")
@@ -425,7 +428,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
           <span title="Результат не видно на экране — вот как машина его подтвердила"
                 style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999,
                          background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741" }}>
-            принята · {proofTxt.slice(0, 90)}
+            принята · {proofShort}
           </span>
         )}
         {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (

@@ -1643,7 +1643,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                 f"rounds={attempts_so_far}: {v['answer'][:120]}")
             notify(conf, f"Разорвал круг сам · {stage}",
                    f"{base}\n\nЭтап шёл по кругу {attempts_so_far} раз(а). "
-                   f"Решил сам, другим способом:\n{v['answer'][:300]}\n\n"
+                   f"Решил сам, другим способом:\n{cut(v['answer'])}\n\n"
                    "Если не согласен — открой и поправь.",
                    priority="low", tags="robot", click=f"{UI_BASE}/answer")
             return False
@@ -1704,7 +1704,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                     f"попытка {used + 1}/{limit}: {v['answer'][:120]}")
                 notify(conf, f"Сменил подход · {stage}",
                        f"{base}\n\nЭтап падал {attempts_so_far} раз(а). "
-                       f"Решил сам, другим способом:\n{v['answer'][:300]}\n\n"
+                       f"Решил сам, другим способом:\n{cut(v['answer'])}\n\n"
                        "Если не согласен — открой и поправь.",
                        priority="low", tags="robot", click=f"{UI_BASE}/answer")
                 return False
@@ -1730,7 +1730,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                     f"attempts={attempts_so_far}: {v['answer'][:120]}")
                 notify(conf, f"Решил сам · {stage}",
                        f"{base}\n\nЭтап падал {attempts_so_far} раз(а). "
-                       f"Решение принял сам:\n{v['answer'][:300]}",
+                       f"Решение принял сам:\n{cut(v['answer'])}",
                        priority="low", tags="robot", click=f"{UI_BASE}/answer")
                 return False
             why = v.get("reason") or "оркестратор сказал, что это решение владельца"
@@ -2189,11 +2189,23 @@ def _generic_screen(u):
     return any(tail.endswith(g) for g in TRY_USELESS)
 
 
+def cut(t, n=300):
+    """Обрезка по границе слова: текст на полуслове выглядит как обрыв связи."""
+    t = (t or "").strip()
+    if len(t) <= n:
+        return t
+    c = t[:n]
+    sp = c.rfind(" ")
+    if sp > n // 2:
+        c = c[:sp]
+    return c.rstrip(" ,;:.-") + "…"
+
+
 def proof_of(result):
     m = None
     for m in PROOF_LINE.finditer(result or ""):
         pass
-    return (m.group(1).strip()[:300] if m else "")
+    return (cut(m.group(1), 300) if m else "")
 
 
 def _is_bare_root(u):
@@ -3466,10 +3478,10 @@ def cycle(conf, state):
                                     raise RuntimeError("нет воркера/сценария")
                             except Exception as e:
                                 log("merge_conflict_return_error", repr(e))
-                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{out[:300]}",
+                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                        priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                         else:
-                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{out[:300]}",
+                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     cmd = conf.get("deploy_staging_cmd")
                     if ok and cmd:
