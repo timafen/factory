@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implement + Test — экран и безопасный API реализованы и подтверждены
-  повторным прогоном на ветке поставки.
-- Branch: `factory/176375c6-c70-02958ebc-4e8`.
-- Head commit: `dc30526`.
-- What changed: `/dialog` ведёт многоходовый разговор с явно выбранной моделью
-  из `brain_chain`; сервер ограничивает историю и запускает только известные CLI.
+- Status: Implement + Test — блокеры ревью устранены, целевые проверки зелёные.
+- Branch: `factory/b331cb36-760-3b73ea2b-615`.
+- Head commit: `d912004`.
+- What changed: `/dialog` однозначно выбирает конкретную строку `brain_chain`,
+  даже если имена моделей совпадают; лимит провайдера показан отдельной ошибкой.
 - Evidence: `go test ./internal/controlplane -run TestDialog` — PASS;
-  `npx vitest run src/Dialog.test.tsx` — 2 PASS; typecheck и Vite build — PASS.
+  `npm --prefix web test -- --run src/Dialog.test.tsx` — 3 PASS;
+  typecheck и Vite build — PASS.
 - One next action: открыть `/dialog` в среде владельца и проверить реальный ответ
   доступной CLI-модели.
 
@@ -39,3 +39,12 @@ src/Dialog.test.tsx` — 2 PASS; `npx tsc --noEmit` и `npx vite build` — PASS
 `go build ./...` и `go test ./...` — PASS кроме заранее известного
 `TestHTTPManagedRepositoryCatalog`, который падает так же и на чистом
 `origin/main` (проверено в отдельном worktree) — не связан с диалогом.
+
+### 2026-08-08 — Implement (блокеры ревью)
+
+Выбор модели переведён с неоднозначного имени на индекс конкретной строки
+`brain_chain`; ответы CLI о rate limit распознаются как HTTP 429 и объясняются
+по-русски с предложением выбрать другую модель. `go test
+./internal/controlplane -run TestDialog -count=1` — PASS; Vitest — 3 PASS;
+TypeScript и production build — PASS. Полный `go test ./...` имеет только
+известное падение `TestHTTPManagedRepositoryCatalog`, зафиксированное выше.
