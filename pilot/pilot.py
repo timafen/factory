@@ -1425,6 +1425,11 @@ PIPELINE_LIVE_STATES = frozenset(
 )
 
 
+def pipeline_task_is_live(task):
+    """Return whether a task still owns the next pipeline transition."""
+    return task.get("state") in PIPELINE_LIVE_STATES
+
+
 def stage_names(conf):
     st = conf.get("stages")
     if isinstance(st, list):
@@ -1466,7 +1471,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     for base, lst in groups.items():
-        if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
+        if any(pipeline_task_is_live(t) for _, t in lst):
             mem.pop(base, None)
             continue
         if base in stopped:

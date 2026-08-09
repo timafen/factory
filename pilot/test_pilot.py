@@ -171,6 +171,20 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
 
+    def test_every_live_state_prevents_duplicate(self):
+        for state in pilot.PIPELINE_LIVE_STATES:
+            with self.subTest(state=state):
+                self.memory = {
+                    "Встроенный патруль": {"since": 1, "nudges": 1}
+                }
+                self.watch([
+                    self.task(state="succeeded"),
+                    self.task(stage="Implement", state=state),
+                ])
+
+                self.assertNotIn("Встроенный патруль", self.memory)
+                self.assertEqual(self.created, [])
+
     def test_owner_pause_is_not_resumed(self):
         self.conf["stopped_pipelines"] = ["Встроенный патруль"]
         self.watch()
