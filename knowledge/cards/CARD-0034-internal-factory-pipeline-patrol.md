@@ -2,15 +2,19 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/54e78a31-548-7d379441-212`.
-- Head commit: `3810b71` (проверенный снимок поставки после перебазирования на `origin/main`).
+- Status: Implemented — awaiting repeat review.
+- Branch: `factory/ada68038-96a-93e0787a-7f1`.
+- Head commit: `2a30034` (функциональный снимок поставки на свежем `origin/main`).
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: патруль закрепил живые состояния конвейера; шесть сценариев проверяют ожидание, один толчок, отсутствие дубля, паузу, финал и эскалацию без внешнего помощника. Базовый 404 каталога исполнителя устранён отдельным минимальным коммитом.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 6 tests OK; `python3 -m unittest pilot.test_pilot` → 7 tests OK; `go test ./internal/controlplane/... -run '^TestHTTPManagedRepositoryCatalog$' -count=1` → OK; `go test -timeout 5m ./...` → OK; `npm --prefix web run build` → OK.
-- One next action: человеку влить проверенную поставку в `main`.
+- What changed: восстановлены 18 обязательных Playwright-сценариев для актуальных экранов и API; Dialog использует каталог доступных моделей, а длинный runbook больше не растягивает мобильный экран. `web/dist` пересобран.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit` → OK; `npm --prefix web test` → 101 passed; `npm --prefix web run test:browser` → 18 passed; lint и build → OK.
+- One next action: повторно проверить поставку и влить её в `main`.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+На чистом снимке свежего `origin/main` восстановлена потерянная функциональная поставка: Playwright-fixture и 18 сценариев синхронизированы с текущими контрактами, тест Dialog — с каталогом моделей, мобильная раскладка защищена от длинного runbook, а `web/dist` пересобран. TypeScript, 101 unit-тест, lint, 18 браузерных сценариев и production-сборка прошли; распределённая аренда намеренно оставлена вне области задачи.
 
 ### 2026-08-08 — Specification
 
