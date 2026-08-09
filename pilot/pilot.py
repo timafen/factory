@@ -2949,7 +2949,7 @@ def host_block(workers=None):
         per_core = load1 / cores
         out["cpu"] = {"load1": round(load1, 2), "cores": cores,
                       "percent": round(per_core * 100),
-                      "state": _verdict(per_core, 0.7, 1.0)}
+                      "state": _verdict(per_core, 1.2, 2.0)}
     except Exception:
         pass
     try:
