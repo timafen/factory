@@ -35,6 +35,8 @@ export function LiveActivity({ attemptId, running }: { attemptId?: string; runni
 
   useEffect(() => {
     if (!on) return;
+    // The first request is part of starting the explicitly enabled poller.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void pull();
     const h = window.setInterval(() => void pull(), 3000);
     return () => window.clearInterval(h);
