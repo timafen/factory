@@ -51,6 +51,7 @@ func invalid(code, message string) error {
 
 type Store struct {
 	db                    *sql.DB
+	attachmentRoot        string
 	now                   func() time.Time
 	sweepEvery            time.Duration
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
@@ -109,7 +110,14 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(8)
-	store := &Store{db: db, now: time.Now, sweepEvery: 5 * time.Second}
+	// Attachments deliberately live outside the database directory: the Factory
+	// host owns their retention and workers receive these exact paths in context.
+	attachmentRoot := "/opt/factory-data/attachments"
+	store := &Store{db: db, attachmentRoot: attachmentRoot, now: time.Now, sweepEvery: 5 * time.Second}
+	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create attachment directory: %w", err)
+	}
 	store.beginLegacyResumeLink = func(ctx context.Context) (*sql.Tx, error) {
 		return db.BeginTx(ctx, nil)
 	}
@@ -2201,6 +2209,40 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	if err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
 	}
+	if len(input.AttachmentIDs) > protocol.MaxTaskAttachments {
+		return protocol.TaskDetail{}, false, invalid("too_many_attachments", "к задаче можно прикрепить не больше 5 файлов")
+	}
+	seenAttachments := map[string]bool{}
+	for _, attachmentID := range input.AttachmentIDs {
+		if seenAttachments[attachmentID] {
+			return protocol.TaskDetail{}, false, invalid("duplicate_attachment", "одно вложение указано несколько раз")
+		}
+		seenAttachments[attachmentID] = true
+		var owner string
+		err := tx.QueryRowContext(ctx, `SELECT request_key FROM task_attachments WHERE id=? AND task_id IS NULL`, attachmentID).Scan(&owner)
+		if errors.Is(err, sql.ErrNoRows) || owner != input.RequestKey {
+			return protocol.TaskDetail{}, false, invalid("invalid_attachment", "вложение не принадлежит этому запросу")
+		}
+		if err != nil {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+	}
+	if len(input.AttachmentIDs) > 0 {
+		var paths []string
+		for _, attachmentID := range input.AttachmentIDs {
+			var name string
+			if err := tx.QueryRowContext(ctx, `SELECT name FROM task_attachments WHERE id=?`, attachmentID).Scan(&name); err != nil {
+				return protocol.TaskDetail{}, false, unavailable(err)
+			}
+			paths = append(paths, "ВЛОЖЕНИЕ: "+filepath.Join(s.attachmentRoot, taskID, attachmentID+"-"+name))
+		}
+		attachmentContext := "\n\n" + strings.Join(paths, "\n")
+		taskContext += attachmentContext
+		resolvedPrompt += attachmentContext
+		if len([]byte(taskContext)) > protocol.MaxDescriptionBytes || len([]byte(resolvedPrompt)) > protocol.MaxResolvedPromptBytes || !protocol.AgentPromptFits(input.Title, repositoryRemoteIdentity, resolvedPrompt) {
+			return protocol.TaskDetail{}, false, invalid("attachment_context_too_large", "вложения делают контекст задачи слишком большим")
+		}
+	}
 	executionID, err := newID()
 	if err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
@@ -2221,8 +2263,56 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 			VALUES (?, ?, ?, ?, 'queued', ?, ?)
 		`, executionID, taskID, input.WorkerID, runtime, now, now)
 	}
+	if err == nil && len(input.AttachmentIDs) > 0 {
+		for _, attachmentID := range input.AttachmentIDs {
+			if _, err = tx.ExecContext(ctx, `UPDATE task_attachments SET task_id=? WHERE id=?`, taskID, attachmentID); err != nil {
+				break
+			}
+		}
+	}
 	if err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
+	}
+	if len(input.AttachmentIDs) > 0 {
+		taskDirectory := filepath.Join(s.attachmentRoot, taskID)
+		if err := os.MkdirAll(taskDirectory, 0o700); err != nil {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+		type attachmentMove struct{ oldPath, newPath string }
+		var moves []attachmentMove
+		rollbackMoves := func(cause error) error {
+			var rollbackErr error
+			for index := len(moves) - 1; index >= 0; index-- {
+				move := moves[index]
+				if err := os.Rename(move.newPath, move.oldPath); err != nil {
+					rollbackErr = errors.Join(rollbackErr, err)
+				}
+			}
+			_ = os.Remove(taskDirectory)
+			return errors.Join(cause, rollbackErr)
+		}
+		for _, attachmentID := range input.AttachmentIDs {
+			var oldPath, name string
+			if err := tx.QueryRowContext(ctx, `SELECT storage_path,name FROM task_attachments WHERE id=?`, attachmentID).Scan(&oldPath, &name); err != nil {
+				return protocol.TaskDetail{}, false, unavailable(err)
+			}
+			newPath := filepath.Join(taskDirectory, attachmentID+"-"+name)
+			if err := os.Rename(oldPath, newPath); err != nil {
+				return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
+			}
+			moves = append(moves, attachmentMove{oldPath: oldPath, newPath: newPath})
+			if _, err := tx.ExecContext(ctx, `UPDATE task_attachments SET storage_path=? WHERE id=?`, newPath, attachmentID); err != nil {
+				return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return protocol.TaskDetail{}, false, unavailable(rollbackMoves(err))
+		}
+		for _, move := range moves {
+			_ = os.Remove(filepath.Dir(move.oldPath))
+		}
+		detail, err := s.Task(ctx, taskID)
+		return detail, true, err
 	}
 	if err := tx.Commit(); err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
@@ -2363,6 +2453,10 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 		return detail, unavailable(err)
 	}
 	detail.RepositoryAvailable = advertised != 0
+	detail.Attachments, err = s.taskAttachments(ctx, id)
+	if err != nil {
+		return detail, unavailable(err)
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, execution_id, worker_id, attempt_number, state, lease_expires_at,
 		       supervisor_pid, process_identity, process_group_id, result, error,
@@ -2494,6 +2588,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID string) error {
 	if err := tx.Commit(); err != nil {
 		return unavailable(err)
 	}
+	_ = os.RemoveAll(filepath.Join(s.attachmentRoot, taskID))
 	return nil
 }
 

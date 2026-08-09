@@ -232,6 +232,10 @@ func (s *Store) claimDetail(ctx context.Context, attemptID string) (protocol.Cla
 	if err != nil {
 		return claim, unavailable(err)
 	}
+	claim.Attachments, err = s.taskAttachments(ctx, claim.Task.ID)
+	if err != nil {
+		return claim, unavailable(err)
+	}
 	err = s.db.QueryRowContext(ctx, `
 		SELECT r.id, wr.display_key,
 		       COALESCE(NULLIF(wr.worker_remote_identity, ''), r.remote_identity),
@@ -694,6 +698,9 @@ type ExpiredLease struct {
 
 func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 	now := s.now().UnixMilli()
+	if err := s.cleanupPendingAttachments(ctx, now-pendingAttachmentTTL.Milliseconds()); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, unavailable(err)

@@ -721,6 +721,41 @@ describe("App", () => {
     });
   });
 
+  it("keeps task submission disabled throughout attachment upload and creation", async () => {
+    const fetch = mockControlPlane();
+    const fixtureImplementation = fetch.getMockImplementation()!;
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    fetch.mockImplementation(async (input, init) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path === "/api/v1/task-attachments" && init?.method === "POST") {
+        await uploadGate;
+        return Response.json({ id: "attachment-1", name: "screen.png", content_type: "image/png", size: 5, sha256: "hash" }, { status: 201 });
+      }
+      return fixtureImplementation(input, init);
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
+    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
+    await user.type(within(dialog).getByLabelText("Title"), "Inspect screenshot");
+    await user.type(within(dialog).getByLabelText("Context"), "Use the supplied screenshot.");
+    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
+    await user.upload(within(dialog).getByLabelText("Files"), new File(["image"], "screen.png", { type: "image/png" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+
+    const submitting = within(dialog).getByRole("button", { name: "Delegating…" });
+    expect(submitting).toBeDisabled();
+    expect(fetch.mock.calls.some(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST")).toBe(false);
+    await user.click(submitting);
+    expect(fetch.mock.calls.filter(([input]) => input === "/api/v1/task-attachments")).toHaveLength(1);
+
+    releaseUpload();
+    expect(await screen.findByRole("heading", { name: "Inspect screenshot" })).toBeVisible();
+  });
+
   it("renders every task status in the operational board", async () => {
     mockControlPlane();
     const user = userEvent.setup();
