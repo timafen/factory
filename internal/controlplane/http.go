@@ -26,6 +26,7 @@ type API struct {
 	automations  *AutomationService
 	pilotConfig  *PilotConfigStore
 	dialogRunner dialogRunner
+	sandboxKeys  sandboxKeysRunner
 }
 
 type workerRegistrationRequest struct {
@@ -76,7 +77,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -104,6 +105,8 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/limits/{provider}", api.setProvider)
 	mux.HandleFunc("GET /api/v1/access", api.listAccess)
 	mux.HandleFunc("POST /api/v1/access/{scope}", api.setAccess)
+	mux.HandleFunc("POST /api/v1/sandbox-keys/ebay-seller/consent", api.startEbaySellerConsent)
+	mux.HandleFunc("GET /api/v1/sandbox-keys/ebay-seller/consent/{operation_id}", api.ebaySellerConsentStatus)
 	mux.HandleFunc("GET /api/v1/questions", api.listQuestions)
 	mux.HandleFunc("GET /api/v1/verdicts", api.listVerdicts)
 	mux.HandleFunc("GET /api/v1/verdicts/{task_id}", api.getVerdict)

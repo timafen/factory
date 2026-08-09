@@ -30,6 +30,8 @@ import type {
 	DialogResponse,
 	DialogScreenshot,
 	TaskAttachment,
+	EbayConsent,
+	EbayConsentStatus,
 } from "./types";
 
 export class APIError extends Error {
@@ -74,6 +76,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+	startEbaySellerConsent: () => request<EbayConsent>("/api/v1/sandbox-keys/ebay-seller/consent", { method: "POST", body: "{}" }),
+	ebaySellerConsentStatus: (operationID: string) => request<EbayConsentStatus>(`/api/v1/sandbox-keys/ebay-seller/consent/${encodeURIComponent(operationID)}`),
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),
   dialogMessage: (brainIndex: number, messages: DialogMessage[], screenshot?: DialogScreenshot) =>
     request<DialogResponse>("/api/v1/dialog/messages", {
