@@ -14,6 +14,7 @@ function humanise(identity: string): string {
 }
 
 /** id репозитория -> человеческое имя проекта. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function useProjectName(): (repoId?: string) => string {
   const repos = useQuery({
     queryKey: ["repo-names"],

@@ -1,4 +1,4 @@
-# CARD-0036 — Устранить восемь ESLint-ошибок общих экранов UI
+# CARD-0036 — Восстановить зелёные общие проверки UI
 
 ## HEAD
 
@@ -16,14 +16,18 @@
 ## Acceptance criteria
 
 1. В `Live.tsx`, `Pipeline.tsx` и `Say.tsx` отсутствуют восемь зафиксированных
-   ESLint-ошибок.
+   ESLint-ошибок, а в `Speak.tsx`, `TaskFilePicker.tsx` и `project.tsx` — семь
+   предупреждений Fast Refresh.
 2. Голосовое уточнение сохраняет выбранный режим для запроса и безопасно
    показывает его в интерфейсе.
 
 ГОТОВО-КОГДА: файл web/src/Live.tsx
 ГОТОВО-КОГДА: файл web/src/Pipeline.tsx
 ГОТОВО-КОГДА: файл web/src/Say.tsx
-ГОТОВО-КОГДА: команда cd web && npx eslint src/Live.tsx src/Pipeline.tsx src/Say.tsx --max-warnings 0
+ГОТОВО-КОГДА: файл web/src/Speak.tsx
+ГОТОВО-КОГДА: файл web/src/TaskFilePicker.tsx
+ГОТОВО-КОГДА: файл web/src/project.tsx
+ГОТОВО-КОГДА: команда just ui-check
 
 ## LOG
 
