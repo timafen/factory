@@ -38,7 +38,7 @@ export interface Worker {
 
 export type PilotStage = "Triage" | "Specification" | "Implement + Test" | "Review" | "Verify";
 export type PilotTier = "low" | "medium" | "high";
-export type PilotNotificationGroup = "questions" | "stuck" | "money" | "done" | "routine";
+export type PilotNotificationGroup = "questions" | "stuck" | "money" | "done" | "escalate" | "routine";
 
 // Этапы приходят с сервера списком, а не словарём: порядок этапов —
 // это и есть конвейер, и его нельзя терять при сериализации.

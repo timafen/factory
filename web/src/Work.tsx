@@ -15,7 +15,8 @@ const STAGE_RU: Record<string, string> = {
 
 type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  // Где владельцу открыть сделанное и посмотреть.
-                 try_url?: string };
+                 try_url?: string; proof?: string;
+};
 type Question = { task_id?: string; status?: string; question?: string };
 type WorkMeta = {
   origin?: "owner" | "assistant" | "orchestrator";
@@ -71,12 +72,14 @@ type Group = {
   reached: Record<string, "done" | "live" | "bad" | "skipped" | "again">;
   lap?: number;
   meta?: WorkMeta;
+  promise?: { files?: string[]; commands?: string[] };
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
                       works: Record<string, WorkMeta> = {},
-                      statuses: Record<string, { state: string; text: string }> = {}): Group[] {
+                      statuses: Record<string, { state: string; text: string }> = {},
+                      promises: Record<string, { files?: string[]; commands?: string[] }> = {}): Group[] {
   const openQ = new Set(
     questions.filter((q) => q.status === "open").map((q) => q.task_id),
   );
@@ -125,6 +128,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     g.lap = lap;
 
     g.meta = works[g.base];
+    g.promise = promises[g.base];
     const recorded = g.meta?.skipped;
     if (recorded && recorded.length) {
       // Записано при заведении работы — гадать не нужно.
@@ -251,6 +255,7 @@ export function WorkView({
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const [works, setWorks] = useState<Record<string, WorkMeta>>({});
   const [statuses, setStatuses] = useState<Record<string, { state: string; text: string }>>({});
+  const [promises, setPromises] = useState<Record<string, { files?: string[]; commands?: string[] }>>({});
   const [showArchive, setShowArchive] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [byStage, setByStage] = useState(false);
@@ -265,6 +270,10 @@ export function WorkView({
           fetch("/api/v1/work-status"),
         ]);
         if (ws.ok && alive) setStatuses((await ws.json()) as Record<string, { state: string; text: string }>);
+        try {
+          const pr = await fetch("/api/v1/promises");
+          if (pr.ok && alive) setPromises((await pr.json()) as Record<string, { files?: string[]; commands?: string[] }>);
+        } catch { /* обещаний может не быть */ }
         if (wk.ok && alive) setWorks((await wk.json()) as Record<string, WorkMeta>);
         if (v.ok && alive) setVerdicts(((await v.json()) as { verdicts?: Record<string, Verdict> }).verdicts ?? {});
         if (q.ok && alive) setQuestions(((await q.json()) as { questions?: Question[] }).questions ?? []);
@@ -283,7 +292,7 @@ export function WorkView({
   if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
 
   const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
-  const groups = build(tasks ?? [], verdicts, questions, works, statuses);
+  const groups = build(tasks ?? [], verdicts, questions, works, statuses, promises);
 
   return (
     <div className="page page-work">
@@ -388,14 +397,37 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
     .filter((it) => it.stage === st).map((it) => it.verdict?.try_url).find(Boolean);
   const tryUrl = byStage("Verify") ?? byStage("Review") ?? [...g.items].reverse()
     .map((it) => it.verdict?.try_url).find(Boolean) ?? "";
+  // «Готово, когда» — перевод сути в проверяемые факты. Показываем сразу
+  // после Спецификации: владелец может сказать «я просил другое» до того,
+  // как потрачен хоть один круг разработки.
+  const proofTxt = [...g.items].reverse()
+    .filter((it) => it.stage === "Verify")
+    .map((it) => it.verdict?.proof).find(Boolean) ?? "";
+  const promiseLine = g.promise && ((g.promise.files?.length ?? 0) + (g.promise.commands?.length ?? 0) > 0)
+    ? [...(g.promise.files ?? []).map((f) => `файл ${f}`),
+       ...(g.promise.commands ?? []).map((c) => `команда: ${c}`)].join(" · ")
+    : "";
   return (
     <section style={{
       background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
       borderColor: g.status.tone === "live" ? "#2a4560" : g.status.tone === "warn" ? "#4a3f22" : "var(--border, #262c38)",
       borderRadius: 12, padding: "12px 16px",
     }}>
+      {promiseLine && (
+        <div style={{ fontSize: 12, color: "#9fb4d8", margin: "0 0 6px", lineHeight: 1.5 }}
+             title="Обещания Спецификации: по ним машина сверяет дифф, а Проверка гоняет команды">
+          готово, когда: {promiseLine}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
+        {g.status.label === "работа принята" && !tryUrl && proofTxt && !g.meta?.closed && (
+          <span title="Результат не видно на экране — вот как машина его подтвердила"
+                style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999,
+                         background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741" }}>
+            принята · {proofTxt.slice(0, 90)}
+          </span>
+        )}
         {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (
           // Итог принят — значит изменение уже на стенде. Сама плашка и есть
           // дверь туда: «сделано» без возможности посмотреть — просто слово.
@@ -453,32 +485,46 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, project 
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-        {STAGE_ORDER.map((st) => {
-          const s = g.reached[st];
-          const isNow = g.currentStage === st;
-          const bg = s === "done" ? "#2f5741" : s === "bad" ? "#5a2b2b"
-                   : isNow ? "#2a4560" : "#232833";
-          const fg = s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
-                   : isNow ? "#8ec5ff" : "#5a6270";
-          const skipped = s === "skipped";
-          const again = s === "again";
-          return (
-            <span key={st}
-              title={skipped ? "Стадию не проводили: работу завели сразу с более позднего шага"
-                             : (s ? undefined : "Стадия ещё не пройдена")}
-              style={{
-                fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
-                background: skipped ? "transparent" : again ? "#3a3320" : bg,
-                color: skipped ? "#4a515e" : again ? "#e0cf9f"
-                     : (s || isNow ? fg : "#5a6270"),
-                border: isNow ? "1px solid #3d6a92"
-                      : skipped ? "1px dashed #363d4a"
-                      : again ? "1px solid #5c4f2a" : "1px solid transparent",
-              }}>{skipped ? `${STAGE_RU[st]} — не нужна`
-                  : again ? `${STAGE_RU[st]} — заново`
-                  : STAGE_RU[st]}</span>
-          );
-        })}
+        {(() => {
+          const idxNow = g.currentStage ? STAGE_ORDER.indexOf(g.currentStage) : -1;
+          const maxIdx = STAGE_ORDER.reduce((m, x, i) => (g.reached[x] ? i : m), -1);
+          return STAGE_ORDER.map((st, idx) => {
+            const s = g.reached[st];
+            const isNow = g.currentStage === st;
+            // Этап никогда не проводился, но работа уже дальше него:
+            // значит, он и не понадобится (например, разбор сделан в плане
+            // эпика). Честная подпись вместо немого серого.
+            const skipped = s === "skipped" || (!s && !isNow && idx < maxIdx);
+            const again = s === "again";
+            // Зелёное позади возврата — история прошлого круга, а не текущее
+            // состояние: после «Разработка — заново» Ревью пройдёт снова.
+            const past = s === "done" && idxNow >= 0 && idx > idxNow;
+            const bg = past ? "#1a2620" : s === "done" ? "#2f5741" : s === "bad" ? "#5a2b2b"
+                     : isNow ? "#2a4560" : "#232833";
+            const fg = past ? "#5f8f74" : s === "done" ? "#7ee2a8" : s === "bad" ? "#ffb4b4"
+                     : isNow ? "#8ec5ff" : "#5a6270";
+            return (
+              <span key={st}
+                title={skipped ? "Стадию не проводили: работа началась с более позднего шага (например, разбор уже сделан в плане эпика)"
+                     : past ? "Этап проходил в прошлом круге; после возврата в разработку он будет пройден заново"
+                     : again ? "Этап идёт повторно после возврата"
+                     : (s ? undefined : "Стадия ещё не пройдена")}
+                style={{
+                  fontSize: 11.5, padding: "3px 10px", borderRadius: 6,
+                  background: skipped ? "transparent" : again ? "#3a3320" : bg,
+                  color: skipped ? "#4a515e" : again ? "#e0cf9f"
+                       : (s || isNow ? fg : "#5a6270"),
+                  border: isNow ? "1px solid #3d6a92"
+                        : skipped ? "1px dashed #363d4a"
+                        : past ? "1px dashed #2f5741"
+                        : again ? "1px solid #5c4f2a" : "1px solid transparent",
+                }}>{skipped ? `${STAGE_RU[st]} — не нужна`
+                    : past ? `${STAGE_RU[st]} — прошлый круг`
+                    : again ? `${STAGE_RU[st]} — заново`
+                    : STAGE_RU[st]}</span>
+            );
+          });
+        })()}
       </div>
 
       {expanded && (

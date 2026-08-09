@@ -98,11 +98,13 @@ NOTIFY_GROUPS = {
               "Упёрлись в лимит", "Продлил бюджет"),
     "done": ("Задача выполнена", "Задача завершена", "Эпик завершён", "Задача заведена",
              "Голосовая задача", "Эпик запущен"),
-    "routine": ("Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
+    "escalate": ("Исполнитель повышен",),
+    "routine": ("Вернул сам:", "Вернул без Ревью", "Мёрж-конфликт", "Сдвинул застрявшую",
+                "Ответ принят", "Решил сам", "Разорвал круг сам", "Сменил подход",
                 "Перезапускаю дешевле", "Эпик: пошла подзадача"),
 }
 NOTIFY_DEFAULTS = {"questions": True, "stuck": True, "money": True,
-                   "done": True, "routine": False}
+                   "done": True, "escalate": True, "routine": False}
 
 
 def notify_group(title):
@@ -131,9 +133,30 @@ def no_bare_hashes(text):
     return HEX_TOKEN.sub("(служебный код)", str(text or ""))
 
 
+NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"
+
+
+def _notify_journal(title, message, group, delivered, click):
+    """Каждое уведомление остаётся в журнале — экран «Уведомления» читает его.
+    Тихие (выключенная группа) тоже пишутся, с пометкой."""
+    try:
+        rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "title": title, "message": message[:1500],
+               "group": group, "delivered": bool(delivered), "click": click}
+        with open(NOTIFY_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        if os.path.getsize(NOTIFY_LOG_PATH) > 1_500_000:
+            lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-800:]
+            io.open(NOTIFY_LOG_PATH, "w", encoding="utf-8").writelines(lines)
+    except Exception as e:
+        log("notify_journal_error", repr(e))
+
+
 def notify(conf, title, message, priority="default", tags="", click=""):
     title = no_bare_hashes(title)
     message = no_bare_hashes(message)
+    _notify_journal(title, message, notify_group(title),
+                    notify_allowed(conf, title), click)
     if not notify_allowed(conf, title):
         log("QUIET[" + notify_group(title) + "] " + str(title)
             + " :: " + str(message)[:80].replace("\n", " "))
@@ -237,9 +260,52 @@ def money_guard(conf, title):
         raise RuntimeError("day_task_cap: %d/%d" % (len(rec), dcap))
 
 
+# ------------------------------------------------- правила в каждую задачу ---
+# context.md читает мозг пилота, а НЕ агенты. Всё, что обязаны знать агенты,
+# доставляется сюда — пилот вшивает этот блок в контекст каждой [auto]-задачи.
+AGENT_RULES = """
+=== ПРАВИЛА ДЛЯ АГЕНТА (обязательны, проверяются машиной) ===
+1. Ветка: режь от свежего origin/main (git fetch origin). НИКОГДА не делай
+   checkout другой ветки в рабочей копии — это ломает воркера. Чужую работу
+   забирай так: git fetch origin <ветка> && git reset --hard FETCH_HEAD.
+2. Сдача: сначала перебазируй на свежий main (git fetch origin main,
+   затем git rebase origin/main), потом проверь список файлов командой
+   git diff --name-only origin/main...HEAD — именно ТРИ точки, сравнение от
+   точки ветвления. В списке ТОЛЬКО твои файлы. Запушь:
+   git push --force-with-lease -u origin HEAD. Непушенная работа не существует.
+3. Отчёт заканчивай строками:
+   ОБЛАСТЬ: <файлы через запятую, ровно как в git>
+   TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
+   страницы (health, login, «ok») — НЕ результат. Если работа невидимая
+   (чистка кода, конфиги), пиши: TRY: нет>
+   ДОКАЗАТЕЛЬСТВО: <обязательно, если TRY: нет — одна фраза по-русски, как
+   машина подтвердила результат: «поиск старых имён по коду даёт 0
+   совпадений, 366 тестов зелёные»>
+4. Спецификация ДОПОЛНИТЕЛЬНО обязана выдать проверяемые обещания:
+   ГОТОВО-КОГДА: файл <путь>            (файл, который изменится)
+   ГОТОВО-КОГДА: команда <команда>      (обязана выйти нулём; лучший вариант —
+   новый тест, выражающий суть задачи, сейчас красный). Ворота сверят дифф
+   с обещаниями; Проверка обязана прогнать команды и показать вывод.
+5. Пиши для человека: первая строка коммита — по-русски, что и зачем.
+   Голые хеши/ID на экранах и в текстах для владельца запрещены — только
+   со словесной подписью. Ревью возвращает работу за голый хеш на экране.
+6. Ревью: меряй поставку ТОЛЬКО диффом от точки ветвления
+   (git diff origin/main...HEAD, три точки). Файлы, отличающиеся лишь потому,
+   что ветка отстала от main, — НЕ замечание, main движется быстро. Возвращай
+   только за чужие файлы в ЭТОМ диффе, отсутствие ветки, несделанное или
+   сломанное — с конкретным списком. За формулировки не возвращай.
+   Побочные идеи — строкой «ПРЕДЛОЖЕНИЕ: что — зачем», не делай их молча.
+=== КОНЕЦ ПРАВИЛ ===
+"""
+
+
 def create_task(body, conf=None):
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
+    if str(body.get("title", "")).startswith(PREFIX):
+        ctx = body.get("context") or ""
+        if "ПРАВИЛА ДЛЯ АГЕНТА" not in ctx:
+            body["context"] = (ctx + "\n\n" + AGENT_RULES)[:60000]
     """Create a task robustly. Attempt chain:
     1. exact worker + repository (fast path when already advertised);
     2. route + same worker (lets the worker acquire the repo dynamically);
@@ -875,7 +941,26 @@ LOOP_NOTE = (
     "Прими решение сам: либо назови ДРУГОЙ способ закрыть замечание, либо разреши "
     "принять работу с этим замечанием и записать его в долги, либо укажи, что именно "
     "починить в окружении. К владельцу это уходит ТОЛЬКО если вопрос про деньги, "
-    "про боевую систему или про выбор продукта — тогда так и скажи прямым текстом.")
+    "про боевую систему или про выбор продукта — тогда так и скажи прямым текстом. "
+    "Если работа по сути СДЕЛАНА (код запушен, тесты зелёные), а замечание можно "
+    "записать в долги — начни ответ ровно словом ПРИНЯТО: и одной фразой почему; "
+    "тогда конвейер двинет работу вперёд, а не на новый круг.")
+
+ACCEPT_MARK = re.compile(
+    r"^\s*[«\"']?(ПРИНЯТО\b|Принима\w*|"
+    r"Работа\s+выполнена|Считаю\s+выполненн)", re.I)
+NEXT_STAGE = {"Implement + Test": "Review", "Review": "Verify", "Verify": "Verify"}
+
+
+def accept_forward(stage, answer):
+    """«Принято» оркестратора — движение ВПЕРЁД: принятая разработка идёт в
+    Ревью, принятое Ревью — в Проверку. Раньше «принято» рождало ещё один
+    круг той же стадии, и работа крутилась вечно."""
+    nxt = NEXT_STAGE.get(str(stage))
+    if nxt and ACCEPT_MARK.match(answer or ""):
+        log(f"ACCEPT FORWARD {stage} -> {nxt}")
+        return nxt
+    return None
 
 
 CAP_NOTE = (
@@ -1262,6 +1347,10 @@ def review_gate(conf, base, branch, repo_identity):
         note_cap_rescue(base, "GATE")
         log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
         return {"back": True,
+                "alert": "Вернул сам: разработка не загрузила работу",
+                "alert_msg": ("Агент сказал «готово», но не загрузил свою работу "
+                              "в хранилище — проверять нечего. Вернул в разработку "
+                              "с инструкцией. Твоего участия не нужно."),
                 "note": (f"Машинная проверка перед Ревью: ветки {branch} НЕТ в хранилище. "
                          "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
                          "Сделай: git push -u origin " + (branch or "<ветка>") +
@@ -1279,6 +1368,10 @@ def review_gate(conf, base, branch, repo_identity):
             note_cap_rescue(base, "DIRT")
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
+                    "alert": "Вернул сам: в поставке чужие файлы",
+                    "alert_msg": ("В работе оказались файлы, не относящиеся к задаче "
+                                  "(%d шт.) — вернул в разработку с точным списком, "
+                                  "что убрать. Твоего участия не нужно." % len(foreign)),
                     "note": ("Машинная проверка перед Ревью: в поставке файлы ВНЕ "
                              "заявленной области работы:\n"
                              + "\n".join("  - " + f for f in foreign)
@@ -1510,7 +1603,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
             set_loop_baseline(base, attempts_so_far)
-            rec = write_question(task_id, stage, resume_stage, base, repo_id,
+            rec = write_question(task_id, stage,
+                                 accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                 base, repo_id,
                                  situation, question, options, prior_result, branch,
                                  status="answered")
             rec["answer"] = v["answer"]
@@ -1569,7 +1664,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 note_cap_rescue(base, stage)
-                rec = write_question(task_id, stage, resume_stage, base, repo_id,
+                rec = write_question(task_id, stage,
+                                     accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                     base, repo_id,
                                      situation, question, options, prior_result, branch,
                                      status="answered")
                 rec["answer"] = v["answer"]
@@ -1593,7 +1690,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-                rec = write_question(task_id, stage, resume_stage, base, repo_id,
+                rec = write_question(task_id, stage,
+                                     accept_forward(stage, v.get("answer", "")) or resume_stage,
+                                     base, repo_id,
                                      situation, question, options, prior_result, branch,
                                      status="answered")
                 rec["answer"] = v["answer"]
@@ -1891,8 +1990,16 @@ def handle_answers(conf, workflows, workers, tasks):
         except Exception:
             rounds = 0
         if rounds >= 2 and cx_hint != "high":
+            was = stage_worker(conf, stage, cx_hint, workers)
             cx_hint = "high"
-            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — исполнитель уровнем выше")
+            now_ = stage_worker(conf, stage, cx_hint, workers)
+            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — {was} -> {now_}")
+            if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
+                note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                notify(conf, "Исполнитель повышен",
+                       (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
+                       + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
+                       tags="arrow_double_up", click=f"{UI_BASE}/work")
         worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
@@ -2041,6 +2148,16 @@ TRY_HOSTS = ("factory.timafen.com", "staging-automation.tarser.net",
 # показываем только новое: пусть ссылка ведёт туда, где он на самом деле живёт.
 TRY_ALIASES = (("staging.ops.tarser.net", "staging-automation.tarser.net"),)
 TRY_NONE = ("none", "нет", "-", "n/a")
+PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
+# служебные страницы: человек там результата не увидит
+TRY_USELESS = ("/health", "/login", "/admin/login")
+
+
+def proof_of(result):
+    m = None
+    for m in PROOF_LINE.finditer(result or ""):
+        pass
+    return (m.group(1).strip()[:300] if m else "")
 
 
 def _is_bare_root(u):
@@ -3236,8 +3353,13 @@ def cycle(conf, state):
                 # Ссылка живёт рядом с итогом: экран показывает её только там,
                 # где написано «сделано».
                 seen = try_url(result, detail["task"].get("repository_id") or "")
+                if seen and any(u in seen for u in TRY_USELESS):
+                    seen = ""     # страница «ok» — не дверь к результату
                 if seen:
                     rec["try_url"] = seen
+                pf = proof_of(result)
+                if pf:
+                    rec["proof"] = pf
                 save(f"{VERDICT_DIR}/{tid}.json", rec)
             except Exception as e:
                 log("verdict_save_error", repr(e))
@@ -3262,13 +3384,19 @@ def cycle(conf, state):
                     if ok:
                         # Хозяину не нужно знать про main — это кухня. Ему нужно:
                         # задача выполнена, и вот дверь, где потрогать результат.
-                        proof = try_url(result, rid)
-                        notify(conf, "Задача выполнена",
-                               base_title(title)
-                               + ("\nПосмотреть: " + proof if proof
-                                  else "\nСсылку на результат стадия не назвала — открой карточку."),
+                        link = try_url(result, rid)
+                        if link and any(u in link for u in TRY_USELESS):
+                            link = ""
+                        pf = proof_of(result)
+                        if link:
+                            body_txt = "\nПосмотреть: " + link
+                        elif pf:
+                            body_txt = "\nРезультат не визуальный. Проверено: " + pf
+                        else:
+                            body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
+                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
                                tags="white_check_mark",
-                               click=proof or f"{UI_BASE}/tasks/{tid}")
+                               click=link or f"{UI_BASE}/tasks/{tid}")
                     else:
                         # Конфликт слияния — рабочий случай, а не тупик: пока эта
                         # работа шла, в main влилась соседняя. Возвращаем в
@@ -3394,6 +3522,43 @@ def cycle(conf, state):
         branch = extract_branch(result, detail.get("context", ""))
         branch_line = f"Branch: {branch}\n" if branch else ""
 
+        # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
+        if (wf == "Specification" and not PROMISE_LINE.search(result or "")
+                and cap_rescues(base, "SPEC") < 1):
+            note_cap_rescue(base, "SPEC")
+            back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
+            nl = chr(10)
+            spec_ctx = nl.join([
+                f"Pipeline: {base}",
+                f"Previous stage: {wf}",
+                branch_line.strip(),
+                "",
+                "Спецификация принята по содержанию, но в отчёте НЕТ строк "
+                "ГОТОВО-КОГДА — без них проверка работы держится на мнении, "
+                "а не на фактах. Дополни СУЩЕСТВУЮЩУЮ спецификацию (ветку не "
+                "переключай: git fetch origin <ветка> и git reset --hard "
+                "FETCH_HEAD) и закончи отчёт строками:",
+                "ГОТОВО-КОГДА: файл <путь, который изменится>",
+                "ГОТОВО-КОГДА: команда <команда, обязана выйти нулём>",
+                "Лучшая команда — новый тест, выражающий суть задачи "
+                "(сейчас он красный)."])
+            try:
+                create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                             "context": spec_ctx[:20000],
+                             "worker_id": worker["id"],
+                             "repository_id": detail["task"].get("repository_id") or "",
+                             "timeout_seconds": conf.get("timeout_seconds", 7200),
+                             "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
+                                 or nw["revision_id"]}, conf)
+                log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
+                notify(conf, "Вернул сам: спецификация без обещаний",
+                       base + chr(10) + "Спецификация не назвала проверяемые признаки "
+                       "готовности (ГОТОВО-КОГДА) — вернул дописать. Твоего участия не нужно.",
+                       tags="wrench", click=f"{UI_BASE}/work")
+                continue
+            except Exception as e:
+                log("spec_gate_error", repr(e))
+
         # Ворота: дешёвая машинная проверка вместо дорогого круга Ревью.
         gate_note = ""
         if next_stage == "Review" and branch:
@@ -3402,7 +3567,7 @@ def cycle(conf, state):
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
-                    create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                    created_g = create_task({"request_key": str(uuid.uuid4()), "title": back_title,
                                  "context": (f"Pipeline: {base}\nPrevious stage: {wf}\n"
                                              f"Branch: {branch}\n\n" + g["note"])[:20000],
                                  "worker_id": worker["id"],
@@ -3410,7 +3575,11 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
                                      or nw["revision_id"]}, conf)
-                    notify(conf, "Вернул без Ревью: ветка не запушена", base, tags="wrench")
+                    new_tid = (created_g.get("task") or {}).get("id", "") if isinstance(created_g, dict) else ""
+                    notify(conf, g.get("alert") or "Вернул сам: поставка не прошла машинную проверку",
+                           base + chr(10) + (g.get("alert_msg") or ""),
+                           tags="wrench",
+                           click=(f"{UI_BASE}/tasks/{new_tid}" if new_tid else f"{UI_BASE}/work"))
                     continue
                 except Exception as e:
                     log("gate_return_error", repr(e))

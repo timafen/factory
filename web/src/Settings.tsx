@@ -12,6 +12,7 @@ const notificationGroups: Array<{key:PilotNotificationGroup;label:string;hint:st
   {key:"stuck",label:"Работа встала",hint:"Присылать уведомление, если задача остановилась и требует вмешательства.",defaultEnabled:true},
   {key:"money",label:"Деньги и лимиты",hint:"Присылать уведомление о расходах и приближении к лимитам.",defaultEnabled:true},
   {key:"done",label:"Завершения и запуски задач",hint:"Присылать уведомление о завершении и запуске задач.",defaultEnabled:true},
+  {key:"escalate",label:"Исполнитель повышен",hint:"Присылать уведомление, когда после двух провалов этап уходит модели уровнем выше (это дороже).",defaultEnabled:true},
   {key:"routine",label:"Рабочая рутина",hint:"Присылать уведомление о рутинных шагах пилота.",defaultEnabled:false},
 ];
 
