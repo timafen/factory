@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented — гонка из Review устранена, готово к повторному Review.
+- Status: Verified PASS — ожидает вливания человеком.
 - Branch: `factory/7a2ccc17-37c-51cddb0d-174`.
-- Head commit: `f95b28f`.
+- Head commit verified: `283c6c5`.
 - Specification: `knowledge/specs/factory-release-worker-reregistration.md`.
 - What changed: воркер полностью останавливается до снятия baseline; успех требует
   heartbeat строго новее baseline после запуска нового процесса.
-- Evidence: `bash ops/test-fx-factory-release.sh` → PASS (включая heartbeat старого
-  процесса во время stop и общий откат); сборка сервера и воркера → PASS.
-- One next action: повторить Review до передачи на проверку.
+- Evidence: полный Go-набор без кэша, Vitest, ESLint, TypeScript-проверка,
+  production-сборка и `bash ops/test-fx-factory-release.sh` прошли.
+- One next action: влить проверенную ветку в main.
 
 ## LOG
 
@@ -41,3 +41,15 @@ Release-скрипт теперь поставляет сервер и ворк�
 подтверждённой остановки и отдельный start. Регрессия с последним heartbeat старого
 процесса во время stop подтвердила ошибку выката и откат обоих бинарей, если новый
 воркер не регистрируется; shell-проверки и сборка обоих Go-бинарей прошли.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Пара одной ревизии, порядок рестартов, новая регистрация | `bash ops/test-fx-factory-release.sh` | PASS: сервер запускается раньше воркера, успех требует нового healthy online heartbeat. |
+| Откат после недоступности сервера | тот же сценарий, режим `server-fail` | Оба прежних бинаря восстановлены; службы перезапущены сервером, затем воркером. |
+| Откат при нерегистрации нового воркера | режимы `worker-fail`, `stale-healthy-worker`, `heartbeat-during-stop` | Выкат завершается ошибкой и возвращает пару бинарей; старая регистрация не принята. |
+| Нет смешанных версий после ошибок сборки или установки | режимы `worker-build-fail`, `worker-install-fail`, `interrupt-between-install` | Пара остаётся прежней либо общий откат восстанавливает оба бинаря. |
+
+Дополнительно без кэша прошёл `go test ./...`; после `npm ci` прошли Vitest,
+ESLint, TypeScript-проверка и production-сборка веб-клиента.
