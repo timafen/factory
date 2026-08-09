@@ -1134,6 +1134,44 @@ def area_of(base, context="", repo=""):
     return files
 
 
+NOISE_PATHS = ("__pycache__", ".pyc", "node_modules/")
+
+
+def area_extend(base, result, repo=""):
+    """Агент назвал свои файлы в отчёте — запоминаем их как область работы.
+    Иначе машинная чистка выбрасывает то, что он же и сделал."""
+    files = set()
+    for m in AREA_LINE.finditer(result or ""):
+        for p in m.group(1).replace(";", ",").split(","):
+            p = p.strip().strip("`")
+            if not p or "<" in p or ">" in p:
+                continue
+            if "/" not in p and "." not in p:
+                continue
+            files.add((repo + "::" + p) if repo else p)
+    if not files:
+        return set()
+    known = load(AREAS_PATH, {}) or {}
+    was = set(known.get(base) or [])
+    if files - was:
+        known[base] = sorted(was | files)
+        save(AREAS_PATH, known)
+        log(f"AREA+ {base[:40]!r}: +{len(files - was)} файлов из отчёта")
+    return files
+
+
+def other_areas(base):
+    """Файлы, закреплённые за ДРУГИМИ работами: только они по-настоящему чужие."""
+    known = load(AREAS_PATH, {}) or {}
+    out = set()
+    for k, v in known.items():
+        if k == base:
+            continue
+        for p in v or []:
+            out.add(p.split("::", 1)[1] if "::" in p else p)
+    return out
+
+
 def area_busy(tasks, base, context="", repo=""):
     """Кто уже занял тот же файл. Возвращает имя работы или пустую строку."""
     mine = area_of(base, context, repo)
@@ -1650,9 +1688,13 @@ def review_gate(conf, base, branch, repo_identity):
         mine = set()
         for p in known.get(base) or []:
             mine.add(p.split("::", 1)[1] if "::" in p else p)
-        foreign = sorted(f for f in files if mine and f not in mine)
-        if foreign and mine:
-            clean = rebuild_clean_branch(repo_identity, branch, sorted(mine), base)
+        alien = other_areas(base)
+        foreign = sorted(f for f in files
+                         if (f in alien and f not in mine)
+                         or any(n in f for n in NOISE_PATHS))
+        if foreign:
+            keep = [f for f in files if f not in set(foreign)]
+            clean = rebuild_clean_branch(repo_identity, branch, keep, base)
             if clean:
                 return {"back": False, "branch": clean,
                         "note": ("Ветка пересобрана машиной от свежей главной: "
@@ -4041,6 +4083,11 @@ def cycle(conf, state):
         attempts = detail.get("attempts") or []
         result = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
 
+        try:
+            area_extend(base_title(title), result,
+                        detail["task"].get("repository_id") or "")
+        except Exception as e:
+            log("area_extend_error", repr(e))
         try:
             collect_ideas(result, detail["task"].get("repository_id") or "",
                           base_title(title))
