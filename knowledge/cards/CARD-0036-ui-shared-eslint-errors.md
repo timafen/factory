@@ -2,14 +2,17 @@
 
 ## HEAD
 
-- Status: READY — общий UI-шлюз зелёный.
+- Status: BLOCKED — общий `just check` останавливается до UI на двух
+  диагностических сообщениях `staticcheck`, уже существующих в `origin/main`.
 - Branch: `factory/5b125661-f3a-208faf70-6d2`.
-- Head commit: `HEAD` этой ветки (единый коммит чистой поставки от `origin/main`).
+- Head commit: `1e40870` (проверенная UI-поставка от `origin/main`).
 - What changed: восемь ESLint-ошибок и семь предупреждений Fast Refresh больше
   не блокируют UI; стартовая загрузка `Access.tsx` разрешена точечно.
-- Evidence: `just ui-check` — успешно; `npm test` — 9 файлов и 101 тест;
-  `npm run typecheck` и `npm run build` — успешно.
-- Next action: влить ветку в `main`.
+- Evidence: после `npm ci` успешно прошли `just ui-check` (9 файлов, 101 тест)
+  и `npm run build`; полный `just check` воспроизводимо завершается на
+  `internal/controlplane/cards_http.go:37` и `pilot_config.go:128` до UI.
+- Next action: исправить две базовые диагностики `staticcheck`, затем повторить
+  `just check` перед слиянием.
 
 ## Acceptance criteria
 
@@ -54,3 +57,17 @@ Fast Refresh в трёх других файлах; область задачи 
 UI-файлов и эта карточка, без `web/dist`, controlplane и чужих карточек.
 Строгий lint, 101 UI-тест, TypeScript и production build прошли; выбранный
 режим голосового уточнения по-прежнему сохраняется для интерфейса и запроса.
+
+### 2026-08-09 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Строгий UI-шлюз не блокируется ESLint, TypeScript или тестами | `npm ci && just ui-check` | PASS: ESLint без предупреждений, TypeScript без ошибок, 9 файлов и 101 тест прошли. |
+| Production-сборка UI остаётся работоспособной | `cd web && npm run build` | PASS: Vite собрал 1735 модулей. |
+| Голосовое уточнение сохраняет режим для запроса и интерфейса | проверка диффа `web/src/Say.tsx` и UI-тесты | PASS: режим хранится одновременно в state для рендера и ref для запроса; 101 UI-тест прошёл. |
+| Полный проектный шлюз проходит | `just check` | BLOCKED: `staticcheck` останавливается до UI на `internal/controlplane/cards_http.go:37` (U1000) и `internal/controlplane/pilot_config.go:128` (SA4006); те же строки есть в `origin/main`. |
+
+Проверка смежного поведения: production build прошёл; область диффа от точки
+ветвления ограничена семью UI-файлами и этой карточкой. В рабочем дереве нет
+отладочных или посторонних файлов. Общий шлюз нельзя считать зелёным до
+устранения двух базовых диагностик `staticcheck`.
