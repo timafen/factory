@@ -95,6 +95,6 @@
 
 `knowledge/cards/CARD-0037-server-load-admission.md`
 
-ГОТОВО-КОГДА: файл pilot/pilot.py
-ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests
+ГОТОВО-КОГДА: файл knowledge/specs/server-load-admission.md
+ГОТОВО-КОГДА: файл knowledge/cards/CARD-0037-server-load-admission.md
+ГОТОВО-КОГДА: команда git diff --exit-code origin/main -- pilot/pilot.py pilot/test_pilot.py
