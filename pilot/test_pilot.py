@@ -38,15 +38,17 @@ class CodexUsageTests(unittest.TestCase):
              "payload": {"model": "gpt-5.6-terra"}},
             self.event("2026-08-09T10:00:01Z",
                        {"input_tokens": 1200, "cached_input_tokens": 200,
-                        "output_tokens": 100}),
+                        "cache_write_tokens": 100, "output_tokens": 100}),
         ])
         with mock.patch.object(pilot.glob, "glob", side_effect=[[path], []]):
             usage = pilot.codex_usage_since(0)
 
         self.assertEqual((usage["input"], usage["cache_read"], usage["output"]),
-                         (1000, 200, 100))
-        self.assertAlmostEqual(usage["cost_usd"], 0.00405)
+                         (900, 200, 100))
+        self.assertEqual(usage["cache_write"], 100)
+        self.assertAlmostEqual(usage["cost_usd"], 0.0041125)
         self.assertTrue(usage["cost_defined"])
+        self.assertFalse(usage["base_estimate"])
 
     def test_cumulative_counts_are_deltas_and_unknown_price_is_not_zero(self):
         path = self.write_rollout([
@@ -62,8 +64,36 @@ class CodexUsageTests(unittest.TestCase):
 
         self.assertEqual(usage["total_tokens"], 175)
         self.assertFalse(usage["cost_defined"])
+        self.assertTrue(usage["base_estimate"])
         self.assertEqual(usage["unknown_models"], ["gpt-future-exact"])
         self.assertIsNone(pilot.openai_api_cost("gpt-future-exact", 1, 1, 1))
+
+    def test_mixed_last_and_cumulative_usage_does_not_repeat_total(self):
+        path = self.write_rollout([
+            {"timestamp": "2026-08-09T10:00:00Z", "type": "turn_context",
+             "payload": {"model": "gpt-5.6-sol"}},
+            self.event("2026-08-09T10:00:01Z",
+                       {"input_tokens": 100, "cached_input_tokens": 20,
+                        "output_tokens": 10},
+                       {"input_tokens": 100, "cached_input_tokens": 20,
+                        "output_tokens": 10}),
+            self.event("2026-08-09T10:00:02Z", None,
+                       {"input_tokens": 150, "cached_input_tokens": 30,
+                        "output_tokens": 25}),
+        ])
+
+        events = pilot._codex_usage_events(path)
+
+        self.assertEqual([(event["input"], event["cache_read"], event["output"])
+                          for event in events], [(80, 20, 10), (40, 10, 15)])
+
+    def test_long_context_and_cache_writes_use_gpt_56_multipliers(self):
+        # 273K prompt: input/read/write all use the long-context multiplier;
+        # writes additionally cost 1.25x and output costs 1.5x.
+        cost = pilot.openai_api_cost("gpt-5.6-sol", 200000, 50000, 23000,
+                                     cache_write_tokens=23000)
+
+        self.assertAlmostEqual(cost, 3.3725)
 
     def test_day_total_adds_global_codex_estimate_without_task_attribution(self):
         with mock.patch.object(pilot, "attempts_of", return_value=["claude-attempt"]), \

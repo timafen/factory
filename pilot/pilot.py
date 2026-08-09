@@ -2589,14 +2589,19 @@ OPENAI_API_PRICE_VERSIONS = ({
 },)
 
 
-def openai_api_cost(model, input_tokens, cached_input_tokens, output_tokens):
+def openai_api_cost(model, input_tokens, cached_input_tokens, output_tokens,
+                    cache_write_tokens=0):
     """Расчётная API-стоимость или None для модели без точного тарифа."""
     price = OPENAI_API_PRICE_VERSIONS[-1]["models"].get(model)
     if not price:
         return None
-    return (input_tokens * price["input"]
-            + cached_input_tokens * price["cached_input"]
-            + output_tokens * price["output"]) / 1e6
+    long_context = input_tokens + cached_input_tokens + cache_write_tokens > 272000
+    input_multiplier = 2.0 if long_context else 1.0
+    output_multiplier = 1.5 if long_context else 1.0
+    return (input_tokens * price["input"] * input_multiplier
+            + cached_input_tokens * price["cached_input"] * input_multiplier
+            + cache_write_tokens * price["input"] * 1.25 * input_multiplier
+            + output_tokens * price["output"] * output_multiplier) / 1e6
 
 
 def _event_epoch(value):
@@ -2628,24 +2633,32 @@ def _codex_usage_events(path):
                     continue
                 info = payload.get("info") or {}
                 usage = info.get("last_token_usage")
+                total = info.get("total_token_usage") or {}
+                cache_write_known = "cache_write_tokens" in (usage or total)
+                keys = ("input_tokens", "cached_input_tokens", "output_tokens",
+                        "cache_write_tokens")
+                current = tuple(int(total.get(k) or 0) for k in keys) if total else None
                 if not usage:
-                    total = info.get("total_token_usage") or {}
-                    current = tuple(int(total.get(k) or 0) for k in
-                                    ("input_tokens", "cached_input_tokens", "output_tokens"))
+                    if current is None:
+                        continue
                     if previous_total is None:
-                        usage = dict(zip(("input_tokens", "cached_input_tokens", "output_tokens"), current))
+                        usage = dict(zip(keys, current))
                     else:
-                        usage = dict(zip(("input_tokens", "cached_input_tokens", "output_tokens"),
-                                         (max(0, n - old) for n, old in zip(current, previous_total))))
+                        usage = dict(zip(keys, (max(0, n - old)
+                                               for n, old in zip(current, previous_total))))
+                if current is not None:
                     previous_total = current
                 raw_input = int(usage.get("input_tokens") or 0)
                 cached = int(usage.get("cached_input_tokens") or 0)
+                cache_write = int(usage.get("cache_write_tokens") or 0)
                 output = int(usage.get("output_tokens") or 0)
-                if raw_input or cached or output:
+                if raw_input or cached or cache_write or output:
                     events.append({"at": _event_epoch(obj.get("timestamp")),
                                    "model": usage.get("model") or model,
-                                   "input": max(0, raw_input - cached),
-                                   "cache_read": cached, "output": output})
+                                   "input": max(0, raw_input - cached - cache_write),
+                                   "cache_read": cached, "cache_write": cache_write,
+                                   "cache_write_known": cache_write_known,
+                                   "output": output})
     except OSError:
         pass
     return events
@@ -2655,8 +2668,9 @@ def codex_usage_since(since_epoch):
     """Общий расход Codex с указанного момента, без ложной связи с задачей."""
     paths = set(glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"))
     paths.update(glob.glob(f"{HOME}/.codex-*/sessions/*/*/*/rollout-*.jsonl"))
-    totals = {"input": 0, "cache_read": 0, "output": 0, "total_tokens": 0,
-              "cost_usd": 0.0, "cost_defined": True, "unknown_models": []}
+    totals = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0,
+              "total_tokens": 0, "cost_usd": 0.0, "cost_defined": True,
+              "base_estimate": False, "unknown_models": []}
     unknown = set()
     for path in paths:
         for event in _codex_usage_events(path):
@@ -2664,14 +2678,19 @@ def codex_usage_since(since_epoch):
                 continue
             totals["input"] += event["input"]
             totals["cache_read"] += event["cache_read"]
+            totals["cache_write"] += event["cache_write"]
             totals["output"] += event["output"]
             cost = openai_api_cost(event["model"], event["input"],
-                                   event["cache_read"], event["output"])
+                                   event["cache_read"], event["output"],
+                                   event["cache_write"])
+            if not event["cache_write_known"]:
+                totals["base_estimate"] = True
             if cost is None:
                 unknown.add(event["model"] or "неизвестная модель")
             else:
                 totals["cost_usd"] += cost
-    totals["total_tokens"] = totals["input"] + totals["cache_read"] + totals["output"]
+    totals["total_tokens"] = (totals["input"] + totals["cache_read"]
+                              + totals["cache_write"] + totals["output"])
     totals["cost_defined"] = not unknown
     totals["unknown_models"] = sorted(unknown)
     return totals
@@ -3407,7 +3426,8 @@ def write_dashboard(conf, tasks, workers):
 
     spend = {"day_usd": 0.0, "day_tokens": 0, "week_usd": 0.0, "week_tokens": 0,
              "wasted_usd": 0.0, "worst": None, "day_cost_defined": True,
-             "week_cost_defined": True, "day_unknown_models": [],
+             "week_cost_defined": True, "day_base_estimate": False,
+             "week_base_estimate": False, "day_unknown_models": [],
              "week_unknown_models": []}
     for t in tasks[:60]:
         h = age_h(t)
@@ -3441,6 +3461,8 @@ def write_dashboard(conf, tasks, workers):
     spend["week_tokens"] = week_codex["total_tokens"]
     spend["day_cost_defined"] = day_codex["cost_defined"]
     spend["week_cost_defined"] = week_codex["cost_defined"]
+    spend["day_base_estimate"] = day_codex["base_estimate"]
+    spend["week_base_estimate"] = week_codex["base_estimate"]
     spend["day_unknown_models"] = day_codex["unknown_models"]
     spend["week_unknown_models"] = week_codex["unknown_models"]
 
