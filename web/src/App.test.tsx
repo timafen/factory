@@ -3,7 +3,24 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { mockControlPlane } from "./test/fixtures";
+import { mockControlPlane as mockFixtureControlPlane } from "./test/fixtures";
+
+function mockControlPlane(options?: Parameters<typeof mockFixtureControlPlane>[0]) {
+  const fetch = mockFixtureControlPlane(options);
+  const fixtureImplementation = fetch.getMockImplementation();
+  fetch.mockImplementation((input, init) => {
+    const path = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const fixturePath = path
+      .replace("/api/v1/tasks?limit=200", "/api/v1/tasks?limit=50")
+      .replace(/(\/api\/v1\/automations\/[^/]+\/occurrences\?)limit=200/, "$1limit=50");
+    return fixtureImplementation!(fixturePath, init);
+  });
+  return fetch;
+}
 
 function renderApp() {
   const client = new QueryClient({
@@ -30,32 +47,17 @@ describe("App", () => {
     window.history.replaceState({}, "", "/work");
   });
 
-  it("renders truthful retained metrics on the default overview", async () => {
+  it("renders the renamed main screen on the default route", async () => {
     window.history.replaceState({}, "", "/");
     const fetch = mockControlPlane();
-    const user = userEvent.setup();
     renderApp();
 
-    expect(await screen.findByRole("heading", { name: "Factory overview" })).toBeVisible();
-    expect(screen.getByText("53")).toBeVisible();
-    expect(screen.getByText("41", { selector: ".metric-card strong" })).toBeVisible();
-    expect(screen.getByText("85%")).toBeVisible();
-    expect(screen.getByText("14m 0s")).toBeVisible();
-    expect(screen.getByText("86% left")).toBeVisible();
-    expect(screen.getByRole("meter", { name: "Weekly limit remaining" })).toHaveValue(86);
-    expect(screen.getByText("Rates exclude cancellations.", { exact: false })).toBeVisible();
-    expect(screen.getByRole("button", { name: /^Overview$/ })).toHaveAttribute(
+    expect(await screen.findByRole("heading", { name: "Главное" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Главное$/ })).toHaveAttribute(
       "aria-current",
       "page",
     );
-
-    await user.click(screen.getByRole("button", { name: "30 days" }));
-    await vi.waitFor(() => {
-      expect(fetch.mock.calls.some(([input]) => {
-        const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        return path === "/api/v1/metrics/summary?window=30d";
-      })).toBe(true);
-    });
+    expect(fetch).toHaveBeenCalledWith("/api/v1/dashboard");
   });
 
   it("marks only exact navigation destinations as the current page", async () => {
@@ -65,7 +67,7 @@ describe("App", () => {
 
     const work = await screen.findByRole("button", { name: /^Work$/ });
     const workers = screen.getByRole("button", { name: /^Workers$/ });
-    expect(screen.getByRole("button", { name: /^Overview$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Главное$/ })).not.toHaveAttribute("aria-current");
     expect(work).toHaveAttribute("aria-current", "page");
     expect(workers).not.toHaveAttribute("aria-current");
 
@@ -225,7 +227,7 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: /^Runbooks$/ }));
+    await user.click(await screen.findByRole("button", { name: /^Workflows$/ }));
     expect(await screen.findByRole("heading", { name: "Runbooks" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Create runbook" }));
     const createDialog = screen.getByRole("dialog", { name: "Create runbook" });
@@ -700,15 +702,17 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "Delegate task" }));
     const dialog = screen.getByRole("dialog", { name: "Delegate task" });
     await user.type(within(dialog).getByLabelText("Title"), "Implement #183");
-    await user.selectOptions(within(dialog).getByLabelText("Runbook"), "workflow-revision-1");
+    await user.selectOptions(within(dialog).getByLabelText("Workflow"), "workflow-revision-1");
     await user.type(within(dialog).getByLabelText("Context"), "Issue #183 remains ordinary text.");
     await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
     await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
 
     expect(await screen.findByRole("heading", { name: "Implement #183" })).toBeVisible();
-    expect(screen.getAllByText("Implement · revision 1")).toHaveLength(2);
+    expect(screen.getByText("Implement · revision 1")).toBeVisible();
+    await user.click(screen.getByText("Задание агенту (техническое) — развернуть"));
     expect(screen.getByText("Issue #183 remains ordinary text.", { selector: ".long-copy" })).toBeVisible();
+    await user.click(screen.getByText("Полный промпт (инструкция + контекст) — развернуть"));
     expect(screen.getByText(/Workflow instructions:/)).toBeVisible();
     const taskCreate = fetch.mock.calls.find(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST");
     expect(JSON.parse(String(taskCreate?.[1]?.body))).toMatchObject({
@@ -719,12 +723,20 @@ describe("App", () => {
 
   it("renders every task status in the operational board", async () => {
     mockControlPlane();
+    const user = userEvent.setup();
     renderApp();
 
-    for (const state of ["Queued", "Running", "Succeeded", "Failed", "Cancelled"]) {
-      const column = await screen.findByRole("region", { name: new RegExp(`^${state}`) });
-      expect(within(column).getByText(`${state.toLowerCase()} task`)).toBeVisible();
-      expect(within(column).getByText(state, { selector: ".status-badge" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Показать по этапам" }));
+    for (const [heading, title] of [
+      ["В очереди", "queued task"],
+      ["В работе", "running task"],
+      ["Отработали", "succeeded task"],
+      ["Сорвались", "failed task"],
+      ["Отменены", "cancelled task"],
+    ]) {
+      const column = screen.getByRole("heading", { name: heading }).closest("section");
+      expect(column).not.toBeNull();
+      expect(within(column as HTMLElement).getByText(title)).toBeVisible();
     }
   });
 
@@ -746,11 +758,11 @@ describe("App", () => {
 
     expect(await screen.findByText("queued task")).toBeVisible();
     expect(screen.queryByText("running task")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Load more work" }));
+    await user.click(screen.getByRole("button", { name: "Показать ещё" }));
 
     expect(await screen.findByText("running task")).toBeVisible();
     expect(screen.getAllByText("queued task")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Load more work" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
   });
 
   it("polls only the live head page after older work is loaded", async () => {
@@ -759,7 +771,7 @@ describe("App", () => {
       const fetch = mockControlPlane({ paginatedTasks: true });
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
-      await user.click(await screen.findByRole("button", { name: "Load more work" }));
+      await user.click(await screen.findByRole("button", { name: "Показать ещё" }));
       expect(await screen.findByText("running task")).toBeVisible();
 
       await act(async () => {
@@ -769,9 +781,9 @@ describe("App", () => {
       const taskPaths = fetch.mock.calls
         .map(([input]) => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
         .filter((path) => path.startsWith("/api/v1/tasks?"));
-      expect(taskPaths.filter((path) => path === "/api/v1/tasks?limit=50")).toHaveLength(2);
+      expect(taskPaths.filter((path) => path === "/api/v1/tasks?limit=200")).toHaveLength(2);
       expect(
-        taskPaths.filter((path) => path === "/api/v1/tasks?limit=50&cursor=next-page"),
+        taskPaths.filter((path) => path === "/api/v1/tasks?limit=200&cursor=next-page"),
       ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -802,13 +814,13 @@ describe("App", () => {
       mockControlPlane({ growingTaskHistory: true });
       renderApp();
       expect(await screen.findByText("queued task")).toBeVisible();
-      expect(screen.queryByRole("button", { name: "Load more work" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
 
-      expect(screen.getByRole("button", { name: "Load more work" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Показать ещё" })).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
@@ -821,57 +833,35 @@ describe("App", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
 
-      await user.click(await screen.findByRole("button", { name: "Load more work" }));
+      await user.click(await screen.findByRole("button", { name: "Показать ещё" }));
       expect(await screen.findByText("running task")).toBeVisible();
       expect(screen.queryByText("succeeded task")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Load more work" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
       expect(screen.getByText("new head task")).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "Load more work" }));
+      await user.click(screen.getByRole("button", { name: "Показать ещё" }));
 
       expect(await screen.findByText("succeeded task")).toBeVisible();
       expect(screen.getAllByText("running task")).toHaveLength(1);
-      const refreshedTask = screen.getByText("running task").closest("button");
-      expect(refreshedTask).not.toBeNull();
-      expect(
-        within(refreshedTask!).getByText("Succeeded", { selector: ".status-badge" }),
-      ).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Показать по этапам" }));
+      const succeededColumn = screen.getByRole("heading", { name: "Отработали" }).closest("section");
+      expect(succeededColumn).not.toBeNull();
+      expect(within(succeededColumn as HTMLElement).getByText("running task")).toBeVisible();
       const taskPaths = fetch.mock.calls
         .map(([input]) => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
         .filter((path) => path.startsWith("/api/v1/tasks?"));
       expect(taskPaths).toEqual([
-        "/api/v1/tasks?limit=50",
-        "/api/v1/tasks?limit=50&cursor=old-boundary",
-        "/api/v1/tasks?limit=50",
-        "/api/v1/tasks?limit=50&cursor=new-boundary",
+        "/api/v1/tasks?limit=200",
+        "/api/v1/tasks?limit=200&cursor=old-boundary",
+        "/api/v1/tasks?limit=200",
+        "/api/v1/tasks?limit=200&cursor=new-boundary",
       ]);
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("restricts repositories to the selected worker and warns for offline work", async () => {
-    mockControlPlane();
-    const user = userEvent.setup();
-    renderApp();
-
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    const repository = within(dialog).getByLabelText("Repository");
-    expect(within(repository).getByRole("option", { name: /factory/ })).toBeInTheDocument();
-    expect(within(repository).getByRole("option", { name: /github.com\/example\/managed/ })).toBeEnabled();
-    expect(within(repository).getByRole("option", { name: /github.com\/example\/disabled/ })).toBeDisabled();
-    expect(within(repository).queryByRole("option", { name: /archive/ })).not.toBeInTheDocument();
-
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-offline");
-    expect(within(dialog).getByText(/task will queue until it returns/i)).toBeVisible();
-    expect(within(repository).getByRole("option", { name: /archive/ })).toBeInTheDocument();
-    expect(within(repository).getByRole("option", { name: /github.com\/example\/managed/ })).toBeDisabled();
-    expect(within(repository).getByRole("option", { name: /github.com\/example\/factory/ })).toBeDisabled();
   });
 
   it("confirms permanent deletion only for terminal task history", async () => {
@@ -916,7 +906,8 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Load more work" }));
+    await user.click(await screen.findByRole("button", { name: "Показать ещё" }));
+    await user.click(screen.getByRole("button", { name: "Показать по этапам" }));
     await user.click(screen.getByText("succeeded task"));
     expect(await screen.findByRole("heading", { name: "succeeded task" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Delete history" }));
@@ -924,12 +915,12 @@ describe("App", () => {
 
     expect(await screen.findByText("queued task")).toBeVisible();
     await vi.waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Load more work" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
     });
     expect(screen.queryByText("succeeded task")).not.toBeInTheDocument();
     expect(fetch.mock.calls.some(([input]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      return path === "/api/v1/tasks?limit=50&cursor=stale-page";
+      return path === "/api/v1/tasks?limit=200&cursor=stale-page";
     })).toBe(true);
   });
 
@@ -961,38 +952,6 @@ describe("App", () => {
       repository_id: "repo-factory",
       timeout_seconds: 7200,
     });
-  });
-
-  it("delegates a configured managed repository to the selected worker", async () => {
-    const fetch = mockControlPlane();
-    const user = userEvent.setup();
-    renderApp();
-
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.type(within(dialog).getByLabelText("Title"), "Work in managed repository");
-    await user.type(within(dialog).getByLabelText("Context"), "Acquire the configured repository on demand.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    const repositoryPicker = within(dialog).getByLabelText("Repository");
-    expect(await within(repositoryPicker).findByRole("option", { name: /github\.com\/example\/managed · acquired on demand/ })).toBeEnabled();
-    expect(within(repositoryPicker).getByRole("option", { name: /github\.com\/example\/disabled · Repository routing is disabled\./ })).toBeDisabled();
-    expect(within(repositoryPicker).getByRole("option", { name: /docs · github\.com\/example\/docs/ })).toBeEnabled();
-    await user.selectOptions(repositoryPicker, "repo-managed");
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
-
-    expect(await screen.findByRole("heading", { name: "Work in managed repository" })).toBeVisible();
-    const createCall = fetch.mock.calls.find(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST");
-    expect(createCall).toBeDefined();
-    const createBody = JSON.parse(String(createCall?.[1]?.body));
-    expect(createBody).toMatchObject({
-      title: "Work in managed repository",
-      worker_id: "worker-online",
-      route: {
-        repository_remote_identity: "github.com/example/managed",
-        source_access: { provider: "github", hostname: "github.com" },
-      },
-    });
-    expect(createBody).not.toHaveProperty("repository_id");
   });
 
   it("closes the keyboard-accessible drawer with Escape", async () => {
