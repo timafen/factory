@@ -2,17 +2,26 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED: ручное и автоматическое создание задач исправлено,
-  готово к повторной проверке.
-- Branch: `factory/f0599a27-417-6608738d-459`
-- Head commit: `6e392b1` — реализация после rebase на свежий `origin/main`.
-- What changed: ручная кнопка снова создаёт задачу с UUID-ключом; карточка без
-  проекта не блокирует очередь; повтор автозапуска остаётся идемпотентным.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 24/24 OK;
-  `git diff --name-only origin/main...HEAD` — только 5 файлов CARD-0034.
-- Next action: Review должен повторно проверить ручную кнопку и границы поставки.
+- Status: Verified PASS — awaiting human merge.
+- Branch: `factory/af59fb23-758-18b9659a-85a`
+- Head commit: `3b95962` — реализация после rebase на свежий `origin/main`.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 24/24 OK; `just test` —
+  PASS; `just ui-check` — 101/101 PASS; трёхточечный diff — только 5 файлов
+  CARD-0034. `just check` и браузерный набор отдельно выявляют прежние сбои
+  вне поставки, описанные в журнале.
+- Next action: человеку проверить и слить поставку.
 
 ## LOG
+
+### 2026-08-09 — Verify
+
+| Проверка | Команда / наблюдение | Результат |
+| --- | --- | --- |
+| Приоритет, три слота и ожидание владельца | `python3 -m unittest pilot.test_pilot` | 24/24 OK: запускается верхняя карточка; три уникальные активные или ожидающие ответа работы блокируют четвёртую. |
+| Повтор, новое планирование и ручной запуск | тот же набор | OK: повтор POST сохраняет `request_key`, новое планирование получает новое поколение, кнопка создаёт задачу с UUID-ключом. |
+| Смежные проверки | `just test`; `just ui-check`; `just test-tooling`; `just test-launcher` | PASS; UI: 101/101 тестов. |
+| Общие ворота | `just check`; `just test-browser` | BLOCKED вне поставки: `staticcheck` сообщает старые `U1000` и `SA4006` в двух файлах `internal/controlplane`; Overview не находит ожидаемый заголовок, поэтому 17 браузерных тестов не стартуют. |
+| Границы и чистота | `git diff --name-only origin/main...HEAD`; `git diff --check` | Только пять файлов CARD-0034; пробельных ошибок нет. |
 
 ### 2026-08-09 — Implement
 
