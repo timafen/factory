@@ -294,6 +294,22 @@ class BrainFallbackTest(unittest.TestCase):
         self.assertEqual(len(self.codex_calls), 1, "codex не должен запускаться повторно, пока блок активен")
         self.assertEqual(len(self.claude_calls), 2)
 
+    def test_expired_provider_is_skipped_later_in_same_chain(self):
+        self.conf["brain_chain"] = [
+            {"cli": "codex", "model": "gpt-5.6-sol", "provider": "codex"},
+            {"cli": "codex", "model": "gpt-5.6-terra", "provider": "codex"},
+            {"cli": "claude", "model": "fable", "provider": "claude"},
+        ]
+
+        out, eng = pilot.brain(self.conf, "прогони задачу")
+
+        self.assertEqual(out, "ответ мозга")
+        self.assertEqual(eng["provider"], "claude")
+        self.assertEqual(len(self.note_limit_calls), 1)
+        self.assertEqual(len(self.codex_calls), 1,
+                         "вторая модель исчерпанного провайдера должна быть пропущена")
+        self.assertEqual(len(self.claude_calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
