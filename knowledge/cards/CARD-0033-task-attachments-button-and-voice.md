@@ -2,18 +2,30 @@
 
 ## HEAD
 
-- Status: Implement complete — голосовые вложения сохраняются при fallback.
-- Branch: `factory/f1b8f0c0-6e1-b2ec863a-c27`.
-- Head commit: `fe4ef29` (исправление fallback и его регрессионный тест).
+- Status: Verified PASS — ожидает слияния человеком.
+- Branch: `factory/66c2762e-cc4-1e85fca1-3d7`.
+- Head commit: будет указан завершающим коммитом Verify.
 - What changed: `/say` принимает до 5 файлов по 10 МБ; сервер хранит их в
   `/opt/factory-data/attachments/<id-задачи>/`; worker сохраняет одноимённые файлы
   как `<id>-<имя>`; fallback пилота сохраняет исходный ключ привязки файлов.
-- Evidence: Python fallback-регрессия, TypeScript и production web build → PASS;
-  полный Vitest сохраняет известный baseline-сбой notification groups, а полный
-  Go-набор — несвязанный 404 в `TestHTTPManagedRepositoryCatalog`.
-- One next action: выполнить Verify исправления голосового fallback.
+- Evidence: полный Go-набор, целевые Go/Python-проверки, TypeScript и production
+  web build → PASS. Полный Vitest сохраняет один известный сбой notification
+  groups в неизменённом `Settings.test.tsx`; полный ESLint — 9 известных ошибок.
+- One next action: влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-08 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Кнопка выбирает до пяти файлов, показывает размер и позволяет удалить файл | `cd web && npx vitest run src/TaskFilePicker.test.tsx src/App.test.tsx` | PASS: picker и сценарий блокировки отправки во время upload/создания задачи проходят. |
+| UI передаёт вложения без поломанной сборки | `cd web && npx tsc -p tsconfig.app.json --noEmit && npx vite build` | PASS: TypeScript без ошибок, production bundle собран. |
+| Сервер ограничивает и хранит вложения, выдаёт их только владельцу lease | `go test ./internal/controlplane ./internal/worker ./internal/protocol` | PASS: проверены лимит/размер, запрет executable, MIME по содержимому, откат при ошибке, SHA-256 и materialization worker. |
+| Голосовой fallback сохраняет ключ привязки файлов | `python3 -m unittest pilot.test_pilot` | PASS: 1 тест проводит два ID вложений через обе fallback-ступени. |
+| Смежный полный Go-набор | `go test ./...` | PASS. |
+| Смежный полный frontend-набор | `cd web && npm test`; `npm run lint` | Не блокирует: Vitest 1 падение в неизменённом `Settings.test.tsx` (устаревшее ожидание `notify_groups`); ESLint 9 прежних ошибок в Access, Live, Pipeline и Say. |
+
 
 ### 2026-08-08 — Specification
 
