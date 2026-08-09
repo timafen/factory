@@ -804,6 +804,7 @@ type PilotSettings struct {
 	MaxParallelWorks    int          `json:"max_parallel_works"`
 	DayCapUSD           float64      `json:"day_cap_usd"`
 	DeployStagingCmd    string       `json:"deploy_staging_cmd"`
+	DeployFactoryCmd    string       `json:"deploy_factory_cmd"`
 	OwnerChatURL        string       `json:"owner_chat_url"`
 	OwnerUIURL          string       `json:"owner_ui_url"`
 	Stages              []PilotStage `json:"stages"`
@@ -899,6 +900,7 @@ func (request *UpdatePilotSettingsRequest) UnmarshalJSON(body []byte) error {
 	required := []string{
 		"enabled", "poll_seconds", "timeout_seconds", "auto_merge", "auto_answer",
 		"max_stage_attempts", "max_parallel_subtasks", "max_parallel_works", "day_cap_usd", "deploy_staging_cmd",
+		"deploy_factory_cmd",
 		"owner_chat_url", "owner_ui_url", "stages", "skip_stages_for_low", "stopped_pipelines",
 		"stage_base_usd", "complexity_factor", "work_cap_usd", "ntfy_topic", "ntfy_server",
 		"ntfy_owner_topic", "brain_chain",

@@ -103,6 +103,11 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["max_parallel_works"] {
 		settings.MaxParallelWorks = 4
 	}
+	// Compatibility default: repository-aware post-merge release existed before
+	// the command became part of the server-owned settings schema.
+	if !present["deploy_factory_cmd"] {
+		settings.DeployFactoryCmd = "sudo -n /usr/local/bin/fx factory release main"
+	}
 	return settings, body, nil
 }
 

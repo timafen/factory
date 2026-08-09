@@ -69,6 +69,7 @@ function SettingsEditor({initial,refresh}:{initial:Awaited<ReturnType<typeof api
       {tiers.map((tier) => <NumberField key={`cap-${tier}`} label={`Лимит работы (${tierNames[tier]}), USD`} hint="Максимальная стоимость одной задачи этой сложности." value={settings.work_cap_usd[tier]} onChange={(value) => set("work_cap_usd", {...settings.work_cap_usd, [tier]:value})}/>) }
       {settings.stages.map((row) => <NumberField key={row.workflow} label={`Базовая стоимость «${row.workflow}», USD`} hint="Стоимость этапа до применения коэффициента сложности." value={settings.stage_base_usd[row.workflow] ?? 0} onChange={(value) => set("stage_base_usd", {...settings.stage_base_usd, [row.workflow]:value})}/>) }
       <TextField label="Команда публикации на стенд" hint="Команда, которая публикует результат в тестовое окружение." value={settings.deploy_staging_cmd} onChange={(value) => set("deploy_staging_cmd", value)}/>
+      <TextField label="Команда выпуска Factory" hint="Команда, которая после успешного слияния обновляет саму Factory из ветки main." value={settings.deploy_factory_cmd} onChange={(value) => set("deploy_factory_cmd", value)}/>
     </SettingsSection>
 
     <SettingsSection title="Уведомления и ссылки владельца">

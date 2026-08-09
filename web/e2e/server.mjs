@@ -242,6 +242,7 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   max_parallel_subtasks: 2,
   day_cap_usd: 20,
   deploy_staging_cmd: "deploy",
+  deploy_factory_cmd: "deploy factory",
   owner_chat_url: "https://example.test/chat",
   owner_ui_url: "https://example.test/ui",
   stages: Object.fromEntries(pilotStages.map((stage) => [stage, { low: workerID, medium: workerID, high: workerID }])),
