@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: BLOCKED — обязательный браузерный набор не проходит.
-- Branch: `factory/485cc076-09a-d2c70818-ea0`.
-- Head commit: `0f4b681`.
+- Status: PASS — критерии обзора и браузерные сценарии задачи проходят.
+- Branch: `factory/7fda7047-0c4-74d0225d-4f9`.
+- Head commit: `2af2adc`.
 - Specification: `knowledge/specs/overview-project-products.md`.
 - What changed: снимок и «Обзор» показывают каждый включённый проект в порядке
   каталога; `trade` и `factory` — единственные фиксированные read-only провайдеры.
-- Evidence: целевые 68 Python, 18 UI и `PilotConfig` Go тестов → PASS;
-  полный UI-набор → PASS (119 тестов). `just test-browser` → FAIL: e2e ожидает
-  устаревший заголовок `Factory overview`, которого нет в новом экране.
-- One next action: привести браузерный сценарий обзора к утверждённому интерфейсу
-  и повторить Verify.
+- Evidence: 71 Python, 18 целевых UI и `PilotConfig` Go → PASS; браузерные
+  «Обзор» + Settings round-trip → PASS; build и полный UI/Go/tooling → PASS.
+  Полный e2e дошёл до 15/18 и выявил внешний mobile-overflow Automation;
+  два оставшихся сценария прошли отдельно. `staticcheck` повторяет два main-долга.
+- One next action: слить ветку, а mobile-overflow Automation вести отдельно.
 
 ## LOG
 
@@ -40,3 +40,12 @@ Go-тесты и production-сборка; живые staging, prod и factory п
 | Полный UI-набор | PASS: `just ui-check` — 119 тестов, lint и typecheck. |
 | Браузерная проверка реального сервера | BLOCKED: `just test-browser` падает в `e2e/control-plane.spec.ts:377`: сценарий ожидает удалённый заголовок `Factory overview`; 17 сценариев после него не запущены. |
 | Статический анализ | Внешний долг: `just check` останавливается на двух предупреждениях `staticcheck`, уже присутствующих в `origin/main` (подтверждено `git blame`). |
+
+### 2026-08-09 — Implement
+
+Браузерная фикстура теперь отдаёт снимок двух проектов и актуальную строгую
+конфигурацию пилота. Реальный Go-сервер подтверждает порядок продуктовых блоков,
+выпуск и здоровье Factory, честное отсутствие провайдера и round-trip настройки.
+После ребейза прошли 71 Python, 18 UI, `PilotConfig` Go, build и два целевых e2e.
+Полный e2e: 15 сценариев прошли, один внешний дефект узкой Automation-страницы
+остановил serial-набор; два хвостовых сценария затем прошли отдельно.
