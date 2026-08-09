@@ -54,7 +54,7 @@ chmod +x "$output"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
-echo "restart $2" >>"$TEST_EVENTS"
+echo "$1 $2" >>"$TEST_EVENTS"
 exit 0
 EOF
   cat >"$case_dir/bin/mv" <<'EOF'
@@ -88,7 +88,12 @@ case "$*" in
       printf '{"id":"worker-release-test","health":"unhealthy","online":false,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     elif [ "$TEST_MODE" = stale-healthy-worker ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
-    elif grep -F 'restart factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+    elif [ "$TEST_MODE" = heartbeat-during-stop ] \
+      && grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
+    elif grep -F 'start factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:02Z"}'
+    elif grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
     else
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
@@ -121,11 +126,13 @@ assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
   || fail "server was not restarted first"
-[ "$(sed -n '2p' "$success/events")" = 'restart factory-worker.service' ] \
-  || fail "worker was not restarted second"
+[ "$(sed -n '2p' "$success/events")" = 'stop factory-worker.service' ] \
+  || fail "worker was not stopped before taking the heartbeat baseline"
+[ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
+  || fail "worker was not started after taking the heartbeat baseline"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 
-for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install; do
+for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi
