@@ -4,7 +4,7 @@
 
 - Status: implemented — готово к повторному Review, оба живых лимита подтверждены.
 - Branch: `factory/df20549b-76b-d63337d0-0c3`.
-- Head commit: `8cefbe1` — исходная карточка предыдущей стадии.
+- Head commit: `89aa76e` — применение лимитов и фактические проверки.
 - What changed: в `/opt/factory-data/pilot/config.json` фактические значения
   `work_day_cap=30` и `day_task_cap=400` заменены на утверждённые 12 и 120.
 - Evidence: точная JSON-проверка вывела `JSON caps: 12 120`; целевой набор
