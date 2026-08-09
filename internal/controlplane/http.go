@@ -134,6 +134,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("POST /api/v1/dialog/messages", api.postDialogMessage)
+	mux.HandleFunc("GET /api/v1/dialog/models", api.getDialogModels)
 	mux.HandleFunc("GET /api/v1/tasks", api.listTasks)
 	mux.HandleFunc("POST /api/v1/tasks", api.createTask)
 	mux.HandleFunc("POST /api/v1/task-attachments", api.uploadTaskAttachment)

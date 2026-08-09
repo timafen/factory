@@ -5,7 +5,7 @@ import type { DialogMessage } from "./types";
 type ShownMessage = DialogMessage & { modelLabel?: string };
 
 export function Dialog() {
-  const [models, setModels] = useState<Array<{model:string; provider:string; note?:string}>>([]);
+  const [models, setModels] = useState<Array<{model:string; provider:string; note?:string; available?:boolean; reason?:string}>>([]);
   const [brainIndex, setBrainIndex] = useState<number | null>(null);
   const [messages, setMessages] = useState<ShownMessage[]>([]);
   const [question, setQuestion] = useState("");
@@ -14,10 +14,13 @@ export function Dialog() {
 
   useEffect(() => {
     let active = true;
-    api.pilotSettings().then(({settings}) => {
+    fetch("/api/v1/dialog/models").then((r) => r.json()).then((data) => {
       if (!active) return;
-      setModels(settings.brain_chain);
-      setBrainIndex(settings.brain_chain.length > 0 ? 0 : null);
+      const list = data.models || [];
+      setModels(list);
+      const free = list.findIndex((item: {available?:boolean}) => item.available !== false);
+      setBrainIndex(free >= 0 ? free : null);
+      if (free < 0 && list.length) setError("Сейчас свободных моделей нет — квоты исчерпаны");
     }).catch(() => active && setError("Не удалось загрузить список моделей"));
     return () => { active = false; };
   }, []);
@@ -40,7 +43,7 @@ export function Dialog() {
     <div className="page-heading"><div><h1 id="dialog-title">Диалог</h1><p>Разговор с выбранной моделью фабрики</p></div></div>
     <label className="field dialog-model">Модель
       <select aria-label="Модель для диалога" value={brainIndex ?? ""} onChange={(event)=>setBrainIndex(Number(event.target.value))} disabled={pending}>
-        {models.map((item,index)=><option key={index} value={index}>{`${item.model} — ${item.provider}${item.note?.trim() ? " · " + item.note.trim() : ""}`}</option>)}
+        {models.map((item,index)=><option key={index} value={index} disabled={item.available === false}>{`${item.model} — ${item.provider}${item.available === false ? " · недоступна: " + (item.reason || "квота исчерпана") : (item.note?.trim() ? " · " + item.note.trim() : "")}`}</option>)}
       </select>
     </label>
     <div className="dialog-history" aria-live="polite">

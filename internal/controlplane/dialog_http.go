@@ -124,6 +124,12 @@ func (a *API) postDialogMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &ServiceError{Code: "dialog_failed", Message: "Не удалось получить ответ модели. Попробуйте ещё раз", Status: http.StatusBadGateway})
 		return
 	}
+	// Модель может ответить не отказом в ошибке, а текстом «твоя квота
+	// кончилась». Это не ответ: говорим человеку правду и предлагаем другую.
+	if isDialogQuotaText(answer) {
+		writeError(w, &ServiceError{Code: "dialog_rate_limited", Message: "Лимит выбранной модели исчерпан. Выберите другую модель", Status: http.StatusTooManyRequests})
+		return
+	}
 	if strings.TrimSpace(answer) == "" {
 		writeError(w, &ServiceError{Code: "dialog_empty", Message: "Модель вернула пустой ответ. Попробуйте ещё раз", Status: http.StatusBadGateway})
 		return
@@ -156,8 +162,21 @@ func validateDialogRequest(request protocol.DialogRequest) error {
 
 func isDialogRateLimit(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"rate limit", "rate_limit", "too many requests", "quota exceeded", "usage limit", "status 429", "error 429"} {
+	for _, marker := range []string{"rate limit", "rate_limit", "too many requests", "quota exceeded", "usage limit", "status 429", "error 429", "reached your", "usage-credits", "limit reached", "лимит исчерпан"} {
 		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDialogQuotaText(answer string) bool {
+	body := strings.ToLower(strings.TrimSpace(answer))
+	if len(body) > 400 {
+		return false
+	}
+	for _, marker := range []string{"reached your", "usage-credits", "usage limit", "limit reached", "лимит исчерпан"} {
+		if strings.Contains(body, marker) {
 			return true
 		}
 	}
