@@ -21,6 +21,7 @@ import { AccessView } from "./Access";
 import { AutomationDetail, AutomationsView } from "./Automations";
 import { Settings } from "./Settings";
 import { Dialog } from "./Dialog";
+import { SandboxKeys } from "./SandboxKeys";
 
 type Route =
   | { page: "overview" }
@@ -28,6 +29,7 @@ type Route =
   | { page: "epics" }
   | { page: "answer" }
   | { page: "access" }
+  | { page: "sandboxKeys" }
   | { page: "work" }
   | { page: "workers" }
   | { page: "repositories" }
@@ -63,6 +65,7 @@ function readRoute(): Route {
   if (parts[0] === "epics") return { page: "epics" };
   if (parts[0] === "answer") return { page: "answer" };
   if (parts[0] === "access") return { page: "access" };
+  if (parts[0] === "sandbox-keys") return { page: "sandboxKeys" };
   return { page: "overview" };
 }
 
@@ -84,6 +87,7 @@ function routePath(route: Route): string {
   if (route.page === "epics") return "/epics";
   if (route.page === "answer") return "/answer";
   if (route.page === "access") return "/access";
+  if (route.page === "sandboxKeys") return "/sandbox-keys";
   return route.page === "work" ? "/work" : "/";
 }
 
@@ -243,6 +247,9 @@ export function App() {
           >
             <KeyRound size={17} /> Доступы
           </button>
+          <button className={`nav-item ${route.page === "sandboxKeys" ? "active" : ""}`} aria-current={route.page === "sandboxKeys" ? "page" : undefined} onClick={() => navigate({ page: "sandboxKeys" })}>
+            <KeyRound size={17} /> Ключи песочницы
+          </button>
           
           <button
             className={`nav-item ${route.page === "work" || route.page === "task" ? "active" : ""}`}
@@ -343,6 +350,7 @@ export function App() {
             {route.page === "automation" && "Automation detail"}
             {route.page === "settings" && "Settings"}
             {route.page === "dialog" && "Диалог"}
+            {route.page === "sandboxKeys" && "Ключи песочницы"}
           </div>
           <button className="button button-primary" onClick={() => openDelegate()}>
             <Plus size={16} /> Delegate task
@@ -354,6 +362,7 @@ export function App() {
           {route.page === "epics" && <EpicsView onTask={(id) => navigate({ page: "task", id })} onAnswer={() => navigate({ page: "answer" })} />}
           {route.page === "answer" && <AnswerView onTask={(id) => navigate({ page: "task", id })} />}
           {route.page === "access" && <AccessView />}
+          {route.page === "sandboxKeys" && <SandboxKeys />}
           {route.page === "overview" && <Overview onNav={(p) => navigate({ page: p } as Route)} />}
           {route.page === "work" && (
             <WorkView
