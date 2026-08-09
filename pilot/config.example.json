@@ -40,6 +40,10 @@
  ],
  "auto_answer": true,
  "auto_merge": true,
+ "project_providers": [
+  {"remote_identity": "github.com/timafen/tarser-operations", "type": "trade"},
+  {"remote_identity": "github.com/timafen/factory", "type": "factory"}
+ ],
  "brain_chain": [
   {
    "cli": "claude",

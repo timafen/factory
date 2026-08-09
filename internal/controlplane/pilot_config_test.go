@@ -84,6 +84,26 @@ func TestPilotConfigValidationWorkerPolicy(t *testing.T) {
 	}
 }
 
+func TestPilotConfigProjectProvidersAreStrictAndPreserved(t *testing.T) {
+	settings := validPilotSettings()
+	settings.ProjectProviders = []protocol.ProjectProvider{
+		{RemoteIdentity: "github.com/acme/shop", Type: "trade"},
+		{RemoteIdentity: "github.com/acme/factory", Type: "factory"},
+	}
+	if _, err := validatePilotSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := writePilotFixture(t, settings)
+	current, err := store.Read()
+	if err != nil || len(current.Settings.ProjectProviders) != 2 {
+		t.Fatalf("round trip = %#v, %v", current.Settings.ProjectProviders, err)
+	}
+	settings.ProjectProviders[0].Type = "shell"
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("unknown executable provider type was accepted")
+	}
+}
+
 func TestUpdatePilotSettingsRequiresCompleteSchema(t *testing.T) {
 	body := []byte(`{"version":"v","settings":{"enabled":true}}`)
 	var request protocol.UpdatePilotSettingsRequest
