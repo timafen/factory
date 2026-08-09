@@ -91,6 +91,34 @@ func (client *client) complete(ctx context.Context, attemptID string, input prot
 	return attempt, err
 }
 
+func (client *client) attachment(ctx context.Context, attemptID, attachmentID, token string) (io.ReadCloser, string, error) {
+	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, client.baseURL+"/api/v1/attempts/"+url.PathEscape(attemptID)+"/attachments/"+url.PathEscape(attachmentID), nil)
+	if err != nil {
+		cancel()
+		return nil, "", err
+	}
+	request.Header.Set("X-Factory-Lease-Token", token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		cancel()
+		return nil, "", err
+	}
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		cancel()
+		return nil, "", fmt.Errorf("attachment download returned %d", response.StatusCode)
+	}
+	return &cancelReadCloser{ReadCloser: response.Body, cancel: cancel}, response.Header.Get("X-Content-SHA256"), nil
+}
+
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelReadCloser) Close() error { err := c.ReadCloser.Close(); c.cancel(); return err }
+
 func boundedCompletionRequest(input protocol.CompleteAttemptRequest) protocol.CompleteAttemptRequest {
 	input.Result = boundedText(strings.ToValidUTF8(input.Result, "\uFFFD"), protocol.MaxResultBytes)
 	input.Error = boundedText(strings.ToValidUTF8(input.Error, "\uFFFD"), protocol.MaxErrorBytes)

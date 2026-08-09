@@ -219,6 +219,8 @@ def refine(text, proposal, intent=""):
 
 class CommitIn(BaseModel):
     proposal: dict
+    request_key: str = ""
+    attachment_ids: list[str] = []
 
 
 def _workflows_workers():
@@ -256,11 +258,12 @@ def commit(inp: CommitIn):
                    "You are the first pipeline stage; later stages continue on the branch "
                    "you (or Implement) push.")[:60000]
         try:
-            r = pilot.create_task({"request_key": str(uuid.uuid4()), "title": title,
+            r = pilot.create_task({"request_key": inp.request_key or str(uuid.uuid4()), "title": title,
                                    "context": context, "worker_id": worker["id"],
                                    "repository_id": repo_id,
                                    "timeout_seconds": conf.get("timeout_seconds", 7200),
-                                   "workflow_revision_id": nw["revision_id"]})
+                                   "workflow_revision_id": nw["revision_id"],
+                                   "attachment_ids": inp.attachment_ids})
         except Exception as e:
             detail = getattr(e, "reason", None) or str(e)
             raise HTTPException(502, f"task create failed: {detail}")
