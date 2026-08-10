@@ -656,6 +656,8 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "revive_signals", return_value=[]),
+            mock.patch.object(pilot, "acknowledge_revive_signal"),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -767,6 +769,94 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        self.patches.append(mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]))
+        self.patches[-1].start()
+        self.addCleanup(self.patches[-1].stop)
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 1)
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+
+    def test_revive_signal_waits_until_owner_pause_is_actually_removed(self):
+        self.conf["stopped_pipelines"] = ["Встроенный патруль"]
+        with mock.patch.object(pilot, "revive_signals",
+                               return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch()
+            acknowledge.assert_not_called()
+            self.assertEqual(self.memory["Встроенный патруль"]["why"], "owner")
+
+            self.conf["stopped_pipelines"] = []
+            self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_revive_signal_stays_pending_when_work_capacity_is_full(self):
+        self.conf["max_parallel_works"] = 1
+        running = self.task(state="running")
+        running["title"] = "[auto] [1/3 Specification] Уже запущена"
+        with mock.patch.object(pilot, "revive_signals",
+                               return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch([self.task(), running])
+
+        self.assertEqual(self.created, [])
+        acknowledge.assert_not_called()
+
+    def test_simultaneous_revives_reserve_the_last_free_slot(self):
+        self.conf["max_parallel_works"] = 1
+        second = self.task()
+        second["title"] = "[auto] [1/3 Specification] Вторая работа"
+        with mock.patch.object(
+                pilot, "revive_signals",
+                return_value=["Встроенный патруль", "Вторая работа"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch([self.task(), second])
+
+        self.assertEqual(len(self.created), 1)
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_signal_created_during_scan_is_not_lost(self):
+        self.patches[2].stop()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "REVIVE_DIR", directory):
+            first = pilot.revive_signal_path("Первая")
+            with open(first, "x", encoding="utf-8") as signal:
+                signal.write("Первая")
+            original_listdir = os.listdir
+
+            def listdir_and_signal(path):
+                names = original_listdir(path)
+                with open(pilot.revive_signal_path("Вторая"), "x", encoding="utf-8") as signal:
+                    signal.write("Вторая")
+                return names
+
+            with mock.patch.object(pilot.os, "listdir", side_effect=listdir_and_signal):
+                self.assertEqual(pilot.revive_signals(), ["Первая"])
+            self.assertTrue(os.path.exists(first))
+            self.assertTrue(os.path.exists(pilot.revive_signal_path("Вторая")))
+
+    def test_revive_signal_round_trips_maximum_length_unicode_name(self):
+        self.patches[2].stop()
+        work = "я" * 200
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "REVIVE_DIR", directory):
+            path = pilot.revive_signal_path(work)
+            with open(path, "x", encoding="utf-8") as signal:
+                signal.write(work)
+
+            self.assertEqual(len(os.path.basename(path)), 64)
+            self.assertEqual(pilot.revive_signals(), [work])
 
 
 class PlanCardCleanupTest(unittest.TestCase):
@@ -929,40 +1019,6 @@ class PlanAutostartTest(unittest.TestCase):
              "repo": "repo-1", "origin": "agent", "state": "planned", "order": 10,
              "run_generation": "first-run"},
         ]
-
-    def test_completed_automation_findings_are_added_to_plan_once(self):
-        tasks = [
-            {"id": "automation-ok", "title": "Patrol: run now",
-             "request_key": "automation:patrol:schedule:run:one",
-             "state": "succeeded"},
-            {"id": "automation-failed", "title": "Patrol: scheduled",
-             "request_key": "automation:patrol:schedule:two",
-             "state": "failed"},
-            {"id": "pipeline", "title": "[auto] [1/1 Triage] Work",
-             "request_key": "regular-task", "state": "succeeded"},
-        ]
-        detail = {
-            "task": {"repository_id": "repo-1"},
-            "workflow": {"title": "Factory Patrol"},
-            "attempts": [{"result": "НАХОДКА: Offline worker - stale worktrees"}],
-        }
-        state = {}
-
-        with mock.patch.object(pilot, "api", return_value=detail) as api, \
-                mock.patch.object(pilot, "collect_ideas", return_value=1) as collect:
-            self.assertEqual(pilot.collect_automation_findings(state, tasks), 1)
-            self.assertEqual(pilot.collect_automation_findings(state, tasks), 0)
-
-        api.assert_called_once_with("/tasks/automation-ok")
-        collect.assert_called_once_with(
-            "НАХОДКА: Offline worker - stale worktrees",
-            "repo-1",
-            "Automation: Factory Patrol",
-        )
-        self.assertEqual(
-            state["automation_results_processed"],
-            ["automation-ok", "automation-failed"],
-        )
 
     @mock.patch.object(pilot.uuid, "uuid4", side_effect=["generation-1", "generation-2"])
     @mock.patch.object(pilot, "set_idea")

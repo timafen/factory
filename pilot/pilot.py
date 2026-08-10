@@ -19,6 +19,7 @@ Planner layer (epics):
   the same mechanism later.
 """
 import calendar
+import hashlib
 import io
 import glob
 import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
@@ -1340,46 +1341,6 @@ def collect_ideas(result, repo_id="", source=""):
     return n
 
 
-def collect_automation_findings(state, tasks):
-    """Persist findings emitted by completed Automation workflow runs.
-
-    Automation tasks do not use the ``[auto] [n/m Stage]`` title contract, so
-    the normal pipeline result loop intentionally ignores them. Keep a
-    separate durable cursor and feed their successful reports through the same
-    de-duplicating Plan collector used by pipeline stages.
-    """
-    processed = state.setdefault("automation_results_processed", [])
-    collected = 0
-    for task in tasks:
-        task_id = task.get("id") or ""
-        request_key = str(task.get("request_key") or "")
-        task_state = task.get("state")
-        if (not task_id or not request_key.startswith("automation:")
-                or task_state not in ("succeeded", "failed", "cancelled")
-                or task_id in processed):
-            continue
-        if task_state != "succeeded":
-            processed.append(task_id)
-            log(f"automation result state={task_state} task={task_id} -> no findings")
-            continue
-
-        detail = api(f"/tasks/{task_id}")
-        attempts = detail.get("attempts") or []
-        result = next(
-            (attempt.get("result") for attempt in reversed(attempts)
-             if attempt.get("result")),
-            "",
-        ) or ""
-        repository_id = detail.get("task", {}).get("repository_id") or ""
-        workflow_title = (detail.get("workflow") or {}).get("title")
-        source = f"Automation: {workflow_title or task.get('title') or task_id}"
-        found = collect_ideas(result, repository_id, source)
-        processed.append(task_id)
-        collected += found
-        log(f"automation findings task={task_id} collected={found}")
-    return collected
-
-
 PLAN_ACTIVE_STATES = ("running", "queued", "pending", "created", "starting", "preparing")
 
 PLAN_REPOSITORY_ALIASES = {
@@ -1516,6 +1477,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1551,6 +1513,37 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, hashlib.sha256(work.encode()).hexdigest())
+
+
+def revive_signals():
+    """Return the signals present at scan time; acknowledgement is separate."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            path = os.path.join(REVIVE_DIR, name)
+            with open(path, encoding="utf-8") as signal:
+                work = signal.read()
+            if hashlib.sha256(work.encode()).hexdigest() != name:
+                continue
+        except (OSError, UnicodeError):
+            continue
+        result.append(work)
+    return result
+
+
+def acknowledge_revive_signal(work):
+    try:
+        os.unlink(revive_signal_path(work))
+    except FileNotFoundError:
+        pass
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1563,9 +1556,19 @@ def pipeline_watch(conf, tasks, workflows, workers):
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    revive = set(revive_signals())
+    free_work_slots = max(0, int(conf.get("max_parallel_works", 4)) -
+                          len(active_auto_works(tasks)))
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in revive:
+        if base not in stopped:
+            mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
+            if base in revive and base not in stopped:
+                acknowledge_revive_signal(base)
             continue
         if base in stopped:
             rec = mem.get(base) or {}
@@ -1580,6 +1583,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
         far = max(idx)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
+            if base in revive:
+                acknowledge_revive_signal(base)
             continue
         rec = mem.get(base) or {}
         rec.setdefault("since", now)
@@ -1595,6 +1600,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
                        "а следующий не запускается даже после двух попыток.",
                        priority="high", tags="warning")
             continue
+        if free_work_slots <= 0:
+            continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
         wname = stage_worker(conf, nxt, "medium", workers)
@@ -1604,6 +1611,9 @@ def pipeline_watch(conf, tasks, workflows, workers):
         src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        # Reserve before create_task so several signals in one scan cannot all
+        # observe the same final slot. A failed request releases the slot.
+        free_work_slots -= 1
         try:
             create_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
@@ -1617,11 +1627,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
+            if base in revive:
+                acknowledge_revive_signal(base)
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
                 ": " + stages[far] + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" + stages[far] + " → " + nxt, tags="wrench")
         except Exception as e:
+            free_work_slots += 1
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
     try:
@@ -4476,12 +4489,6 @@ def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
 
     tasks = api("/tasks?limit=100").get("tasks") or []
-    try:
-        collect_automation_findings(state, tasks)
-    except Exception as e:
-        # A transient read or Plan write failure must not mark the run as
-        # processed. The next cycle retries it through the durable cursor.
-        log("automation_findings_error", repr(e))
     # Сначала убрать выполненное из открытого Плана. Автоподбор (когда он
     # включён) ниже по циклу уже не увидит эту карточку как planned.
     try:
@@ -5005,8 +5012,6 @@ def main():
             except Exception as e:
                 log("cycle_error", repr(e))
             state["processed"] = state["processed"][-2000:]
-            state["automation_results_processed"] = state.get(
-                "automation_results_processed", [])[-2000:]
             state["epics_processed"] = state.get("epics_processed", [])[-2000:]
             state["epic_starts_processed"] = state.get("epic_starts_processed", [])[-2000:]
             save(STATE_PATH, state)
