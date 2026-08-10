@@ -10,7 +10,7 @@
   `ERR_INVALID_AUTH_CREDENTIALS`; installer и standalone используют один сценарий.
 - Evidence: `bash -n ops/install-server-browser.sh ops/test-browser-sandbox.sh
   ops/test-install-server-browser.sh` — PASS; `bash ops/test-install-server-browser.sh` — PASS.
-- One next action: открыть заменяющий PR с пометкой supersedes #86.
+- One next action: проверить и слить заменяющий PR #90 (supersedes #86).
 
 ## LOG
 
