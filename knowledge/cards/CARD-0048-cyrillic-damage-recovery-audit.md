@@ -2,14 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented PASS — замечание ревью о регистре полного SHA исправлено.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/25f8a66a-2f6-c9f1b31b-368`.
-- Head commit: `8b4681b` — аудит принимает полный commit SHA в любом регистре.
-- What changed: `%H` и входной полный SHA сравниваются через `strings.EqualFold`;
-  проверка типа `commit` и запрет tree/blob сохранены.
-- Evidence: целевые Go-тесты, обязательный тест `internal/worker`, сборка команды,
-  целевой `go vet` и `git diff --check` → PASS.
-- One next action: провести повторное независимое ревью поставки.
+- Head commit: `02d7be3` — аудит принимает полный commit SHA в любом регистре.
+- Evidence: чистый полный `go test ./... -count=1` (5 пакетов), целевые проверки
+  неизменности SQLite/Git, защита от сети и подмены Git-объектов, `go vet`, сборка
+  и `git diff --check` → PASS.
+- One next action: выполнить человеческое слияние в `main`.
 
 ## LOG
 
@@ -49,3 +48,13 @@ Go-набор, сборка команды, `go vet` и `git diff --check` пр�
 Регрессионный тест подтверждает чтение корректного коммита по SHA в верхнем
 регистре; проверки типа объекта, целевые тесты, обязательный тест воркера,
 сборка, `go vet` и `git diff --check` прошли.
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Наблюдение |
+| --- | --- | --- |
+| SQLite только для чтения и только повреждённые заголовки | `TestAuditInventoriesWithoutChangingOrDisclosingInputs` | Найдены три повреждённые записи; digest и отсутствие WAL/SHM сохранены. |
+| Git только для указанного полного commit SHA | целевые `TestGitSubject*` | Верхний регистр SHA принят; tree/blob, lazy-fetch и replace refs отклонены или проигнорированы. |
+| Сопоставление не выдаёт догадки за восстановление | `TestReadSourcesRejectsUnverifiableInput`, `TestCompareDoesNotTreatExistingQuestionMarkAsEvidence` | Неоднозначные/неполные источники отклонены, исходный `?` не служит доказательством. |
+| JSON не раскрывает исследуемые тексты, данные не меняются | `TestAuditInventoriesWithoutChangingOrDisclosingInputs` | Проверка прошла; отчёт содержит только безопасные метаданные. |
+| Полная регрессия поставки | `go clean -testcache && go test ./... -count=1` | Все 5 пакетов прошли. |
