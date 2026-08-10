@@ -539,6 +539,66 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertTrue(verdict["нужен_владелец"])
         begin.assert_not_called()
 
+    def test_owner_diagnosis_pauses_pipeline_and_creates_answer_card(self):
+        running = dict(
+            self.task,
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+            repository_id="repo-id",
+        )
+        verdict = {
+            "причина": "нужен выбор контракта",
+            "решение": "выбрать допустимую длину имени",
+            "нужен_владелец": True,
+        }
+        conf = dict(self.conf, deep_diag_rounds=5, stages=[
+            {"workflow": "Triage"},
+            {"workflow": "Specification"},
+            {"workflow": "Implement + Test"},
+            {"workflow": "Review"},
+            {"workflow": "Verify"},
+        ])
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "stage_attempts", return_value=5), \
+                mock.patch.object(pilot, "deep_diagnose", return_value=verdict), \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
+                mock.patch.object(pilot, "recent_stage_text", return_value="history"), \
+                mock.patch.object(pilot, "write_question", return_value={}) as write, \
+                mock.patch.object(pilot, "save") as save:
+            pilot.diag_sweep(conf, [running])
+
+        pause.assert_called_once_with(conf, "Починить отчёт")
+        self.assertEqual(write.call_args.args[0], "looping-task")
+        self.assertEqual(write.call_args.args[2], "Implement + Test")
+        save.assert_called_once()
+
+    def test_stopped_pipeline_is_not_diagnosed_again(self):
+        running = dict(
+            self.task,
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        conf = dict(self.conf, deep_diag_rounds=5)
+        with mock.patch.object(pilot, "is_stopped", return_value=True), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+            pilot.diag_sweep(conf, [running])
+
+        diagnose.assert_not_called()
+
+    def test_live_sweep_diagnoses_each_work_only_once(self):
+        running = dict(
+            self.task,
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        conf = dict(self.conf, deep_diag_rounds=5)
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=1), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+            pilot.diag_sweep(conf, [running])
+
+        diagnose.assert_not_called()
+
     def test_started_repair_skips_owner_question_and_pipeline_pause_at_limits(self):
         verdict = {"причина": "технический сбой", "решение": "исправить",
                    "нужен_владелец": False, "repair_started": True}
@@ -1378,6 +1438,99 @@ class StageWorkerCapacityTests(unittest.TestCase):
             self.conf, "Implement + Test", "medium", workers)
 
         self.assertEqual(selected, "preferred")
+
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_exact_escalation_queues_on_high_tier_instead_of_falling_back(self, _limits):
+        workers = {
+            "preferred": {"online": True, "health": "healthy", "capacity": 2, "active_count": 0},
+            "spare": {"online": True, "health": "healthy", "capacity": 1, "active_count": 1},
+        }
+
+        selected = pilot.stage_worker(
+            self.conf, "Implement + Test", "high", workers, exact_tier=True)
+
+        self.assertEqual(selected, "spare")
+
+    def test_capability_rank_orders_reasoning_within_sol(self):
+        self.assertLess(pilot.worker_capability_rank("codex-sol-low"),
+                        pilot.worker_capability_rank("codex-sol-medium"))
+        self.assertLess(pilot.worker_capability_rank("codex-sol-medium"),
+                        pilot.worker_capability_rank("codex-sol-high"))
+
+
+class AnswerEscalationTests(unittest.TestCase):
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_repeated_stage_really_uses_stronger_worker(self, _limits):
+        conf = {
+            "stages": [{
+                "workflow": "Implement + Test",
+                "workers": {
+                    "low": "codex-terra-medium",
+                    "medium": "codex-sol-medium",
+                    "high": "codex-sol-high",
+                },
+            }],
+            "timeout_seconds": 900,
+        }
+        question = {
+            "id": "question-id",
+            "task_id": "source-task",
+            "status": "answered",
+            "answer": "Исправь конкретный дефект",
+            "resume_stage": "Implement + Test",
+            "stage": "Review",
+            "title": "Оживить работу",
+            "repository_id": "repo-id",
+        }
+        workers = {
+            "codex-terra-medium": {
+                "id": "terra", "online": True, "health": "healthy",
+                "capacity": 2, "active_count": 0,
+            },
+            "codex-sol-medium": {
+                "id": "sol-medium", "online": True, "health": "healthy",
+                "capacity": 2, "active_count": 0,
+            },
+            # Busy is intentional: a real escalation must queue here instead
+            # of silently falling back to sol-medium.
+            "codex-sol-high": {
+                "id": "sol-high", "online": True, "health": "healthy",
+                "capacity": 1, "active_count": 1,
+            },
+        }
+        created = []
+        notifications = []
+
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "load", return_value=dict(question)), \
+                mock.patch.object(pilot, "stage_attempts", return_value=2), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "note_cap_rescue"), \
+                mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "live_or_done_at", return_value=None), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=lambda body, _conf: created.append(body)
+                    or {"task": {"id": "new-task"}},
+                ), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(
+                    pilot, "notify",
+                    side_effect=lambda _conf, title, message, **_kwargs:
+                    notifications.append((title, message)),
+                ):
+            pilot.handle_answers(
+                conf,
+                {"Implement + Test": {"enabled": True, "revision_id": "revision"}},
+                workers,
+                [],
+            )
+
+        self.assertEqual(created[0]["worker_id"], "sol-high")
+        raised = [message for title, message in notifications
+                  if title == "Исполнитель повышен"]
+        self.assertEqual(len(raised), 1)
+        self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
 
 
 class HostLoadAdmissionTests(unittest.TestCase):

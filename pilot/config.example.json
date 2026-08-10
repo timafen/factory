@@ -28,6 +28,7 @@
   "codex-luna-low",
   "codex-luna-medium",
   "codex-sol-low",
+  "codex-sol-high",
   "codex-terra-high",
   "codex-terra-low",
   "codex-terra-medium",
@@ -122,7 +123,7 @@
    "workers": {
     "low": "codex-terra-medium",
     "medium": "claude-sonnet-think",
-    "high": "codex-sol-low"
+    "high": "codex-sol-high"
    }
   },
   {
@@ -130,7 +131,7 @@
    "workers": {
     "low": "codex-terra-low",
     "medium": "codex-terra-medium",
-    "high": "claude-sonnet-think"
+    "high": "codex-sol-high"
    }
   },
   {
@@ -138,7 +139,7 @@
    "workers": {
     "low": "codex-terra-low",
     "medium": "codex-terra-medium",
-    "high": "codex-sol-low"
+    "high": "codex-sol-high"
    }
   }
  ],
