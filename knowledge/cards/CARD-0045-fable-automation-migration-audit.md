@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/d8291cc8-15a-a9a49bc3-521`.
-- Head commit: `fca900a` (проверенный снимок матрицы аудита после перебазирования на `main`).
+- Status: Implement PASS — awaiting verification.
+- Branch: `factory/2f07c58c-b17-205698b1-1cb`.
+- Head commit: `77f3001` (поставленный снимок контракта завершения аудита).
 - Specification: `knowledge/specs/fable-automation-migration-audit.md`.
-- What changed: утверждённая владельцем матрица стала окончательным объёмом аудита; все известные и доступные механизмы сопоставлены с реализацией Factory и тестами.
-- Evidence: `PipelineWatchTests` → 7 tests OK; целевые Go-тесты автоматизаций → OK; полный Go- и Python-наборы → OK.
+- What changed: в спецификации закреплены точный файл поставки и обязательная
+  команда проверки автономного сторожа.
+- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 7 tests OK.
 - Limitation: абсолютный исторический паритет с Fable без её исходников не доказан и не заявляется.
-- One next action: человеку влить поставку в `main`.
+- One next action: провести стадию проверки поставки перед вливанием в `main`.
 
 ## LOG
 
@@ -41,3 +42,10 @@ GitHub issue/PR, cron, восстановление после рестарта 
 Полный `npm test` обнаружил один тайм-аут `Settings.test.tsx` (5 секунд).
 Это существующая web-проверка вне двух файлов поставки и вне области Fable;
 целевая проверка поставки, lint и production build успешны.
+
+### 2026-08-10 — Implement
+
+В спецификации закреплено машинно-проверяемое завершение аудита: наличие
+самого файла поставки и успешный запуск `PipelineWatchTests`. Все 7 сценариев
+сторожа прошли; ограничение исторического паритета с недоступной Fable
+сохранено без расширения объёма реализации.
