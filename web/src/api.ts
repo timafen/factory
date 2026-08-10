@@ -30,6 +30,7 @@ import type {
 	DialogMessage,
 	DialogResponse,
 	DialogScreenshot,
+	BrowserCapture,
 	TaskAttachment,
 	EbayConsent,
 	EbayConsentStatus,
@@ -77,6 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+	browserCapture: (url: string) => request<BrowserCapture>("/api/v1/browser/capture", { method: "POST", body: JSON.stringify({ url }) }),
 	startEbaySellerConsent: () => request<EbayConsent>("/api/v1/sandbox-keys/ebay-seller/consent", { method: "POST", body: "{}" }),
 	ebaySellerConsentStatus: (operationID: string) => request<EbayConsentStatus>(`/api/v1/sandbox-keys/ebay-seller/consent/${encodeURIComponent(operationID)}`),
   pilotSettings: () => request<PilotSettingsResponse>("/api/v1/settings/pilot"),

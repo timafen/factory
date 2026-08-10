@@ -59,6 +59,66 @@ it("previews a screenshot and sends its bytes with the question",async()=>{
   expect(screen.queryByAltText("Скриншот: screen.png")).not.toBeInTheDocument();
 });
 
+it("captures the approved stand in the server browser and attaches it",async()=>{
+  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+    if(String(input).includes("models")) return new Response(JSON.stringify(models),{status:200,headers:{"Content-Type":"application/json"}});
+    if(String(input).includes("browser/capture")) return new Response(JSON.stringify({url:"https://staging-automation.tarser.net/orders",content_type:"image/png",data:"iVBORw=="}),{status:200,headers:{"Content-Type":"application/json"}});
+    throw new Error("unexpected request");
+  }));
+  render(<Dialog/>); const user=userEvent.setup();
+  const address=await screen.findByLabelText("Адрес страницы стенда");
+  await user.clear(address); await user.type(address,"https://staging-automation.tarser.net/orders");
+  await user.click(screen.getByRole("button",{name:"Посмотреть стенд"}));
+  expect(await screen.findByAltText("Скриншот: стенд.png")).toBeVisible();
+});
+
+it("blocks sending while the server is capturing a fresh screenshot",async()=>{
+  let resolveCapture:(value:Response)=>void=()=>{}; let dialogRequests=0;
+  vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+    if(String(input).includes("models")) return new Response(JSON.stringify(models),{status:200,headers:{"Content-Type":"application/json"}});
+    if(String(input).includes("browser/capture")) return new Promise<Response>(resolve=>{resolveCapture=resolve;});
+    dialogRequests++; return new Response(JSON.stringify({message:{role:"assistant",content:"Ответ"},model_label:"Первая модель"}),{status:200,headers:{"Content-Type":"application/json"}});
+  }));
+  render(<Dialog/>); const user=userEvent.setup();
+  await screen.findByLabelText("Модель для диалога");
+  await user.type(screen.getByLabelText("Ваш вопрос"),"Что на свежем снимке?");
+  await user.click(screen.getByRole("button",{name:"Посмотреть стенд"}));
+  expect(screen.getByRole("button",{name:"Открываю…"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Отправить"})).toBeDisabled();
+  await user.keyboard("{Enter}");
+  expect(dialogRequests).toBe(0);
+  resolveCapture(new Response(JSON.stringify({url:"https://staging-automation.tarser.net/",content_type:"image/png",data:"bmV3"}),{status:200,headers:{"Content-Type":"application/json"}}));
+  expect(await screen.findByAltText("Скриншот: стенд.png")).toBeVisible();
+  expect(screen.getByRole("button",{name:"Отправить"})).toBeEnabled();
+});
+
+it("does not let an unfinished file read overwrite a server capture",async()=>{
+  const readers: Array<{result:string|null;onload:(()=>void)|null}>=[];
+  const OriginalFileReader=globalThis.FileReader;
+  class DeferredFileReader {
+    result:string|null=null; onload:(()=>void)|null=null; onerror:(()=>void)|null=null;
+    constructor(){ readers.push(this); }
+    readAsDataURL() {}
+  }
+  vi.stubGlobal("FileReader",DeferredFileReader);
+  try {
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+      if(String(input).includes("models")) return new Response(JSON.stringify(models),{status:200,headers:{"Content-Type":"application/json"}});
+      return new Response(JSON.stringify({url:"https://staging-automation.tarser.net/",content_type:"image/png",data:"c2VydmVy"}),{status:200,headers:{"Content-Type":"application/json"}});
+    }));
+    render(<Dialog/>); const user=userEvent.setup();
+    await screen.findByLabelText("Модель для диалога");
+    await user.upload(screen.getByLabelText("Скриншот к вопросу"),new File(["old"],"old.png",{type:"image/png"}));
+    await user.click(screen.getByRole("button",{name:"Посмотреть стенд"}));
+    expect(await screen.findByAltText("Скриншот: стенд.png")).toBeVisible();
+    readers[0].result="data:image/png;base64,b2xk"; readers[0].onload?.();
+    await waitFor(()=>expect(screen.queryByAltText("Скриншот: old.png")).not.toBeInTheDocument());
+    expect(screen.getByAltText("Скриншот: стенд.png")).toBeVisible();
+  } finally {
+    vi.stubGlobal("FileReader",OriginalFileReader);
+  }
+});
+
 it("waits for the latest screenshot selection before sending",async()=>{
   const readers: Array<{result:string|null;onload:(()=>void)|null}>=[];
   const OriginalFileReader=globalThis.FileReader;
