@@ -125,6 +125,30 @@ describe("Overview Factory efficiency", () => {
   });
 });
 
+describe("Overview product capacity", () => {
+  it("shows the four-stream history honestly and keeps unknown explicit", async () => {
+    const period = { started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z", observation_from: "2026-08-10T11:00:00Z", samples: 2, low_data: true,
+      active_time: [0, 1, 2, 3, 4].map((active) => ({ active, seconds: active === 0 ? 3600 : 0, share: active === 0 ? 1 : 0 })), average_busy: 0, queue_p90: 2,
+      underload: ["no_ready_work", "owner_question", "provider_limit", "repository_conflict", "release_lock", "unknown"].map((reason) => ({ reason, seconds: reason === "unknown" ? 3600 : 0, share: reason === "unknown" ? 1 : 0 })),
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/metrics/product-capacity" ? { generated_at: "2026-08-10T12:00:00Z", capacity: 4, periods: { "24h": period, "7d": period } }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
+    expect(within(section).getByText("данных мало")).toBeVisible();
+    expect(within(section).getByText("0.0 / 4")).toBeVisible();
+    expect(within(section).getByText("p90 очереди")).toBeVisible();
+    fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
+    expect(within(section).getByText(/unknown:/)).toBeVisible();
+    fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
+    expect(within(section).getByText("сэмплов: 2")).toBeVisible();
+  });
+});
+
 describe("Overview products", () => {
   it("renders projects in snapshot order with honest provider states", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
