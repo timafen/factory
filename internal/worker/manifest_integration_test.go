@@ -93,24 +93,33 @@ data_directory = %q
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := lifetimeRead.Close(); err != nil {
-		t.Fatal(err)
-	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
 	reaped := false
 	t.Cleanup(func() {
 		_ = lifetimeWrite.Close()
 		if !reaped {
 			_ = command.Process.Kill()
-			_ = command.Wait()
+			<-waitDone
 		}
 	})
+	if err := lifetimeRead.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := lifetimeWrite.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := command.Wait(); err != nil {
-		t.Fatalf("manager helper did not stop after its parent pipe closed: %v", err)
+	select {
+	case err := <-waitDone:
+		reaped = true
+		if err != nil {
+			t.Fatalf("manager helper did not stop after its parent pipe closed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("manager helper did not stop within 5 seconds after its parent pipe closed")
 	}
-	reaped = true
 }
 
 func fixtureUUID(value int) string {
