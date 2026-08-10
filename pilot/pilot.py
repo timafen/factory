@@ -19,6 +19,7 @@ Planner layer (epics):
   the same mechanism later.
 """
 import calendar
+import hashlib
 import io
 import glob
 import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
@@ -33,6 +34,8 @@ CONTEXT_PATH = f"{HOME}/pilot/context.md"
 VERDICT_DIR = f"{HOME}/pilot/verdicts"
 PREFIX = "[auto]"
 STAGE_TITLE_RE = re.compile(r"^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.*)$")
+AUTO_REVIVE_REQUEST_PREFIX = "pilot:auto-revive:"
+AUTO_REVIVE_REQUEST_RE = re.compile(r"^pilot:auto-revive:(\d+):")
 EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
 EPIC_PLAN_PREFIX = "[epic-plan]"     # or any task titled like this
 EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
@@ -72,6 +75,44 @@ def log(*a):
 
 def base_title(title):
     return re.sub(r"^\[auto\]\s*(\[\d+/\d+[^\]]*\]\s*)?", "", title).strip()
+
+
+def revived_stage_index(task):
+    """Return the stage index stored on a revived automatic task."""
+    match = AUTO_REVIVE_REQUEST_RE.match(str(task.get("request_key", "") or ""))
+    return int(match.group(1)) if match else None
+
+
+def is_automatic_task(task):
+    """Automatic work is identified by task metadata, not display text alone."""
+    return (str(task.get("title", "") or "").startswith(PREFIX)
+            or revived_stage_index(task) is not None)
+
+
+def automatic_work_title(task):
+    match = STAGE_TITLE_RE.match(str(task.get("title", "") or ""))
+    if match:
+        return match.group(2).strip()
+    if revived_stage_index(task) is not None:
+        return str(task.get("title", "") or "").strip()
+    return ""
+
+
+def automatic_stage(task, stages=()):
+    match = STAGE_TITLE_RE.match(str(task.get("title", "") or ""))
+    if match:
+        return match.group(1).strip()
+    index = revived_stage_index(task)
+    return stages[index] if index is not None and index < len(stages) else ""
+
+
+def automatic_stage_number(task):
+    """Return the one-based pipeline stage number from title or metadata."""
+    match = re.match(r"^\[auto\]\s*\[(\d+)/", str(task.get("title", "") or ""))
+    if match:
+        return int(match.group(1))
+    index = revived_stage_index(task)
+    return index + 1 if index is not None else 0
 
 
 def verify_passed(result):
@@ -237,11 +278,11 @@ def _recent_tasks():
     return out
 
 
-def money_guard(conf, title):
+def money_guard(conf, work):
     """Бросает исключение, если создание задачи прожжёт лимиты подписок.
     Работает по числу задач, а не по долларам: доллары кодекса мы пока
     не видим, а число задач видим всегда и для всех провайдеров."""
-    base = base_title(title)
+    base = base_title(work)
     rec = _recent_tasks()
     wcap = int(conf.get("work_day_cap", 12))
     dcap = int(conf.get("day_task_cap", 120))
@@ -328,13 +369,15 @@ AGENT_RULES = """
 
 
 def create_task(body, conf=None):
+    automatic = is_automatic_task(body)
+    stages = stage_names(conf) if conf else ()
     if conf and not host_load_admits(
-            conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
+            conf.get("_host_load_tasks"), automatic_stage(body, stages),
             conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
         raise RuntimeError("host_load_admission: stage deferred")
-    if conf and str(body.get("title", "")).startswith(PREFIX):
-        money_guard(conf, body["title"])
-    if str(body.get("title", "")).startswith(PREFIX):
+    if conf and automatic:
+        money_guard(conf, automatic_work_title(body) or base_title(body.get("title", "")))
+    if automatic:
         ctx = body.get("context") or ""
         if "ПРАВИЛА ДЛЯ АГЕНТА" not in ctx:
             body["context"] = (ctx + "\n\n" + AGENT_RULES)[:60000]
@@ -901,14 +944,12 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
 
 
-def stage_attempts(tasks, stage, base):
+def stage_attempts(tasks, stage, base, stages=()):
     """How many times this exact work already went through this exact stage."""
-    n = 0
-    for t in tasks:
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if m and m.group(1).strip() == stage and m.group(2).strip() == base.strip():
-            n += 1
-    return n
+    base = (base or "").strip()
+    return sum(1 for task in tasks
+               if automatic_stage(task, stages) == stage
+               and automatic_work_title(task) == base)
 
 
 def stage_no_of(title):
@@ -925,12 +966,11 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     прошлого прогона дублем не считается и не мешает доработке."""
     base = (base or "").strip()
     for t in tasks:
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or m.group(2).strip() != base:
+        if automatic_work_title(t) != base:
             continue
         if since and (t.get("created_at") or "") <= since:
             continue
-        if stage_no_of(t.get("title")) >= stage_no and t.get("state") in (
+        if automatic_stage_number(t) >= stage_no and t.get("state") in (
                 "running", "queued", "preparing", "succeeded"):
             return t
     return None
@@ -983,10 +1023,11 @@ def supersede_stale_questions(tasks):
         t = by_id.get(q.get("task_id"))
         if not t or t.get("state") not in ("cancelled", "failed"):
             continue
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m:
+        base = automatic_work_title(t)
+        stage_no = automatic_stage_number(t)
+        if not base or not stage_no:
             continue
-        newer = live_or_done_at(tasks, m.group(2).strip(), stage_no_of(t.get("title")),
+        newer = live_or_done_at(tasks, base, stage_no,
                                 since=t.get("created_at"))
         if not newer or newer["id"] == t["id"]:
             continue
@@ -1182,10 +1223,9 @@ def area_busy(tasks, base, context="", repo=""):
     for t in tasks:
         if t.get("state") not in ("running", "queued"):
             continue
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m:
+        other = automatic_work_title(t)
+        if not other:
             continue
-        other = m.group(2).strip()
         if other == base.strip():
             continue
         if mine & set(known.get(other) or []):
@@ -1300,14 +1340,16 @@ def cleanup_completed_plan_cards(tasks, final_stage_no):
         since = (linked or {}).get("created_at")
         if not linked or not since:
             continue
-        base = base_title(linked.get("title", ""))
+        base = automatic_work_title(linked)
+        if not base:
+            continue
         candidates = []
         for task in tasks or []:
             if (task.get("created_at") or "") < since:
                 continue
-            if base_title(task.get("title", "")) != base:
+            if automatic_work_title(task) != base:
                 continue
-            if stage_no_of(task.get("title")) != final_stage_no:
+            if automatic_stage_number(task) != final_stage_no:
                 continue
             candidates.append(task)
         candidates.sort(key=lambda t: (t.get("created_at") or "", t.get("id") or ""))
@@ -1433,15 +1475,15 @@ def active_auto_works(tasks):
     """Unique pipeline works that occupy an automatic-start slot."""
     active = set()
     for task in tasks:
-        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
-        if match and task.get("state") in PLAN_ACTIVE_STATES:
-            active.add(match.group(2).strip())
+        work = automatic_work_title(task)
+        if work and task.get("state") in PLAN_ACTIVE_STATES:
+            active.add(work)
     open_questions = {q.get("task_id") for q in load_questions()
                       if q.get("status") == "open"}
     for task in tasks:
-        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
-        if match and task.get("id") in open_questions:
-            active.add(match.group(2).strip())
+        work = automatic_work_title(task)
+        if work and task.get("id") in open_questions:
+            active.add(work)
     return active
 
 
@@ -1516,6 +1558,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1551,6 +1594,38 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, hashlib.sha256(work.encode()).hexdigest())
+
+
+def revive_signals():
+    """Return the signals present at scan time; acknowledgement is separate."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            path = os.path.join(REVIVE_DIR, name)
+            with open(path, encoding="utf-8") as signal:
+                work = signal.read()
+            if hashlib.sha256(work.encode()).hexdigest() != name:
+                continue
+        except (OSError, UnicodeError):
+            continue
+        result.append(work)
+    return result
+
+
+def acknowledge_revive_signal(work):
+    try:
+        path = revive_signal_path(work)
+        os.replace(path, path + ".done")
+    except FileNotFoundError:
+        pass
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1558,14 +1633,23 @@ def pipeline_watch(conf, tasks, workflows, workers):
     stopped = set(conf.get("stopped_pipelines") or [])
     groups = {}
     for t in tasks:
-        m = STAGE_TITLE_RE.match(t.get("title", "") or "")
-        if m:
-            groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
+        stage = automatic_stage(t, stages)
+        work = automatic_work_title(t)
+        if stage and work:
+            groups.setdefault(work, []).append((stage, t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    revive = set(revive_signals())
+    free_work_slots = max(0, int(conf.get("max_parallel_works", 4)) -
+                          len(active_auto_works(tasks)))
+    for base in revive:
+        if base not in stopped:
+            mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
+            if base in revive and base not in stopped:
+                acknowledge_revive_signal(base)
             continue
         if base in stopped:
             rec = mem.get(base) or {}
@@ -1580,6 +1664,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
         far = max(idx)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
+            if base in revive:
+                acknowledge_revive_signal(base)
             continue
         rec = mem.get(base) or {}
         rec.setdefault("since", now)
@@ -1595,6 +1681,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
                        "а следующий не запускается даже после двух попыток.",
                        priority="high", tags="warning")
             continue
+        if free_work_slots <= 0:
+            continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
         wname = stage_worker(conf, nxt, "medium", workers)
@@ -1603,9 +1691,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
-        title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        # The workflow revision is the service metadata for the resumed stage.
+        # Keep the owner's work name intact: it may already use the control
+        # plane's full 200-character title allowance.
+        title = base
+        free_work_slots -= 1
         try:
-            create_task({"request_key": str(uuid.uuid4()), "title": title,
+            create_task({"request_key": (AUTO_REVIVE_REQUEST_PREFIX + str(far + 1)
+                                         + ":" + str(uuid.uuid4())), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
@@ -1617,11 +1710,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
+            if base in revive:
+                acknowledge_revive_signal(base)
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
                 ": " + stages[far] + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" + stages[far] + " → " + nxt, tags="wrench")
         except Exception as e:
+            free_work_slots += 1
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
     try:
@@ -2342,56 +2438,25 @@ def diag_sweep(conf, tasks):
     """Обход всех живых работ: у кого кругов больше порога — зовём старшую
     модель разобраться. Один разбор на работу, дальше конвейер идёт по нему."""
     diag_at = int(conf.get("deep_diag_rounds", 5))
+    stages = stage_names(conf)
     seen = set()
     for t in tasks:
-        title = t.get("title") or ""
-        if not title.startswith(PREFIX):
+        stage = automatic_stage(t, stages)
+        base = automatic_work_title(t)
+        if not stage or not base:
             continue
         if t.get("state") not in ("running", "queued"):
             continue
-        m = STAGE_TITLE_RE.match(title)
-        if not m:
-            continue
-        base = m.group(2).strip()
         if base in seen:
             continue
         seen.add(base)
-        if is_stopped(conf, base):
-            continue
-        # The live sweep is an early warning, not a minute-by-minute brain
-        # loop. A terminal stage can still invoke deep_diagnose later through
-        # route_question, where a safe repair has enough evidence to start.
-        if cap_rescues(base, "DIAG") >= 1:
-            continue
-        rounds = max(stage_attempts(tasks, "Implement + Test", base),
-                     stage_attempts(tasks, "Review", base))
+        rounds = max(stage_attempts(tasks, "Implement + Test", base, stages),
+                     stage_attempts(tasks, "Review", base, stages))
         if rounds < diag_at:
             continue
         try:
-            stage = m.group(1).strip()
-            verdict = deep_diagnose(conf, base, stage, rounds, tasks,
-                                    repair_task=t)
-            if verdict and verdict.get("нужен_владелец"):
-                pause_pipeline(conf, base)
-                stages = [s.get("workflow") for s in conf.get("stages", [])]
-                resume = resume_stage_for(stages, stage, stage)
-                reason = str(verdict.get("причина") or "").strip()
-                solution = str(verdict.get("решение") or "").strip()
-                rec = write_question(
-                    t["id"], stage, resume, base,
-                    t.get("repository_id") or "",
-                    reason or f"Работа прошла {rounds} кругов и не движется.",
-                    ("Как поступить? Предложение диагностики: " + solution)
-                    if solution else "Как поступить дальше?",
-                    [], recent_stage_text(tasks, base),
-                )
-                rec["owner_only"] = True
-                rec["escalation_reason"] = (
-                    f"старшая диагностика после {rounds} кругов определила, "
-                    "что без решения владельца продолжать нельзя"
-                )
-                save(f"{QUESTION_DIR}/{t['id']}.json", rec)
-                log(f"DIAG OWNER STOP base={base!r} task={t['id']}")
+            deep_diagnose(conf, base, stage, rounds, tasks,
+                          repair_task=t)
         except Exception as e:
             log("diag_sweep_error", repr(e))
 
@@ -2619,21 +2684,20 @@ def load_questions():
     return out
 
 
-def subtask_state(tasks, open_q, last_stage, base, since=""):
+def subtask_state(tasks, open_q, last_stage, base, since="", stages=()):
     """Что сейчас с подзадачей: 'none' — конвейер не начинался, 'working' —
     что-то выполняется, 'waiting' — ждёт ответа владельца, 'done' — прошла
     всю цепочку с настоящим PASS, 'stuck' — остановилась не дойдя до конца."""
     base = (base or "").strip()
     mine = []
     for t in tasks:
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or m.group(2).strip() != base:
+        if automatic_work_title(t) != base:
             continue
         # Задачи с тем же названием из прошлых прогонов не считаются: иначе
         # подзадача объявляется готовой по чужому давнему успеху.
         if since and (t.get("created_at") or "") < since:
             continue
-        mine.append((m.group(1).strip(), t))
+        mine.append((automatic_stage(t, stages), t))
     if not mine:
         return "none"
     if any(t["state"] in ("running", "queued", "preparing") for _, t in mine):
@@ -2670,8 +2734,7 @@ def advance_epics(conf, tasks, workflows, workers):
                 continue
             floor = epic.get("started_at") or epic.get("created_at") or ""
             live = [t for t in tasks
-                    if (STAGE_TITLE_RE.match(t.get("title", ""))
-                        and STAGE_TITLE_RE.match(t["title"]).group(2).strip() == sub["title"].strip()
+                    if (automatic_work_title(t) == sub["title"].strip()
                         and t["state"] in ("running", "queued", "preparing")
                         and (not floor or (t.get("created_at") or "") >= floor))]
             if live:
@@ -2691,7 +2754,9 @@ def advance_epics(conf, tasks, workflows, workers):
             if sub.get("status") not in ("running", "done"):
                 continue
             since = sub.get("started_at") or epic.get("started_at") or epic.get("created_at") or ""
-            state_now = subtask_state(tasks, open_q, last_stage, sub["title"], since)
+            state_now = subtask_state(
+                tasks, open_q, last_stage, sub["title"], since, stages
+            )
             if state_now == "done":
                 if sub.get("status") != "done":
                     sub["status"] = "done"
@@ -2778,13 +2843,12 @@ def record_new_works(conf, tasks, max_age_min=180):
     # самая ранняя стадия каждой работы среди свежих задач
     first = {}
     for t in tasks:
-        title = t.get("title") or ""
-        if not title.startswith(PREFIX):
+        base = automatic_work_title(t)
+        n = automatic_stage_number(t)
+        if not base or not n:
             continue
         if (t.get("created_at") or "") < cutoff:
             continue
-        base = base_title(title)
-        n = stage_no_of(title)
         if not base or not n or base in known:
             continue
         if base not in first or n < first[base][0]:
@@ -2822,31 +2886,21 @@ def handle_answers(conf, workflows, workers, tasks):
         # Модель, которая дважды не справилась с этапом, третий раз денег
         # не заслужила: третий заход отдаём исполнителю уровнем выше.
         try:
-            rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")))
+            rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")), stages)
         except Exception:
             rounds = 0
-        selected_worker = stage_worker(conf, stage, cx_hint, workers)
         if rounds >= 2 and cx_hint != "high":
-            was = selected_worker
-            candidate = stage_worker(conf, stage, "high", workers, exact_tier=True)
-            if (candidate and worker_capability_rank(candidate)
-                    > worker_capability_rank(was)):
-                cx_hint = "high"
-                selected_worker = candidate
-                log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: "
-                    f"{rounds} провала — {was} -> {candidate}")
-                if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
-                    note_cap_rescue(q.get("title") or "", "ESCNOTE")
-                    notify(conf, "Исполнитель повышен",
-                           (q.get("title") or "") + "\nЭтап «" + str(stage)
-                           + "» провалился " + str(rounds)
-                           + " раз(а). Повышаю: " + str(was) + " → "
-                           + str(candidate) + ".",
-                           tags="arrow_double_up", click=f"{UI_BASE}/work")
-            else:
-                log(f"ESCALATE SKIP '{q.get('title','')[:40]}' {stage}: "
-                    f"нет исполнителя сильнее {was} (кандидат={candidate})")
-        worker = workers.get(selected_worker)
+            was = stage_worker(conf, stage, cx_hint, workers)
+            cx_hint = "high"
+            now_ = stage_worker(conf, stage, cx_hint, workers)
+            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — {was} -> {now_}")
+            if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
+                note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                notify(conf, "Исполнитель повышен",
+                       (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
+                       + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
+                       tags="arrow_double_up", click=f"{UI_BASE}/work")
+        worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
             continue
@@ -3149,7 +3203,7 @@ def branch_from_history(tasks, base, limit=8):
     следующая стадия увидит пустой diff и справедливо всё отвергнет."""
     seen = 0
     for t in tasks or []:
-        if base_title(t.get("title") or "") != base:
+        if automatic_work_title(t) != base:
             continue
         seen += 1
         if seen > limit:
@@ -3523,7 +3577,7 @@ def work_spent(tasks, base):
     трижды заплатил один и тот же потолок."""
     atts = []
     for t in tasks:
-        if base_title(t.get("title") or "") != base:
+        if automatic_work_title(t) != base:
             continue
         atts += attempts_of(t["id"], not _live(t))
     return task_cost_usd(atts)
@@ -3605,16 +3659,14 @@ def budget_guard(conf, tasks, workers=None):
         if isinstance(w, dict) and w.get("id"):
             by_id[w["id"]] = w
 
+    stages = stage_names(conf)
     for t in tasks:
         if t.get("state") not in ("running", "preparing"):
             continue
-        title = t.get("title") or ""
-        if not title.startswith(PREFIX):
+        stage = automatic_stage(t, stages)
+        base = automatic_work_title(t)
+        if not stage or not base:
             continue
-        m = STAGE_TITLE_RE.match(title)
-        if not m:
-            continue
-        stage, base = m.group(1).strip(), m.group(2).strip()
 
         wname = (by_id.get(t.get("worker_id")) or {}).get("name", "")
         cx = complexity_of(conf, stage, wname)
@@ -4351,25 +4403,6 @@ def worker_price_rank(name):
     return (rank, "think" in n, n)      # без think дешевле: меньше ходов размышления
 
 
-def worker_capability_rank(name):
-    """Comparable capability for the named Codex/Claude worker.
-
-    Model family is the primary step; reasoning effort is the step inside a
-    family. The rank is deliberately used only to prevent a claimed escalation
-    from selecting the same or a weaker worker.
-    """
-    n = (name or "").lower()
-    family = next((rank for key, rank in (
-        ("haiku", 0), ("luna", 0), ("sonnet", 1), ("terra", 1),
-        ("sol", 2), ("opus", 3), ("fable", 3),
-    ) if key in n), 1)
-    effort = next((rank for suffix, rank in (
-        ("-low", 0), ("-medium", 1), ("-high", 2), ("-max", 3),
-        ("-think", 2),
-    ) if n.endswith(suffix)), 1)
-    return family * 10 + effort
-
-
 # ----------------------------------------------- Очередь у больного --------
 
 
@@ -4429,7 +4462,7 @@ def rescue_queued(conf, tasks, workflows, workers):
             log("queue_rescue_error", repr(e))
 
 
-def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
+def stage_worker(conf, stage_name, complexity, workers=None):
     """Pick the worker for a stage. Prefer the tier the orchestrator asked for,
     but never hand work to an unhealthy worker: fall back to the other tiers of
     the SAME stage, then to any healthy worker configured anywhere in the
@@ -4465,12 +4498,6 @@ def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
             else:
                 ordered = [s.get("worker")]
             break
-    if exact_tier and isinstance(tiers, dict):
-        exact = tiers.get(complexity)
-        if healthy(exact):
-            # An escalation must really use the configured higher tier. Queue
-            # there when it is busy instead of silently falling back downward.
-            return exact
     for name in ordered:
         if name and healthy(name) and available(name):
             return name
@@ -4557,7 +4584,7 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
             continue
 
         # ignore pipeline stage tasks here; the main loop owns them
-        if title.startswith(PREFIX):
+        if is_automatic_task(t):
             continue
 
         # (b) a finished planning task -> write a 'planned' epic.
@@ -4736,7 +4763,8 @@ def cycle(conf, state):
 
     for t in tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
-        if not title.startswith(PREFIX):
+        base = automatic_work_title(t)
+        if not is_automatic_task(t) or not base:
             continue
         if tid in state["processed"]:
             continue
@@ -4744,21 +4772,22 @@ def cycle(conf, state):
             continue
 
         detail = api(f"/tasks/{tid}")
-        wf = (detail.get("workflow") or {}).get("title")
+        wf = ((detail.get("workflow") or {}).get("title")
+              or automatic_stage(t, stages))
         state["processed"].append(tid)
 
         if tstate != "succeeded":
             attempts = detail.get("attempts") or []
             err = next((a.get("error") for a in reversed(attempts) if a.get("error")), "") or ""
             res = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
-            base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             # Отменённая/упавшая задача, которую уже перекрыла другая по той же
             # работе, вопросов не порождает — иначе эпик встанет на пустом месте.
             if is_stopped(conf, base):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, base, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(tasks, base, automatic_stage_number(t),
+                                    since=t.get("created_at"))
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
@@ -4786,7 +4815,7 @@ def cycle(conf, state):
                 except Exception as e:
                     log("infra_retry_error", repr(e))
 
-            done = stage_attempts(tasks, wf, base)
+            done = stage_attempts(tasks, wf, base, stages)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -4812,18 +4841,18 @@ def cycle(conf, state):
         result = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
 
         try:
-            area_extend(base_title(title), result,
+            area_extend(base, result,
                         detail["task"].get("repository_id") or "")
         except Exception as e:
             log("area_extend_error", repr(e))
         try:
             collect_ideas(result, detail["task"].get("repository_id") or "",
-                          base_title(title))
+                          base)
         except Exception as e:
             log("ideas_error", repr(e))
         if wf == "Specification":
             try:
-                save_promises(base_title(title), result)
+                save_promises(base, result)
             except Exception as e:
                 log("promises_error", repr(e))
         verdict = decide(conf, wf, next_stage, title, result,
@@ -4862,14 +4891,14 @@ def cycle(conf, state):
                     repo_short = repo_identity.split("github.com/")[-1]
                     cmp_ = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
                     if cmp_ is not None and cmp_.get("ahead_by") == 0:
-                        log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
+                        log(f"MERGE SKIP '{base}': ветка {branch} уже в main — дубль не открываю")
                         continue
-                    ok, out = gh_merge(repo_identity, branch, base_title(title))
-                    log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
+                    ok, out = gh_merge(repo_identity, branch, base)
+                    log(f"AUTO-MERGE pipeline='{base}' branch={branch} ok={ok} :: {out[:200]}")
                     if ok:
                         try:
                             with open(MERGES_PATH, "a", encoding="utf-8") as mf:
-                                mf.write(json.dumps({"base": base_title(title),
+                                mf.write(json.dumps({"base": base,
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")},
                                     ensure_ascii=False) + chr(10))
                         except Exception as e:
@@ -4886,7 +4915,7 @@ def cycle(conf, state):
                             body_txt = "\nРезультат не визуальный. Проверено: " + pf
                         else:
                             body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
-                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
+                        notify(conf, "Задача выполнена", base + body_txt,
                                tags="white_check_mark",
                                click=link or f"{UI_BASE}/tasks/{tid}")
                     else:
@@ -4894,8 +4923,8 @@ def cycle(conf, state):
                         # работа шла, в main влилась соседняя. Возвращаем в
                         # разработку с прямым наказом перебазироваться. Один раз:
                         # если и после этого не влилось — зовём хозяина.
-                        if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
-                            note_cap_rescue(base_title(title), "MERGE")
+                        if "conflict" in out.lower() and cap_rescues(base, "MERGE") < 1:
+                            note_cap_rescue(base, "MERGE")
                             try:
                                 stages_all = [x["workflow"] for x in conf["stages"]]
                                 back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
@@ -4904,8 +4933,8 @@ def cycle(conf, state):
                                 bnw = workflows.get(back_st)
                                 if bw and bnw and bnw.get("enabled"):
                                     create_task({"request_key": str(uuid.uuid4()),
-                                        "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
-                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n\n"
+                                        "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base}"[:200],
+                                        "context": (f"Pipeline: {base}\nBranch: {branch}\n\n"
                                             "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
                                             "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
                                             "оставайся на своей. Сделай ровно это: "
@@ -4917,15 +4946,15 @@ def cycle(conf, state):
                                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                                         "workflow_revision_id": bnw["revision_id"]}, conf)
                                     notify(conf, "Мёрж-конфликт: отправил на перебазирование",
-                                           base_title(title), tags="wrench")
+                                           base, tags="wrench")
                                 else:
                                     raise RuntimeError("нет воркера/сценария")
                             except Exception as e:
                                 log("merge_conflict_return_error", repr(e))
-                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
+                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base}\n{cut(out)}",
                                        priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                         else:
-                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
+                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     if ok:
                         deploy_after_merge(conf, repo_identity)
@@ -4935,7 +4964,6 @@ def cycle(conf, state):
                 log(f"pipeline end task={tid}: verify not PASS or auto_merge disabled -> stopped for human")
                 # Подзадача эпика НЕ считается сделанной: проверка не прошла.
                 mark_final(tid, wf, False)
-                base = base_title(title)
                 rid = detail["task"].get("repository_id") or ""
                 back = "Implement + Test" if "Implement + Test" in stages else wf
                 # route_question сам решает, чей это вопрос. Тревогу владельцу
@@ -4948,16 +4976,15 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
+                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base, stages),
                     branch=extract_branch(result, detail.get("context", "")))
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
-                           f"{base_title(title)}\nПроверка не подтвердила результат, "
+                           f"{base}\nПроверка не подтвердила результат, "
                            "в main ничего не влито, и сам я это не решаю.",
                            priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
             continue
         if verdict["action"] != "advance":
-            base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             situation = verdict.get("situation_ru") or ""
             question = verdict.get("question_ru") or ""
@@ -4966,15 +4993,15 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, base),
+                           attempts_so_far=stage_attempts(tasks, back, base, stages),
                            branch=extract_branch(result, detail.get("context", "")))
             continue
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
-        holder = area_busy(tasks, base_title(title), detail.get("context", ""),
+        holder = area_busy(tasks, base, detail.get("context", ""),
                            (detail.get("task") or {}).get("repository_id", ""))
         if holder:
-            log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
+            log(f"AREA WAIT {base!r} ждёт: тот же файл правит {holder!r}")
             if tid in state["processed"]:
                 state["processed"].remove(tid)
             continue
@@ -4991,7 +5018,6 @@ def cycle(conf, state):
             continue
 
         # stage marker in the title so the Work list shows progress at a glance
-        base = re.sub(r"^\[auto\]\s*(\[\d+/\d+[^\]]*\]\s*)?", "", title).strip()
         next_title = f"[auto] [{idx + 2}/{len(stages)} {next_stage}] {base}"[:200]
 
         # Idempotency guard: if this work already has a task at the next stage
