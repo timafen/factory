@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkView } from "./Work";
@@ -82,3 +82,90 @@ it("loads and combines history for more than 100 tasks in batches", async () => 
   expect(historyRequests.map((path) => new URL(path, "http://localhost").searchParams.getAll("task_id").length))
     .toEqual([100, 1]);
 }, 10_000);
+
+it("revives only stopped work once and shows API errors", async () => {
+  let reviveCalls = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") return Response.json({ "Понятная история": { state: "stopped_owner", text: "остановлена" } });
+    if (path.includes("/revive")) {
+      reviveCalls += 1;
+      expect(init?.method).toBe("POST");
+      return new Response(JSON.stringify({ error: { code: "failed", message: "Пилот недоступен" } }), { status: 503 });
+    }
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory();
+
+  const button = await screen.findByRole("button", { name: "Оживить" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Пилот недоступен");
+  expect(reviveCalls).toBe(1);
+  expect(screen.getByRole("button", { name: "Оживить" })).toBeEnabled();
+  await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
+});
+
+it("revives stuck work through its encoded name and removes the action after success", async () => {
+  const stuck = { ...task, title: "[auto] [3/5 Implement + Test] Работа / с пробелом" };
+  let requestedPath = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") {
+      return Response.json({ "Работа / с пробелом": { state: "stuck", text: "застряла" } });
+    }
+    if (path.includes("/revive")) {
+      requestedPath = path;
+      expect(init?.method).toBe("POST");
+      return Response.json({ work: "Работа / с пробелом", state: "reviving" });
+    }
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory([stuck]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Оживить" }));
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument());
+  expect(requestedPath).toBe(`/api/v1/works/${encodeURIComponent("Работа / с пробелом")}/revive`);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("does not offer revive for ordinary failed work", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") return Response.json({});
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory([{ ...task, state: "failed" }]);
+  await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
+  expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
+});
+
+it("sends the complete 200-character work name when reviving", async () => {
+  const work = "я".repeat(200);
+  const longTask = { ...task, title: `[auto] [3/5 Implement + Test] ${work}` };
+  let requestedPath = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") return Response.json({ [work]: { state: "stuck", text: "застряла" } });
+    if (path.includes("/revive")) {
+      requestedPath = path;
+      return Response.json({ work, state: "reviving" });
+    }
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory([longTask]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Оживить" }));
+
+  await waitFor(() => expect(requestedPath).toBe(`/api/v1/works/${encodeURIComponent(work)}/revive`));
+  expect(screen.getByText(work)).toBeVisible();
+});
