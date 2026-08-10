@@ -11,7 +11,7 @@ const response: PilotSettingsResponse = {
   settings: {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
     max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2, max_parallel_works: 4,
-    day_cap_usd: 20, deploy_staging_cmd: "deploy", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
+    day_cap_usd: 20, deploy_staging_cmd: "deploy staging", deploy_factory_cmd: "deploy factory", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
     stages: [
       {workflow:"Triage",workers:{low:"worker-1",medium:"worker-1",high:"worker-new"}},
       {workflow:"Specification",workers:{low:"worker-1",medium:"worker-1",high:"worker-1"}},
@@ -45,7 +45,7 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   const poll=screen.getByLabelText("Интервал проверки, секунд"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
-  const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first");
+  const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first"); expect(body.settings.deploy_factory_cmd).toBe("deploy factory");
 });
 
 it("edits and saves only a known product provider type", async () => {
