@@ -24,8 +24,14 @@ const maxPilotConfigBytes = 1 << 20
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
 
 type PilotConfigStore struct {
-	path string
-	mu   sync.Mutex
+	path                  string
+	mu                    sync.Mutex
+	reviveSignalPublished func(string)
+}
+
+type ReviveWorkResponse struct {
+	Work  string `json:"work"`
+	State string `json:"state"`
 }
 
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
@@ -59,6 +65,149 @@ func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings
 		return protocol.PilotSettingsResponse{}, err
 	}
 	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+// Revive removes only the requested owner pause and leaves an idempotent signal
+// for pipeline_watch. Task selection remains entirely in the pilot.
+func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
+	work = strings.TrimSpace(work)
+	if work == "" {
+		return ReviveWorkResponse{}, invalid("invalid_work", "work name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, _, err := s.read()
+	if err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	known := s.hasReviveSignal(work) || s.hasReviveReceipt(work)
+	needsSignal := false
+	configChanged := false
+	stopped := make([]string, 0, len(settings.StoppedPipelines))
+	for _, name := range settings.StoppedPipelines {
+		if name == work {
+			known = true
+			needsSignal = true
+			configChanged = true
+			continue
+		}
+		stopped = append(stopped, name)
+	}
+	stalls, readErr := s.readStalls()
+	if readErr != nil {
+		return ReviveWorkResponse{}, readErr
+	}
+	if rec, ok := stalls[work]; ok && rec.Why == "give_up" {
+		known = true
+		needsSignal = true
+	}
+	if !known {
+		return ReviveWorkResponse{}, &ServiceError{Code: "work_not_stopped", Message: "work is not stopped", Status: 404}
+	}
+	created := false
+	if needsSignal || !s.hasReviveReceipt(work) {
+		created, err = s.createReviveSignal(work)
+		if err != nil {
+			return ReviveWorkResponse{}, err
+		}
+	}
+	// A stuck work is not present in stopped_pipelines. Publishing its targeted
+	// signal is the whole mutation; rewriting identical settings would add a
+	// second failure after the pilot may already have consumed the signal.
+	if !configChanged {
+		return ReviveWorkResponse{Work: work, State: "reviving"}, nil
+	}
+	settings.StoppedPipelines = stopped
+	body, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		if created {
+			_ = os.Remove(s.reviveSignalPath(work))
+		}
+		return ReviveWorkResponse{}, unavailable(err)
+	}
+	if err := s.atomicWrite(append(body, '\n')); err != nil {
+		if created {
+			_ = os.Remove(s.reviveSignalPath(work))
+		}
+		return ReviveWorkResponse{}, err
+	}
+	return ReviveWorkResponse{Work: work, State: "reviving"}, nil
+}
+
+type pilotStall struct {
+	Why string `json:"why"`
+}
+
+func (s *PilotConfigStore) revivePath() string {
+	return filepath.Join(filepath.Dir(s.path), "revive")
+}
+func (s *PilotConfigStore) stallPath() string {
+	return filepath.Join(filepath.Dir(s.path), "stalled.json")
+}
+
+func (s *PilotConfigStore) reviveSignalPath(work string) string {
+	sum := sha256.Sum256([]byte(work))
+	return filepath.Join(s.revivePath(), hex.EncodeToString(sum[:]))
+}
+
+func (s *PilotConfigStore) reviveReceiptPath(work string) string {
+	return s.reviveSignalPath(work) + ".done"
+}
+
+func (s *PilotConfigStore) hasReviveSignal(work string) bool {
+	_, err := os.Stat(s.reviveSignalPath(work))
+	return err == nil
+}
+
+func (s *PilotConfigStore) hasReviveReceipt(work string) bool {
+	_, err := os.Stat(s.reviveReceiptPath(work))
+	return err == nil
+}
+
+// createReviveSignal creates one file per work. O_EXCL makes a concurrent
+// request for another work independent, and makes a repeated request safe.
+func (s *PilotConfigStore) createReviveSignal(work string) (bool, error) {
+	if err := os.MkdirAll(s.revivePath(), 0o700); err != nil {
+		return false, unavailable(err)
+	}
+	if err := os.Remove(s.reviveReceiptPath(work)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, unavailable(err)
+	}
+	f, err := os.OpenFile(s.reviveSignalPath(work), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, unavailable(err)
+	}
+	if _, err := f.WriteString(work); err != nil {
+		_ = f.Close()
+		_ = os.Remove(s.reviveSignalPath(work))
+		return false, unavailable(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(s.reviveSignalPath(work))
+		return false, unavailable(err)
+	}
+	if s.reviveSignalPublished != nil {
+		s.reviveSignalPublished(work)
+	}
+	return true, nil
+}
+
+func (s *PilotConfigStore) readStalls() (map[string]pilotStall, error) {
+	result := map[string]pilotStall{}
+	body, err := os.ReadFile(s.stallPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, &ServiceError{Code: "pilot_state_invalid", Message: "pilot stall state contains invalid JSON", Status: 503, Err: err}
+	}
+	return result, nil
 }
 
 func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
@@ -132,7 +281,8 @@ func (s *PilotConfigStore) atomicWrite(body []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err == nil {
+	err = tmp.Chmod(0o600)
+	if err == nil {
 		_, err = tmp.Write(body)
 	}
 	if err == nil {
