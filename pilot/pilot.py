@@ -2116,9 +2116,18 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         _fail_diag_repair(conf, base, repair,
                           f"не удалось проверить все активные запуски: {e}")
         return False
-    live = [t for t in all_tasks
-            if base_title(t.get("title", "")) == base
-            and t.get("state") in ("running", "queued", "preparing")]
+    live = []
+    live_ids = set()
+    for task in all_tasks:
+        if (base_title(task.get("title", "")) != base
+                or task.get("state") not in ("running", "queued", "preparing")):
+            continue
+        task_id = task.get("id")
+        if task_id and task_id in live_ids:
+            continue
+        live.append(task)
+        if task_id:
+            live_ids.add(task_id)
     candidate_state = candidate.get("state")
     running_candidate = (candidate_state == "running" and len(live) == 1
                          and live[0].get("id") == candidate.get("id"))

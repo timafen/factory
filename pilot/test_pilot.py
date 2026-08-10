@@ -367,10 +367,17 @@ class DiagnosisRepairTests(unittest.TestCase):
             "workflow_revision_id": "revision-id",
         }
 
-    def test_cancel_once_wait_for_terminal_then_resume_once_on_same_branch(self):
+    def test_duplicate_active_id_is_cancelled_once_then_resumed_same_branch(self):
         verdict = {"причина": "исполнитель повторяет один и тот же шаг",
                    "решение": "исправить проверку состояния", "нужен_владелец": False}
-        with mock.patch.object(pilot, "api", side_effect=self.detail_api):
+
+        def duplicate_list_api(path, body=None):
+            if path == "/tasks?limit=200":
+                self.api_calls.append((path, body))
+                return {"tasks": [self.task, dict(self.task)], "next_cursor": None}
+            return self.detail_api(path, body)
+
+        with mock.patch.object(pilot, "api", side_effect=duplicate_list_api):
             pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
             pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
