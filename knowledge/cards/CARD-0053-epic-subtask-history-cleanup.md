@@ -1,14 +1,15 @@
-# Завершение подзадач эпика: чистота поставки
+# CARD-0053 — Завершение подзадач эпика переживает очистку истории
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: `factory/15a169f0-0eb-d2deb02e-cdc`.
-Head commit: `b32cdd6` (чистая поставка до записи результатов Verify).
-Delivery result: поставка собрана заново от актуального `origin/main` и содержит только эту карточку; изменения пилота и общего журнала в неё не входят.
-What changed: удалена привязка итоговой карточки к устаревающему хешу коммита, а результат поставки описан словами.
-Evidence: `go test -timeout 5m ./...` — 13 пакетов, OK; `go vet ./...` — OK; `python3 -m unittest pilot.test_pilot` — OK; в `web/` обязательный `npx tsc -p tsconfig.app.json --noEmit` — OK; `git diff --name-only origin/main...HEAD` содержит только эту карточку; `git diff --check origin/main...HEAD` завершилась без замечаний.
-One next action: влить чистую ветку в `main`.
+Status: Verified PASS — готово к слиянию.
+Branch: `factory/80aca1a3-f87-4b58af7e-2a5`.
+Implementation commit: `4e40ff2` — Пилот помнит завершение подзадач после очистки истории.
+What changed: Пилот сохраняет durable receipt завершения и восстанавливает running-подзадачу только по точному свежему merge после её `started_at`.
+Перезапуск с `failed` или `stuck` фиксирует границу по новейшей одноимённой задаче, поэтому очистка истории не применяет старую квитанцию.
+`hold_reason` удерживает очередь, а `parallel_ok` продолжает разрешать независимый запуск.
+Evidence: `python3 -m unittest pilot.test_pilot` — 115 tests OK; `just build` — OK; `git diff --check origin/main...HEAD` — OK.
+One next action: влить ветку в `main`.
 
 ## LOG
 
@@ -34,3 +35,11 @@ One next action: влить чистую ветку в `main`.
 | Полные серверные и пилотные проверки | `go test -timeout 5m ./...`; `go vet ./...`; `python3 -m unittest pilot.test_pilot` | OK; Go: 13 пакетов, Pilot: OK. |
 | UI-проверка | `npm run lint`; `npm run typecheck`; `npm test` | lint и typecheck — OK; полный Vitest: 122/123, один нестабильный сбой в `src/App.test.tsx` вне области поставки; повтор `npx vitest run src/App.test.tsx` — 63/63 OK. |
 | Нет пробельных артефактов | `git diff --check origin/main...HEAD` | OK. |
+
+### 2026-08-10 — Implement
+
+Полная реализация перенесена из `factory/f038362a-a18-27b85255-e35` поверх
+свежего `origin/main`: только `pilot/pilot.py` и `pilot/test_pilot.py`.
+`4e40ff2` сохраняет durable receipt, отсеивает старый merge после `failed` и
+`stuck`, и не меняет семантику `hold_reason` и `parallel_ok`.
+`python3 -m unittest pilot.test_pilot` — 115 OK; `just build` — OK.
