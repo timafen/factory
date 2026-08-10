@@ -158,6 +158,16 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 Доказательство: `bash ops/test-fx-factory-release.sh`, чистый `npm ci` + typecheck/test/Vite и `go test ./...` — PASS.
 Открытый риск: привилегированный живой выкат намеренно не запускался; его процессная семантика покрыта изолированной shell-фикстурой.
 
+### 2026-08-10 — Загрузка четырёх потоков на Обзоре
+На ветке `factory/6ab50efb-d7c-6f0f66e4-296` добавлены durable samples product works: 24ч/7д, 0–4 активных, средняя занятость, p90 очереди и причины простоя.
+Доказательство: `go test ./internal/controlplane` и `npm --prefix web test -- --run src/Overview.test.ts` проходят; production build веба проходит.
+Риск: до накопления как минимум двух сэмплов API и UI честно показывают low data; незафиксированные причины очереди остаются `unknown`.
+
+### 2026-08-10 — Implement: метрика потоков не зависит от открытого Обзора
+На ветке `factory/ea9c8aa0-f66-6ecfe85f-26f` коммит `5837b6fb789c0eed095a17758952882ade88cc10` считает direct/delegated product tasks и пишет durable samples серверным минутным sampler; patrol, Automation и служебные префиксы исключает общий с efficiency классификатор.
+Доказательство: `go test -count=1 ./...`, targeted `go test -race`, 132/132 Vitest, `go vet ./...`, ESLint, `go build ./...` и web production build — PASS; тест sampler получил два сэмпла без GET и подтвердил shutdown.
+Открытый риск: точные причины `provider_limit`, `repository_conflict` и `release_lock` появятся только после добавления отдельного durable/system источника; пока недоказанная блокировка честно остаётся `unknown`.
+
 ### 2026-08-10 — Остановленный выпуск не оставляет тестовые процессы
 На ветке `factory/0724b7f5-761-f2293c84-560` очистка ждёт готовность pid-файла process group, затем завершает и дожидается обеих тестовых групп при ошибке, HUP, INT, TERM и EXIT.
 Фоновая оболочка явно сбрасывает наследованный ignored SIGINT до запуска тестов; параллельные ворота сохранены.

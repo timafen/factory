@@ -145,6 +145,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/occurrences/{occurrence_id}/skip", api.skipLegacyPollerOccurrence)
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/efficiency", api.getEfficiency)
+	mux.HandleFunc("GET /api/v1/metrics/product-capacity", api.getProductCapacity)
 	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("POST /api/v1/dialog/messages", api.postDialogMessage)
@@ -387,6 +388,19 @@ func (a *API) getEfficiency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary, err := a.store.Efficiency(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (a *API) getProductCapacity(w http.ResponseWriter, r *http.Request) {
+	if len(r.URL.Query()) != 0 {
+		writeError(w, invalid("invalid_query", "product capacity metrics do not accept query parameters"))
+		return
+	}
+	summary, err := a.store.ProductCapacity(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return

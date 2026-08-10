@@ -53,6 +53,13 @@ type EfficiencyPeriod = {
 };
 type EfficiencyComparison = { assessment: "low_data" | "degraded" | "mixed" | "improved" | "stable"; current: EfficiencyPeriod; previous: EfficiencyPeriod };
 type EfficiencySummary = { generated_at: string; minimum_sample: number; release_observation_started_at?: string; periods: Record<"24h" | "7d", EfficiencyComparison> };
+type ProductCapacityPeriod = {
+  started_at: string; ended_at: string; observation_from?: string; samples: number; low_data: boolean;
+  active_time: { active: number; seconds: number; share: number | null }[];
+  average_busy: number | null; queue_p90: number | null;
+  underload: { reason: string; seconds: number; share: number | null }[];
+};
+type ProductCapacitySummary = { generated_at: string; capacity: number; periods: Record<"24h" | "7d", ProductCapacityPeriod> };
 
 export type ProductEnvironment = { name: string; status: "available" | "unavailable"; release_label?: string; health?: "healthy" | "unhealthy" };
 export type ProductProject = { id: string; name: string; remote_identity: string; main_subject?: string; provider_status: "configured" | "not_configured"; environments: ProductEnvironment[] };
@@ -257,23 +264,62 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
   );
 }
 
+const UNDERLOAD_RU: Record<string, string> = {
+  no_ready_work: "нет готовых работ", owner_question: "вопрос владельцу",
+  provider_limit: "лимит провайдера", repository_conflict: "конфликт области или репозитория",
+  release_lock: "блокировка выпуска", unknown: "unknown",
+};
+
+function ProductCapacityPanel({ summary }: { summary: ProductCapacitySummary }) {
+  const [window, setWindow] = useState<"24h" | "7d">("24h");
+  const period = summary.periods[window];
+  if (!period) return null;
+  const percentage = (value: number | null) => value == null ? "—" : `${Math.round(value * 100)}%`;
+  return <section style={card} aria-label="Загрузка четырёх потоков">
+    <div className="efficiency-heading">
+      <div><div className="efficiency-title"><Users size={16} color="#8ec5ff" /><strong>Загрузка {summary.capacity} потоков</strong></div>
+        <div className="efficiency-subtitle">Только product works; patrol, scheduled и helper исключены</div></div>
+      <div className="window-picker" aria-label="Период загрузки">
+        <button type="button" aria-pressed={window === "24h"} onClick={() => setWindow("24h")}>24 часа</button>
+        <button type="button" aria-pressed={window === "7d"} onClick={() => setWindow("7d")}>7 дней</button>
+      </div>
+    </div>
+    {period.low_data && <div className="efficiency-verdict"><Pill text="данных мало" tone="muted" /><span>наблюдение началось {period.observation_from ? new Date(period.observation_from).toLocaleString("ru-RU") : "сейчас"}; историю не восстанавливали.</span></div>}
+    <div className="efficiency-primary">
+      <div><strong>{period.average_busy == null ? "—" : `${period.average_busy.toFixed(1)} / ${summary.capacity}`}</strong><span>средняя занятость</span><small>сэмплов: {period.samples}</small></div>
+      <div><strong>{period.queue_p90 == null ? "—" : period.queue_p90}</strong><span>p90 очереди</span><small>продуктовых работ</small></div>
+      <div><strong>{period.active_time.map((item) => `${item.active}: ${percentage(item.share)}`).join(" · ")}</strong><span>доля времени 0–4</span><small>в каждом числе — активных работ : доля</small></div>
+    </div>
+    <details className="efficiency-details"><summary>Показать причины недозагрузки</summary>
+      <div className="efficiency-sources">{period.underload.map((item) => <div key={item.reason}>{UNDERLOAD_RU[item.reason] ?? item.reason}: <strong>{percentage(item.share)}</strong></div>)}
+        <br />Причина показывается только по наблюдаемому факту. Если очередь есть, а подтверждения причины нет, это <strong>unknown</strong>; нули не означают, что причина исключена.</div>
+    </details>
+  </section>;
+}
+
 /** Главный экран отвечает на один вопрос: всё ли идёт, и если нет — что мешает. */
 export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   const [d, setD] = useState<Dash>({});
   const [activeWork, setActiveWork] = useState<OverviewWork[]>([]);
   const [efficiency, setEfficiency] = useState<EfficiencySummary>();
+  const [capacity, setCapacity] = useState<ProductCapacitySummary>();
   const [loading, setLoading] = useState(true);
 
   const pull = async () => {
     try {
-      const [dashboardResponse, tasks, worksResponse, efficiencyResponse] = await Promise.all([
+      const [dashboardResponse, tasks, worksResponse, efficiencyResponse, capacityResponse] = await Promise.all([
         fetch("/api/v1/dashboard"), fetchAllTasks(), fetch("/api/v1/works"),
         fetch("/api/v1/metrics/efficiency"),
+        fetch("/api/v1/metrics/product-capacity"),
       ]);
       if (dashboardResponse.ok) setD((await dashboardResponse.json()) as Dash);
       if (efficiencyResponse.ok) {
         const value = (await efficiencyResponse.json()) as EfficiencySummary;
         if (value.periods?.["24h"] && value.periods?.["7d"]) setEfficiency(value);
+      }
+      if (capacityResponse.ok) {
+        const value = (await capacityResponse.json()) as ProductCapacitySummary;
+        if (value.periods?.["24h"] && value.periods?.["7d"]) setCapacity(value);
       }
       if (worksResponse.ok) {
         const works = (await worksResponse.json()) as Record<string, WorkMeta>;
@@ -373,6 +419,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       </section>
 
       {efficiency && <EfficiencyPanel summary={efficiency} />}
+      {capacity && <ProductCapacityPanel summary={capacity} />}
 
       {(d.recent_done ?? []).length > 0 && (
         <section style={card} aria-label="Сделано недавно">
