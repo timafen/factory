@@ -1075,6 +1075,211 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
 
+
+class WorkArchiveCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1_786_320_000
+        self.works = {}
+        self.statuses = {}
+        self.saved = []
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.merges = os.path.join(self.temporary.name, "merges.jsonl")
+        open(self.merges, "w", encoding="utf-8").close()
+
+        # Production writes legacy merge receipts in the server's time.Local.
+        self.old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Chicago"
+        if hasattr(time, "tzset"):
+            time.tzset()
+        self.addCleanup(self.restore_timezone)
+
+    def restore_timezone(self):
+        if self.old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self.old_tz
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    @staticmethod
+    def task(task_id, base, state, minute=0, stage="Review", request_key="",
+             created_at=""):
+        return {
+            "id": task_id, "title": f"[auto] [4/5 {stage}] {base}",
+            "state": state, "request_key": request_key,
+            "created_at": created_at or f"2026-08-10T18:{minute:02d}:00Z",
+        }
+
+    def remember(self, base, origin="owner", start_stage="Review", skipped=None):
+        self.works[base] = {
+            "origin": origin,
+            "start_stage": start_stage,
+            "skipped": (["Triage", "Specification", "Implement + Test"]
+                        if skipped is None else skipped),
+        }
+
+    def add_merge(self, base, at):
+        with open(self.merges, "a", encoding="utf-8") as journal:
+            journal.write(json.dumps({"base": base, "at": at}) + "\n")
+
+    def load(self, path, default=None):
+        if path == pilot.WORKS_PATH:
+            return self.works
+        if path.endswith("/pilot/work_status.json"):
+            return self.statuses
+        return default
+
+    def save(self, path, value):
+        self.saved.append(path)
+        if path == pilot.WORKS_PATH:
+            self.works = value
+        elif path.endswith("/pilot/work_status.json"):
+            self.statuses = value
+
+    def run_cleanup(self, tasks, questions=None, stopped=None):
+        conf = {
+            "stopped_pipelines": stopped or [],
+            "stages": [
+                {"workflow": "Triage"}, {"workflow": "Specification"},
+                {"workflow": "Implement + Test"}, {"workflow": "Review"},
+                {"workflow": "Verify"},
+            ],
+        }
+        with mock.patch.object(pilot, "load", side_effect=self.load), \
+                mock.patch.object(pilot, "save", side_effect=self.save), \
+                mock.patch.object(pilot, "load_questions", return_value=questions or []), \
+                mock.patch.object(pilot, "MERGES_PATH", self.merges), \
+                mock.patch.object(pilot.time, "time", return_value=self.now):
+            pilot.cleanup_work_archive(conf, tasks)
+
+    def assert_archived(self, base):
+        self.assertIn("closed", self.works[base])
+        self.assertEqual(self.statuses[base]["state"], "archived")
+        self.assertEqual(self.works[base]["retention_until"], "2026-11-08T00:00:00Z")
+
+    # Nine production regressions: a real merge, the Russian patrol, a product
+    # schedule, two independent-check origins, required gates, owner questions,
+    # explicit/dead-end stops, and live/replaced generations.
+    def test_01_production_legacy_merge_time_uses_local_instant(self):
+        self.add_merge("Уже влито", "2026-08-10 13:30:26")
+        self.add_merge("Ещё не влито", "2026-08-10 13:30:26")
+        tasks = [
+            self.task("merged", "Уже влито", "succeeded", stage="Verify",
+                      created_at="2026-08-10T18:30:25.900Z"),
+            self.task("newer", "Ещё не влито", "succeeded", stage="Verify",
+                      created_at="2026-08-10T18:30:27Z"),
+        ]
+
+        self.run_cleanup(tasks)
+
+        self.assert_archived("Уже влито")
+        self.assertNotIn("closed", self.works["Ещё не влито"])
+        merged_at = pilot._work_time("2026-08-10 13:30:26")
+        self.assertIsNotNone(merged_at.tzinfo)
+        self.assertEqual(merged_at.isoformat(), "2026-08-10T18:30:26+00:00")
+
+    def test_02_cancelled_russian_factory_patrol_is_archived(self):
+        patrol = {
+            "id": "patrol", "title": "Патруль Factory: scheduled 2026-08-10T18:00:00Z",
+            "state": "cancelled",
+            "request_key": "automation:4f3a:schedule:scheduled:2026-08-10T18:00:00Z",
+            "created_at": "2026-08-10T18:00:00Z",
+        }
+
+        self.run_cleanup([patrol])
+
+        self.assert_archived(patrol["title"])
+
+    def test_03_cancelled_product_schedule_is_not_patrol(self):
+        product = {
+            "id": "prices", "title": "Сверка продуктовых цен: scheduled 2026-08-10",
+            "state": "cancelled",
+            "request_key": "automation:pricing:schedule:scheduled:2026-08-10",
+            "created_at": "2026-08-10T18:01:00Z",
+        }
+
+        self.run_cleanup([product])
+
+        self.assertNotIn("closed", self.works[product["title"]])
+        self.assertNotIn("archived_attempts", self.works[product["title"]])
+
+    def test_04_assistant_independent_review_is_archived(self):
+        self.remember("Review помощника", origin="assistant")
+        self.run_cleanup([self.task("assistant-review", "Review помощника", "succeeded")])
+        self.assert_archived("Review помощника")
+
+    def test_05_orchestrator_independent_verify_is_archived(self):
+        self.remember(
+            "Verify оркестратора", origin="orchestrator", start_stage="Verify",
+            skipped=["Triage", "Specification", "Implement + Test", "Review"],
+        )
+        self.run_cleanup([
+            self.task("orchestrator-verify", "Verify оркестратора", "failed", stage="Verify")
+        ])
+        self.assert_archived("Verify оркестратора")
+
+    def test_06_unfinished_or_required_gates_are_not_archived(self):
+        self.remember("Обязательная проверка", start_stage="Triage", skipped=[])
+        self.remember("Без skipped", skipped=[])
+        self.remember("Незавершённый Review")
+        tasks = [
+            self.task("required", "Обязательная проверка", "succeeded"),
+            self.task("no-skips", "Без skipped", "succeeded"),
+            self.task("unfinished", "Незавершённый Review", "blocked"),
+        ]
+        self.run_cleanup(tasks)
+        for base in ("Обязательная проверка", "Без skipped", "Незавершённый Review"):
+            self.assertNotIn("closed", self.works[base])
+
+    def test_07_open_question_is_not_archived(self):
+        self.remember("Открытый вопрос")
+        self.run_cleanup(
+            [self.task("question", "Открытый вопрос", "failed")],
+            questions=[{"task_id": "question", "status": "open"}],
+        )
+        self.assertNotIn("closed", self.works["Открытый вопрос"])
+
+    def test_08_owner_stop_and_genuine_stuck_are_not_archived(self):
+        self.remember("Пауза владельца")
+        self.remember("Настоящий тупик")
+        self.statuses["Пауза владельца"] = {"state": "stopped_owner"}
+        self.statuses["Настоящий тупик"] = {"state": "stuck"}
+        tasks = [
+            self.task("paused", "Пауза владельца", "failed"),
+            self.task("stuck", "Настоящий тупик", "failed"),
+        ]
+        self.run_cleanup(tasks, stopped=["Пауза владельца"])
+        for base in ("Пауза владельца", "Настоящий тупик"):
+            self.assertNotIn("closed", self.works[base])
+
+    def test_09_live_generation_stays_open_and_old_attempt_is_idempotent(self):
+        tasks = [
+            self.task("old", "Новое поколение", "failed", 1),
+            self.task("queued", "Новое поколение", "queued", 2),
+            self.task("running", "Работа выполняется", "running", 3),
+        ]
+        self.run_cleanup(tasks)
+
+        self.assertNotIn("closed", self.works["Новое поколение"])
+        self.assertNotIn("closed", self.works["Работа выполняется"])
+        self.assertEqual(
+            [item["task_id"] for item in self.works["Новое поколение"]["archived_attempts"]],
+            ["old"],
+        )
+        writes_after_first_run = len(self.saved)
+        self.run_cleanup(tasks)
+        self.assertEqual(len(self.saved), writes_after_first_run)
+
+
+class PipelineWatchMergeTests(unittest.TestCase):
+    def setUp(self):
+        self.conf = {
+            "stages": [{"workflow": "Specification"}, {"workflow": "Implement"},
+                       {"workflow": "Review"}],
+            "timeout_seconds": 900,
+        }
+
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
         self.conf["stages"] = [{"workflow": "Verify"}]
@@ -1114,7 +1319,7 @@ class PipelineWatchTests(unittest.TestCase):
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "rescue_queued",
                  "supersede_stale_questions", "handle_answers", "advance_epics",
-                 "autostart_plan")
+                 "autostart_plan", "cleanup_work_archive")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
