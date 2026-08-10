@@ -69,6 +69,7 @@ test-worker-race:
 test-tooling:
     ./scripts/test-build.sh
     ./scripts/test-update-go-minimum.sh
+    ./ops/test-provision-codex-auth.sh
 
 # Test local startup, readiness, and signal handling.
 test-launcher:
