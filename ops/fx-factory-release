@@ -33,21 +33,30 @@ mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
-cleanup() { rm -rf "$work"; }
+gate_pids=()
+gate_pid_files=()
+gate_logs=()
+gate_names=()
+cleanup() {
+  stop_test_gates
+  wait_for_test_gates
+  rm -rf "$work"
+}
+on_release_exit() { cleanup; }
+trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
 # их общего успеха. Каждая группа живёт в отдельной сессии: при остановке
 # выпуска завершается вся её группа процессов, включая возможных помощников
 # тестового раннера.
-gate_pids=()
-gate_pid_files=()
-gate_logs=()
-gate_names=()
-
+# setsid может forkнуть, поэтому PID фонового launcher не всегда совпадает с
+# PGID. Launcher обязан сообщить PGID до возврата из этой функции: сигнал в
+# этот момент ждёт готовности файла, а не убивает launcher и не теряет группу.
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
-  local name=$1 log=$2 pid_file=$3
+  local name=$1 log=$2 pid_file=$3 i
   shift 3
   as_user setsid bash -c '
+    trap - INT
     printf "%s\\n" "$$" > "$1"
     shift
     exec "$@"
@@ -56,21 +65,27 @@ start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <к
   gate_pid_files+=("$pid_file")
   gate_logs+=("$log")
   gate_names+=("$name")
+  for ((i = 0; i < 500; i++)); do
+    [ -s "$pid_file" ] && return 0
+    sleep 0.01
+  done
+  fail "не дождался отдельной process group для $name"
+  return 1
 }
 
 stop_test_gates() {
-  local pid pid_file group_pid
+  local pid_file group_pid i
   for pid_file in "${gate_pid_files[@]}"; do
-    if [ -r "$pid_file" ]; then
-      read -r group_pid <"$pid_file" || true
-      case "$group_pid" in
-        ''|*[!0-9]*) ;;
-        *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
-      esac
-    fi
-  done
-  for pid in "${gate_pids[@]}"; do
-    kill -TERM "$pid" 2>/dev/null || true
+    [ -e "$pid_file" ] || continue
+    group_pid=''
+    for ((i = 0; i < 500; i++)); do
+      if [ -s "$pid_file" ]; then read -r group_pid <"$pid_file" || true; fi
+      case "$group_pid" in ''|*[!0-9]*) sleep 0.01 ;; *) break ;; esac
+    done
+    case "$group_pid" in
+      ''|*[!0-9]*) ;;
+      *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
+    esac
   done
 }
 
@@ -106,6 +121,9 @@ run_parallel_test_gates() {
   gate_logs=()
   gate_names=()
 
+  # A shell started as a background job can inherit ignored SIGINT. Reset it
+  # before installing our handler so INT follows the same cleanup path.
+  trap - HUP INT TERM
   trap 'on_test_gate_signal HUP' HUP
   trap 'on_test_gate_signal INT' INT
   trap 'on_test_gate_signal TERM' TERM

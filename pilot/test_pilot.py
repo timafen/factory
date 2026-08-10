@@ -2544,6 +2544,7 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         question = pilot.write_question(
             "manual-question", "Triage", "Specification", "Ручная работа",
             "repo-id", "нужен выбор", "Продолжать?", [], "", status="answered")
+        self.assertRegex(question["asked_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         question["answer"] = "Отложить и сначала исправить окружение"
         question["answered_by"] = "owner"
         pilot.save(os.path.join(self.question_dir, "manual-question.json"), question)

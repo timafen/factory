@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Questions are pipeline stops that need the owner. The pilot writes them,
@@ -95,6 +96,8 @@ func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	rec["answer"] = req.Answer
 	rec["status"] = "answered"
+	rec["answered_by"] = "owner"
+	rec["answered_at"] = a.store.now().UTC().Format(time.RFC3339)
 	updated, err := json.MarshalIndent(rec, "", " ")
 	if err != nil {
 		writeError(w, unavailable(err))

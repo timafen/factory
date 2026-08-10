@@ -23,6 +23,19 @@ assert_before() {
   second=$(line_of "$1" "$3") || fail "$1 is missing: $3"
   [ "$first" -lt "$second" ] || fail "$2 did not run before $3"
 }
+assert_no_fixture_processes() {
+  local case_dir=$1 pid args by_cmdline='' by_cwd
+  while read -r pid args; do
+    [[ "$args" == *"$case_dir"* ]] || continue
+    by_cmdline+="${pid} ${args}"$'\n'
+  done < <(ps -eo pid=,args=)
+  by_cwd=$(find /proc/[0-9]*/cwd -maxdepth 0 -lname "$case_dir*" -printf '%h\n' 2>/dev/null || true)
+  if [ -n "$by_cmdline$by_cwd" ]; then
+    [ -z "$by_cmdline" ] || echo "leaked fixture cmdline: $by_cmdline" >&2
+    [ -z "$by_cwd" ] || echo "leaked fixture cwd: $by_cwd" >&2
+    fail "processes survived fixture $case_dir"
+  fi
+}
 
 make_fixture() {
   case_dir=$1 mode=$2
@@ -315,6 +328,7 @@ for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop w
   tail -n 2 "$failed/events" | diff -u - <(printf '%s\n' \
     'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
     || fail "$mode rollback restart order is wrong"
+  assert_no_fixture_processes "$failed"
 done
 
 brain_failed="$temporary/brain-install-fail"
@@ -327,6 +341,7 @@ tail -n 2 "$brain_failed/events" | diff -u - <(printf '%s\n' \
   || fail "brain-install-fail did not roll back the binary pair"
 ! grep -F 'systemd-run ' "$brain_failed/events" >/dev/null \
   || fail "failed brain install scheduled a Pilot restart"
+assert_no_fixture_processes "$brain_failed"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
@@ -334,6 +349,7 @@ if run_release "$build_failed" worker-build-fail; then fail "worker build unexpe
 assert_file "$build_failed/install/factory-server" old-server
 assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
+assert_no_fixture_processes "$build_failed"
 
 for mode in ui-test-fail go-test-fail release-test-fail; do
   gate_failed="$temporary/$mode"
@@ -348,29 +364,33 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
   [ ! -s "$gate_failed/events" ] || fail "services restarted after $mode"
   ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
     || fail "binaries were built after $mode"
+  assert_no_fixture_processes "$gate_failed"
 done
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
-for signal in HUP TERM; do
-  signaled="$temporary/signal-$signal"
-  make_fixture "$signaled" signal-gates
-  start_release "$signaled" signal-gates
-  wait_for_file "$signaled/ui-running"
-  wait_for_file "$signaled/go-running"
-  kill -"$signal" "$release_pid"
-  set +e
-  wait "$release_pid"
-  status=$?
-  set -e
-  [ "$status" -eq 130 ] || fail "signal $signal returned $status instead of 130"
-  assert_file "$signaled/install/factory-server" old-server
-  assert_file "$signaled/install/factory-worker" old-worker
-  [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
-  grep -Fx 'ui-stopped' "$signaled/gate-children" >/dev/null \
-    || fail "signal $signal left the UI test group running"
-  grep -Fx 'go-stopped' "$signaled/gate-children" >/dev/null \
-    || fail "signal $signal left the Go test group running"
+for signal in HUP INT TERM; do
+  for attempt in 1 2 3 4 5; do
+    signaled="$temporary/signal-$signal-$attempt"
+    make_fixture "$signaled" signal-gates
+    start_release "$signaled" signal-gates
+    wait_for_file "$signaled/ui-running"
+    wait_for_file "$signaled/go-running"
+    kill -"$signal" "$release_pid"
+    set +e
+    wait "$release_pid"
+    status=$?
+    set -e
+    [ "$status" -eq 130 ] || fail "signal $signal attempt $attempt returned $status instead of 130"
+    assert_file "$signaled/install/factory-server" old-server
+    assert_file "$signaled/install/factory-worker" old-worker
+    [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
+    grep -Fx 'ui-stopped' "$signaled/gate-children" >/dev/null \
+      || fail "signal $signal left the UI test group running"
+    grep -Fx 'go-stopped' "$signaled/gate-children" >/dev/null \
+      || fail "signal $signal left the Go test group running"
+    assert_no_fixture_processes "$signaled"
+  done
 done
 
 auth_failed="$temporary/auth-provision-fail"
@@ -387,6 +407,7 @@ assert_file "$auth_failed/install/factory-worker" old-worker
   || fail "control installation ran after unsafe Codex auth"
 grep -F 'авторизация Codex не прошла безопасную проверку' "$auth_failed/output" >/dev/null \
   || fail "release did not explain the Codex auth failure"
+assert_no_fixture_processes "$auth_failed"
 
 locked="$temporary/locked"
 make_fixture "$locked" locked
