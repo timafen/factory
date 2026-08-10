@@ -1524,6 +1524,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_PATH = f"{HOME}/pilot/revive.json"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1559,6 +1560,55 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def claim_revive_signals():
+    """Atomically detach signals so a concurrent API write stays pending."""
+    claimed = []
+    snapshot = f"{REVIVE_PATH}.processing-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.replace(REVIVE_PATH, snapshot)
+        claimed.append(snapshot)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        log("revive_claim_error", repr(error))
+        return {}, []
+
+    # A crash after claiming must not strand a signal forever. Pick up every
+    # older spool file as well as the snapshot detached in this cycle.
+    for path in glob.glob(REVIVE_PATH + ".processing-*"):
+        if path not in claimed:
+            claimed.append(path)
+    signals = {}
+    readable = []
+    for path in sorted(claimed):
+        value = load(path, None)
+        if not isinstance(value, dict):
+            log("revive_signal_invalid", repr(path))
+            continue
+        signals.update(value)
+        readable.append(path)
+    return signals, readable
+
+
+def finish_revive_signals(claimed, completed=None):
+    completed = None if completed is None else set(completed)
+    for path in claimed:
+        if completed is not None:
+            value = load(path, None)
+            if isinstance(value, dict):
+                pending = {base: signal for base, signal in value.items()
+                           if base not in completed}
+                if pending:
+                    save(path, pending)
+                    continue
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            log("revive_finish_error", repr(error))
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1570,10 +1620,18 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if m:
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
+    revive, claimed_revive = claim_revive_signals()
+    completed_revive = set()
     now = int(time.time())
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in list(revive):
+        mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
+            if base in revive:
+                completed_revive.add(base)
             continue
         if base in stopped:
             rec = mem.get(base) or {}
@@ -1581,11 +1639,29 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec.setdefault("since", now)
             mem[base] = rec
             continue
-        idx = [stages.index(st) for st, t in lst
-               if t.get("state") == "succeeded" and st in stages]
-        if not idx:
-            continue
-        far = max(idx)
+        succeeded = [(st, t) for st, t in lst
+                     if t.get("state") == "succeeded" and st in stages]
+        if not succeeded:
+            if base not in revive:
+                continue
+            # Revive of a pipeline stopped on its first stage has no success
+            # to continue from. Start its first unfinished stage immediately.
+            far = -1
+            _, src = max(
+                lst,
+                key=lambda item: (item[1].get("created_at") or "",
+                                  item[1].get("id") or ""),
+            )
+        else:
+            # A later rework lap may successfully finish an earlier stage after a
+            # Review from the previous lap. Continue from the latest success, not
+            # the furthest stage that happened to succeed at any time.
+            latest_stage, src = max(
+                succeeded,
+                key=lambda item: (item[1].get("created_at") or "",
+                                  item[1].get("id") or ""),
+            )
+            far = stages.index(latest_stage)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
             continue
@@ -1609,29 +1685,38 @@ def pipeline_watch(conf, tasks, workflows, workers):
         worker = workers.get(wname)
         if not nw or not nw.get("enabled") or not worker:
             continue
-        src = next((t for st, t in lst if st == stages[far]), None)
-        rid = (src or {}).get("repository_id") or ""
+        rid = src.get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        previous = stages[far] if far >= 0 else "начало конвейера"
+        if far >= 0:
+            recovery_context = ("Конвейер встал: предыдущий этап закончился, "
+                                "а следующий никто не создал. Продолжай с того "
+                                "же места, на той же ветке, ничего не начиная "
+                                "заново.")
+        else:
+            recovery_context = ("Конвейер остановился до успешного завершения "
+                                "первого этапа. Запусти первую незавершённую "
+                                "стадию на той же ветке.")
         try:
             create_task({"request_key": str(uuid.uuid4()), "title": title,
-                         "context": ("Конвейер встал: предыдущий этап закончился, "
-                                     "а следующий никто не создал. Продолжай с того "
-                                     "же места, на той же ветке, ничего не начиная "
-                                     "заново.\n\nРабота: " + base +
-                                     "\nПредыдущий этап: " + stages[far])[:60000],
+                         "context": (recovery_context + "\n\nРабота: " + base +
+                                     "\nПредыдущая точка: " + previous)[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
                          "workflow_revision_id": nw["revision_id"]}, conf)
+            if base in revive:
+                completed_revive.add(base)
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
-                ": " + stages[far] + " -> " + nxt)
+                ": " + previous + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
-                   base + "\n" + stages[far] + " → " + nxt, tags="wrench")
+                   base + "\n" + previous + " → " + nxt, tags="wrench")
         except Exception as e:
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
+    finish_revive_signals(claimed_revive, completed_revive)
     try:
         work_status_write(mem)
     except Exception as e:
