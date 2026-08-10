@@ -4,11 +4,11 @@
 
 - Stage: Implement + Test
 - Status: PASS — блокирующее замечание Review исправлено на свежем `origin/main`.
-- Branch: `factory/85b7f6bd-a79-2f2ac257-1ac`
-- Implementation commit: `492ea75`.
-- What changed: при revive после `failed` или `cancelled` первого этапа пилот повторяет этот этап вместо выхода без Task; добавлены две регрессии.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 25 pilot, 8 UI); `go test ./internal/controlplane -run 'Revive|PilotConfigStorePreservesNotes'` → PASS; `just build` → PASS.
-- Next action: повторить Review исправленного сценария первого этапа.
+- Branch: `factory/5b86090e-caa-69059181-548`.
+- Head commit: `891daf6`.
+- What changed: для `stuck` публикуется только адресный сигнал без записи неизменной конфигурации; синхронизированная регрессия подтверждает успешный ответ при немедленном чтении сигнала пилотом.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 23 pilot, 8 UI); `just build` → PASS.
+- Next action: повторить Review исправленной атомарности `stuck`.
 
 ## LOG
 
@@ -146,3 +146,7 @@
 ### 2026-08-09 — Implement
 
 После адресной доработки `pipeline_watch` больше не теряет revive-сигнал, если первый этап завершился как `failed` или `cancelled`: первый незавершённый этап запускается повторно с тем же repository и сигнал подтверждается только после создания Task. Отдельные регрессии закрепляют оба терминальных состояния. `just test-revive-stopped-work` прошёл (Go API, 25 pilot, 8 UI), целевой Go-тест сохранения настроек и `just build` успешны. Коммит реализации: `492ea75`.
+
+### 2026-08-10 — Implement
+
+Для состояния `stuck` control plane больше не переписывает неизменившуюся конфигурацию после публикации сигнала. Синхронизированный Go-тест заставляет пилота немедленно прочитать и подтвердить сигнал, делает последующую запись конфигурации невозможной и подтверждает отсутствие ложной ошибки API. `just test-revive-stopped-work` прошёл: Go API, 23 pilot-теста и 8 UI-тестов; `just build` успешен. Коммит реализации: `891daf6`.
