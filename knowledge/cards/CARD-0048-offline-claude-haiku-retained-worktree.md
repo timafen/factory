@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: implemented
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/55529d04-53b-d876a132-bb3`
-- Head commit: `e326f04` — санитар снимает фантомные worktree после карантина
+- Head commit: `fb85141` — доказаны очистка истории и сбой подтверждения санитара
 - Specification: `knowledge/specs/offline-claude-haiku-retained-worktree.md`
 - What changed: control plane идемпотентно удаляет только точный подтверждённый
   снимок retained worktree; санитар посылает подтверждение только после успешного
   переноса соответствующей директории в карантин.
-- Evidence: `bash ops/test-factory-janitor.sh` → PASS; `go test ./internal/controlplane` → PASS.
-- Next action: проверить и влить изменение.
+- Evidence: сборка, UI, release, Go, race, vulnerability scan и целевые
+  сценарии PASS; два общих сбоя локализованы вне diff задачи.
+- Next action: человеку влить ветку в `main`.
 
 ## LOG
 
@@ -29,3 +30,21 @@
 точечное снятие снимков, поэтому повторный запуск не затрагивает новые либо
 несовпадающие записи. Санитар передаёт в control plane только worktree, успешно
 перемещённые в карантин. Изолированный shell-тест и тесты control plane проходят.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Перемещённый worktree исчезает из API | `TestHTTPClearRetainedWorktrees`; `bash ops/test-factory-janitor.sh` | PASS: в карантине файл есть, в clear payload только его snapshot, ответ API пуст. |
+| `DeleteTask` разблокирован | `TestClearRetainedWorktreesUnblocksTerminalTaskDeletion` | PASS: до clear код `retained_worktree`, после clear удаление успешно. |
+| Неперемещённое не подтверждается; HTTP-сбой виден | `bash ops/test-factory-janitor.sh` | PASS: несуществующий path не вошёл в payload; при exit 22 карантин сохранён и журнал пишет ошибку. |
+| Точность и идемпотентность | `TestClearRetainedWorktreesRemovesOnlyConfirmedSnapshots` | PASS: несовпавший snapshot сохранён, повтор ничего не меняет. |
+| Семантика регистрации сохранена | тот же store-тест; `TestWorkerRuntimeDeterminesExecutionAndCannotChange`; `TestRegistrationAcknowledgesSameMillisecondTerminalHandoff` | PASS: name/runtime/health/capacity/heartbeat не изменились; runtime и capacity handoff проходят старые регрессии. |
+
+Полный CI-подобный прогон: `npm ci`, `just ui-check`, `just ui-build 0`,
+`just build`, `just test-tooling`, `just test-release`, `just test-launcher`,
+`just format-check`, `just vet`, `just vuln`, `just staticcheck`, `just boundary`,
+`just test`, `just test-worker-race`, `just test-browser` и целевой shell-тест.
+Все прошло, кроме уже существующих ошибок `staticcheck` в
+`cards_http.go:37`/`pilot_config.go:136` и несвязанного browser-таймаута в
+`control-plane.spec.ts:421`; все три файла вне diff задачи.
