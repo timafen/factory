@@ -67,10 +67,6 @@ as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/fact
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
 
-step "ставлю серверный браузер"
-bash "$work/src/ops/install-server-browser.sh" \
-  || { fail "серверный браузер не установился — релиз не поеду"; cleanup; exit 5; }
-
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \
   && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
@@ -150,6 +146,10 @@ raise SystemExit(not ok)' \
   [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || sleep "$REGISTER_DELAY"
 done
 [ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
+
+step "обновляю штатные команды управления Фабрикой"
+bash "$work/src/ops/install-factory-control.sh" "$work/src" \
+  || rollback "не смог обновить fx и драйвер выпуска" 7
 
 if [ -x "$work/src/ops/install-brain.sh" ]; then
   bash "$work/src/ops/install-brain.sh" "$work/src" \
