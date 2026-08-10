@@ -722,7 +722,7 @@ class DiagnosisRepairTests(unittest.TestCase):
         state = {"processed": [], "epics_processed": []}
         noops = ("cleanup_completed_plan_cards", "write_dashboard",
                  "provider_limits_tick", "detect_limits", "record_new_works",
-                 "budget_guard", "pipeline_watch", "handle_epics", "diag_sweep",
+                 "budget_guard", "handle_epics", "diag_sweep",
                  "rescue_queued", "supersede_stale_questions", "handle_answers",
                  "advance_epics")
         with contextlib.ExitStack() as stack:
@@ -1312,7 +1312,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(create.call_args.args[0]["request_key"],
                          "plan-autostart:top:second-run")
 
-    def test_cycle_recounts_slots_after_pipeline_continuation(self):
+    def test_cycle_does_not_run_legacy_pipeline_patrol(self):
         tasks = [
             {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
             {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
@@ -1330,10 +1330,6 @@ class PlanAutostartTest(unittest.TestCase):
                     "current_revision": {"id": "wf-triage", "title": "Triage"}}]}
             raise AssertionError(path)
 
-        def continue_pipeline(*_args):
-            tasks.append({"id": "c", "title": "[auto] [2/2 Implement] C",
-                          "state": "queued"})
-
         noops = ("cleanup_completed_plan_cards", "write_dashboard",
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "rescue_queued",
@@ -1347,8 +1343,7 @@ class PlanAutostartTest(unittest.TestCase):
                                                   return_value=False))
             stack.enter_context(mock.patch.object(pilot, "host_overloaded",
                                                   return_value=False))
-            stack.enter_context(mock.patch.object(pilot, "pipeline_watch",
-                                                  side_effect=continue_pipeline))
+            watch = stack.enter_context(mock.patch.object(pilot, "pipeline_watch"))
             create = stack.enter_context(mock.patch.object(pilot, "create_task"))
             ideas = stack.enter_context(mock.patch.object(pilot, "ideas_all",
                 return_value=self.cards))
@@ -1357,8 +1352,8 @@ class PlanAutostartTest(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
             pilot.cycle(self.conf, state)
 
-        ideas.assert_not_called()
-        create.assert_not_called()
+        watch.assert_not_called()
+        self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
         report = "ОБЛАСТЬ: pilot/pilot.py, docs/additional.md"
@@ -1389,7 +1384,7 @@ class PlanAutostartTest(unittest.TestCase):
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "rescue_queued",
                  "supersede_stale_questions", "handle_answers", "advance_epics",
-                 "pipeline_watch", "collect_ideas", "route_question")
+                 "collect_ideas", "route_question")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
@@ -1705,7 +1700,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_called_once()
+        watch.assert_not_called()
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)

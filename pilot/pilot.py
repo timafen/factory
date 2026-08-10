@@ -4737,12 +4737,6 @@ def cycle(conf, state):
     except Exception as e:
         log("host_load_error", repr(e))
 
-    # Сторож конвейера: молча умерших работ быть не должно.
-    try:
-        pipeline_watch(conf, tasks, workflows, workers)
-    except Exception as e:
-        log("watch_error", repr(e))
-
     # Planner layer runs first, guarded so it can never break the pipeline.
     try:
         handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id)

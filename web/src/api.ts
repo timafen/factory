@@ -211,6 +211,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
+  provisionPipelinePatrol: (id: string) =>
+    request<AutomationDetail>(`/api/v1/automations/${encodeURIComponent(id)}/pipeline-patrol`, {
+      method: "POST",
+      body: "{}",
+    }),
   testAutomation: (id: string) =>
     request<TestAutomationResult>(`/api/v1/automations/${encodeURIComponent(id)}/test`, {
       method: "POST",

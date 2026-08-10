@@ -123,6 +123,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/automations/{automation_id}", api.getAutomation)
 	mux.HandleFunc("PUT /api/v1/automations/{automation_id}", api.updateAutomation)
 	mux.HandleFunc("PUT /api/v1/automations/{automation_id}/enabled", api.setAutomationEnabled)
+	mux.HandleFunc("POST /api/v1/automations/{automation_id}/pipeline-patrol", api.provisionPipelinePatrol)
 	mux.HandleFunc("POST /api/v1/automations/{automation_id}/test", api.testAutomation)
 	mux.HandleFunc("POST /api/v1/automations/{automation_id}/check", api.checkAutomation)
 	mux.HandleFunc("POST /api/v1/automations/{automation_id}/run", api.runAutomation)
