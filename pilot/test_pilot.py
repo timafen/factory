@@ -2347,8 +2347,53 @@ class PostMergeDeployTest(unittest.TestCase):
         pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
 
         self.assertNotIn("deploy_factory_cmd", state[pilot.DEPLOY_STATE_KEY])
-        self.assertIn("completed generation=3 rc=7 :: health check failed",
+        self.assertIn("completed generation=3 rc=7 :: " +
+                      pilot.RELEASE_DIAGNOSTICS_OMITTED,
                       log.call_args.args[0])
+
+    @mock.patch.object(pilot, "log")
+    def test_completed_release_keeps_only_allowlisted_diagnostics(self, log):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        status = os.path.join(temporary.name, "failed.status")
+        output = os.path.join(temporary.name, "failed.log")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("7\n")
+        with open(output, "w", encoding="utf-8") as f:
+            f.write("build output " + ("x" * 400) + "\n")
+            f.write("Chromium sandbox smoke failed: No usable sandbox\n")
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 4, "status": status, "output": output, "queued": False}}}
+
+        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+
+        message = log.call_args.args[0]
+        self.assertIn("Chromium sandbox smoke failed: No usable sandbox", message)
+        self.assertNotIn("build output", message)
+
+    def test_release_output_rejects_adversarial_secret_lines(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        output = os.path.join(temporary.name, "failed.log")
+        secrets = {
+            "aws": "AWS_SECRET_ACCESS_KEY=aws-secret-value",
+            "client_secret": "client_secret=oauth-secret-value",
+            "url_credentials": "postgres://dbuser:dbpass@db.example/factory",
+            "cookie": "Cookie: factory_session=cookie-secret-value",
+            "session": "session=session-secret-value",
+        }
+        with open(output, "w", encoding="utf-8") as f:
+            f.write("Chromium sandbox smoke failed: No usable sandbox\n")
+            for secret in secrets.values():
+                f.write(secret + "\n")
+                f.write("Chromium sandbox smoke failed: No usable sandbox " + secret + "\n")
+
+        result = pilot._release_output({"output": output})
+
+        self.assertEqual(result, "Chromium sandbox smoke failed: No usable sandbox")
+        for label, secret in secrets.items():
+            with self.subTest(label=label):
+                self.assertNotIn(secret, result)
 
     @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
