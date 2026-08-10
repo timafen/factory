@@ -212,6 +212,7 @@ export function AutomationDetail({
   const interval = useVisibleInterval(3_000);
   const [editing, setEditing] = useState(false);
   const [confirmEnabled, setConfirmEnabled] = useState<boolean>();
+  const [confirmPatrol, setConfirmPatrol] = useState(false);
   const [preview, setPreview] = useState<TestAutomationResult>();
   const [occurrenceHistory, setOccurrenceHistory] = useState<AutomationOccurrence[]>([]);
   const [nextOccurrenceCursor, setNextOccurrenceCursor] = useState<string | null>();
@@ -251,6 +252,14 @@ export function AutomationDetail({
     onSuccess: async (next) => {
       queryClient.setQueryData(["automation", id], next);
       setConfirmEnabled(undefined);
+      await invalidateControlPlane(queryClient);
+    },
+  });
+  const provisionPatrol = useMutation({
+    mutationFn: () => api.provisionPipelinePatrol(id),
+    onSuccess: async (next) => {
+      queryClient.setQueryData(["automation", id], next);
+      setConfirmPatrol(false);
       await invalidateControlPlane(queryClient);
     },
   });
@@ -304,9 +313,14 @@ export function AutomationDetail({
             {test.isPending ? <LoaderCircle size={14} className="spin" /> : <FlaskConical size={14} />} Test trigger
           </button>
           {automation.trigger.type === "schedule" ? (
-            <button className="button button-secondary" onClick={() => run.mutate()} disabled={!automation.enabled || run.isPending}>
-              <CirclePlay size={14} /> Run now
-            </button>
+            <>
+              <button className="button button-secondary" onClick={() => setConfirmPatrol(true)} disabled={provisionPatrol.isPending}>
+                <Bot size={14} /> Enable pipeline patrol
+              </button>
+              <button className="button button-secondary" onClick={() => run.mutate()} disabled={!automation.enabled || run.isPending}>
+                <CirclePlay size={14} /> Run now
+              </button>
+            </>
           ) : (
             <button className="button button-secondary" onClick={() => check.mutate()} disabled={!automation.enabled || check.isPending}>
               <CirclePlay size={14} /> Check now
@@ -326,6 +340,7 @@ export function AutomationDetail({
       </div>
       {detail.error && <StaleBanner error={detail.error} />}
       {setEnabled.error && <InlineError error={setEnabled.error} />}
+      {provisionPatrol.error && <InlineError error={provisionPatrol.error} />}
       {test.error && <InlineError error={test.error} />}
       {check.error && <InlineError error={check.error} />}
       {run.error && <InlineError error={run.error} />}
@@ -345,6 +360,22 @@ export function AutomationDetail({
             {setEnabled.isPending ? "Saving…" : `Confirm ${confirmEnabled ? "enable" : "disable"}`}
           </button>
           <button className="button button-secondary" onClick={() => setConfirmEnabled(undefined)}>Cancel</button>
+        </div>
+      )}
+      {confirmPatrol && (
+        <div className="confirm-action automation-confirm" role="alert">
+          <div>
+            <strong>Enable pipeline patrol on this schedule?</strong>
+            <p>The patrol instructions will be saved in {automation.title}. Its existing cron and timezone stay unchanged.</p>
+          </div>
+          <button
+            className="button button-primary"
+            disabled={provisionPatrol.isPending}
+            onClick={() => provisionPatrol.mutate()}
+          >
+            {provisionPatrol.isPending ? "Enabling…" : "Confirm pipeline patrol"}
+          </button>
+          <button className="button button-secondary" onClick={() => setConfirmPatrol(false)}>Cancel</button>
         </div>
       )}
 
