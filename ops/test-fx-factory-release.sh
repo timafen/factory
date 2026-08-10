@@ -73,6 +73,11 @@ if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
   [ "$TEST_MODE" != control-install-fail ]
   exit
 fi
+if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
+  echo "bash ops/provision-codex-auth.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != auth-provision-fail ]
+  exit
+fi
 exec /bin/bash "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
@@ -155,6 +160,7 @@ diff -u <(printf '%s\n' \
   'npx vite build' \
   'go build -o PLACEHOLDER ./cmd/factory-server' \
   'go build -o PLACEHOLDER ./cmd/factory-worker' \
+  'bash ops/provision-codex-auth.sh' \
   'bash ops/install-factory-control.sh') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
     -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' "$success/gates") >/dev/null \
@@ -205,6 +211,21 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
   ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
     || fail "binaries were built after $mode"
 done
+
+auth_failed="$temporary/auth-provision-fail"
+make_fixture "$auth_failed" auth-provision-fail
+set +e
+run_release "$auth_failed" auth-provision-fail
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "auth-provision-fail returned $status instead of build error 5"
+assert_file "$auth_failed/install/factory-server" old-server
+assert_file "$auth_failed/install/factory-worker" old-worker
+[ ! -s "$auth_failed/events" ] || fail "services restarted after unsafe Codex auth"
+! grep -F 'bash ops/install-factory-control.sh' "$auth_failed/gates" >/dev/null \
+  || fail "control installation ran after unsafe Codex auth"
+grep -F 'авторизация Codex не прошла безопасную проверку' "$auth_failed/output" >/dev/null \
+  || fail "release did not explain the Codex auth failure"
 
 locked="$temporary/locked"
 make_fixture "$locked" locked
