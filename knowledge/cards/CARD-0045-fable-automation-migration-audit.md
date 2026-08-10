@@ -3,11 +3,13 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge.
-- Branch: `factory/d8291cc8-15a-a9a49bc3-521`.
-- Head commit: `fca900a` (проверенный снимок матрицы аудита после перебазирования на `main`).
+- Branch: `factory/6b7a512d-d08-5490389d-893`.
+- Head commit: `58521ab` (фактически проверенная поставка контракта завершения аудита).
 - Specification: `knowledge/specs/fable-automation-migration-audit.md`.
-- What changed: утверждённая владельцем матрица стала окончательным объёмом аудита; все известные и доступные механизмы сопоставлены с реализацией Factory и тестами.
-- Evidence: `PipelineWatchTests` → 7 tests OK; целевые Go-тесты автоматизаций → OK; полный Go- и Python-наборы → OK.
+- What changed: в спецификации закреплены точный файл поставки и обязательная
+  команда проверки автономного сторожа.
+- Evidence: полный Go-набор, 87 проверок `pilot` и 121 web-проверка прошли;
+  целевые `PipelineWatchTests` (7 сценариев) и Go-сценарии автоматизаций — OK.
 - Limitation: абсолютный исторический паритет с Fable без её исходников не доказан и не заявляется.
 - One next action: человеку влить поставку в `main`.
 
@@ -41,3 +43,26 @@ GitHub issue/PR, cron, восстановление после рестарта 
 Полный `npm test` обнаружил один тайм-аут `Settings.test.tsx` (5 секунд).
 Это существующая web-проверка вне двух файлов поставки и вне области Fable;
 целевая проверка поставки, lint и production build успешны.
+
+### 2026-08-10 — Implement
+
+В спецификации закреплено машинно-проверяемое завершение аудита: наличие
+самого файла поставки и успешный запуск `PipelineWatchTests`. Все 7 сценариев
+сторожа прошли; ограничение исторического паритета с недоступной Fable
+сохранено без расширения объёма реализации.
+
+### 2026-08-10 — Implement
+
+HEAD карточки приведён к фактически проверенной поставке `cf7c17e` и текущей
+рабочей ветке. Остальные метаданные сверены с поставкой; повторный review не
+обнаружил расхождений в области, доказательствах и заявленном ограничении.
+
+### 2026-08-10 — Verify
+
+| Проверяемый критерий | Команда или проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Матрица связывает шесть известных механизмов с Factory и тестами | проверка `knowledge/specs/fable-automation-migration-audit.md` | у каждого механизма есть путь реализации и именованные автоматические сценарии |
+| Сторож автономен | `python3 -m unittest pilot.test_pilot.PipelineWatchTests` | 7 сценариев OK без сети и второго процесса |
+| Issue/PR, cron, рестарт и operator API | `go test ./internal/controlplane -run 'Test(Automation|PullRequestAutomation|HTTPAutomation|ScheduleAutomation)' -count=1` | пакет OK |
+| Полный набор проекта | `go test ./... -count=1`; `python3 -m unittest pilot.test_pilot -v`; web: `npm run lint && npm run typecheck && npm test && npm run build` | Go OK; 87 Python-проверок OK; lint/typecheck, 121 UI-тест и production build OK |
+| Граница вывода | сверка решения и остаточных пробелов в спецификации | исторический паритет с недоступным исходником Fable не заявлен |
