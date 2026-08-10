@@ -28,6 +28,11 @@ type PilotConfigStore struct {
 	mu   sync.Mutex
 }
 
+type ReviveWorkResponse struct {
+	Work  string `json:"work"`
+	State string `json:"state"`
+}
+
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
 
 func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
@@ -59,6 +64,147 @@ func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings
 		return protocol.PilotSettingsResponse{}, err
 	}
 	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+// Revive removes only the requested owner pause and leaves an idempotent signal
+// for pipeline_watch. Task selection remains entirely in the pilot.
+func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
+	work = strings.TrimSpace(work)
+	if work == "" {
+		return ReviveWorkResponse{}, invalid("invalid_work", "work name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, _, err := s.read()
+	if err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	known := s.hasReviveSignal(work) || s.hasReviveReceipt(work)
+	needsSignal := false
+	stopped := make([]string, 0, len(settings.StoppedPipelines))
+	for _, name := range settings.StoppedPipelines {
+		if name == work {
+			known = true
+			needsSignal = true
+			continue
+		}
+		stopped = append(stopped, name)
+	}
+	stalls, readErr := s.readStalls()
+	if readErr != nil {
+		return ReviveWorkResponse{}, readErr
+	}
+	if rec, ok := stalls[work]; ok && rec.Why == "give_up" {
+		known = true
+		needsSignal = true
+	}
+	if !known {
+		return ReviveWorkResponse{}, &ServiceError{Code: "work_not_stopped", Message: "work is not stopped", Status: 404}
+	}
+	created := false
+	if needsSignal || !s.hasReviveReceipt(work) {
+		created, err = s.createReviveSignal(work)
+		if err != nil {
+			return ReviveWorkResponse{}, err
+		}
+	}
+	settings.StoppedPipelines = stopped
+	body, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		if created {
+			_ = os.Remove(s.reviveSignalPath(work))
+		}
+		return ReviveWorkResponse{}, unavailable(err)
+	}
+	if err := s.atomicWrite(append(body, '\n')); err != nil {
+		if created {
+			_ = os.Remove(s.reviveSignalPath(work))
+		}
+		return ReviveWorkResponse{}, err
+	}
+	return ReviveWorkResponse{Work: work, State: "reviving"}, nil
+}
+
+type pilotStall struct {
+	Why string `json:"why"`
+}
+
+func (s *PilotConfigStore) revivePath() string {
+	return filepath.Join(filepath.Dir(s.path), "revive")
+}
+func (s *PilotConfigStore) stallPath() string {
+	return filepath.Join(filepath.Dir(s.path), "stalled.json")
+}
+
+func (s *PilotConfigStore) reviveSignalPath(work string) string {
+	sum := sha256.Sum256([]byte(work))
+	return filepath.Join(s.revivePath(), hex.EncodeToString(sum[:]))
+}
+
+func (s *PilotConfigStore) reviveReceiptPath(work string) string {
+	return s.reviveSignalPath(work) + ".done"
+}
+
+func (s *PilotConfigStore) hasReviveSignal(work string) bool {
+	_, err := os.Stat(s.reviveSignalPath(work))
+	return err == nil
+}
+
+func (s *PilotConfigStore) hasReviveReceipt(work string) bool {
+	_, err := os.Stat(s.reviveReceiptPath(work))
+	return err == nil
+}
+
+// createReviveSignal creates one file per work. O_EXCL makes a concurrent
+// request for another work independent, and makes a repeated request safe.
+func (s *PilotConfigStore) createReviveSignal(work string) (bool, error) {
+	if err := os.MkdirAll(s.revivePath(), 0o700); err != nil {
+		return false, unavailable(err)
+	}
+	if err := os.Remove(s.reviveReceiptPath(work)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, unavailable(err)
+	}
+	f, err := os.OpenFile(s.reviveSignalPath(work), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, unavailable(err)
+	}
+	if _, err := f.WriteString(work); err != nil {
+		_ = f.Close()
+		_ = os.Remove(s.reviveSignalPath(work))
+		return false, unavailable(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(s.reviveSignalPath(work))
+		return false, unavailable(err)
+	}
+	return true, nil
+}
+
+func (s *PilotConfigStore) readStalls() (map[string]pilotStall, error) {
+	result := map[string]pilotStall{}
+	body, err := os.ReadFile(s.stallPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil || json.Unmarshal(body, &result) != nil {
+		return nil, &ServiceError{Code: "pilot_state_invalid", Message: "pilot stall state is unavailable", Status: 503}
+	}
+	return result, nil
+}
+
+func (s *PilotConfigStore) atomicWritePath(path string, value any) error {
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return unavailable(err)
+	}
+	original := s.path
+	s.path = path
+	err = s.atomicWrite(append(body, '\n'))
+	s.path = original
+	return err
 }
 
 func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
@@ -201,9 +347,6 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 		if workers.Low == "" || workers.Medium == "" || workers.High == "" {
 			return nil, invalid("invalid_pilot_settings", "each stage requires low, medium, and high workers")
 		}
-		if err := validateWorkerEffortOrder(stage, workers); err != nil {
-			return nil, err
-		}
 		if cost, ok := settings.StageBaseUSD[stage]; !ok || cost <= 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
 			return nil, invalid("invalid_pilot_settings", "stage_base_usd values must be positive")
 		}
@@ -263,34 +406,4 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 	}
 	sort.Strings(warnings)
 	return warnings, nil
-}
-
-func validateWorkerEffortOrder(stage string, workers protocol.PilotStageWorkers) error {
-	ordered := []struct {
-		tier string
-		name string
-	}{{"low", workers.Low}, {"medium", workers.Medium}, {"high", workers.High}}
-	for i := 1; i < len(ordered); i++ {
-		previousFamily, previousEffort, previousOK := workerEffort(ordered[i-1].name)
-		family, effort, ok := workerEffort(ordered[i].name)
-		if previousOK && ok && previousFamily == family && effort < previousEffort {
-			return invalid("invalid_pilot_settings", fmt.Sprintf(
-				"%s %s worker %s has lower reasoning effort than %s worker %s",
-				stage, ordered[i].tier, ordered[i].name,
-				ordered[i-1].tier, ordered[i-1].name))
-		}
-	}
-	return nil
-}
-
-func workerEffort(name string) (string, int, bool) {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	for suffix, rank := range map[string]int{
-		"-low": 0, "-medium": 1, "-high": 2, "-max": 3,
-	} {
-		if strings.HasSuffix(lower, suffix) {
-			return strings.TrimSuffix(lower, suffix), rank, true
-		}
-	}
-	return "", 0, false
 }

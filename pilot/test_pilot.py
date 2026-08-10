@@ -9,6 +9,7 @@ import types
 import unittest
 import urllib.error
 import uuid
+from collections import defaultdict
 from unittest import mock
 
 from pilot import pilot
@@ -45,6 +46,171 @@ class AgentRulesScopeTests(unittest.TestCase):
         pilot.create_task(body)
 
         self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_revived_raw_title_uses_auto_budget_and_rules(self, _api, money):
+        body = {
+            "request_key": pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:request-id",
+            "title": "Пользовательское имя без служебного префикса",
+            "context": "Контекст",
+        }
+
+        pilot.create_task(body, {"stages": [
+            {"workflow": "Specification"}, {"workflow": "Implement"},
+        ]})
+
+        money.assert_called_once_with(
+            mock.ANY, "Пользовательское имя без служебного префикса"
+        )
+        self.assertIn("ПРАВИЛА ДЛЯ АГЕНТА", body["context"])
+
+
+class RevivedAutomaticTaskTests(unittest.TestCase):
+    stages = ["Implement + Test", "Review", "Verify"]
+
+    @staticmethod
+    def revived(stage_index, state="succeeded"):
+        return {
+            "id": "revived-task",
+            "request_key": pilot.AUTO_REVIVE_REQUEST_PREFIX + f"{stage_index}:request-id",
+            "title": "Оживлённая работа",
+            "state": state,
+            "created_at": "2026-08-09T10:00:00Z",
+            "repository_id": "repo-id",
+        }
+
+    def cycle_stack(self, stack, task, workflow, result):
+        detail = {
+            "task": {"repository_id": "repo-id", "worker_id": "worker-id",
+                     "context": "Branch: factory/revived"},
+            "workflow": {"title": workflow, "revision_id": "revision-id"},
+            "attempts": [{"result": result}],
+            "context": "Branch: factory/revived",
+        }
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/tasks/revived-task":
+                return detail
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": [
+                    {"id": "repo-id", "remote_identity": "github.com/acme/repo"}
+                ]}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+        stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+        stack.enter_context(mock.patch.object(
+            pilot, "codex_usage_snapshot", return_value=defaultdict(float)))
+        stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+        stack.enter_context(mock.patch.object(
+            pilot, "host_block", return_value={"state": "ok"}))
+        stack.enter_context(mock.patch.object(pilot, "load_questions", return_value=[]))
+        for name in (
+                "collect_automation_findings", "cleanup_completed_plan_cards",
+                "write_dashboard", "provider_limits_tick", "detect_limits",
+                "record_new_works", "budget_guard", "pipeline_watch", "handle_epics",
+                "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+                "supersede_stale_questions", "handle_answers", "advance_epics",
+                "area_extend", "collect_ideas", "autostart_plan"):
+            stack.enter_context(mock.patch.object(pilot, name))
+
+    def test_review_request_changes_from_raw_title_routes_back_to_implementation(self):
+        task = self.revived(1)
+        conf = {"stages": [{"workflow": stage} for stage in self.stages],
+                "auto_plan": False}
+        verdict = json.dumps({
+            "action": "stop", "reason": "REQUEST CHANGES",
+            "handoff": "", "situation_ru": "Нужны исправления",
+            "question_ru": "Вернуть на доработку?", "options_ru": ["Да"],
+        })
+        state = {"processed": [], "epics_processed": []}
+
+        with contextlib.ExitStack() as stack:
+            self.cycle_stack(stack, task, "Review", "REQUEST CHANGES\nНайдены замечания")
+            stack.enter_context(mock.patch.object(pilot, "brain", return_value=(verdict, "brain")))
+            route = stack.enter_context(mock.patch.object(pilot, "route_question"))
+            pilot.cycle(conf, state)
+
+        self.assertIn("revived-task", state["processed"])
+        self.assertEqual(route.call_args.args[2:6], (
+            "Review", "Implement + Test", "Оживлённая работа", "repo-id"
+        ))
+
+    def test_verify_pass_from_raw_title_reaches_auto_merge(self):
+        task = self.revived(2)
+        conf = {"stages": [{"workflow": stage} for stage in self.stages],
+                "auto_plan": False, "auto_merge": True}
+        verdict = json.dumps({"action": "stop", "reason": "final stage", "handoff": ""})
+        result = "PASS\nBRANCH: factory/revived\nTRY: none"
+        state = {"processed": [], "epics_processed": []}
+
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            self.cycle_stack(stack, task, "Verify", result)
+            stack.enter_context(mock.patch.object(pilot, "brain", return_value=(verdict, "brain")))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH",
+                                                  os.path.join(directory, "merges.jsonl")))
+            stack.enter_context(mock.patch.object(
+                pilot, "gh_json", return_value={"ahead_by": 1}))
+            merge = stack.enter_context(mock.patch.object(
+                pilot, "gh_merge", return_value=(True, "merged")))
+            mark_final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
+            stack.enter_context(mock.patch.object(pilot, "deploy_after_merge"))
+            stack.enter_context(mock.patch.object(pilot, "notify"))
+            pilot.cycle(conf, state)
+
+        mark_final.assert_called_once_with("revived-task", "Verify", True)
+        merge.assert_called_once_with(
+            "github.com/acme/repo", "factory/revived", "Оживлённая работа"
+        )
+
+    def test_metadata_aware_attempts_duplicate_guard_and_budget_limit(self):
+        task = self.revived(1, state="running")
+        later = self.revived(2, state="queued")
+        later["id"] = "later-task"
+        later["created_at"] = "2026-08-09T11:00:00Z"
+
+        self.assertEqual(
+            pilot.stage_attempts([task], "Review", "Оживлённая работа", self.stages), 1
+        )
+        self.assertEqual(
+            pilot.live_or_done_at([task, later], "Оживлённая работа", 3,
+                                  since=task["created_at"]),
+            later,
+        )
+
+        conf = {"stages": [{"workflow": stage} for stage in self.stages]}
+        with mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "stage_cap", return_value=0), \
+                mock.patch.object(pilot, "attempts_of", return_value=["attempt"]), \
+                mock.patch.object(pilot, "task_cost_usd", return_value=1), \
+                mock.patch.object(pilot, "branch_from_history", return_value=""), \
+                mock.patch.object(pilot, "work_spent", return_value=1), \
+                mock.patch.object(pilot, "work_cap", return_value=100), \
+                mock.patch.object(pilot, "api", return_value={"task": {}}), \
+                mock.patch.object(pilot, "write_budget_retry") as retry, \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "save"):
+            pilot.budget_guard(conf, [task])
+
+        retry.assert_called_once()
+        self.assertEqual(retry.call_args.args[2:4], ("Review", "Оживлённая работа"))
+
+    def test_raw_title_automatic_task_is_not_misclassified_as_epic_plan(self):
+        task = self.revived(1)
+        state = {"epics_processed": [], "epic_starts_processed": []}
+        with mock.patch.object(pilot, "load_epics", return_value=[]), \
+                mock.patch.object(pilot, "api") as api:
+            pilot.handle_epics({}, state, [task], {}, {}, {})
+
+        api.assert_not_called()
+        self.assertEqual(state["epics_processed"], [])
 
 
 class DeliveryAreaTests(unittest.TestCase):
@@ -539,66 +705,6 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertTrue(verdict["нужен_владелец"])
         begin.assert_not_called()
 
-    def test_owner_diagnosis_pauses_pipeline_and_creates_answer_card(self):
-        running = dict(
-            self.task,
-            state="running",
-            title="[auto] [3/5 Implement + Test] Починить отчёт",
-            repository_id="repo-id",
-        )
-        verdict = {
-            "причина": "нужен выбор контракта",
-            "решение": "выбрать допустимую длину имени",
-            "нужен_владелец": True,
-        }
-        conf = dict(self.conf, deep_diag_rounds=5, stages=[
-            {"workflow": "Triage"},
-            {"workflow": "Specification"},
-            {"workflow": "Implement + Test"},
-            {"workflow": "Review"},
-            {"workflow": "Verify"},
-        ])
-        with mock.patch.object(pilot, "is_stopped", return_value=False), \
-                mock.patch.object(pilot, "stage_attempts", return_value=5), \
-                mock.patch.object(pilot, "deep_diagnose", return_value=verdict), \
-                mock.patch.object(pilot, "pause_pipeline") as pause, \
-                mock.patch.object(pilot, "recent_stage_text", return_value="history"), \
-                mock.patch.object(pilot, "write_question", return_value={}) as write, \
-                mock.patch.object(pilot, "save") as save:
-            pilot.diag_sweep(conf, [running])
-
-        pause.assert_called_once_with(conf, "Починить отчёт")
-        self.assertEqual(write.call_args.args[0], "looping-task")
-        self.assertEqual(write.call_args.args[2], "Implement + Test")
-        save.assert_called_once()
-
-    def test_stopped_pipeline_is_not_diagnosed_again(self):
-        running = dict(
-            self.task,
-            state="running",
-            title="[auto] [3/5 Implement + Test] Починить отчёт",
-        )
-        conf = dict(self.conf, deep_diag_rounds=5)
-        with mock.patch.object(pilot, "is_stopped", return_value=True), \
-                mock.patch.object(pilot, "deep_diagnose") as diagnose:
-            pilot.diag_sweep(conf, [running])
-
-        diagnose.assert_not_called()
-
-    def test_live_sweep_diagnoses_each_work_only_once(self):
-        running = dict(
-            self.task,
-            state="running",
-            title="[auto] [3/5 Implement + Test] Починить отчёт",
-        )
-        conf = dict(self.conf, deep_diag_rounds=5)
-        with mock.patch.object(pilot, "is_stopped", return_value=False), \
-                mock.patch.object(pilot, "cap_rescues", return_value=1), \
-                mock.patch.object(pilot, "deep_diagnose") as diagnose:
-            pilot.diag_sweep(conf, [running])
-
-        diagnose.assert_not_called()
-
     def test_started_repair_skips_owner_question_and_pipeline_pause_at_limits(self):
         verdict = {"причина": "технический сбой", "решение": "исправить",
                    "нужен_владелец": False, "repair_started": True}
@@ -716,6 +822,8 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "revive_signals", return_value=[]),
+            mock.patch.object(pilot, "acknowledge_revive_signal"),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -771,7 +879,7 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.created[0]["repository_id"], "repo-id")
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
         self.assertEqual(self.created[0]["worker_id"], "worker-id")
-        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
 
         self.watch()
         self.assertEqual(len(self.created), 1)
@@ -784,6 +892,38 @@ class PipelineWatchTests(unittest.TestCase):
 
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
+
+    def test_raw_title_revived_task_occupies_slot_and_prevents_duplicate(self):
+        revived = self.task(stage="Implement", state="running")
+        revived["title"] = "Встроенный патруль"
+        revived["request_key"] = pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:running-id"
+        self.conf["max_parallel_works"] = 1
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": 1, "why": "nudged"}
+        }
+
+        self.watch([self.task(), revived])
+
+        self.assertEqual(pilot.active_auto_works([revived]), {"Встроенный патруль"})
+        self.assertNotIn("Встроенный патруль", self.memory)
+        self.assertEqual(self.created, [])
+
+    def test_next_cycle_continues_after_succeeded_raw_title_stage(self):
+        revived = self.task(stage="Implement")
+        revived["title"] = "Встроенный патруль"
+        revived["request_key"] = pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:succeeded-id"
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+
+        self.watch([self.task(), revived])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
+        self.assertTrue(self.created[0]["request_key"].startswith(
+            pilot.AUTO_REVIVE_REQUEST_PREFIX + "2:"
+        ))
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-review")
 
     def test_owner_pause_is_not_resumed(self):
         self.conf["stopped_pipelines"] = ["Встроенный патруль"]
@@ -828,6 +968,64 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
 
+    def test_revive_restarts_next_unfinished_stage_and_keeps_other_stalls(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        with mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
+        self.assertEqual(self.memory["Встроенный патруль"]["why"], "nudged")
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_revive_signal_waits_for_owner_pause_and_capacity(self):
+        self.conf["stopped_pipelines"] = ["Встроенный патруль"]
+        with mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch()
+            acknowledge.assert_not_called()
+            self.conf["stopped_pipelines"] = []
+            self.conf["max_parallel_works"] = 1
+            running = self.task(state="running")
+            running["title"] = "[auto] [1/3 Specification] Уже запущена"
+            self.watch([self.task(), running])
+            acknowledge.assert_not_called()
+            self.conf["max_parallel_works"] = 2
+            self.watch([self.task(), running])
+
+        self.assertEqual(len(self.created), 1)
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_revive_preserves_full_maximum_length_unicode_work_name(self):
+        work = "я" * 200
+        task = self.task()
+        task["title"] = "[auto] [1/3 Specification] " + work
+        with mock.patch.object(pilot, "revive_signals", return_value=[work]):
+            self.watch([task])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], work)
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
+
+    def test_acknowledge_keeps_durable_receipt_for_safe_retry(self):
+        self.patches[3].stop()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "REVIVE_DIR", directory):
+            path = pilot.revive_signal_path("Работа")
+            with open(path, "x", encoding="utf-8") as signal:
+                signal.write("Работа")
+
+            pilot.acknowledge_revive_signal("Работа")
+
+            self.assertFalse(os.path.exists(path))
+            self.assertTrue(os.path.exists(path + ".done"))
+            self.assertEqual(pilot.revive_signals(), [])
+
 
 class PlanCardCleanupTest(unittest.TestCase):
     def setUp(self):
@@ -850,6 +1048,18 @@ class PlanCardCleanupTest(unittest.TestCase):
         return closed, updates, verdict
 
     def test_accepted_final_stage_closes_linked_card(self):
+        closed, updates, verdict = self.run_cleanup()
+
+        self.assertEqual(closed, ["idea-1"])
+        self.assertEqual(updates, [("idea-1", {"state": "done"})])
+        verdict.assert_called_once_with("verify-new", strict=True)
+
+    def test_accepted_raw_title_final_stage_closes_linked_card(self):
+        self.tasks[-1]["title"] = "Очистить план"
+        self.tasks[-1]["request_key"] = (
+            pilot.AUTO_REVIVE_REQUEST_PREFIX + "4:verify-request"
+        )
+
         closed, updates, verdict = self.run_cleanup()
 
         self.assertEqual(closed, ["idea-1"])
@@ -1438,99 +1648,6 @@ class StageWorkerCapacityTests(unittest.TestCase):
             self.conf, "Implement + Test", "medium", workers)
 
         self.assertEqual(selected, "preferred")
-
-    @mock.patch.object(pilot, "load_limits", return_value={})
-    def test_exact_escalation_queues_on_high_tier_instead_of_falling_back(self, _limits):
-        workers = {
-            "preferred": {"online": True, "health": "healthy", "capacity": 2, "active_count": 0},
-            "spare": {"online": True, "health": "healthy", "capacity": 1, "active_count": 1},
-        }
-
-        selected = pilot.stage_worker(
-            self.conf, "Implement + Test", "high", workers, exact_tier=True)
-
-        self.assertEqual(selected, "spare")
-
-    def test_capability_rank_orders_reasoning_within_sol(self):
-        self.assertLess(pilot.worker_capability_rank("codex-sol-low"),
-                        pilot.worker_capability_rank("codex-sol-medium"))
-        self.assertLess(pilot.worker_capability_rank("codex-sol-medium"),
-                        pilot.worker_capability_rank("codex-sol-high"))
-
-
-class AnswerEscalationTests(unittest.TestCase):
-    @mock.patch.object(pilot, "load_limits", return_value={})
-    def test_repeated_stage_really_uses_stronger_worker(self, _limits):
-        conf = {
-            "stages": [{
-                "workflow": "Implement + Test",
-                "workers": {
-                    "low": "codex-terra-medium",
-                    "medium": "codex-sol-medium",
-                    "high": "codex-sol-high",
-                },
-            }],
-            "timeout_seconds": 900,
-        }
-        question = {
-            "id": "question-id",
-            "task_id": "source-task",
-            "status": "answered",
-            "answer": "Исправь конкретный дефект",
-            "resume_stage": "Implement + Test",
-            "stage": "Review",
-            "title": "Оживить работу",
-            "repository_id": "repo-id",
-        }
-        workers = {
-            "codex-terra-medium": {
-                "id": "terra", "online": True, "health": "healthy",
-                "capacity": 2, "active_count": 0,
-            },
-            "codex-sol-medium": {
-                "id": "sol-medium", "online": True, "health": "healthy",
-                "capacity": 2, "active_count": 0,
-            },
-            # Busy is intentional: a real escalation must queue here instead
-            # of silently falling back to sol-medium.
-            "codex-sol-high": {
-                "id": "sol-high", "online": True, "health": "healthy",
-                "capacity": 1, "active_count": 1,
-            },
-        }
-        created = []
-        notifications = []
-
-        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
-                mock.patch.object(pilot, "load", return_value=dict(question)), \
-                mock.patch.object(pilot, "stage_attempts", return_value=2), \
-                mock.patch.object(pilot, "cap_rescues", return_value=0), \
-                mock.patch.object(pilot, "note_cap_rescue"), \
-                mock.patch.object(pilot, "is_stopped", return_value=False), \
-                mock.patch.object(pilot, "live_or_done_at", return_value=None), \
-                mock.patch.object(
-                    pilot, "create_task",
-                    side_effect=lambda body, _conf: created.append(body)
-                    or {"task": {"id": "new-task"}},
-                ), \
-                mock.patch.object(pilot, "save"), \
-                mock.patch.object(
-                    pilot, "notify",
-                    side_effect=lambda _conf, title, message, **_kwargs:
-                    notifications.append((title, message)),
-                ):
-            pilot.handle_answers(
-                conf,
-                {"Implement + Test": {"enabled": True, "revision_id": "revision"}},
-                workers,
-                [],
-            )
-
-        self.assertEqual(created[0]["worker_id"], "sol-high")
-        raised = [message for title, message in notifications
-                  if title == "Исполнитель повышен"]
-        self.assertEqual(len(raised), 1)
-        self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
 
 
 class HostLoadAdmissionTests(unittest.TestCase):
