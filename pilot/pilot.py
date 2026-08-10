@@ -1260,16 +1260,43 @@ def area_extend(base, result, repo=""):
     return files
 
 
-def other_areas(base):
-    """Файлы, закреплённые за ДРУГИМИ работами: только они по-настоящему чужие."""
+def other_areas(base, active_tasks=None, repo=""):
+    """Файлы живых ДРУГИХ работ в том же репозитории.
+
+    areas.json — это журнал заявок, а не вечный список запретов.  Закончившаяся
+    работа не должна держать файл в замке, иначе старая область превращает
+    совершенно новую поставку в ложное пересечение.
+    """
     known = load(AREAS_PATH, {}) or {}
+    active = None
+    if active_tasks is not None:
+        active = set()
+        for t in active_tasks:
+            if t.get("state") not in ("running", "queued"):
+                continue
+            m = STAGE_TITLE_RE.match(t.get("title", ""))
+            if m:
+                active.add(m.group(2).strip())
     out = set()
     for k, v in known.items():
-        if k == base:
+        if k == base or (active is not None and k not in active):
             continue
         for p in v or []:
-            out.add(p.split("::", 1)[1] if "::" in p else p)
+            owner, path = (p.split("::", 1) if "::" in p else ("", p))
+            if repo and owner and owner != repo:
+                continue
+            out.add(path)
     return out
+
+
+def area_replace(base, files, repo=""):
+    """Зафиксировать реальную, а не когда-то заявленную область поставки."""
+    paths = sorted({p.strip() for p in files if p and p.strip()})
+    known = load(AREAS_PATH, {}) or {}
+    known[base] = [(repo + "::" + p) if repo else p for p in paths]
+    save(AREAS_PATH, known)
+    log(f"AREA= {base[:40]!r}: {len(paths)} файлов по финальному diff")
+    return set(known[base])
 
 
 def area_busy(tasks, base, context="", repo=""):
@@ -1791,16 +1818,20 @@ def branch_report(repo_identity, branch):
 REBUILD_DIR = f"{HOME}/pilot/rebuild"
 
 
-def _git(cwd, *args, timeout=180):
+def _git(cwd, *args, timeout=180, input_text=None):
     env = dict(os.environ, HOME=HOME, GIT_TERMINAL_PROMPT="0")
     p = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True,
-                       text=True, timeout=timeout, env=env)
+                       text=True, timeout=timeout, env=env, input=input_text)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base):
-    """Собрать ветку заново от свежей главной и перенести ТОЛЬКО свои файлы.
-    Делает пилот своими руками: агент мог бы забыть или сделать не так."""
+def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo=""):
+    """Собрать ветку от свежей главной, сохранив весь diff задачи.
+
+    Переносим патч, а не снимок файлов: так сохраняются удаления и все hunks
+    задачи.  До push сверяем итоговый трёхточечный diff с исходным списком —
+    карточка знаний не может молча заменить пропавший файл реализации.
+    """
     if not (repo_identity and dirty_branch and keep_files):
         return ""
     short = repo_identity.split("github.com/")[-1]
@@ -1814,34 +1845,52 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base):
         if rc:
             log("rebuild: init " + out[:120]); return ""
         for args in (("remote", "add", "origin", url),
-                     ("fetch", "--depth", "1", "origin", "main"),
-                     ("fetch", "--depth", "1", "origin", dirty_branch)):
+                     ("fetch", "origin",
+                      "+main:refs/remotes/origin/main"),
+                     ("fetch", "origin",
+                      "+" + dirty_branch + ":refs/remotes/origin/" + dirty_branch)):
             rc, out = _git(work, *args)
             if rc:
                 log("rebuild: " + args[0] + " " + out[:160]); return ""
         clean = dirty_branch + "-clean"
-        rc, out = _git(work, "checkout", "-q", "-B", clean, "FETCH_HEAD^{commit}")
         rc, out = _git(work, "checkout", "-q", "-B", clean, "origin/main")
         if rc:
             log("rebuild: base " + out[:160]); return ""
-        taken = []
-        for f in keep_files:
-            rc, out = _git(work, "checkout", "origin/" + dirty_branch, "--", f)
-            if rc == 0:
-                taken.append(f)
-        if not taken:
+        selected = sorted(set(keep_files))
+        rc, source = _git(work, "diff", "--name-only",
+                          "origin/main...origin/" + dirty_branch, "--", *selected)
+        if rc:
+            log("rebuild: source diff " + source[:160]); return ""
+        expected = {p.strip() for p in source.splitlines() if p.strip()}
+        if not expected:
             log("rebuild: ни один файл области не перенесён"); return ""
-        _git(work, "add", "-A")
+        rc, patch = _git(work, "diff", "--binary",
+                         "origin/main...origin/" + dirty_branch, "--", *sorted(expected))
+        if rc or not patch:
+            log("rebuild: patch " + patch[:160]); return ""
+        rc, out = _git(work, "apply", "--index", "--3way", "-",
+                       input_text=patch)
+        if rc:
+            log("rebuild: apply " + out[:200]); return ""
         rc, out = _git(work, "-c", "user.name=Factory Pilot",
                        "-c", "user.email=pilot@factory", "commit", "-q", "-m",
                        "Пересобрано машиной от свежей главной: " + base[:90])
         if rc:
             log("rebuild: commit " + out[:160]); return ""
+        rc, final = _git(work, "diff", "--name-only", "origin/main...HEAD")
+        if rc:
+            log("rebuild: final diff " + final[:160]); return ""
+        final_paths = {p.strip() for p in final.splitlines() if p.strip()}
+        missing = sorted(expected - final_paths)
+        if missing:
+            log("rebuild: пропали обещанные файлы: " + ", ".join(missing)[:240])
+            return ""
         rc, out = _git(work, "push", "-q", "--force-with-lease", "origin",
                        "HEAD:" + clean)
         if rc:
             log("rebuild: push " + out[:200]); return ""
-        log(f"REBUILD OK: {clean} собрана от главной, файлов {len(taken)}")
+        area_replace(base, final_paths, area_repo or repo_identity)
+        log(f"REBUILD OK: {clean} собрана от главной, файлов {len(final_paths)}")
         return clean
     except Exception as e:
         log("rebuild_error", repr(e))
@@ -1853,7 +1902,7 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base):
             pass
 
 
-def review_gate(conf, base, branch, repo_identity):
+def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=""):
     """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
     Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
     не блокируют конвейер: тогда ворота просто молчат."""
@@ -1880,18 +1929,54 @@ def review_gate(conf, base, branch, repo_identity):
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
 
+        # Не даём очистке маскировать уже потерянный обещанный код карточкой
+        # или любым другим файлом. Проверяем исходную ветку до rebuild.
+        prom = (load(PROMISES_PATH, {}) or {}).get(base) or {}
+        if not isinstance(prom, dict):
+            prom = {}
+        missing_promises = sorted(set(prom.get("files") or []) - set(files))
+        if missing_promises:
+            log(f"GATE '{base}': нет обещанных файлов: " + ", ".join(missing_promises))
+            return {"back": True,
+                    "alert": "Вернул сам: исчез обещанный файл реализации",
+                    "alert_msg": ("Ветка не содержит все файлы, обещанные спецификацией; "
+                                  "документация не заменяет реализацию."),
+                    "note": ("Машинная проверка перед Ревью: в исходной ветке "
+                             "нет обещанных файлов:\n"
+                             + "\n".join("  - " + f for f in missing_promises)
+                             + "\nВосстанови реализацию в этой же ветке, запушь и сдай снова.")}
+
         # Область: файлы вне заявленной зоны — возврат кодом, без Ревью.
         known = load(AREAS_PATH, {}) or {}
-        mine = set()
-        for p in known.get(base) or []:
-            mine.add(p.split("::", 1)[1] if "::" in p else p)
-        alien = other_areas(base)
-        foreign = sorted(f for f in files
-                         if (f in alien and f not in mine)
-                         or any(n in f for n in NOISE_PATHS))
+        mine = {p.split("::", 1)[1] if "::" in p else p
+                for p in known.get(base) or []}
+        alien = other_areas(base, active_tasks, area_repo or repo_identity)
+        overlaps = sorted(f for f in files if f in alien)
+        noise = sorted(f for f in files if any(n in f for n in NOISE_PATHS))
+        if overlaps:
+            # Нельзя «разрулить» настоящее пересечение удалением файлов из
+            # одной ветки: это как раз и теряет готовую реализацию. Замок
+            # остаётся строгим — ждём, пока соседняя живая работа освободит
+            # область, затем пересчитаем её по фактическому diff.
+            holder = "другая живая работа"
+            for t in active_tasks or []:
+                m = STAGE_TITLE_RE.match(t.get("title", ""))
+                if (t.get("state") in ("running", "queued") and m
+                        and m.group(2).strip() != base
+                        and set(overlaps) & {p.split("::", 1)[1] if "::" in p else p
+                                             for p in known.get(m.group(2).strip()) or []}):
+                    holder = m.group(2).strip()
+                    break
+            log(f"AREA WAIT {base!r} ждёт: пересечение с {holder!r}: "
+                + ", ".join(overlaps)[:160])
+            return {"wait": True,
+                    "note": "Жду завершения пересекающейся работы: " + holder}
+
+        foreign = noise
         if foreign:
             keep = [f for f in files if f not in set(foreign)]
-            clean = rebuild_clean_branch(repo_identity, branch, keep, base)
+            kwargs = {"area_repo": area_repo} if area_repo else {}
+            clean = rebuild_clean_branch(repo_identity, branch, keep, base, **kwargs)
             if clean:
                 return {"back": False, "branch": clean,
                         "note": ("Ветка пересобрана машиной от свежей главной: "
@@ -1920,7 +2005,6 @@ def review_gate(conf, base, branch, repo_identity):
                              "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
 
         # Обещания: что Спецификация записала как «готово, когда».
-        prom = (load(PROMISES_PATH, {}) or {}).get(base) or {}
         missing = [f for f in (prom.get("files") or []) if f not in files]
         prom_note = ""
         if prom.get("files") or prom.get("commands"):
@@ -5521,7 +5605,12 @@ def cycle(conf, state):
         gate_note = ""
         if next_stage == "Review" and branch:
             rid_g = detail["task"].get("repository_id") or ""
-            g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""))
+            g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
+                            area_repo=rid_g)
+            if g and g.get("wait"):
+                if tid in state["processed"]:
+                    state["processed"].remove(tid)
+                continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
