@@ -317,7 +317,7 @@ export function WorkView({
   onTask, onAnswer, onResume, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
 }: ViewStateProps & {
   tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
-  onTask: (id: string) => void; onAnswer?: () => void; onResume?: () => void; onDelegate: () => void;
+  onTask: (id: string) => void; onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>; onDelegate: () => void;
   hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
@@ -329,6 +329,8 @@ export function WorkView({
   const [history, setHistory] = useState<Record<string, string>>({});
   const [byStage, setByStage] = useState(false);
   const [open, setOpen] = useState<string>("");
+  const [resuming, setResuming] = useState("");
+  const [resumeError, setResumeError] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -427,6 +429,8 @@ export function WorkView({
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
+                            resuming={resuming === g.base} resumeError={resumeError}
+                            onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
@@ -453,6 +457,8 @@ export function WorkView({
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
+                            resuming={resuming === g.base} resumeError={resumeError}
+                            onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
@@ -473,11 +479,13 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume, history, project }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume, history, project,
+  resuming, resumeError, onResuming, onResumeError }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
-  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void; onResume?: () => void;
+  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>;
   history: Record<string, string>;
   project?: string;
+  resuming: boolean; resumeError: string; onResuming: (base: string) => void; onResumeError: (error: string) => void;
 }) {
   const worker = workerMap.get(g.latest.worker_id);
   // Самая свежая ссылка «посмотреть» по всей работе: её называет стадия
@@ -554,13 +562,20 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
             }}>Ответить Factory →</button>
         ) : g.status.kind === "paused" && onResume ? (
           <button
-            onClick={(e) => { e.stopPropagation(); onResume(); }}
-            title="Открыть настройки, где можно снять паузу с конвейера"
+            disabled={resuming}
+            onClick={(e) => {
+              e.stopPropagation();
+              onResumeError(""); onResuming(g.base);
+              Promise.resolve(onResume(g.base)).catch((error: unknown) => {
+                onResumeError(error instanceof Error ? error.message : "Не удалось продолжить работу.");
+              }).finally(() => onResuming(""));
+            }}
+            title="Снять паузу и поставить следующий обязательный этап в очередь"
             style={{
               fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
               background: "#22262f", color: "#c5ccd8", border: "1px solid #4b5362",
-              cursor: "pointer", whiteSpace: "nowrap",
-            }}>Продолжить в настройках →</button>
+              cursor: resuming ? "wait" : "pointer", whiteSpace: "nowrap",
+            }}>{resuming ? "Продолжаю…" : "Продолжить"}</button>
         ) : (
           <Pill text={g.meta?.closed ? "закрыта" : g.status.label}
                 tone={g.meta?.closed ? "muted" : g.status.tone} />
@@ -593,6 +608,9 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
         </span>
         <ChevronRight size={14} style={{ transform: expanded ? "rotate(90deg)" : undefined, color: muted }} />
       </div>
+      {g.status.kind === "paused" && resumeError && (
+        <p role="alert" style={{ margin: "8px 0 0", color: "#ffb4b4", fontSize: 12.5 }}>{resumeError}</p>
+      )}
 
       {g.status.kind !== "done" && g.status.kind !== "archive" && (
         <div className="work-explanation" aria-label="Что будет дальше">

@@ -1996,6 +1996,31 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
 
 
+class ResumeStageFromHistoryTests(unittest.TestCase):
+    stages = ["Triage", "Specification", "Implement + Test", "Review", "Verify"]
+    base = "Продолжение карточки"
+
+    def task(self, stage, state):
+        return {"title": f"[auto] [1/5 {stage}] {self.base}", "state": state}
+
+    def test_terminal_first_stage_restarts_itself(self):
+        for state in ("failed", "cancelled"):
+            with self.subTest(state=state):
+                stage, active = pilot.resume_stage_from_history(
+                    self.stages, [self.task("Triage", state)], self.base)
+                self.assertEqual((stage, active), ("Triage", False))
+
+    def test_stop_after_review_continues_with_verify(self):
+        history = [self.task(stage, "succeeded") for stage in self.stages[:-1]]
+        stage, active = pilot.resume_stage_from_history(self.stages, history, self.base)
+        self.assertEqual((stage, active), ("Verify", False))
+
+    def test_active_stage_wins_over_repeated_resume(self):
+        history = [self.task("Triage", "succeeded"), self.task("Specification", "queued")]
+        stage, active = pilot.resume_stage_from_history(self.stages, history, self.base)
+        self.assertEqual((stage, active), ("Specification", True))
+
+
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

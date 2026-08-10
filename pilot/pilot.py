@@ -995,6 +995,33 @@ def resume_stage_for(stages, wf, next_stage):
     return next_stage or wf
 
 
+def resume_stage_from_history(stages, tasks, base):
+    """Return the first stage that has not successfully completed.
+
+    This mirrors the card-resume contract: terminal failure retries that same
+    stage, while an already queued/running stage wins over any older history.
+    Walking the configured list is intentional: Review and Verify are gates,
+    not optional labels that a restart may jump over.
+    """
+    latest = {}
+    live = None
+    for task in tasks or []:
+        m = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if not m or m.group(2).strip() != (base or "").strip():
+            continue
+        stage = m.group(1).strip()
+        latest[stage] = task
+        if task.get("state") in PIPELINE_LIVE_STATES:
+            live = stage
+    if live:
+        return live, True
+    for stage in stages:
+        task = latest.get(stage)
+        if not task or task.get("state") != "succeeded":
+            return stage, False
+    return None, False
+
+
 def mark_final(task_id, stage, passed):
     """Запомнить, прошла ли последняя стадия по существу (а не просто «задача
     отработала»). Эпик двигается только по настоящему PASS."""
