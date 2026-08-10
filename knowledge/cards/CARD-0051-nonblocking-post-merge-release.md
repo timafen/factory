@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented + Tested — готово к проверке и слиянию.
-- Branch: `factory/dc442a1e-b59-40baa865-773`.
-- Head commit: `856c745` (`Автовыпуск не останавливает управление конвейерами`).
-- What changed: post-merge выпуски Factory и automation сохраняются в очереди
-  и запускаются отдельным процессом; цикл Пилота продолжает управлять задачами.
-  Повторные merge коалесцируются; статусный файл позволяет собрать результат
-  после рестарта, а журнал содержит start/completed с rc и кратким выводом.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 101/101 OK;
-  `python3 -m py_compile pilot/pilot.py` и `git diff --check` — OK.
+- Status: Implemented + Tested — блокер восстановления устранён.
+- Branch: `factory/ed5fa1ca-db3-e29b3696-7ed`.
+- Head commit: `4c1cda8` (`Сохранять автовыпуск до запуска фонового процесса`).
+- What changed: запись запуска атомарно попадает в `state.json` до `Popen`, PID
+  фиксируется после старта, а коалесцированный повтор сохраняется немедленно.
+  Новый Pilot восстанавливает сохранённый, но ещё не запущенный выпуск с диска.
+- Evidence: `python3 -m unittest pilot.test_pilot.PostMergeDeployTest` — 10/10 OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` — OK;
+  `git diff --check` — OK.
 - One next action: проверить изменения Review и влить их в `main`.
 
 ## LOG
@@ -38,3 +38,11 @@
 Проверки: `PostMergeDeployTest` — 9/9 OK, включая заблокированный выпуск и
 обработку следующей завершённой задачи; полный `pilot.test_pilot` — 101/101 OK;
 `go test ./...`, сборка двух Go-бинарей, `py_compile` и `git diff --check` — OK.
+
+### 2026-08-10 — Implement
+
+Запуск выпуска теперь сначала резервируется атомарной записью в `state.json`,
+и только затем Pilot вызывает фоновый процесс и сохраняет его PID. Ожидающий
+коалесцированный повтор также пишется сразу. Тест останавливает Pilot на границе
+после сохранения, заново читает состояние с диска и подтверждает автозапуск:
+`PostMergeDeployTest` — 10/10 OK; `py_compile` и `git diff --check` — OK.
