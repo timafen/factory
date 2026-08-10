@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: ready for Review
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/9715a8ad-d48-27794e25-8f5`
-- Head commit: `80dd9e7`
+- Head commit: `6c9b1ea`
 - What changed: Пилот при каждом создании auto-задачи заменяет прежний
   управляемый блок правил. Изменённый канал попадает в повтор, а при
   неполных текущих настройках старый URL удаляется.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 104/104; `py_compile`,
-  `npm run typecheck` и `npm run build` — PASS.
-- Next action: на Review проверить замену канала в повторной auto-задаче.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 104/104; полный Go-набор,
+  race-проверка worker, tooling, launcher и UI-проверки — PASS.
+- Next action: владельцу подтвердить слияние; browser E2E требует отдельного разбора
+  таймаута в сценарии Workflow, не затрагивающего Пилот.
 
 ## LOG
 
@@ -28,3 +29,16 @@
 неизменяемым при наличии маркера, а целиком заменяется актуальной версией.
 Тесты повтора подтверждают замену изменённого канала и удаление старого URL
 при неполном конфиге; весь модуль Пилота прошёл 104 теста, а web — typecheck и сборку.
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Изменённый канал заменяет прежний | `python3 -m unittest pilot.test_pilot` | PASS: старый URL отсутствует, новый присутствует |
+| Неполная настройка удаляет устаревший адрес | тот же набор, сценарий повторной auto-задачи | PASS: канала уведомлений нет |
+| Длинный контекст сохраняет правила и канал | тот же набор | PASS: контекст не длиннее 60000, блок правил цел |
+| Смежные контракты не регрессировали | `just test`; `just test-worker-race`; `just test-tooling`; `just test-launcher`; `just ui-check` | PASS; Go-набор включает worker за 196 с, UI: 123/123 |
+
+`just test-browser` не прошёл: независимый E2E-сценарий reusable Workflow
+ждал включения репозитория и истёк через 120 секунд; изменение Пилота этот путь
+не затрагивает. Дерево проверено чистым, `git diff --check` — PASS.
