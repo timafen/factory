@@ -4,7 +4,7 @@
 
 - Status: Implemented PASS — замечание Review устранено, готово к повторному Review.
 - Branch: `factory/90b2fdd8-3bf-36abeb90-5cf`.
-- Head commit: `79eb5d0` — проверенная реализация до записи карточки.
+- Head commit: `b0a827d` — проверенная реализация на свежем `origin/main`.
 - What changed: installer нормализует фактический `No usable sandbox` в статическую
   строку и не публикует Chromium stderr; интеграционный тест проходит через штатный
   browser smoke. Обе посторонние правки controlplane исключены из diff.
