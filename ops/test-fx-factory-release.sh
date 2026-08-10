@@ -11,7 +11,7 @@ assert_file() { grep -Fx "$2" "$1" >/dev/null || fail "$1 does not contain: $2";
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web"
+  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" "$case_dir/system"
   printf 'old-server\n' >"$case_dir/install/factory-server"
   printf 'old-worker\n' >"$case_dir/install/factory-worker"
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
@@ -21,7 +21,16 @@ make_fixture() {
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
 case "$*" in
-  *'clone --quiet'*) destination=${@: -1}; mkdir -p "$destination/web" "$destination/ops" ;;
+  *'clone --quiet'*)
+    destination=${@: -1}
+    mkdir -p "$destination/web" "$destination/ops"
+    printf '{}\n' >"$destination/web/package.json"
+    printf '{}\n' >"$destination/web/package-lock.json"
+    for file in fx fx-factory-release install-server-browser.sh factory-browser-sandbox test-browser-sandbox.sh; do
+      printf '#!/bin/sh\nprintf "system %%s\\n" "$*" >>"$TEST_SYSTEM_EVENTS"\n' >"$destination/ops/$file"
+      chmod 755 "$destination/ops/$file"
+    done
+    ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1'*) echo 'Проверочный релиз' ;;
 esac
@@ -120,6 +129,7 @@ EOF
 run_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_SYSTEM_EVENTS="$case_dir/system-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -127,6 +137,9 @@ run_release() {
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_SYSTEM_INSTALL=1 FACTORY_FX_BIN="$case_dir/system/fx" \
+    FACTORY_RELEASE_HELPER="$case_dir/system/fx-factory-release" \
+    FACTORY_BROWSER_SHARE="$case_dir/system/browser-sandbox" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
@@ -157,6 +170,12 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
+[ -x "$success/system/fx" ] || fail "system fx was not installed"
+[ -x "$success/system/fx-factory-release" ] || fail "release helper was not installed"
+diff -u <(printf '%s\n' \
+  'system factory browser-sandbox install' \
+  'system factory browser-sandbox check') "$success/system-events" >/dev/null \
+  || fail "browser sandbox was not installed and checked during release"
 
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install; do
   failed="$temporary/$mode"

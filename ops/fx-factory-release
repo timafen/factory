@@ -16,6 +16,10 @@ WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
+FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
+RELEASE_HELPER="${FACTORY_RELEASE_HELPER:-/usr/local/lib/fx-factory-release}"
+BROWSER_SHARE="${FACTORY_BROWSER_SHARE:-/usr/local/share/factory/browser-sandbox}"
+SYSTEM_INSTALL="${FACTORY_RELEASE_SYSTEM_INSTALL:-auto}"
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -61,6 +65,30 @@ step "собираю сервер и воркер"
 as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
+
+# Keep the root-owned operational entrypoints and browser payload on the same
+# revision as the application. Reinstalling them is deliberately idempotent.
+if [ "$SYSTEM_INSTALL" = auto ]; then
+  if [ "$(id -u)" -eq 0 ]; then SYSTEM_INSTALL=1; else SYSTEM_INSTALL=0; fi
+fi
+if [ "$SYSTEM_INSTALL" = 1 ]; then
+  step "обновляю системные fx и release-helper"
+  install -d -m 755 "$(dirname "$FX_BIN")" "$(dirname "$RELEASE_HELPER")" \
+    && install -m 755 "$work/src/ops/fx" "$FX_BIN" \
+    && install -m 755 "$work/src/ops/fx-factory-release" "$RELEASE_HELPER" \
+    || { fail "не смог обновить системные команды выпуска"; cleanup; exit 4; }
+
+  step "устанавливаю и проверяю сетевую песочницу браузера"
+  install -d -m 755 "$BROWSER_SHARE/ops" "$BROWSER_SHARE/web" \
+    && install -m 755 \
+      "$work/src/ops/install-server-browser.sh" "$work/src/ops/factory-browser-sandbox" \
+      "$work/src/ops/test-browser-sandbox.sh" "$BROWSER_SHARE/ops/" \
+    && install -m 644 \
+      "$work/src/web/package.json" "$work/src/web/package-lock.json" "$BROWSER_SHARE/web/" \
+    && "$FX_BIN" factory browser-sandbox install \
+    && "$FX_BIN" factory browser-sandbox check \
+    || { fail "browser-sandbox не установился или не прошёл проверку"; cleanup; exit 4; }
+fi
 
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \

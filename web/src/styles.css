@@ -1380,6 +1380,10 @@ button { color: inherit; }
 .dlg-compose {
   padding-top: 10px; border-top: 1px solid #1e2531; background: transparent;
 }
+
+.dlg-browser { display: flex; gap: 8px; padding: 10px 18px; border-bottom: 1px solid #202838; }
+.dlg-browser input { flex: 1; min-width: 0; }
+.dlg-browser button { white-space: nowrap; }
 .dlg-drag .dlg-input { border-color: #2f6feb; background: #131c2c; }
 .dlg-input {
   display: flex; align-items: flex-end; gap: 8px;
