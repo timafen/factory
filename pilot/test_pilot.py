@@ -1159,6 +1159,45 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
         self.assertEqual(self.disk_config()["stopped_pipelines"], [])
 
 
+class PilotConfigPermissionsTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.conf_path = os.path.join(self.temporary.name, "config.json")
+
+    def save_config(self, data):
+        with mock.patch.object(pilot, "CONF_PATH", self.conf_path):
+            pilot.save(self.conf_path, data)
+
+    def test_new_config_is_owner_only(self):
+        self.save_config({"ntfy_topic": "private"})
+
+        self.assertEqual(os.stat(self.conf_path).st_mode & 0o777, 0o600)
+        self.assertEqual(pilot.load(self.conf_path, None), {"ntfy_topic": "private"})
+
+    def test_replacing_existing_config_restores_owner_only_mode(self):
+        with open(self.conf_path, "w") as f:
+            json.dump({"ntfy_topic": "old"}, f)
+        os.chmod(self.conf_path, 0o644)
+        previous_inode = os.stat(self.conf_path).st_ino
+
+        self.save_config({"ntfy_topic": "new"})
+
+        self.assertNotEqual(os.stat(self.conf_path).st_ino, previous_inode)
+        self.assertEqual(os.stat(self.conf_path).st_mode & 0o777, 0o600)
+        self.assertEqual(pilot.load(self.conf_path, None), {"ntfy_topic": "new"})
+
+    def test_non_config_json_keeps_standard_umask_mode(self):
+        state_path = os.path.join(self.temporary.name, "state.json")
+        previous_umask = os.umask(0o027)
+        try:
+            pilot.save(state_path, {"state": "ordinary"})
+        finally:
+            os.umask(previous_umask)
+
+        self.assertEqual(os.stat(state_path).st_mode & 0o777, 0o640)
+
+
 class BrainFallbackTest(unittest.TestCase):
     """После лимита один провайдер должен оставаться заблокирован до
     следующего вызова brain(), а не тратить попытку снова."""

@@ -238,7 +238,7 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 	settings := validPilotSettings()
 	settings.AllowAnyWorker = true
 	settings.AllowedWorkers = nil
-	pilot, _ := writePilotFixture(t, settings)
+	pilot, path := writePilotFixture(t, settings)
 	store := newTestStore(t)
 	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
 	defer server.Close()
@@ -269,7 +269,26 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 	if len(got.Settings.AllowedWorkers) != 1 || got.Settings.AllowedWorkers[0] != "worker-1" || !got.Settings.AllowAnyWorker {
 		t.Fatalf("settings = %#v", got.Settings)
 	}
-	put, _ := json.Marshal(protocol.UpdatePilotSettingsRequest{Version: "stale", Settings: got.Settings})
+	got.Settings.PollSeconds = 15
+	put, _ := json.Marshal(protocol.UpdatePilotSettingsRequest{Version: got.Version, Settings: got.Settings})
+	request, _ = http.NewRequest(http.MethodPut, server.URL+"/api/v1/settings/pilot", bytes.NewReader(put))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("successful PUT status %d", response.StatusCode)
+	}
+	response.Body.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode = %04o, want 0600", info.Mode().Perm())
+	}
+	put, _ = json.Marshal(protocol.UpdatePilotSettingsRequest{Version: "stale", Settings: got.Settings})
 	request, _ = http.NewRequest(http.MethodPut, server.URL+"/api/v1/settings/pilot", bytes.NewReader(put))
 	request.Header.Set("Content-Type", "application/json")
 	response, err = server.Client().Do(request)

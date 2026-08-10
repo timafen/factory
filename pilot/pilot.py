@@ -62,7 +62,20 @@ def load(path, default):
 
 def save(path, data):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    if path == CONF_PATH:
+        # Конфиг содержит темы ntfy и адреса владельца. Создаём временный файл
+        # сразу закрытым для остальных пользователей, иначе os.replace вернёт
+        # права, зависящие от umask, даже если прежний config.json был 0600.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            f = os.fdopen(fd, "w")
+        except Exception:
+            os.close(fd)
+            raise
+    else:
+        f = open(tmp, "w")
+    with f:
         json.dump(data, f, indent=1)
     os.replace(tmp, path)
 
