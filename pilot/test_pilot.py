@@ -893,6 +893,75 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
 
+    def test_verify_pass_is_processed_once(self):
+        """A restart after a successful Verify must not merge it a second time."""
+        self.conf["stages"] = [{"workflow": "Verify"}]
+        self.conf["auto_merge"] = True
+        verify = {
+            "id": "verify-pass",
+            "title": "[auto] [1/1 Verify] Идемпотентный финал",
+            "state": "succeeded",
+            "repository_id": "repo-id",
+        }
+        detail = {
+            "task": {"repository_id": "repo-id"},
+            "workflow": {"title": "Verify"},
+            "context": "Branch: factory/idempotent-verify",
+            "attempts": [{"result": "PASS\nBRANCH: factory/idempotent-verify"}],
+        }
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [verify]}
+            if path == "/tasks/verify-pass":
+                return detail
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                                           "remote_identity": "github.com/acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": "verify-workflow", "enabled": True,
+                    "current_revision": {"id": "verify-revision", "title": "Verify"}}]}
+            raise AssertionError(path)
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                                                  side_effect=lambda day_start, _week_start:
+                                                  {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "area_extend"))
+            stack.enter_context(mock.patch.object(pilot, "collect_ideas"))
+            stack.enter_context(mock.patch.object(pilot, "decide",
+                                                  return_value={"action": "stop"}))
+            stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+            merge = stack.enter_context(mock.patch.object(pilot, "gh_merge", return_value=(True, "merged")))
+            final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
+            stack.enter_context(mock.patch.object(pilot, "deploy_after_merge"))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", journal))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, {"processed": []})
+            pilot.cycle(self.conf, {"processed": []})
+
+        self.assertEqual(merge.call_count, 1)
+        final.assert_called_once_with("verify-pass", "Verify", True)
+        with open(journal, encoding="utf-8") as entries:
+            records = [json.loads(line) for line in entries]
+        self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
+
 
 class PlanCardCleanupTest(unittest.TestCase):
     def setUp(self):
