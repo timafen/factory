@@ -194,6 +194,11 @@ grep -F 'IPAddressAllow=192.0.2.10' "$temporary/events" >/dev/null \
   || fail "browser не разрешил только адрес Factory FQDN"
 grep -F 'IPAddressAllow=192.0.2.20' "$temporary/events" >/dev/null \
   || fail "browser не разрешил только адрес staging FQDN"
+grep -F 'MAP factory.timafen.com 192.0.2.10, MAP staging-automation.tarser.net 192.0.2.20, MAP * ~NOTFOUND, EXCLUDE localhost' \
+  "$temporary/events" >/dev/null \
+  || fail "Chromium resolver не запретил DNS для всех неразрешённых FQDN"
+grep -F -- '--no-proxy-server' "$temporary/events" >/dev/null \
+  || fail "Chromium не запущен с принудительно отключённым proxy"
 grep -Fx 'goto=https://factory.timafen.com' "$temporary/events" >/dev/null \
   || fail "smoke не открыл разрешённый Factory FQDN"
 grep -Fx 'goto=https://staging-automation.tarser.net' "$temporary/events" >/dev/null \
@@ -204,6 +209,25 @@ grep -Fx 'goto=https://example.com' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку внешнего интернета"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
+
+for unsafe_argument in \
+  '--host-resolver-rules=MAP * 127.0.0.1' \
+  '--host-rules=MAP * 127.0.0.1' \
+  '--proxy-auto-detect' \
+  '--proxy-bypass-list=example.com' \
+  '--proxy-server=http://127.0.0.1:8080' \
+  '--proxy-pac-url=http://127.0.0.1/proxy.pac' \
+  '--no-proxy-server'; do
+  status=0
+  TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+    PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+    "$libexec/factory-browser-isolated" "$unsafe_argument" \
+    >"$temporary/network-override-output" 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "launcher принял network override: $unsafe_argument"
+  grep -F 'unsafe Chromium network override rejected:' \
+    "$temporary/network-override-output" >/dev/null \
+    || fail "launcher не объяснил отказ network override: $unsafe_argument"
+done
 
 rollback="$temporary/rollback"
 mkdir -p "$rollback/libexec" "$rollback/release"
