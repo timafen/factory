@@ -1,4 +1,5 @@
 import contextlib
+import collections
 import importlib
 import json
 import os
@@ -724,12 +725,12 @@ class DiagnosisRepairTests(unittest.TestCase):
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "diag_sweep",
                  "rescue_queued", "supersede_stale_questions", "handle_answers",
-                 "advance_epics")
+                 "advance_epics", "pipeline_watch")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=api_for_cycle))
             stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
             stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
-                                                  return_value={0: 0}))
+                                                  return_value=collections.defaultdict(int)))
             stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
                                                   return_value=False))
             stack.enter_context(mock.patch.object(pilot, "host_block",
@@ -755,10 +756,45 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
+class ReviveSignalTests(unittest.TestCase):
+    def test_concurrent_signal_written_after_claim_survives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            active = os.path.join(temporary, "revive.json")
+            with mock.patch.object(pilot, "REVIVE_PATH", active):
+                pilot.save(active, {"Первая работа": True})
+
+                first, claimed = pilot.claim_revive_signals()
+                # This is the race window from the old load-then-save code:
+                # control plane publishes another signal while pilot works.
+                pilot.save(active, {"Вторая работа": True})
+                pilot.finish_revive_signals(claimed)
+
+                second, claimed = pilot.claim_revive_signals()
+                pilot.finish_revive_signals(claimed)
+
+        self.assertEqual(first, {"Первая работа": True})
+        self.assertEqual(second, {"Вторая работа": True})
+
+    def test_unfinished_signal_remains_in_spool(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            active = os.path.join(temporary, "revive.json")
+            with mock.patch.object(pilot, "REVIVE_PATH", active):
+                pilot.save(active, {"Запущена": True, "Ждёт исполнителя": True})
+
+                _, claimed = pilot.claim_revive_signals()
+                pilot.finish_revive_signals(claimed, {"Запущена"})
+                pending, claimed = pilot.claim_revive_signals()
+                pilot.finish_revive_signals(claimed, {"Ждёт исполнителя"})
+
+        self.assertEqual(pending, {"Ждёт исполнителя": True})
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
         self.memory = {}
+        self.revive = {}
+        self.works = {}
         self.work_status = {}
         self.created = []
         self.notifications = []
@@ -781,6 +817,10 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "pilot_config_lock",
+                              side_effect=contextlib.nullcontext),
+            mock.patch.object(pilot, "claim_revive_signals", side_effect=self._claim_revive),
+            mock.patch.object(pilot, "finish_revive_signals", side_effect=self._finish_revive),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -793,13 +833,33 @@ class PipelineWatchTests(unittest.TestCase):
     def _load(self, path, default=None):
         if path == pilot.STALL_PATH:
             return self.memory
+        if path == pilot.REVIVE_PATH:
+            return self.revive
+        if path == pilot.WORKS_PATH:
+            return self.works
+        if path == pilot.CONF_PATH:
+            return dict(self.conf)
         return default
 
     def _save(self, path, value):
         if path == pilot.STALL_PATH:
             self.memory = value
+        elif path == pilot.REVIVE_PATH:
+            self.revive = value
+        elif path == pilot.CONF_PATH:
+            self.conf.clear()
+            self.conf.update(value)
         elif path.endswith("/pilot/work_status.json"):
             self.work_status = value
+
+    def _claim_revive(self):
+        return dict(self.revive), ["claimed"] if self.revive else []
+
+    def _finish_revive(self, claimed, completed=None):
+        if claimed:
+            completed = set(self.revive) if completed is None else set(completed)
+            self.revive = {base: signal for base, signal in self.revive.items()
+                           if base not in completed}
 
     def _create(self, body, conf):
         self.created.append(body)
@@ -892,6 +952,168 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 1)
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+        self.assertEqual(self.revive, {})
+
+    def test_revive_without_success_starts_first_unfinished_stage(self):
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([self.task(state="failed")])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[1/3 Specification]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-spec")
+        self.assertIn("Повторно запусти эту стадию", self.created[0]["context"])
+        self.assertNotIn("Предыдущий этап: Review", self.created[0]["context"])
+        self.assertEqual(self.revive, {})
+
+    def test_revive_retries_failed_start_stage_after_intentional_skips(self):
+        stages = [
+            "Triage", "Specification", "Implement + Test", "Review", "Verify",
+        ]
+        self.conf["stages"] = [{"workflow": stage} for stage in stages]
+        self.workflows = {
+            stage: {"enabled": True, "revision_id": "rev-" + str(index)}
+            for index, stage in enumerate(stages, start=1)
+        }
+        self.works = {
+            "Встроенный патруль": {
+                "start_stage": "Implement + Test",
+                "skipped": ["Triage", "Specification"],
+            }
+        }
+        self.revive = {"Встроенный патруль": True}
+        failed = {
+            "id": "failed-implement",
+            "title": "[auto] [3/5 Implement + Test] Встроенный патруль",
+            "state": "failed",
+            "created_at": "2026-08-10T12:00:00Z",
+            "repository_id": "repo-id",
+        }
+
+        self.watch([failed])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[3/5 Implement + Test]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-3")
+        self.assertIn("не возвращаясь к намеренно пропущенным", self.created[0]["context"])
+        self.assertEqual(self.revive, {})
+
+    def test_revive_signal_survives_until_task_is_created(self):
+        self.revive = {"Встроенный патруль": True}
+        self.workers = {}
+
+        self.watch([self.task(state="failed")])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.revive, {"Встроенный патруль": True})
+
+    def test_revive_after_rework_runs_review_again(self):
+        old_review = self.task(stage="Review")
+        old_review["created_at"] = "2026-08-09T10:00:00Z"
+        reworked_implementation = self.task(stage="Implement")
+        reworked_implementation["created_at"] = "2026-08-09T11:00:00Z"
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"}
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([reworked_implementation, old_review])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[3/3 Review]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-review")
+
+    def test_revive_retries_newer_failed_implement_after_old_successful_review(self):
+        old_review = self.task(stage="Review")
+        old_review.update({
+            "id": "old-review",
+            "created_at": "2026-08-09T10:00:00Z",
+        })
+        failed_implementation = self.task(stage="Implement", state="failed")
+        failed_implementation.update({
+            "id": "new-failed-implement",
+            "created_at": "2026-08-09T11:00:00Z",
+        })
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([old_review, failed_implementation])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
+
+    def test_revive_removes_only_target_pause_from_latest_python_config(self):
+        self.conf["stopped_pipelines"] = [
+            "Встроенный патруль", "Параллельная пауза",
+        ]
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([self.task(state="failed")])
+
+        self.assertEqual(self.conf["stopped_pipelines"], ["Параллельная пауза"])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.revive, {})
+
+    def test_cycle_consumes_revive_and_starts_the_next_stage(self):
+        task = self.task()
+        task.update({"id": "finished-spec", "created_at": "2026-08-10T12:00:00Z"})
+        self.revive = {"Встроенный патруль": True}
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/workers":
+                return {"workers": list(self.workers.values())}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": [
+                    {"id": stage, "enabled": True,
+                     "current_revision": {"id": data["revision_id"], "title": stage}}
+                    for stage, data in self.workflows.items()
+                ]}
+            raise AssertionError(path)
+
+        state = {"processed": [task["id"]], "epics_processed": [],
+                 "epic_starts_processed": []}
+        noops = ("collect_automation_findings", "cleanup_completed_plan_cards",
+                 "write_dashboard", "provider_limits_tick", "detect_limits",
+                 "record_new_works", "budget_guard", "handle_epics",
+                 "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers",
+                                                  return_value=self.workers))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                                                  return_value=collections.defaultdict(int)))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, state)
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.revive, {})
 
 
 class PlanCardCleanupTest(unittest.TestCase):
@@ -1312,7 +1534,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(create.call_args.args[0]["request_key"],
                          "plan-autostart:top:second-run")
 
-    def test_cycle_does_not_run_legacy_pipeline_patrol(self):
+    def test_cycle_runs_pipeline_watch_with_loaded_inputs(self):
         tasks = [
             {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
             {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
@@ -1352,7 +1574,12 @@ class PlanAutostartTest(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
             pilot.cycle(self.conf, state)
 
-        watch.assert_not_called()
+        watch.assert_called_once()
+        watched_conf, watched_tasks, watched_workflows, watched_workers = watch.call_args.args
+        self.assertIs(watched_conf, self.conf)
+        self.assertEqual(watched_tasks, tasks)
+        self.assertEqual(watched_workflows["Triage"]["revision_id"], "wf-triage")
+        self.assertEqual(watched_workers, self.workers)
         self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
@@ -1384,7 +1611,7 @@ class PlanAutostartTest(unittest.TestCase):
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "rescue_queued",
                  "supersede_stale_questions", "handle_answers", "advance_epics",
-                 "collect_ideas", "route_question")
+                 "collect_ideas", "route_question", "pipeline_watch")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
@@ -1700,7 +1927,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_not_called()
+        watch.assert_called_once()
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)
