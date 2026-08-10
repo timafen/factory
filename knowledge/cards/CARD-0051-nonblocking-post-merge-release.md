@@ -2,14 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented + Tested — повтор после внешней блокировки не теряется.
+- Status: Verified PASS — автовыпуск сохраняется, не блокирует цикл Pilot и
+  повторяется после внешней блокировки.
 - Branch: `factory/3ea10dee-e5d-6daabe49-3e0`.
-- Head commit: `bbd2429` (`Не терять автовыпуск при занятой внешней блокировке`).
+- Head commit: `6490a10` (`Зафиксировать повтор выпуска после внешней блокировки`).
 - What changed: при `rc=8` Pilot сохраняет на диск один отложенный повтор, даже
   если новый merge ещё не успел выставить очередь. Повтор запускается после 60 секунд.
-- Evidence: `python3 -m unittest pilot.test_pilot.PostMergeDeployTest` — 11/11 OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и `git diff --check` — OK.
-- One next action: проверить исправление внешней блокировки в Review и влить в `main`.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 103/103 OK, включая 11/11
+  `PostMergeDeployTest`; Go-пакеты и UI lint/typecheck прошли. `just check`
+  останавливается только на двух прежних staticcheck-находках вне области задачи.
+- One next action: оркестратор автоматически вносит PASS-ветку в `main` и запускает
+  staging-выпуск.
 
 ## LOG
 
@@ -52,3 +55,19 @@
 release-lock, подтверждает сохранение очереди без нового merge и её запуск после
 освобождения блокировки; `PostMergeDeployTest` — 11/11 OK, `py_compile` и
 `git diff --check` — OK.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда/проверка | Наблюдение |
+| --- | --- | --- |
+| Выпуск не блокирует цикл Pilot | `PostMergeDeployTest.test_release_is_started_in_background_and_saved_for_next_cycle` | Процесс запускается через `Popen`, PID и состояние записаны на диск. |
+| Рестарт не теряет выпуск | `PostMergeDeployTest.test_restart_from_state_file_resumes_release_saved_before_process_start` | Очередь, сохранённая до `Popen`, восстановлена и запущена следующим циклом. |
+| Внешняя блокировка не теряет запрос | `PostMergeDeployTest.test_external_release_lock_is_saved_then_retried_after_delay` | `rc=8` создаёт сохраняемую очередь; до 60 секунд запуска нет, на 60-й секунде повтор стартует. |
+| Повторные merge не плодят выпуски | `PostMergeDeployTest.test_busy_factory_release_is_coalesced_for_retry` и `test_completed_release_starts_one_coalesced_successor` | Занятый выпуск получает один coalesced-повтор. |
+| Соседние среды не перепутаны | `PostMergeDeployTest.test_trading_repository_releases_only_trading_staging` и `test_factory_repository_uses_its_own_release_command` | tarser-operations выпускает staging, Factory — только свою команду. |
+
+Полный Python-набор: `python3 -m unittest pilot.test_pilot` — 103/103 OK. Go:
+`go test -timeout 5m` для всех 13 пакетов — OK. UI: после `just ui-install`
+`npm run lint` и `npm run typecheck` — OK. `just check` воспроизводимо красный
+только на staticcheck в `internal/controlplane/cards_http.go:37` и
+`internal/controlplane/pilot_config.go:136`, обе строки существовали до ветки.
