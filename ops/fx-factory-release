@@ -42,7 +42,7 @@ as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/nul
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
 sha=$(as_user git -C "$work/src" rev-parse HEAD)
 subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
-step "собираю ${sha:0:7} — $subject"
+step "собираю изменение: $subject"
 
 step "ставлю зависимости интерфейса"
 as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
@@ -163,7 +163,7 @@ json.dump({"name": "релиз от %s, из %s: %s" % (when, ref, subj),
            "sha": sha, "short": sha[:7], "ref": ref,
            "subject": subj, "when": when, "at": iso},
           open(p, "w"), ensure_ascii=False, indent=2)
-print("== выкачено: релиз от %s, из %s: %s (%s)" % (when, ref, subj, sha[:7]))
+print("== выкачено: релиз от %s, из %s: %s" % (when, ref, subj))
 PY
 set_owner "$INFO" 2>/dev/null || true
 

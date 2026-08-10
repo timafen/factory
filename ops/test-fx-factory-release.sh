@@ -158,6 +158,10 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
+grep -F 'Проверочный релиз' "$success/output" >/dev/null \
+  || fail "release did not explain the deployed change"
+! grep -F '1234567890abcdef' "$success/output" >/dev/null \
+  || fail "release exposed a bare technical version in owner-facing output"
 
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install; do
   failed="$temporary/$mode"

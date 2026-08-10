@@ -36,6 +36,23 @@ class AgentRulesScopeTests(unittest.TestCase):
             with self.subTest(signature=signature):
                 self.assertIn(signature, pilot.AGENT_RULES)
 
+
+class OwnerMessageTests(unittest.TestCase):
+    def test_internal_identifiers_become_human_words(self):
+        text = (
+            "Ветка `factory/6ca72092-cc4f-4a5d-802d-3e376f36e6fc`, "
+            "задача 6ca72092-cc4f-4a5d-802d-3e376f36e6fc, "
+            "версия `0684f94bd46493d0ec920ed1939323ccbebefe84`."
+        )
+
+        result = pilot.no_bare_hashes(text)
+
+        self.assertEqual(
+            result,
+            "Ветка рабочая ветка, задача внутренняя задача, версия проверенная версия.",
+        )
+        self.assertNotIn("служебный код", result)
+
     @mock.patch.object(pilot, "money_guard")
     @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
     def test_auto_task_receives_common_rules_only_once(self, _api, _money):
