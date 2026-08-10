@@ -2,15 +2,13 @@
 
 ## HEAD
 
-- Stage: Implement + Test
-- Status: implemented and ready for repeat Review
+- Stage: Verify
+- Status: BLOCKED: `staticcheck` находит два нарушения в изменённом `pilot_config.go`.
 - Branch: `factory/78379fa7-d75-48756a35-864`
-- Head commit: `dc72b13`
-- What changed: кнопка и атомарная команда оживления восстановлены на свежем `origin/main`.
-- What changed: infra-retry сохраняет auto-revive metadata; следующий этап не обрезает 200-символьное имя.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 23 pilot, 8 UI).
-- Evidence: Go binaries и web production build, lint, typecheck → PASS.
-- Next action: repeat Review проверяет два исправленных сквозных сценария идентичности.
+- Head commit: `025ad16` (проверенная поставка до записи Verify).
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 23 pilot, 8 UI); `just ui-check`, `just test-browser` и `just build` → PASS.
+- Evidence: `just check` → BLOCKED на `staticcheck`: неиспользуемый `atomicWritePath` и проигнорированная ошибка `json.Unmarshal` в `pilot_config.go`.
+- Next action: удалить неиспользуемый метод и корректно обработать ошибку JSON, затем повторить `just check`.
 
 ## LOG
 
@@ -127,3 +125,16 @@
 ### 2026-08-09 — Implement
 
 После блокирующих замечаний Review infra-retry сохраняет `pilot:auto-revive:<stage>:` и остаётся автоматической работой в следующем цикле. Обычный переход оставляет 200-символьное имя целым и кодирует следующую стадию в `request_key`. Оба сквозных сценария добавлены в целевой шлюз; `just test-revive-stopped-work` прошёл (Go API, 23 pilot, 8 UI), Go и web production build, lint и typecheck успешны.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| `stopped_owner` снимает паузу только выбранной работы и продолжает следующий этап | `just test-revive-stopped-work` (Go `TestReviveWorkRemovesOnlyExactPauseAndIsIdempotent`; pilot `test_revive_restarts_next_unfinished_stage_and_keeps_other_stalls`) | PASS |
+| `stuck` сбрасывает исчерпанные попытки и не начинает работу заново | тот же шлюз (Go `TestReviveWorkAcceptsStuckAndRejectsUnknown`; pilot `PipelineWatchTests`) | PASS |
+| Кнопка отсутствует у обычной failed работы | тот же шлюз (UI `does not offer revive for ordinary failed work`) | PASS |
+| Повторный клик/запрос безопасен, ошибка возвращает доступную кнопку | тот же шлюз (Go idempotence; UI `revives only stopped work once and shows API errors`) | PASS |
+| Не затрагиваются другие настройки и stall-состояния; control plane не создаёт Task | тот же шлюз (точное удаление и pilot-проверка других stalls) | PASS |
+| Полный набор проекта | `just check` | BLOCKED: `staticcheck` сообщает U1000 для `atomicWritePath` и SA4006 для ошибки `json.Unmarshal` в изменённом `internal/controlplane/pilot_config.go` |
+
+Дополнительно: `just ui-check`, `just test-browser` и `just build` прошли. `git diff --check origin/main...HEAD` не нашёл пробельных ошибок; до записи Verify дерево было чистым.
