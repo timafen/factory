@@ -24,15 +24,15 @@ FROM workflows AS workflow
 JOIN workflow_revisions AS revision ON revision.id = workflow.current_revision_id
 WHERE workflow.enabled = 1
   AND (
-      lower(revision.instructions) LIKE '%head commit%'
-      OR revision.instructions LIKE '%git rev-parse --short HEAD%'
+      instr(lower(revision.instructions), 'head commit') > 0
+      OR instr(lower(revision.instructions), 'git rev-parse --short head') > 0
   );
 
 UPDATE workflows
 SET current_revision_id = 'migration-019-implementation-commit-' || id,
     updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
 WHERE enabled = 1
-  AND current_revision_id IN (
-      SELECT id FROM workflow_revisions
+  AND id IN (
+      SELECT workflow_id FROM workflow_revisions
       WHERE request_key LIKE 'migration:019:implementation-commit:%'
   );
