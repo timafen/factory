@@ -2026,6 +2026,44 @@ class PlanAutostartTest(unittest.TestCase):
 
         self.assertEqual(result, "fourth-task")
 
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "fourth-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_four_work_limit_and_free_worker_distribution(
+            self, _limits, _questions, ideas, create, _set_idea,
+            _note_work, _notify):
+        conf = {
+            "stages": [{"workflow": "Triage", "workers": {
+                "medium": "preferred", "high": "spare",
+            }}],
+        }
+        workflows = {"Triage": {"enabled": True, "revision_id": "wf-triage"}}
+        workers = {
+            "preferred": {"id": "worker-busy", "online": True,
+                           "health": "healthy", "capacity": 1, "active_count": 1},
+            "spare": {"id": "worker-free", "online": True,
+                      "health": "healthy", "capacity": 1, "active_count": 0},
+        }
+        ideas.return_value = [self.cards[1]]
+        three_active = [
+            {"id": "a", "title": "[auto] [1/5 Triage] A", "state": "running"},
+            {"id": "b", "title": "[auto] [2/5 Specification] B", "state": "queued"},
+            {"id": "c", "title": "[auto] [3/5 Implement + Test] C", "state": "running"},
+        ]
+
+        result = pilot.autostart_plan(conf, three_active, workflows, workers)
+
+        self.assertEqual(result, "fourth-task")
+        self.assertEqual(create.call_args.args[0]["worker_id"], "worker-free")
+        self.assertIsNone(pilot.autostart_plan(
+            conf, three_active + [{"id": "d", "title": "[auto] [1/5 Triage] D",
+                                   "state": "running"}], workflows, workers))
+        self.assertEqual(create.call_count, 1)
+
     @mock.patch.object(pilot, "set_idea")
     @mock.patch.object(pilot, "ideas_all")
     @mock.patch.object(pilot, "load_questions", return_value=[])
