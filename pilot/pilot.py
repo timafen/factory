@@ -43,6 +43,9 @@ HOST_LOAD_ACTIVE_STATES = {"running", "queued", "pending", "created", "starting"
 HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
 HOST_LOAD_MINIMUM_ACTIVE = 1
 MAX_RETAINED_PER_REPOSITORY = 10
+FAST_POLL_SECONDS = 2
+ACTIVE_POLL_SECONDS = 10
+ERROR_BACKOFF_MAX_SECONDS = 300
 
 
 def api(path, body=None):
@@ -439,6 +442,9 @@ def create_task(body, conf=None):
 
 def _note_admitted_task(conf, response, body):
     """Keep the cycle snapshot honest after a successful create."""
+    activity = (conf or {}).get("_cycle_activity")
+    if isinstance(activity, dict):
+        activity["task_created"] = True
     tasks = (conf or {}).get("_host_load_tasks")
     if tasks is None:
         return
@@ -1848,6 +1854,45 @@ STALL_NUDGES = 2      # сколько раз толкаем сами, даль�
 PIPELINE_LIVE_STATES = frozenset(
     ("running", "queued", "pending", "created", "starting")
 )
+POLL_ACTIVE_STATES = PIPELINE_LIVE_STATES | {"preparing"}
+
+
+def next_poll_hint(conf, tasks, fast=False):
+    """Choose the next Pilot interval without changing pipeline semantics."""
+    idle = max(float((conf or {}).get("poll_seconds", 30)), 1)
+    if fast:
+        return {"seconds": min(float(FAST_POLL_SECONDS), idle), "reason": "handoff"}
+    active = any(
+        str(task.get("title") or "").startswith(PREFIX)
+        and task.get("state") in POLL_ACTIVE_STATES
+        and not is_stopped(conf or {}, base_title(task.get("title", "")))
+        for task in (tasks or [])
+    )
+    if active:
+        return {"seconds": min(float(ACTIVE_POLL_SECONDS), idle), "reason": "active"}
+    return {"seconds": idle, "reason": "idle"}
+
+
+def remember_new_terminal_tasks(conf, state, tasks):
+    """Return a one-shot handoff signal for newly observed terminal stages."""
+    seen_ids = state.setdefault("poll_terminal_seen", [])
+    already_seen = set(seen_ids)
+    terminal = [
+        task for task in (tasks or [])
+        if str(task.get("title") or "").startswith(PREFIX)
+        and task.get("state") in ("succeeded", "failed", "cancelled")
+    ]
+    fast = any(
+        task.get("id") not in already_seen
+        and not is_stopped(conf or {}, base_title(task.get("title", "")))
+        for task in terminal
+    )
+    seen_ids.extend(
+        task.get("id") for task in terminal
+        if task.get("id") and task.get("id") not in already_seen
+    )
+    state["poll_terminal_seen"] = seen_ids[-2000:]
+    return fast
 
 
 def stage_names(conf):
@@ -3416,6 +3461,7 @@ def record_new_works(conf, tasks, max_age_min=180):
 def handle_answers(conf, workflows, workers, tasks):
     """An answered question resumes its pipeline from resume_stage."""
     stages = [s["workflow"] for s in conf["stages"]]
+    applied = 0
     for q in load_questions():
         if q.get("status") not in ("answered", "no_worker") or not q.get("answer"):
             continue
@@ -3542,6 +3588,7 @@ def handle_answers(conf, workflows, workers, tasks):
             q["resumed_task_id"] = tid
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"ANSWER APPLIED q={q['id']} -> {stage} new_task={tid}")
+            applied += 1
             notify(conf, "Ответ принят, работа продолжена",
                    f"{q['title']}\nСтадия: {stage}", tags="arrow_forward",
                    click=f"{UI_BASE}/tasks/{tid}")
@@ -3550,6 +3597,7 @@ def handle_answers(conf, workflows, workers, tasks):
             q["last_error"] = repr(e)[:200]
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer resume failed for {q['id']} (попытка {tries+1}/5): {e}")
+    return applied
 
 
 def decide(conf, stage, next_stage, title, result, repo_id=""):
@@ -5477,8 +5525,11 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None):
 
 def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
+    activity = {"task_created": False, "answer_applied": False}
+    conf["_cycle_activity"] = activity
 
     tasks = api("/tasks?limit=100").get("tasks") or []
+    new_terminal = remember_new_terminal_tasks(conf, state, tasks)
     try:
         collect_automation_findings(state, tasks)
     except Exception as e:
@@ -5540,7 +5591,9 @@ def cycle(conf, state):
     # Дневной потолок: начатое доигрывается, новое не берётся.
     try:
         if day_budget_blocks(conf, tasks, codex_snapshot[day_start]):
-            return
+            hint = next_poll_hint(conf, tasks, fast=new_terminal)
+            conf.pop("_cycle_activity", None)
+            return hint
     except Exception as e:
         log("day_cap_error", repr(e))
 
@@ -5601,7 +5654,9 @@ def cycle(conf, state):
 
     # Owner answers resume stopped pipelines.
     try:
-        handle_answers(conf, workflows, workers, tasks)
+        answered = handle_answers(conf, workflows, workers, tasks)
+        activity["answer_applied"] = (
+            answered is True or (type(answered) is int and answered > 0))
     except Exception as e:
         log("answer_error", repr(e))
 
@@ -6021,24 +6076,76 @@ def cycle(conf, state):
     except Exception as e:
         log("plan_autostart_error", repr(e))
 
+    hint = next_poll_hint(
+        conf, tasks,
+        fast=(new_terminal or activity["task_created"] or activity["answer_applied"]),
+    )
+    conf.pop("_cycle_activity", None)
+    return hint
 
-def main():
-    log("factory-pilot started")
-    while True:
+
+def error_poll_hint(conf, failures, error=None):
+    """Keep the normal interval on the first failure, then back off safely."""
+    base = max(float((conf or {}).get("poll_seconds", 30)), 30)
+    seconds = min(base * (2 ** max(int(failures) - 1, 0)),
+                  float(ERROR_BACKOFF_MAX_SECONDS))
+    try:
+        retry_after = float(error.headers.get("Retry-After", 0))
+        seconds = max(seconds, retry_after)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return {"seconds": seconds, "reason": "error_backoff"}
+
+
+def record_poll_hint(state, hint, now=None):
+    """Persist every choice, but log only when the interval or reason changes."""
+    previous = state.get("next_poll") or {}
+    chosen = {
+        "seconds": hint["seconds"],
+        "reason": hint["reason"],
+        "chosen_at": time.time() if now is None else now,
+    }
+    state["next_poll"] = chosen
+    if (previous.get("seconds"), previous.get("reason")) != (
+            chosen["seconds"], chosen["reason"]):
+        log(f"next_poll seconds={chosen['seconds']:g} reason={chosen['reason']}")
+
+
+def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
+    sleep_fn = sleep_fn or time.sleep
+    clock_fn = clock_fn or time.time
+    failures = 0
+    completed = 0
+    while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
         state = load(STATE_PATH, {"processed": []})
+        hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
             try:
-                cycle(conf, state)
+                hint = cycle(conf, state) or next_poll_hint(conf, [])
+                failures = 0
             except Exception as e:
                 log("cycle_error", repr(e))
+                failures += 1
+                hint = error_poll_hint(conf, failures, e)
             state["processed"] = state["processed"][-2000:]
             state["automation_results_processed"] = state.get(
                 "automation_results_processed", [])[-2000:]
             state["epics_processed"] = state.get("epics_processed", [])[-2000:]
             state["epic_starts_processed"] = state.get("epic_starts_processed", [])[-2000:]
+            state["poll_terminal_seen"] = state.get("poll_terminal_seen", [])[-2000:]
+            record_poll_hint(state, hint, clock_fn())
             save(STATE_PATH, state)
-        time.sleep(conf.get("poll_seconds", 30) if conf else 60)
+        elif conf:
+            hint = {"seconds": max(float(conf.get("poll_seconds", 30)), 1),
+                    "reason": "disabled"}
+        sleep_fn(hint["seconds"])
+        completed += 1
+
+
+def main():
+    log("factory-pilot started")
+    run_loop()
 
 
 if __name__ == "__main__":
