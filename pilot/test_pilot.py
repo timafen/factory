@@ -1161,6 +1161,8 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
         cases = (
             ({"title": "оплата продавцу", "status": "open"}, True),
             ({"title": "Оплата продавцу", "status": "resolved"}, False),
+            ({"title": "Оплата продавцу", "status": "resolved",
+              "machine_action": "wait"}, True),
             ({"title": "Оплата", "status": "open"}, False),
             ({"title": "Оплата продавцу срочно", "status": "open"}, False),
         )
@@ -2012,6 +2014,82 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
         self.assertEqual(verdict["decision"], "wait")
         self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
+
+    def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
+        self.conf["stages"] = [
+            {"workflow": "Triage", "worker": "worker"},
+            {"workflow": "Specification", "worker": "worker"},
+        ]
+        pilot.save(self.conf_path, dict(self.conf))
+        self.assertFalse(self.route({
+            "decision": "wait",
+            "reason": "Владелец явно снимет паузу после проверки",
+        }))
+        task = {
+            "id": "question-id",
+            "title": "[auto] [1/2 Triage] Новая работа",
+            "state": "succeeded",
+            "repository_id": "repo-id",
+        }
+        worker = {
+            "id": "worker-id", "name": "worker", "online": True,
+            "health": "healthy", "capacity": 1, "active_count": 0,
+        }
+        workflows = [
+            {"id": "triage", "enabled": True,
+             "current_revision": {"title": "Triage", "id": "rev-triage"}},
+            {"id": "spec", "enabled": True,
+             "current_revision": {
+                 "title": "Specification", "id": "rev-spec"}},
+        ]
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/workers":
+                return {"workers": [worker]}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": workflows}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "advance_epics",
+            "retry_pending_factory_deploy", "autostart_plan",
+        )
+        created = []
+        state = {"processed": ["question-id"]}
+        stall_path = os.path.join(self.temporary.name, "pipeline_stalls.json")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "STALL_PATH", stall_path))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "load_limits", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "work_status_write"))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {"id": "unexpected"}}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, state)
+            pilot.cycle(self.conf, state)
+
+        self.assertEqual(created, [])
+        self.assertEqual(self.conf["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(
+            pilot.load(self.conf_path, {})["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(pilot.load(stall_path, {})["Новая работа"]["why"], "owner")
 
 
 class HostLoadAdmissionTests(unittest.TestCase):

@@ -1072,7 +1072,10 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
         active_names.update(
             name(question.get("title"))
             for question in load_questions()
-            if question.get("status") == "open"
+            if question.get("status") == "open" or (
+                question.get("status") == "resolved"
+                and question.get("machine_action") == "wait"
+            )
         )
         active_names.update(
             name(task.get("title"))
