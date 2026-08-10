@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented PASS — замечание устранено, готово к повторному Review.
-- Branch: `factory/a377b8bd-fd1-ec442943-ded`.
-- Head commit: `198afb8` — безопасная диагностика Pilot и adversarial-тесты.
-- What changed: install-deps использует needrestart list-only; AppArmor разрешает
-  user namespace только закреплённому full Chromium, а весь комплект откатывается
-  при ошибке smoke. Pilot публикует только точные строки fail-closed allowlist.
-- Evidence: Pilot 110/110 PASS; adversarial-проверка закрывает AWS,
-  client_secret, URL credentials, cookie и session.
-- One next action: Review проверяет fail-closed allowlist; root smoke остаётся Verify.
+- Status: Implemented PASS — замечание Review устранено, готово к повторному Review.
+- Branch: `factory/90b2fdd8-3bf-36abeb90-5cf`.
+- Head commit: `79eb5d0` — проверенная реализация до записи карточки.
+- What changed: installer нормализует фактический `No usable sandbox` в статическую
+  строку и не публикует Chromium stderr; интеграционный тест проходит через штатный
+  browser smoke. Обе посторонние правки controlplane исключены из diff.
+- Evidence: installer/release shell suites PASS; Pilot 13/13 PASS;
+  `npx tsc -p tsconfig.app.json --noEmit` PASS; `npm run build` PASS.
+- One next action: Review повторно проверяет достижимость диагностики и чистоту diff.
 
 ## LOG
 
@@ -37,3 +37,15 @@ allowlist безопасных сообщений установщика Chromiu
 `python3 -m unittest pilot.test_pilot.PostMergeDeployTest` — 13/13 PASS;
 полный `python3 -m unittest pilot.test_pilot` — 110/110 PASS. Adversarial-тест
 проверяет AWS key, client_secret, URL credentials, cookie и session.
+
+### 2026-08-10 — Implement
+
+После замечания Review нормализация перенесена в настоящий installer: штатный
+`test-browser-sandbox.sh` ловит отказ исполняемого Chromium, installer публикует
+только статическую строку `No usable sandbox`, а исходный stderr не выходит наружу.
+Release-stub больше не создаёт эту диагностику искусственно; интеграционный тест
+проверяет реальный failure-path и полный откат browser-комплекта.
+
+`bash ops/test-install-server-browser.sh`, `bash ops/test-fx-factory-release.sh`
+и 13 тестов `PostMergeDeployTest` — PASS. TypeScript-check и production build —
+PASS. Diff от `origin/main` не содержит двух посторонних controlplane-файлов.
