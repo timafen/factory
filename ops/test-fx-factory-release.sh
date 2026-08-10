@@ -8,6 +8,21 @@ trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -Fx "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
+wait_for_file() {
+  local file=$1 i
+  for ((i = 0; i < 500; i++)); do
+    [ -e "$file" ] && return 0
+    /bin/sleep 0.01
+  done
+  fail "timed out waiting for $file"
+}
+line_of() { grep -nF "$2" "$1" | head -n 1 | cut -d: -f1; }
+assert_before() {
+  local first second
+  first=$(line_of "$1" "$2") || fail "$1 is missing: $2"
+  second=$(line_of "$1" "$3") || fail "$1 is missing: $3"
+  [ "$first" -lt "$second" ] || fail "$2 did not run before $3"
+}
 
 make_fixture() {
   case_dir=$1 mode=$2
@@ -49,12 +64,64 @@ EOF
   cat >"$case_dir/bin/npx" <<'EOF'
 #!/bin/bash
 echo "npx $*" >>"$TEST_GATES"
+wait_for_file() {
+  local file=$1 i
+  for ((i = 0; i < 500; i++)); do
+    [ -e "$file" ] && return 0
+    /bin/sleep 0.01
+  done
+  exit 9
+}
+case "$TEST_MODE:${1:-}" in
+  parallel-success:tsc)
+    : >"$TEST_UI_STARTED"
+    wait_for_file "$TEST_GO_STARTED"
+    ;;
+  ui-test-fail:tsc)
+    : >"$TEST_UI_STARTED"
+    wait_for_file "$TEST_GO_RUNNING"
+    ;;
+  signal-gates:tsc)
+    : >"$TEST_UI_RUNNING"
+    trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+    while :; do /bin/sleep 0.01; done
+    ;;
+esac
 exit 0
 EOF
   cat >"$case_dir/bin/go" <<'EOF'
 #!/bin/bash
 echo "go $*" >>"$TEST_GATES"
-[ "${1:-}" != test ] || { [ "$TEST_MODE" != go-test-fail ]; exit; }
+if [ "${1:-}" = test ]; then
+  wait_for_file() {
+    local file=$1 i
+    for ((i = 0; i < 500; i++)); do
+      [ -e "$file" ] && return 0
+      /bin/sleep 0.01
+    done
+    exit 9
+  }
+  case "$TEST_MODE" in
+    parallel-success)
+      : >"$TEST_GO_STARTED"
+      wait_for_file "$TEST_UI_STARTED"
+      ;;
+    ui-test-fail)
+      : >"$TEST_GO_STARTED"
+      wait_for_file "$TEST_UI_STARTED"
+      : >"$TEST_GO_RUNNING"
+      trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+      while :; do /bin/sleep 0.01; done
+      ;;
+    signal-gates)
+      : >"$TEST_GO_RUNNING"
+      trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+      while :; do /bin/sleep 0.01; done
+      ;;
+    go-test-fail) exit 1 ;;
+  esac
+  exit 0
+fi
 output=
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then output=$2; shift 2; else shift; fi
@@ -160,6 +227,9 @@ run_release() {
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
+    TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
+    TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -172,27 +242,42 @@ run_release() {
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
 }
 
+start_release() {
+  case_dir=$1 mode=$2
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_SERVER_BIN="$case_dir/install/factory-server" \
+    TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
+    TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
+    TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
+    FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
+    FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
+    FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+  release_pid=$!
+}
+
 success="$temporary/success"
-make_fixture "$success" success
-run_release "$success" success \
+make_fixture "$success" parallel-success
+run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
-diff -u <(printf '%s\n' \
-  'npm ci --no-audit --no-fund --silent' \
-  'npx tsc -p tsconfig.app.json --noEmit' \
-  'npm test' \
-  'go test ./...' \
-  'bash ops/test-fx-factory-release.sh' \
-  'npx vite build' \
-  'go build -o PLACEHOLDER ./cmd/factory-server' \
-  'go build -o PLACEHOLDER ./cmd/factory-worker' \
-  'bash ops/provision-codex-auth.sh' \
-  'bash ops/install-factory-control.sh' \
-  'brain defer=1 marker=PLACEHOLDER' \
-  'bash ops/install-server-browser.sh') \
-  <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
-    -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' \
-    -e 's|marker=[^ ]*/restart-pilot|marker=PLACEHOLDER|' "$success/gates") >/dev/null \
-  || fail "release gates ran in the wrong order"
+wait_for_file "$success/ui-started"
+wait_for_file "$success/go-started"
+for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
+  'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  assert_before "$success/gates" "$gate" 'npx vite build'
+done
+assert_before "$success/gates" 'npx vite build' 'go build -o '
+grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
+  || fail "UI output was not kept separate"
+grep -F 'полный вывод: Go-проверки и сценарий выката' "$success/output" >/dev/null \
+  || fail "Go output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
@@ -263,6 +348,29 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
   [ ! -s "$gate_failed/events" ] || fail "services restarted after $mode"
   ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
     || fail "binaries were built after $mode"
+done
+grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
+  || fail "a failed UI group did not stop and reap the Go group"
+
+for signal in HUP TERM; do
+  signaled="$temporary/signal-$signal"
+  make_fixture "$signaled" signal-gates
+  start_release "$signaled" signal-gates
+  wait_for_file "$signaled/ui-running"
+  wait_for_file "$signaled/go-running"
+  kill -"$signal" "$release_pid"
+  set +e
+  wait "$release_pid"
+  status=$?
+  set -e
+  [ "$status" -eq 130 ] || fail "signal $signal returned $status instead of 130"
+  assert_file "$signaled/install/factory-server" old-server
+  assert_file "$signaled/install/factory-worker" old-worker
+  [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
+  grep -Fx 'ui-stopped' "$signaled/gate-children" >/dev/null \
+    || fail "signal $signal left the UI test group running"
+  grep -Fx 'go-stopped' "$signaled/gate-children" >/dev/null \
+    || fail "signal $signal left the Go test group running"
 done
 
 auth_failed="$temporary/auth-provision-fail"
