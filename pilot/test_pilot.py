@@ -3356,6 +3356,28 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_ignores_succeeded_intermediate_triage(self):
+        tasks = [
+            {"id": "triage", "title": "[auto] [1/5 Triage] Работа",
+             "state": "succeeded", "updated_at": "2026-08-10T10:00:00Z"},
+            {"id": "final", "title": "[auto] [5/5 Verify] Готовая работа",
+             "state": "succeeded", "updated_at": "2026-08-10T11:00:00Z"},
+            {"id": "failed", "title": "[auto] [2/5 Specification] Остановленная работа",
+             "state": "failed", "updated_at": "2026-08-10T12:00:00Z"},
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+
+        with mock.patch.object(pilot, "MERGES_PATH", os.path.join(temporary.name, "none")), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual([item["title"] for item in recent],
+                         ["Остановленная работа", "Готовая работа"])
+        self.assertEqual(recent[0]["status"], "failed")
+        self.assertIn("в main не влито", recent[0]["detail"])
+        self.assertEqual(recent[1]["status"], "passed")
+
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
             {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",

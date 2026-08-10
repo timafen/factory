@@ -5223,8 +5223,11 @@ def recent_done_block(tasks, n=5):
 
     latest = {}
     for task in tasks:
+        match = PIPELINE_TITLE.match(task.get("title") or "")
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
+            continue
+        if task.get("state") == "succeeded" and match.group(1) != match.group(2):
             continue
         title, stage = parsed
         if not title or is_service_work(title):
