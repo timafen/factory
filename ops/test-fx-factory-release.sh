@@ -50,7 +50,11 @@ case "$output" in
     [ "$TEST_MODE" != worker-build-fail ] || exit 1
     cat >"$output" <<'WORKER'
 #!/bin/bash
-[ "${1:-}" = identity ] && { echo worker-release-test; exit 0; }
+[ "${1:-}" = identity ] && {
+  grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null || exit 9
+  echo worker-release-test
+  exit 0
+}
 WORKER
     ;;
   *) printf '#!/bin/bash\nexit 0\n' >"$output" ;;

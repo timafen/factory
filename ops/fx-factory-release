@@ -114,10 +114,10 @@ sleep 5
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
 [ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
 
+systemctl stop "$WORKER_SERVICE" || rollback "воркер не остановился" 6
 worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
   || rollback "не удалось определить identity воркера" 6
 [ -n "$worker_id" ] || rollback "identity воркера пуст" 6
-systemctl stop "$WORKER_SERVICE" || rollback "воркер не остановился" 6
 previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
 previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
   'import json,sys
