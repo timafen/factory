@@ -335,6 +335,26 @@ AGENT_RULES = """
 """
 
 
+def notification_channel(conf):
+    """Return the configured owner notification URL for local workers."""
+    server = str((conf or {}).get("ntfy_server") or "").strip().rstrip("/")
+    topic = str((conf or {}).get("ntfy_owner_topic") or "").strip().strip("/")
+    if not server or not topic:
+        return ""
+    return server + "/" + urllib.parse.quote(topic, safe="")
+
+
+def agent_rules(conf=None):
+    channel = notification_channel(conf)
+    if not channel:
+        return AGENT_RULES
+    return AGENT_RULES.replace(
+        "=== КОНЕЦ ПРАВИЛ ===",
+        "8. Канал срочных уведомлений владельца: " + channel + "\n"
+        "=== КОНЕЦ ПРАВИЛ ===",
+    )
+
+
 def create_task(body, conf=None):
     if conf and not host_load_admits(
             conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
@@ -345,7 +365,9 @@ def create_task(body, conf=None):
     if str(body.get("title", "")).startswith(PREFIX):
         ctx = body.get("context") or ""
         if "ПРАВИЛА ДЛЯ АГЕНТА" not in ctx:
-            body["context"] = (ctx + "\n\n" + AGENT_RULES)[:60000]
+            rules = agent_rules(conf)
+            ctx = ctx[:max(0, 60000 - len(rules) - 2)]
+            body["context"] = (ctx + "\n\n" + rules)[:60000]
     """Create a task robustly. Attempt chain:
     1. exact worker + repository (fast path when already advertised);
     2. route + same worker (lets the worker acquire the repo dynamically);
