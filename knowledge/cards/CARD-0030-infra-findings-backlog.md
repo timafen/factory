@@ -167,3 +167,9 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 На ветке `factory/ea9c8aa0-f66-6ecfe85f-26f` коммит `5837b6fb789c0eed095a17758952882ade88cc10` считает direct/delegated product tasks и пишет durable samples серверным минутным sampler; patrol, Automation и служебные префиксы исключает общий с efficiency классификатор.
 Доказательство: `go test -count=1 ./...`, targeted `go test -race`, 132/132 Vitest, `go vet ./...`, ESLint, `go build ./...` и web production build — PASS; тест sampler получил два сэмпла без GET и подтвердил shutdown.
 Открытый риск: точные причины `provider_limit`, `repository_conflict` и `release_lock` появятся только после добавления отдельного durable/system источника; пока недоказанная блокировка честно остаётся `unknown`.
+
+### 2026-08-10 — Остановленный выпуск не оставляет тестовые процессы
+На ветке `factory/0724b7f5-761-f2293c84-560` очистка ждёт готовность pid-файла process group, затем завершает и дожидается обеих тестовых групп при ошибке, HUP, INT, TERM и EXIT.
+Фоновая оболочка явно сбрасывает наследованный ignored SIGINT до запуска тестов; параллельные ворота сохранены.
+Доказательство: `bash -n ops/fx-factory-release && bash -n ops/test-fx-factory-release.sh` и `bash ops/test-fx-factory-release.sh` — PASS; HUP/INT/TERM повторены по 5 раз, `/proc` и `ps` не нашли cmdline/cwd фикстур.
+Открытый риск: привилегированный живой выкат не запускался; семантика процессов покрыта изолированной фикстурой и live-проверкой `ps` после неё.

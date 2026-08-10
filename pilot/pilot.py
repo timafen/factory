@@ -57,6 +57,19 @@ def api(path, body=None):
         return json.loads(r.read())
 
 
+def all_tasks():
+    """Read every task page so old real work is not displaced by service runs."""
+    tasks, cursor = [], ""
+    for _ in range(500):
+        path = "/tasks?limit=200" + ("&cursor=" + urllib.parse.quote(cursor) if cursor else "")
+        page = api(path)
+        tasks.extend(page.get("tasks") or [])
+        cursor = page.get("next_cursor") or ""
+        if not cursor:
+            break
+    return tasks
+
+
 def load(path, default):
     try:
         with open(path) as f:
@@ -78,6 +91,23 @@ def log(*a):
 
 def base_title(title):
     return re.sub(r"^\[auto\]\s*(\[\d+/\d+[^\]]*\]\s*)?", "", title).strip()
+
+
+PIPELINE_TITLE = re.compile(r"^\[auto\]\s*\[(\d+)/(\d+)\s+([^\]]+)\]\s*(.*)$")
+SERVICE_WORK_TITLE = re.compile(r"(?:smoke|helper|debug|idempoten|идемпотен)", re.I)
+
+
+def pipeline_title(task):
+    """Owner-facing identity of a pipeline task, without its stage wrapper."""
+    match = PIPELINE_TITLE.match(task.get("title") or "")
+    if not match:
+        return None
+    return match.group(4).strip(), match.group(3).strip()
+
+
+def is_service_work(title):
+    """Service runs are useful diagnostics, but are not owner work delivered."""
+    return bool(SERVICE_WORK_TITLE.search(title or ""))
 
 
 def verify_passed(result):
@@ -5135,19 +5165,76 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         "limits": limits_view(),
         "access": load(f"{HOME}/pilot/access.json", {}),
         "projects": dashboard_slow(conf),
-        "recent_done": recent_done_block(),
+        "recent_done": recent_done_block(tasks),
         "health": pipeline_health(tasks),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],
     }
     save(DASH_PATH, data)
 
 
-def recent_done_block(n=5):
-    """Последние принятые работы — из журнала уведомлений, того же, откуда
-    идут пуши «Задача выполнена». Один источник — одна правда."""
-    out = []
+def recent_done_block(tasks, n=5):
+    """Recent owner work, based on pipeline facts rather than push wording.
+
+    A succeeded task is deliberately not called merged: only the merge journal
+    proves that.  Old notification-only records remain a small fallback while
+    the task history ages in.
+    """
+    merged = set()
     try:
-        lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-400:]
+        with io.open(MERGES_PATH, encoding="utf-8") as stream:
+            lines = stream.readlines()[-400:]
+        for line in reversed(lines):
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("task_id"):
+                merged.add(r["task_id"])
+    except Exception:
+        pass
+
+    latest = {}
+    for task in tasks:
+        parsed = pipeline_title(task)
+        if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
+            continue
+        title, stage = parsed
+        if not title or is_service_work(title):
+            continue
+        at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
+        old = latest.get(title)
+        if old is None or at >= old[0]:
+            latest[title] = (at, task, stage)
+
+    out = []
+    for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
+        state = task.get("state")
+        if task.get("id") in merged:
+            status, detail = "merged", "Влито в main."
+        elif state == "succeeded":
+            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
+        else:
+            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
+        try:
+            attempts = api(f"/tasks/{task['id']}").get("attempts") or []
+            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
+            if proof:
+                detail += " Проверено: " + proof
+        except Exception:
+            pass
+        out.append({"title": title[:120], "detail": detail[:180], "at": at,
+                    "status": status})
+        if len(out) >= n:
+            return out
+
+    if out:
+        return out
+
+    # Before structured task history exists, show old real notifications but
+    # never revive the service noise that prompted this view's redesign.
+    try:
+        with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
+            lines = stream.readlines()[-400:]
         for line in reversed(lines):
             try:
                 r = json.loads(line)
@@ -5156,9 +5243,12 @@ def recent_done_block(n=5):
             if r.get("title") != "Задача выполнена":
                 continue
             body = (r.get("message") or "").split(chr(10))
-            out.append({"title": body[0][:120],
+            title = body[0].strip()
+            if not title or is_service_work(title) or title in latest:
+                continue
+            out.append({"title": title[:120],
                         "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or ""})
+                        "at": r.get("at") or "", "status": "legacy"})
             if len(out) >= n:
                 break
     except Exception:
@@ -5743,7 +5833,7 @@ def cycle(conf, state):
 
     # Снимок для главного экрана. Никогда не должен ломать цикл.
     try:
-        write_dashboard(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]},
+        write_dashboard(conf, all_tasks(), {w["id"]: w for w in api("/workers")["workers"]},
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
