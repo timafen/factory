@@ -4,11 +4,11 @@
 
 - Stage: Implement + Test
 - Status: implemented and ready for Review
-- Branch: `factory/5b15a020-971-1ea66d5f-9ce`
-- Head commit: `83e43fb` (implementation)
+- Branch: `factory/7c886c96-390-470f195f-7ae`
+- Head commit: `7f240b9` (implementation)
 - What changed: кнопка «Оживить» доступна для `stopped_owner` и `stuck`; маршрут проверяет Origin и JSON.
-- What changed: вместо общего `revive.json` созданы независимые атомарные сигналы работ, поэтому параллельная команда не стирается.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 9 pilot tests, 6 UI tests); regressions max-parallel/capacity (3 tests), typecheck и production build → PASS.
+- What changed: сигнал остаётся ожидающим до снятия паузы и успешного запуска; слот `max_parallel_works` резервируется до `create_task`.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 12 pilot tests, 6 UI tests); `just build` → PASS.
 - Next action: провести повторный Review чистого diff ветки доставки.
 
 ## LOG
@@ -98,3 +98,7 @@
 ### 2026-08-09 — Implement
 
 На свежем `origin/main` исправлена атомарность: сигнал создаётся до снятия паузы, а тест ошибки сигнала подтверждает неизменность остановленной работы. Восстановлены compatibility-default и положительная валидация `max_parallel_works`, capacity-маршрутизация и её тесты. `just test-revive-stopped-work`, три регрессионных теста, полный пакет `internal/controlplane`, typecheck и production build прошли.
+
+### 2026-08-09 — Implement
+
+После повторного Review сигнал стал подтверждаемым: он не удаляется в окне между записью команды и снятием паузы и остаётся ожидающим при занятой capacity. `pipeline_watch` резервирует свободный work-слот до `create_task`, поэтому несколько одновременных оживлений не превышают лимит. Детерминированные тесты гонки, полной capacity и двух сигналов вошли в 12 pilot-тестов; `just test-revive-stopped-work` и `just build` прошли.
