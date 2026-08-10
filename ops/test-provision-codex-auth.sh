@@ -124,4 +124,36 @@ run_provisioner "$regular_link" "$regular_link/.codex-high" \
 grep -Fx local-copy "$regular_link/.codex-high/auth.json" >/dev/null \
   || fail "existing auth copy was changed"
 
+rollback="$temporary/rollback"
+mkdir -p "$rollback/.codex" "$rollback/.codex-first" \
+  "$rollback/.codex-second" "$rollback/bin"
+printf secret >"$rollback/.codex/auth.json"
+chmod 600 "$rollback/.codex/auth.json"
+ln -s /original/first "$rollback/.codex-first/auth.json"
+ln -s /original/second "$rollback/.codex-second/auth.json"
+real_mv=$(command -v mv)
+printf '%s\n' \
+  '#!/bin/bash' \
+  'if [[ $1 = -Tf && $2 = -- && $4 = */auth.json && $3 = */.auth.json.provision.* ]]; then' \
+  '  count=0' \
+  "  [ ! -f '$rollback/mv-count' ] || count=\$(<'$rollback/mv-count')" \
+  '  count=$((count + 1))' \
+  "  printf '%s\\n' \"\$count\" >'$rollback/mv-count'" \
+  '  [ "$count" -ne 2 ] || exit 1' \
+  'fi' \
+  "exec '$real_mv' \"\$@\"" \
+  >"$rollback/bin/mv"
+chmod +x "$rollback/bin/mv"
+status=0
+PATH="$rollback/bin:$PATH" run_provisioner "$rollback" \
+  "$rollback/.codex-first" "$rollback/.codex-second" \
+  >"$rollback/output" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "failure while installing the second link passed"
+grep -F 'previous links restored' "$rollback/output" >/dev/null \
+  || fail "second-link failure did not report rollback"
+[ "$(readlink "$rollback/.codex-first/auth.json")" = /original/first ] \
+  || fail "first link was not restored after second-link failure"
+[ "$(readlink "$rollback/.codex-second/auth.json")" = /original/second ] \
+  || fail "second link changed despite its failed installation"
+
 echo "PASS: Codex auth links are owned by the worker and unsafe targets fail closed"

@@ -54,7 +54,13 @@ as_factory() {
   fi
 }
 
-for home in "${homes[@]}"; do
+original_targets=()
+had_original=()
+temporaries=()
+
+# Validate every destination before changing any auth link.
+for i in "${!homes[@]}"; do
+  home=${homes[$i]}
   [ "$(dirname "$home")" = "$DATA_HOME" ] \
     || fail "CODEX_HOME must be a direct .codex-* child of $DATA_HOME: $home"
   case "$(basename "$home")" in
@@ -62,27 +68,85 @@ for home in "${homes[@]}"; do
     *) fail "CODEX_HOME must be a direct .codex-* child of $DATA_HOME: $home" ;;
   esac
 
-  if [ ! -d "$home" ]; then
-    as_factory mkdir -m 755 -- "$home" \
-      || fail "cannot create CODEX_HOME: $home"
-  fi
+  for previous in "${homes[@]:0:$i}"; do
+    [ "$previous" != "$home" ] || fail "duplicate CODEX_HOME: $home"
+  done
+  [ ! -e "$home" ] || [ -d "$home" ] \
+    || fail "CODEX_HOME is not a directory: $home"
   link=$home/auth.json
   if [ -e "$link" ] && [ ! -L "$link" ]; then
     fail "$link exists and is not a symlink"
   fi
 
-  temporary=$home/.auth.json.provision.$$
-  as_factory ln -s -- "$AUTH_TARGET" "$temporary" \
-    || fail "cannot prepare auth link in $home"
-  if ! as_factory mv -Tf -- "$temporary" "$link"; then
-    as_factory rm -f -- "$temporary" 2>/dev/null || true
-    fail "cannot install auth link: $link"
+  if [ -L "$link" ]; then
+    original_targets[$i]=$(readlink -- "$link") \
+      || fail "cannot inspect auth link: $link"
+    had_original[$i]=yes
+  else
+    original_targets[$i]=
+    had_original[$i]=no
   fi
+done
 
+# Prepare every replacement before changing the first auth link.
+for i in "${!homes[@]}"; do
+  home=${homes[$i]}
+  if [ ! -d "$home" ]; then
+    as_factory mkdir -m 755 -- "$home" \
+      || fail "cannot create CODEX_HOME: $home"
+  fi
+  temporary=$home/.auth.json.provision.$$
+  temporaries[$i]=$temporary
+  as_factory ln -s -- "$AUTH_TARGET" "$temporary" \
+    || {
+      for prepared in "${temporaries[@]}"; do
+        as_factory rm -f -- "$prepared" 2>/dev/null || true
+      done
+      fail "cannot prepare auth link in $home"
+    }
+done
+
+rollback_links() {
+  local last=$1 rollback_failed=no j rollback_tmp rollback_link
+  for ((j=last; j>=0; j--)); do
+    rollback_link=${homes[$j]}/auth.json
+    if [ "${had_original[$j]}" = yes ]; then
+      rollback_tmp=${homes[$j]}/.auth.json.rollback.$$
+      as_factory rm -f -- "$rollback_tmp" 2>/dev/null || true
+      if ! as_factory ln -s -- "${original_targets[$j]}" "$rollback_tmp" ||
+         ! as_factory mv -Tf -- "$rollback_tmp" "$rollback_link"; then
+        rollback_failed=yes
+      fi
+    elif ! as_factory rm -f -- "$rollback_link"; then
+      rollback_failed=yes
+    fi
+  done
+  for prepared in "${temporaries[@]}"; do
+    as_factory rm -f -- "$prepared" 2>/dev/null || true
+  done
+  [ "$rollback_failed" = no ] || fail "rollback failed; inspect auth links"
+}
+
+for i in "${!homes[@]}"; do
+  home=${homes[$i]}
+  link=$home/auth.json
+  if ! as_factory mv -Tf -- "${temporaries[$i]}" "$link"; then
+    rollback_links "$i"
+    fail "cannot install auth link: $link; previous links restored"
+  fi
+done
+
+for i in "${!homes[@]}"; do
+  link=${homes[$i]}/auth.json
   read -r link_user link_group < <(stat -c '%U %G' "$link") \
-    || fail "cannot inspect auth link: $link"
-  [ "$link_user:$link_group" = "$FACTORY_USER:$FACTORY_GROUP" ] \
-    || fail "$link must be owned by $FACTORY_USER:$FACTORY_GROUP"
+    || {
+      rollback_links "$((${#homes[@]} - 1))"
+      fail "cannot inspect auth link: $link; previous links restored"
+    }
+  if [ "$link_user:$link_group" != "$FACTORY_USER:$FACTORY_GROUP" ]; then
+    rollback_links "$((${#homes[@]} - 1))"
+    fail "$link must be owned by $FACTORY_USER:$FACTORY_GROUP; previous links restored"
+  fi
 done
 
 printf 'Codex auth ready: %d link(s), protected shared target\n' "${#homes[@]}"
