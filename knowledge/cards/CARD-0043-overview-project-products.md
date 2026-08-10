@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — продуктовый обзор готов, несвязанная проверка маршрутизации восстановлена.
-- Branch: `factory/5a1af3b2-612-a7e24d3c-b75`.
-- Head commit: `8d9698a`.
+- Status: IMPLEMENTED — продуктовый обзор и on-demand делегирование готовы.
+- Branch: `factory/6c52b1f3-699-70c2965c-0ef`.
+- Head commit: `941ed1d`.
 - Specification: `knowledge/specs/overview-project-products.md`.
-- What changed: каждый включённый проект получает собственный блок продукта;
-  исходный e2e-сценарий снова делегирует в репозиторий и проверяет worker.
-- Evidence: 75 Python, 18 UI, продуктовый e2e и сборки → PASS; восстановленный
-  baseline e2e выявляет отсутствие on-demand репозитория в текущем интерфейсе.
-- One next action: Review чистого diff с отдельно отмеченным baseline-дефектом маршрутизации.
+- What changed: каждый включённый проект получает свой блок продукта;
+  выбранный worker видит и берёт готовый managed-репозиторий по требованию.
+- Evidence: 76 Python, 81 UI, Go `PilotConfig`, обе сборки и два e2e → PASS.
+- One next action: Review чистого diff и слияние в `main`.
 
 ## LOG
 
@@ -62,3 +61,10 @@ basename сборки, показывает тему найденного ком
 удалено, делегирование и проверка назначенного worker восстановлены дословно.
 Прошли 75 Python-тестов, 18 UI-тестов, Go-тест, обе сборки и продуктовый e2e.
 Восстановленный baseline-сценарий честно выявляет отсутствие on-demand варианта.
+
+### 2026-08-09 — Implement
+
+Ветка заново собрана от `origin/main`. Модальное окно делегирования
+читает worker-specific варианты и маршрутизует on-demand репозиторий на
+выбранного worker. Прошли 76 Python-, 81 UI-тест, Go `PilotConfig`,
+сборки frontend и `factory-server`, продуктовый и маршрутизационный e2e.
