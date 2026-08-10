@@ -2,15 +2,17 @@
 
 ## HEAD
 
-- Status: Specification ready — ожидает реализации.
-- Branch: `factory/8e5bde0f-635-76e66a26-65d`.
+- Status: Implemented — целевая проверка зелёная.
+- Branch: `factory/f663ebdd-354-c441eda2-67e`.
+- Head commit: `624aeb8`.
 - Specification: `knowledge/specs/orphaned-paused-pipeline-cleanup.md`.
-- What changes: пауза без открытой карточки Плана, открытого вопроса и живой
-  задачи перестаёт бессрочно блокировать новый конвейер с тем же названием.
-- Implementation scope: `pilot/pilot.py`, `pilot/test_pilot.py`.
-- Required check:
-  `python3 -m unittest pilot.test_pilot.OrphanedPausedPipelineCleanupTest`.
-- One next action: реализовать согласованную сверку и целевые тесты.
+- What changed: пилот после снятия устаревших вопросов удаляет паузу без
+  открытой карточки Плана, вопроса или живой задачи; похожие названия не
+  считаются совпадением, а сбой I/O оставляет память согласованной с диском.
+- Evidence: `python3 -m unittest
+  pilot.test_pilot.OrphanedPausedPipelineCleanupTest` → 7 tests, OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0.
+- One next action: проверить реализацию на стадии Review.
 
 ## LOG
 
@@ -20,3 +22,10 @@
 если у работы остаётся хотя бы одно видимое основание: незавершённая карточка
 Плана, открытый вопрос владельцу или живая задача конвейера. Форматы данных и API
 не меняются; обязательная проверка привязана к новому регрессионному классу.
+
+### 2026-08-10 — Implement
+
+Добавлена атомарная очистка осиротевших пауз и её вызов в основном цикле после
+снятия устаревших вопросов. Семь целевых тестов подтвердили удаление из памяти
+и `config.json`, защиту по Плану, вопросу и живой задаче, точное сопоставление
+названий и сохранение согласованности при ошибках чтения и записи.
