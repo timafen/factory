@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Specification — согласована по содержанию, дополнена проверяемым контрактом.
-- Branch: `factory/ea308d28-fca-7e8ab710-a41`.
-- Implementation commit: предстоит на стадии Implement — промежуточный успешный этап перестанет считаться завершённой работой.
-- What changes: успешный Triage и другие промежуточные этапы не попадают в
-  «Сделано недавно»; результат появляется после успешного последнего этапа,
-  а честное отображение провала этапа сохраняется.
-- Evidence target: отдельная регрессия `RecentDoneTest` воспроизводит успешный
-  Triage `[1/5]` и подтверждает отсутствие работы в итоговом блоке.
-- Next action: реализовать фильтр и целевой тест по обещаниям ниже.
+- Status: Implemented.
+- Branch: `factory/025dcbc7-d90-1753310a-e23`.
+- Implementation commit: 97ae0d8a9bb24075530098e9c2ff58b3570ec5c2 — успешный промежуточный этап не попадает в «Сделано недавно».
+- What changed: `recent_done` включает успешную задачу только после последнего
+  этапа `N/M`; промежуточные failed/cancelled остаются видимы как невлитые.
+- Evidence: `python3 -m unittest pilot.test_pilot.RecentDoneTest.test_ignores_succeeded_intermediate_triage` → OK; весь `RecentDoneTest` → 4 tests OK.
+- Next action: передать изменение на Review.
+
+## LOG
 
 ## Goal and user impact
 
@@ -81,3 +81,9 @@
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.RecentDoneTest.test_ignores_succeeded_intermediate_triage
+
+### 2026-08-10 — Implement
+
+Успешный промежуточный Triage `[1/5]` исключён из блока «Сделано недавно»;
+успешный финал и промежуточный провал покрыты регрессией. Проверки: целевой
+метод — OK, `RecentDoneTest` — 4 tests OK.
