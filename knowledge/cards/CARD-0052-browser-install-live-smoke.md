@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: READY — реальный ответ Basic Auth учтён в fail-closed browser smoke.
-- Branch: `factory/d9383c92-f24-9b855974-a89`.
-- Head commit: `ae4e150`.
-- What changed: smoke требует DOM локального Factory и staging, а публичный Factory
-  принимает только успешную загрузку или точный `ERR_INVALID_AUTH_CREDENTIALS`.
-  Любая другая ошибка даёт безопасную диагностику и полный rollback.
-- Evidence: installer/release suites PASS; Pilot 110/110; Go tests и UI 123/123;
-  `just build` PASS. `just check` блокируют только две прежние staticcheck-ошибки
-  в запрещённых для этой задачи `internal/controlplane`.
+- Status: READY — навигации live smoke изолированы друг от друга.
+- Branch: `factory/3e614817-151-f7df191e-4df`.
+- What changed: loopback, публичный Factory, staging, production automation и
+  произвольный internet проверяются в пяти отдельных Playwright pages. Каждая
+  page закрывается в `finally`, поэтому поздний `chrome-error://chromewebdata/`
+  после точного `ERR_INVALID_AUTH_CREDENTIALS` не перебивает staging.
+- Evidence: installer/release suites PASS; Pilot 122/122; Go tests и UI 123/123;
+  Node-free build, воспроизводимый release и `just build` PASS. UI E2E открыл
+  loopback после исключения устаревшего установленного launcher, затем упёрся в
+  прежний disabled repository option второго сценария; UI-код вне diff.
 - One next action: проверить diff и слить ветку в `main`.
 
 ## LOG

@@ -45,14 +45,24 @@ exports.chromium = {
       stdio: "inherit",
     });
     if (launched.status !== 0) throw new Error(`launcher exited ${launched.status}`);
+    let nextPageId = 0;
+    let authErrorPageId = null;
     return {
       async newPage() {
+        const pageId = ++nextPageId;
+        fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `page-new=${pageId}\n`);
         return {
           async goto(url) {
-            fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `goto=${url}\n`);
+            fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `goto-page=${pageId} url=${url}\n`);
+            if (authErrorPageId === pageId && url.includes("staging-automation.tarser.net")) {
+              throw new Error("page.goto: Navigation to staging is interrupted by another navigation to chrome-error://chromewebdata/");
+            }
             if (url.includes("factory.timafen.com")) {
               const code = process.env.TEST_FACTORY_GOTO_ERROR || "ERR_INVALID_AUTH_CREDENTIALS";
-              if (code !== "success") throw new Error(`page.goto: net::${code} at ${url}`);
+              if (code !== "success") {
+                authErrorPageId = pageId;
+                throw new Error(`page.goto: net::${code} at ${url}`);
+              }
             }
             if (url.includes("automation.tarser.net") && !url.includes("staging-")) throw new Error("blocked");
             if (url.includes("example.com")) throw new Error("blocked");
@@ -67,6 +77,9 @@ exports.chromium = {
           },
           async screenshot(options) {
             fs.writeFileSync(options.path, "screenshot");
+          },
+          async close() {
+            fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `page-close=${pageId}\n`);
           },
         };
       },
@@ -301,19 +314,33 @@ grep -Fx '  userns,' "$temporary/apparmor.d/factory-browser" >/dev/null \
   || fail "AppArmor profile не разрешил Chromium user namespace sandbox"
 grep -F 'setpriv=' "$temporary/events" | grep -F -- '--no-new-privs' >/dev/null \
   || fail "Chromium не получил NoNewPrivileges через setpriv"
-grep -Fx 'goto=https://factory.timafen.com' "$temporary/events" >/dev/null \
+grep -F 'url=https://factory.timafen.com' "$temporary/events" >/dev/null \
   || fail "smoke не достиг защищённого Factory FQDN"
-grep -Fx 'goto=http://127.0.0.1:7337' "$temporary/events" >/dev/null \
+grep -F 'url=http://127.0.0.1:7337' "$temporary/events" >/dev/null \
   || fail "smoke не открыл локальный Factory"
 dom_count=$(grep -Fxc 'dom=body state=attached' "$temporary/events")
 [ "$dom_count" -eq 2 ] \
   || fail "smoke не подтвердил DOM локального Factory и staging"
-grep -Fx 'goto=https://staging-automation.tarser.net' "$temporary/events" >/dev/null \
+grep -F 'url=https://staging-automation.tarser.net' "$temporary/events" >/dev/null \
   || fail "smoke не открыл разрешённый staging FQDN"
-grep -Fx 'goto=https://automation.tarser.net' "$temporary/events" >/dev/null \
+grep -F 'url=https://automation.tarser.net' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку production FQDN"
-grep -Fx 'goto=https://example.com' "$temporary/events" >/dev/null \
+grep -F 'url=https://example.com' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку внешнего интернета"
+page_count=$(grep -Fc 'page-new=' "$temporary/events")
+closed_page_count=$(grep -Fc 'page-close=' "$temporary/events")
+[ "$page_count" -eq 5 ] && [ "$closed_page_count" -eq 5 ] \
+  || fail "smoke не выделил и не закрыл отдельную page для каждой проверки URL"
+url_page_count=$(sed -n 's/^goto-page=\([0-9][0-9]*\) url=.*/\1/p' "$temporary/events" \
+  | sort -u | wc -l)
+[ "$url_page_count" -eq 5 ] \
+  || fail "smoke повторно использовал page между независимыми проверками URL"
+auth_page=$(sed -n 's/^goto-page=\([0-9][0-9]*\) url=https:\/\/factory\.timafen\.com$/\1/p' "$temporary/events")
+staging_page=$(sed -n 's/^goto-page=\([0-9][0-9]*\) url=https:\/\/staging-automation\.tarser\.net$/\1/p' "$temporary/events")
+[ -n "$auth_page" ] && [ -n "$staging_page" ] && [ "$auth_page" != "$staging_page" ] \
+  || fail "staging повторно использовал page после Basic Auth error"
+grep -Fx "page-close=$auth_page" "$temporary/events" >/dev/null \
+  || fail "page с Basic Auth error не была закрыта до продолжения smoke"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
 

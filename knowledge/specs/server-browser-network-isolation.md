@@ -39,6 +39,9 @@ AppArmor-профиль для точного пути закреплённог�
 ## Smoke-критерии
 
 - Chromium запускается с включённым Linux sandbox через установленный launcher.
+- Каждая разрешённая и запрещённая навигация выполняется в отдельной Playwright
+  page, которая закрывается сразу после проверки. Поздняя внутренняя навигация
+  Basic Auth в `chrome-error://chromewebdata/` не может перебить staging.
 - Локальный Factory на `http://127.0.0.1:7337` и staging загружают DOM; staging
   сохраняется в screenshot.
 - Публичный `https://factory.timafen.com` либо загружает DOM, либо возвращает
