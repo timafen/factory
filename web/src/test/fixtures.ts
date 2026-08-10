@@ -716,6 +716,19 @@ export function mockControlPlane(
       };
       return Response.json(automationDetail);
     }
+    if (path === `/api/v1/automations/${automationDetail.automation.id}/pipeline-patrol` && init?.method === "POST") {
+      automationDetail = {
+        ...automationDetail,
+        automation: {
+          ...automationDetail.automation,
+          enabled: true,
+          context: `${automationDetail.automation.context}\n\nFactory pipeline patrol.`,
+          health: { status: "healthy", message: "Pipeline patrol provisioned from the existing schedule." },
+          next_due_at: "2026-08-03T08:00:00Z",
+        },
+      };
+      return Response.json(automationDetail);
+    }
     if (path === `/api/v1/automations/${automationDetail.automation.id}/check` && init?.method === "POST") {
       automationDetail = {
         ...automationDetail,

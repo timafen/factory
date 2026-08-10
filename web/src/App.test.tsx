@@ -540,9 +540,14 @@ describe("App", () => {
     expect(screen.getByText("Europe/London")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Test trigger" }));
     expect(await screen.findByText(/next matching UTC instant/i)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Enable" }));
-    expect(screen.queryByRole("checkbox", { name: /factory-poller is stopped/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Confirm enable" }));
+    await user.click(screen.getByRole("button", { name: "Enable pipeline patrol" }));
+    expect(screen.getByText(/existing cron and timezone stay unchanged/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Confirm pipeline patrol" }));
+    expect(await screen.findByText("Pipeline patrol provisioned from the existing schedule.")).toBeVisible();
+    expect(fetch.mock.calls.some(([input, init]) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      return path.endsWith("/api/v1/automations/automation-created/pipeline-patrol") && init?.method === "POST";
+    })).toBe(true);
     await user.click(await screen.findByRole("button", { name: "Run now" }));
     expect(await screen.findByText(/connection lost after Run now commit/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Run now" }));
