@@ -755,10 +755,31 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
+class ReviveSignalTests(unittest.TestCase):
+    def test_concurrent_signal_written_after_claim_survives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            active = os.path.join(temporary, "revive.json")
+            with mock.patch.object(pilot, "REVIVE_PATH", active):
+                pilot.save(active, {"Первая работа": True})
+
+                first, claimed = pilot.claim_revive_signals()
+                # This is the race window from the old load-then-save code:
+                # control plane publishes another signal while pilot works.
+                pilot.save(active, {"Вторая работа": True})
+                pilot.finish_revive_signals(claimed)
+
+                second, claimed = pilot.claim_revive_signals()
+                pilot.finish_revive_signals(claimed)
+
+        self.assertEqual(first, {"Первая работа": True})
+        self.assertEqual(second, {"Вторая работа": True})
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
         self.memory = {}
+        self.revive = {}
         self.work_status = {}
         self.created = []
         self.notifications = []
@@ -781,6 +802,8 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "claim_revive_signals", side_effect=self._claim_revive),
+            mock.patch.object(pilot, "finish_revive_signals", side_effect=self._finish_revive),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -793,13 +816,24 @@ class PipelineWatchTests(unittest.TestCase):
     def _load(self, path, default=None):
         if path == pilot.STALL_PATH:
             return self.memory
+        if path == pilot.REVIVE_PATH:
+            return self.revive
         return default
 
     def _save(self, path, value):
         if path == pilot.STALL_PATH:
             self.memory = value
+        elif path == pilot.REVIVE_PATH:
+            self.revive = value
         elif path.endswith("/pilot/work_status.json"):
             self.work_status = value
+
+    def _claim_revive(self):
+        return dict(self.revive), ["claimed"] if self.revive else []
+
+    def _finish_revive(self, claimed):
+        if claimed:
+            self.revive = {}
 
     def _create(self, body, conf):
         self.created.append(body)
@@ -892,6 +926,37 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 1)
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+        self.assertEqual(self.revive, {})
+
+    def test_revive_after_rework_runs_review_again(self):
+        old_review = self.task(stage="Review")
+        old_review["created_at"] = "2026-08-09T10:00:00Z"
+        reworked_implementation = self.task(stage="Implement")
+        reworked_implementation["created_at"] = "2026-08-09T11:00:00Z"
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"}
+        }
+        self.revive = {"Встроенный патруль": True}
+
+        self.watch([reworked_implementation, old_review])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[3/3 Review]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-review")
 
 
 class PlanCardCleanupTest(unittest.TestCase):
