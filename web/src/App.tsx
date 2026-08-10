@@ -148,6 +148,12 @@ export function App() {
     queryFn: api.workers,
     refetchInterval: workerInterval,
   });
+  const resumeWork = useMutation({
+    mutationFn: api.resumeWork,
+    onSuccess: async () => {
+      await Promise.all([tasks.refetch(), workers.refetch()]);
+    },
+  });
 
   useEffect(() => {
     const refresh = () => {
@@ -374,7 +380,7 @@ export function App() {
               updatedAt={tasks.dataUpdatedAt}
               onTask={(id) => navigate({ page: "task", id })}
               onAnswer={() => navigate({ page: "answer" })}
-              onResume={() => navigate({ page: "settings" })}
+              onResume={(base) => resumeWork.mutateAsync(base).then(() => undefined)}
               onDelegate={() => openDelegate()}
               onRefresh={() => void tasks.refetch()}
               hasMore={Boolean(taskHistoryCursor)}

@@ -24,8 +24,9 @@ const maxPilotConfigBytes = 1 << 20
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
 
 type PilotConfigStore struct {
-	path string
-	mu   sync.Mutex
+	path      string
+	mu        sync.Mutex
+	writeFile func([]byte) error
 }
 
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
@@ -125,6 +126,9 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 }
 
 func (s *PilotConfigStore) atomicWrite(body []byte) error {
+	if s.writeFile != nil {
+		return s.writeFile(body)
+	}
 	dir := filepath.Dir(s.path)
 	tmp, err := os.CreateTemp(dir, ".pilot-config-*")
 	if err != nil {
