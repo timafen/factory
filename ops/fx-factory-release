@@ -67,6 +67,10 @@ as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/fact
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
 
+step "проверяю и обновляю ссылки авторизации Codex"
+env -u CODEX_HOME bash "$work/src/ops/provision-codex-auth.sh" \
+  || { fail "авторизация Codex не прошла безопасную проверку — релиз не поеду"; cleanup; exit 5; }
+
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \
   && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
