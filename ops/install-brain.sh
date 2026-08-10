@@ -12,6 +12,56 @@ INSTALL_GROUP="${FACTORY_BRAIN_GROUP:-factory}"
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 
+validate_sources() {
+  python3 - "$SRC" pilot/pilot.py pilot/context.md intake/app.py intake/plan.py <<'PY'
+import os
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+paths = sys.argv[2:]
+
+def checked_lstat(path, label):
+    try:
+        value = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        print("!! не смог проверить %s через lstat: %s" % (label, error), file=sys.stderr)
+        raise SystemExit(1)
+    if stat.S_ISLNK(value.st_mode):
+        print("!! источник содержит симлинк: %s" % label, file=sys.stderr)
+        raise SystemExit(1)
+    return value
+
+current = os.path.sep
+for component in [part for part in root.split(os.path.sep) if part]:
+    current = os.path.join(current, component)
+    value = checked_lstat(current, current)
+    if value is None or not stat.S_ISDIR(value.st_mode):
+        print("!! источник не является обычным каталогом: %s" % current, file=sys.stderr)
+        raise SystemExit(1)
+
+for relative in paths:
+    current = root
+    components = relative.split("/")
+    for index, component in enumerate(components):
+        current = os.path.join(current, component)
+        value = checked_lstat(current, relative)
+        if value is None:
+            break
+        final = index == len(components) - 1
+        if final and not stat.S_ISREG(value.st_mode):
+            print("!! источник не является обычным файлом: %s" % relative, file=sys.stderr)
+            raise SystemExit(1)
+        if not final and not stat.S_ISDIR(value.st_mode):
+            print("!! путь источника не является каталогом: %s" % relative, file=sys.stderr)
+            raise SystemExit(1)
+PY
+}
+
+validate_sources || exit 7
+
 changed=""
 install_one() {  # $1 файл в репо, $2 живой путь, $3 py|txt
   local s="$SRC/$1" d="$2"

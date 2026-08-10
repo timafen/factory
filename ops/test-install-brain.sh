@@ -115,4 +115,20 @@ cp "$unchanged/src/intake/plan.py" "$unchanged/live/intake/plan.py"
 run_case "$unchanged" success || fail "быстрый путь без изменений завершился ошибкой"
 [ ! -s "$unchanged/events" ] || fail "без изменений были перезапуск или платный запрос"
 
-echo "PASS: один ответ принимает мозг, отклонения возвращают прежнюю версию"
+symlinked="$temporary/symlinked"
+make_fixture "$symlinked" success
+printf 'root-only secret\n' >"$symlinked/secret"
+rm "$symlinked/src/pilot/context.md"
+ln -s "$symlinked/secret" "$symlinked/src/pilot/context.md"
+status=0
+run_case "$symlinked" success || status=$?
+[ "$status" = 7 ] || fail "симлинк завершился кодом $status вместо 7"
+grep -Fx 'old context' "$symlinked/live/pilot/context.md" >/dev/null \
+  || fail "симлинк изменил рабочий context.md"
+grep -Fx 'old = True' "$symlinked/live/pilot/pilot.py" >/dev/null \
+  || fail "проверка симлинка началась после изменения мозга"
+[ ! -s "$symlinked/events" ] || fail "симлинк привёл к перезапуску или smoke-запросу"
+grep -F 'источник содержит симлинк: pilot/context.md' "$symlinked/output" >/dev/null \
+  || fail "отказ не объяснил найденный симлинк"
+
+echo "PASS: мозг ставится и откатывается, а источники-симлинки отклоняются"
