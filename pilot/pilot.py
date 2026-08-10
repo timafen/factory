@@ -3243,7 +3243,7 @@ def receipt_epoch(value):
     if not value:
         return None
     utc = value.endswith("Z")
-    value = value.rstrip("Z").replace("T", " ").split(".", 1)[0]
+    value = value.removesuffix("Z").replace("T", " ").split(".", 1)[0]
     try:
         parsed = time.strptime(value, "%Y-%m-%d %H:%M:%S")
     except ValueError:

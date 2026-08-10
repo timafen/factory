@@ -3239,6 +3239,22 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         self.assertEqual(saved["completion_receipt"], {
             "task_id": "verify-1", "base": "Подготовить sandbox", "at": "2026-08-10T10:02:00Z"})
 
+    def test_running_subtask_recovers_from_legacy_local_merge_date(self):
+        self.write_epic([
+            {"title": "Подготовить sandbox", "status": "running",
+             "started_at": "2026-08-10 10:00:00"},
+            {"title": "Купить ключ", "status": "pending", "hold_reason": "ждём ключ владельца"},
+        ])
+        with open(self.merges_path, "w", encoding="utf-8") as merges:
+            merges.write(json.dumps({"task_id": "verify-legacy", "base": "Подготовить sandbox",
+                                     "at": "2026-08-10 10:02:00"}) + "\n")
+
+        self.advance([])
+        saved = self.read_epic()["subtasks"][0]
+        self.assertEqual(saved["status"], "done")
+        self.assertEqual(saved["completion_source"], "merge_journal")
+        self.assertEqual(saved["completed_at"], "2026-08-10 10:02:00")
+
     def test_old_merge_cannot_complete_restarted_generation(self):
         self.write_epic([
             {"title": "Подготовить sandbox", "status": "running",
