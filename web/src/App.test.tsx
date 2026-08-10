@@ -894,6 +894,7 @@ describe("App", () => {
       expect(screen.getByText("new head task")).toBeVisible();
       await user.click(screen.getByRole("button", { name: "Показать ещё" }));
 
+      await user.click(screen.getByRole("button", { name: /^Архив/ }));
       expect(await screen.findByText("succeeded task")).toBeVisible();
       expect(screen.getAllByText("running task")).toHaveLength(1);
       await user.click(screen.getByRole("button", { name: "Показать по этапам" }));
