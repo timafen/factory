@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implement PASS — ожидает слияния.
-- Branch: `factory/baf3534c-87e-bdcb1358-8b8`.
-- Head commit: `d106859` — изоляция серверного браузера после rebase на `main`.
-- What changed: Chromium работает в deny-by-default systemd BPF scope; доступны
-  только `factory.timafen.com`, `staging-automation.tarser.net` и loopback.
+- Status: Implement PASS — оба обхода закрыты, ожидает слияния.
+- Branch: `factory/78242a74-6a0-4df57466-3dc`.
+- Head commit: `8035180` — проверенная реализация после rebase на `main`.
+- What changed: после allowlist FQDN resolver блокирует все остальные имена;
+  Chromium всегда работает с `--no-proxy-server`, proxy/resolver overrides отклоняются.
 - Delivery: installer проверяет BPF до изменений, атомарно ставит полный комплект,
   выполняет allow/deny smoke со screenshot; release делает этот gate обязательным.
-- Evidence: installer/release tests — PASS; Go — PASS; UI 123/123; tooling,
-  launcher и сборка двух бинарей — PASS; shell syntax/`git diff --check` — PASS.
+- Evidence: installer/release negative tests — PASS; Go — PASS; UI 123/123;
+  tooling, launcher и сборка двух бинарей — PASS; shell syntax/`git diff --check` — PASS.
 - Known baseline: общий `just check` останавливается на двух прежних staticcheck
   findings в `internal/controlplane`; изменённые browser/release файлы не затронуты.
 - Host check: user systemd bus недоступен, passwordless sudo отсутствует; поэтому
@@ -40,3 +40,13 @@ network namespace с deny-by-default nftables как равноценная бу
 Полный `just check` дошёл до staticcheck и выявил две существующие ошибки вне
 области карточки (`cards_http.go:37`, `pilot_config.go:136`). Остальные проверки
 запущены отдельно: Go, UI 123/123, tooling, launcher и сборка двух бинарей прошли.
+
+### 2026-08-10 — Implement
+
+Закрыты два выявленных обхода: resolver rules завершаются
+`MAP * ~NOTFOUND`, а Chromium принудительно получает `--no-proxy-server`.
+Все пользовательские resolver/proxy overrides отклоняются до запуска браузера.
+
+Отрицательные installer и release tests прошли; Go, UI 123/123, tooling,
+launcher и сборка двух бинарей также прошли. Общий `just check`
+останавливается только на двух прежних staticcheck findings вне этой области.
