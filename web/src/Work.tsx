@@ -228,7 +228,9 @@ const FRESH_DAYS = 2;
 
 /** Куда попадёт работа. Порядок разделов — это порядок срочности:
  *  сначала то, что стоит без человека, потом живое, потом свежий итог. */
-function sectionOf(g: Group): "waiting" | "live" | "won" | "lost" | "archive" {
+type WorkSection = "waiting" | "live" | "won" | "lost" | "archive";
+
+function sectionOf(g: Group): WorkSection {
   // Закрытую работу владелец видеть в делах не должен, даже если она свежая:
   // от него по ней ничего не ждут и ждать не будут.
   if (g.meta?.closed) return "archive";
@@ -246,7 +248,7 @@ function sectionOf(g: Group): "waiting" | "live" | "won" | "lost" | "archive" {
   return g.status.tone === "ok" ? "won" : "lost";
 }
 
-const SECTIONS: { key: "waiting" | "live" | "won" | "lost"; title: string;
+const SECTIONS: { key: Exclude<WorkSection, "archive">; title: string;
                    hint: string; accent: string }[] = [
   { key: "waiting", title: "Нужен ты", hint: "Без тебя не сдвинется", accent: "#ffb86b" },
   { key: "live", title: "Идёт сейчас", hint: "Работает или вот-вот продолжится — от тебя ничего не нужно", accent: "#8ec5ff" },
@@ -386,6 +388,7 @@ export function WorkView({
                 </div>
                 {rows.map((g) => (
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
+                            section={sec.key}
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
@@ -413,6 +416,7 @@ export function WorkView({
                 )}
                 {showArchive && old.map((g) => (
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
+                            section="archive"
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
@@ -437,11 +441,11 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project, onRevive, reviving, reviveError }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project, section, onRevive, reviving, reviveError }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
   onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void;
   history: Record<string, string>;
-  project?: string;
+  project?: string; section: WorkSection;
   onRevive: (work: string) => void; reviving: boolean; reviveError?: string;
 }) {
   const worker = workerMap.get(g.latest.worker_id);
@@ -534,7 +538,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
             }}>{ORIGIN_RU[g.meta.origin] ?? g.meta.origin}</span>
         )}
         <strong style={{ fontSize: 15, opacity: g.meta?.closed ? 0.65 : 1 }}>{g.base}</strong>
-        {!g.meta?.closed && (g.status.label.startsWith("остановлена:") || g.status.label.startsWith("застряла:")) && (
+        {section !== "archive" && !g.meta?.closed && (g.status.label.startsWith("остановлена:") || g.status.label.startsWith("застряла:")) && (
           <>
             <button className="button" disabled={reviving}
               onClick={(event) => { event.stopPropagation(); void onRevive(g.base); }}>

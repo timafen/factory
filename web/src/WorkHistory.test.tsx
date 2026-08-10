@@ -136,3 +136,19 @@ it("does not offer revive for a closed work with a stale stopped status", async 
   await waitFor(() => expect(screen.getByText("Понятная история")).toBeVisible());
   expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
 });
+
+it("does not offer revive for an old unclosed work placed in the archive", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/v1/work-status") return Response.json({ "Понятная история": { state: "stopped_owner", text: "остановлена" } });
+    if (path === "/api/v1/works") return Response.json({});
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+      : path === "/api/v1/questions" ? { questions: [] } : {});
+  }));
+  renderHistory([{ ...task, created_at: new Date(Date.now() - 3 * 864e5).toISOString() }]);
+
+  fireEvent.click(await screen.findByRole("button", { name: /Архив/ }));
+  expect(await screen.findByText("остановлена: конвейер на паузе")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
+});

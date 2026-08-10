@@ -755,6 +755,26 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
+class ReviveSignalTests(unittest.TestCase):
+    def test_concurrent_signal_written_after_claim_survives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            active = os.path.join(temporary, "revive.json")
+            with mock.patch.object(pilot, "REVIVE_PATH", active):
+                pilot.save(active, {"Первая работа": True})
+
+                first, claimed = pilot.claim_revive_signals()
+                # This is the race window from the old load-then-save code:
+                # control plane publishes another signal while pilot works.
+                pilot.save(active, {"Вторая работа": True})
+                pilot.finish_revive_signals(claimed)
+
+                second, claimed = pilot.claim_revive_signals()
+                pilot.finish_revive_signals(claimed)
+
+        self.assertEqual(first, {"Первая работа": True})
+        self.assertEqual(second, {"Вторая работа": True})
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
@@ -782,6 +802,8 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "claim_revive_signals", side_effect=self._claim_revive),
+            mock.patch.object(pilot, "finish_revive_signals", side_effect=self._finish_revive),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -805,6 +827,13 @@ class PipelineWatchTests(unittest.TestCase):
             self.revive = value
         elif path.endswith("/pilot/work_status.json"):
             self.work_status = value
+
+    def _claim_revive(self):
+        return dict(self.revive), ["claimed"] if self.revive else []
+
+    def _finish_revive(self, claimed):
+        if claimed:
+            self.revive = {}
 
     def _create(self, body, conf):
         self.created.append(body)

@@ -64,7 +64,7 @@ test:
 # Prove stopped work can be revived end-to-end across API, pilot and UI.
 test-revive-stopped-work:
     go test ./internal/controlplane -run 'Revive'
-    python3 -m unittest pilot.test_pilot.PipelineWatchTests.test_revive_restarts_next_unfinished_stage pilot.test_pilot.PipelineWatchTests.test_revive_after_rework_runs_review_again
+    python3 -m unittest pilot.test_pilot.ReviveSignalTests pilot.test_pilot.PipelineWatchTests.test_revive_restarts_next_unfinished_stage pilot.test_pilot.PipelineWatchTests.test_revive_after_rework_runs_review_again
     cd web && npm test -- --run WorkHistory.test.tsx
 
 # Race-check worker coordination and process cancellation paths.

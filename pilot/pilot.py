@@ -1560,6 +1560,46 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def claim_revive_signals():
+    """Atomically detach signals so a concurrent API write stays pending."""
+    claimed = []
+    snapshot = f"{REVIVE_PATH}.processing-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.replace(REVIVE_PATH, snapshot)
+        claimed.append(snapshot)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        log("revive_claim_error", repr(error))
+        return {}, []
+
+    # A crash after claiming must not strand a signal forever. Pick up every
+    # older spool file as well as the snapshot detached in this cycle.
+    for path in glob.glob(REVIVE_PATH + ".processing-*"):
+        if path not in claimed:
+            claimed.append(path)
+    signals = {}
+    readable = []
+    for path in sorted(claimed):
+        value = load(path, None)
+        if not isinstance(value, dict):
+            log("revive_signal_invalid", repr(path))
+            continue
+        signals.update(value)
+        readable.append(path)
+    return signals, readable
+
+
+def finish_revive_signals(claimed):
+    for path in claimed:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            log("revive_finish_error", repr(error))
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1571,14 +1611,12 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if m:
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
-    revive = load(REVIVE_PATH, {}) or {}
+    revive, claimed_revive = claim_revive_signals()
     now = int(time.time())
     # Control plane records intent only. Consuming it here keeps stage, branch,
     # workflow and worker selection in the single existing pipeline authority.
     for base in list(revive):
         mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
-        revive.pop(base, None)
-    save(REVIVE_PATH, revive)
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
@@ -1647,6 +1685,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         except Exception as e:
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
+    finish_revive_signals(claimed_revive)
     try:
         work_status_write(mem)
     except Exception as e:
