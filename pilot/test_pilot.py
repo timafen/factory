@@ -616,6 +616,19 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         diagnose.assert_not_called()
 
+    def test_terminal_route_does_not_repeat_spent_diagnosis(self):
+        self.repairs["Починить отчёт"] = {"status": "resumed"}
+        with mock.patch.object(pilot, "cap_rescues", return_value=1), \
+                mock.patch.object(pilot, "brain") as brain, \
+                mock.patch.object(pilot, "begin_diag_repair") as begin:
+            verdict = pilot.deep_diagnose(
+                self.conf, "Починить отчёт", "Review", 6,
+                [self.task], repair_task=self.task)
+
+        self.assertIsNone(verdict)
+        brain.assert_not_called()
+        begin.assert_not_called()
+
     def test_started_repair_skips_owner_question_and_pipeline_pause_at_limits(self):
         verdict = {"причина": "технический сбой", "решение": "исправить",
                    "нужен_владелец": False, "repair_started": True}

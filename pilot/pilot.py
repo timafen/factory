@@ -2309,8 +2309,16 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     """Зовём сильную модель разобраться и говорим владельцу по-человечески.
     Один разбор на работу — дальше конвейер действует по найденному решению."""
     diag_already_counted = cap_rescues(base, "DIAG") >= 1
-    if diag_already_counted and repair_task is None:
-        return None
+    # Repair tasks used to bypass this guard. As a result, every later stage
+    # return paid for another senior diagnosis even though begin_diag_repair()
+    # would refuse a second repair for the same work. The only safe exception
+    # is a crash window where the DIAG marker exists but no durable repair was
+    # ever recorded; then the terminal path must finish the promised first
+    # repair once.
+    if diag_already_counted:
+        repairs = load(DIAG_REPAIR_PATH, {}) or {}
+        if repair_task is None or base in repairs:
+            return None
     if not diag_already_counted:
         note_cap_rescue(base, "DIAG")
     tail = recent_stage_text(tasks, base)
