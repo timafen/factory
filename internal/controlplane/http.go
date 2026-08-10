@@ -36,6 +36,10 @@ type workerRegistrationRequest struct {
 	CodexVersion   registrationString `json:"codex_version"`
 }
 
+type retainedWorktreeCleanupRequest struct {
+	RetainedWorktrees []protocol.RetainedWorktree `json:"retained_worktrees"`
+}
+
 type registrationString struct {
 	Value   string
 	Present bool
@@ -81,6 +85,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
+	mux.HandleFunc("POST /api/v1/workers/{worker_id}/retained-worktrees/clear", api.clearRetainedWorktrees)
 	mux.HandleFunc("POST /api/v1/workers/{worker_id}/claims", api.claim)
 	mux.HandleFunc("GET /api/v1/workers", api.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{worker_id}", api.getWorker)
@@ -466,6 +471,22 @@ func (a *API) registerWorker(w http.ResponseWriter, r *http.Request) {
 			CurrentTaskTitle: worker.CurrentTaskTitle, RegisteredAt: worker.RegisteredAt,
 			LastHeartbeat: worker.LastHeartbeat,
 		})
+		return
+	}
+	writeJSON(w, http.StatusOK, worker)
+}
+
+func (a *API) clearRetainedWorktrees(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input retainedWorktreeCleanupRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	worker, err := a.store.ClearRetainedWorktrees(r.Context(), r.PathValue("worker_id"), input.RetainedWorktrees)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, worker)
