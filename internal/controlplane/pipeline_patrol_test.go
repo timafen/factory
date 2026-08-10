@@ -13,6 +13,9 @@ import (
 )
 
 func TestPipelinePatrolProvisionUsesExistingScheduleAndPreservesRuns(t *testing.T) {
+	if !stringsContain(PipelinePatrolInstruction, "wait 120 seconds") || stringsContain(PipelinePatrolInstruction, "wait 600 seconds") {
+		t.Fatalf("patrol instruction does not enforce the 120-second wait: %q", PipelinePatrolInstruction)
+	}
 	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
 	store, detail := createScheduleAutomationFixture(t, &now, true)
 
@@ -103,6 +106,39 @@ func TestPipelinePatrolProvisionMakesPriorVersionStale(t *testing.T) {
 	}
 	if current.Automation.Version != provisioned.Automation.Version || !stringsContain(current.Automation.Context, PipelinePatrolInstruction) {
 		t.Fatalf("Automation after stale update = %#v", current.Automation)
+	}
+}
+
+func TestPipelinePatrolProvisionReplacesLegacyWaitWithoutLosingContext(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, false)
+	legacyContext := "Keep the owner guardrail.\n\n" + legacyPipelinePatrolInstruction + "\n\nKeep the audit note."
+	updated, err := store.UpdateAutomation(context.Background(), detail.Automation.ID, protocol.UpdateAutomationRequest{
+		ExpectedVersion: detail.Automation.Version,
+		Title:           detail.Automation.Title,
+		WorkflowID:      detail.Automation.WorkflowID,
+		Context:         legacyContext,
+		TimeoutSeconds:  detail.Automation.TimeoutSeconds,
+		Trigger:         detail.Automation.Trigger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provisioned, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContext := "Keep the owner guardrail.\n\n" + PipelinePatrolInstruction + "\n\nKeep the audit note."
+	if provisioned.Automation.Context != wantContext || stringsContain(provisioned.Automation.Context, legacyPipelinePatrolInstruction) {
+		t.Fatalf("updated patrol context = %q", provisioned.Automation.Context)
+	}
+	if provisioned.Automation.Version != updated.Automation.Version+1 {
+		t.Fatalf("updated version = %d, want %d", provisioned.Automation.Version, updated.Automation.Version+1)
+	}
+	replayed, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
+	if err != nil || replayed.Automation.Context != wantContext || replayed.Automation.Version != provisioned.Automation.Version {
+		t.Fatalf("replayed provision = %#v, error %v", replayed.Automation, err)
 	}
 }
 
