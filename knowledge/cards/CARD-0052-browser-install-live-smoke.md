@@ -2,19 +2,27 @@
 
 ## HEAD
 
-- Status: READY — навигации live smoke изолированы друг от друга.
-- Branch: `factory/3e614817-151-f7df191e-4df`.
-- What changed: loopback, публичный Factory, staging, production automation и
-  произвольный internet проверяются в пяти отдельных Playwright pages. Каждая
-  page закрывается в `finally`, поэтому поздний `chrome-error://chromewebdata/`
-  после точного `ERR_INVALID_AUTH_CREDENTIALS` не перебивает staging.
-- Evidence: installer/release suites PASS; Pilot 122/122; Go tests и UI 123/123;
-  Node-free build, воспроизводимый release и `just build` PASS. UI E2E открыл
-  loopback после исключения устаревшего установленного launcher, затем упёрся в
-  прежний disabled repository option второго сценария; UI-код вне diff.
-- One next action: проверить diff и слить ветку в `main`.
+- Status: READY — browser smoke не принимает HTML-страницы ошибок за Factory.
+- Branch: `factory/69b00ee2-402-3994b263-654`.
+- Implementation commit: 0ffec74081e0a9c481ba7101b30316b477b1c71c — HTTP-статус и title Factory обязательны для live smoke.
+- What changed: loopback и staging требуют 2xx; public Factory с credentials
+  требует 2xx и title с `Factory`. Без credentials допускается только точный
+  `ERR_INVALID_AUTH_CREDENTIALS`; installer и standalone используют один сценарий.
+- Evidence: `bash -n ops/install-server-browser.sh ops/test-browser-sandbox.sh
+  ops/test-install-server-browser.sh` — PASS; `bash ops/test-install-server-browser.sh` — PASS.
+- One next action: проверить и слить заменяющий PR #90 (supersedes #86).
 
 ## LOG
+
+### 2026-08-10 — Implement
+
+Независимый review PR #86 выявил, что проверка одного body принимала HTML 401.
+Общий сценарий теперь требует `Response.ok()` и, для авторизованного public
+Factory, узнаваемый title; 401/403/5xx, неправильный title и 401 без challenge
+падают. Fake Playwright покрывает Response/status/title, а installer сохраняет
+credentials только в environment без их значений в events или arguments.
+
+`bash -n` трёх изменённых shell-скриптов и `bash ops/test-install-server-browser.sh` — PASS.
 
 ### 2026-08-10 — Verify
 
