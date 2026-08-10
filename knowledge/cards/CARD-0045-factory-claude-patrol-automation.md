@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Ready for Review — блокирующий путь provision восстановлен и проверен.
-- Branch: `factory/9efaf5bb-9b4-d38e9946-bd5`.
-- Head commit: `1e44f27` — включение патруля через HTTP и панель Automations.
-- What changed: schedule Automation с явным ID получает durable инструкции патруля через HTTP или подтверждение в панели; runtime пробуждается после provision. Сквозная проверка доводит наступившее расписание до одной Occurrence и связанной Task.
-- Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)'` → PASS; `npm test -- --run src/App.test.tsx` → PASS; `go test -timeout 5m ./...`, UI build/lint/typecheck/tests, `go vet ./...`, сборка бинарников и `python3 -m unittest pilot.test_pilot` → PASS.
-- One next action: принять Review после проверки provision из `/automations/<id>` на существующем schedule.
+- Status: Ready for Review — замечания по версии и размеру контекста исправлены.
+- Branch: `factory/a16a4ddc-029-01696424-114`.
+- Head commit: `702130a` — атомарная защита конфигурации патруля.
+- What changed: первое provision добавляет инструкции и увеличивает версию Automation через CAS; повторный вызов не меняет версию. Контекст свыше 8 KiB отклоняется до записи.
+- Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)'` → PASS; `go vet ./internal/controlplane` и `go build ./...` → PASS; UI typecheck/build и 63 компонентных теста → PASS; 87 тестов пилота → PASS.
+- One next action: повторно проверить ветку на Review.
 
 ## LOG
 
@@ -30,3 +30,11 @@ Provisioner использует существующую schedule Automation, �
 подтверждением в панели schedule Automation. Интеграционный тест включает
 патруль через HTTP и проводит due schedule через durable Occurrence до Task;
 целевые и полные Go/UI/Python проверки, vet и сборка завершились успешно.
+
+### 2026-08-10 — Implement
+
+Первое добавление инструкций патруля теперь атомарно увеличивает версию
+Automation через CAS, поэтому устаревшее редактирование после отключения не
+может стереть инструкции. Повторный provision сохраняет версию, а итоговый
+контекст проверяется на границе 8 KiB до записи. Целевые Go-тесты, сборка,
+Go vet, UI typecheck/build и профильные UI/Python тесты завершились успешно.
