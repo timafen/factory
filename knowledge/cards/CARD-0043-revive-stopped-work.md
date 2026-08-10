@@ -4,13 +4,14 @@
 
 - Stage: Implement + Test
 - Status: implemented and ready for Review
-- Branch: `factory/d3c0bbf9-274-f218b9e8-31b`
-- Head commit: `de52b60` (implementation)
-- What changed: кнопка «Оживить» доступна для `stopped_owner` и `stuck`; маршрут проверяет Origin и JSON.
-- What changed: сигнал остаётся ожидающим до снятия паузы и успешного запуска; слот `max_parallel_works` резервируется до `create_task`.
-- What changed: SHA-256 ограничивает имя сигнального файла 64 байтами, исходное название хранится в содержимом.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 13 pilot tests, 6 UI tests); `just build` → PASS.
-- Next action: проверить чистый diff и принять реализацию в Review.
+- Branch: `factory/fce0eb4f-b3a-ebc179c0-ad6`
+- Head commit: `57e31c2` (implementation)
+- What changed: API и кнопка оживляют `stopped_owner`/`stuck`, не затрагивая другие работы и Automation findings.
+- What changed: атомарное подтверждение сохраняет успешный результат для повторного POST; новая остановка создаёт свежий сигнал.
+- What changed: исходное имя до 200 кириллических символов без усечения переходит в Task следующей стадии.
+- Evidence: `just test-revive-stopped-work` → PASS (Go, 11 pilot, 7 UI); Automation findings test → PASS; `just build` → PASS.
+- Evidence: `just test` → внешний FAIL в `TestTimeoutStopsIgnoringProcessGroup`; изменённые области прошли.
+- Next action: Review проверяет чистый diff и три исправленных блокирующих сценария.
 
 ## LOG
 
@@ -107,3 +108,7 @@
 ### 2026-08-09 — Implement
 
 После замечания Review hex-кодирование названия в имени сигнального файла заменено на SHA-256, а исходное название перенесено в содержимое файла. Go и pilot используют единый формат; допустимое название из 200 кириллических символов проходит полный путь без `ENAMETOOLONG`. `just test-revive-stopped-work` прошёл: Go API, 13 pilot-тестов и 6 UI-тестов; `just build` также прошёл.
+
+### 2026-08-09 — Implement
+
+Работа заново собрана на актуальном `origin/main` без удаления `collect_automation_findings`. Обработанный сигнал теперь атомарно превращается в подтверждение, поэтому повтор команды после запуска успешен, а новая остановка той же работы создаёт свежий сигнал. Убрано усечение Task: полное имя из 200 кириллических символов подтверждено pilot- и UI-сценариями. `just test-revive-stopped-work`, отдельный тест Automation findings и `just build` прошли; полный `just test` обнаружил внешний сбой `TestTimeoutStopsIgnoringProcessGroup` в неизменённом worker-коде.
