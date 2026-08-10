@@ -4,7 +4,7 @@
 
 - Status: Ready for Review — блокирующий путь provision восстановлен и проверен.
 - Branch: `factory/9efaf5bb-9b4-d38e9946-bd5`.
-- Head commit: `48bff11` — включение патруля через HTTP и панель Automations.
+- Head commit: `1e44f27` — включение патруля через HTTP и панель Automations.
 - What changed: schedule Automation с явным ID получает durable инструкции патруля через HTTP или подтверждение в панели; runtime пробуждается после provision. Сквозная проверка доводит наступившее расписание до одной Occurrence и связанной Task.
 - Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)'` → PASS; `npm test -- --run src/App.test.tsx` → PASS; `go test -timeout 5m ./...`, UI build/lint/typecheck/tests, `go vet ./...`, сборка бинарников и `python3 -m unittest pilot.test_pilot` → PASS.
 - One next action: принять Review после проверки provision из `/automations/<id>` на существующем schedule.
