@@ -979,6 +979,51 @@ button { color: inherit; }
 
 /* ---------- overview ---------- */
 
+.efficiency-heading, .efficiency-title, .efficiency-verdict {
+  display: flex;
+  align-items: center;
+}
+.efficiency-heading { justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.efficiency-title { gap: 8px; }
+.efficiency-subtitle { margin: 3px 0 0 24px; color: var(--fg-3); font-size: 12px; }
+.efficiency-verdict { margin-top: 13px; gap: 9px; flex-wrap: wrap; color: var(--fg-3); font-size: 12px; }
+.efficiency-primary {
+  margin-top: 13px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.efficiency-primary > div { min-width: 0; padding: 12px; border-right: 1px solid var(--line); }
+.efficiency-primary > div:last-child { border-right: 0; }
+.efficiency-primary strong, .efficiency-primary span, .efficiency-primary small { display: block; }
+.efficiency-primary strong { font-size: 21px; overflow-wrap: anywhere; }
+.efficiency-primary span { margin-top: 5px; font-size: 12px; }
+.efficiency-primary small { margin-top: 3px; color: var(--fg-3); font-size: 11px; line-height: 1.45; }
+.efficiency-details { margin-top: 12px; border-top: 1px solid var(--line); }
+.efficiency-details > summary { padding-top: 11px; color: var(--fg-2); font-size: 12.5px; cursor: pointer; }
+.efficiency-detail-grid { margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.efficiency-detail-grid h3 { margin: 0 0 9px; font-size: 13px; }
+.efficiency-facts { margin: 0; display: grid; gap: 7px; }
+.efficiency-facts > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.efficiency-facts dt { color: var(--fg-3); }
+.efficiency-facts dd { margin: 0; text-align: right; }
+.efficiency-facts dd small { color: var(--fg-3); font-size: 10.5px; }
+.efficiency-shares { display: grid; gap: 7px; }
+.efficiency-shares > div { display: grid; grid-template-columns: minmax(125px, 1fr) minmax(70px, 1fr) 68px; align-items: center; gap: 8px; font-size: 11.5px; }
+.efficiency-shares > div > span { color: var(--fg-3); }
+.efficiency-shares > div > div { height: 4px; background: var(--line-2); overflow: hidden; }
+.efficiency-shares i { display: block; height: 100%; background: #8ec5ff; }
+.efficiency-shares strong { font-family: var(--mono); font-weight: 400; text-align: right; }
+.efficiency-sources { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line); color: var(--fg-3); font-size: 11.5px; line-height: 1.55; }
+
+@media (max-width: 700px) {
+  .efficiency-primary, .efficiency-detail-grid { grid-template-columns: 1fr; }
+  .efficiency-primary > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .efficiency-primary > div:last-child { border-bottom: 0; }
+}
+
 .metrics-toolbar {
   display: flex;
   align-items: center;

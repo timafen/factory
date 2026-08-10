@@ -2429,16 +2429,32 @@ class PostMergeDeployTest(unittest.TestCase):
         with open(status, "w", encoding="utf-8") as f:
             f.write("7\n")
         with open(output, "w", encoding="utf-8") as f:
-            f.write("health check failed\n")
+            f.write("health check failed — возвращаю предыдущие сервер и воркер\n")
         state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
             "generation": 3, "status": status, "output": output, "queued": False}}}
 
-        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+        events = os.path.join(temporary.name, "release-events.jsonl")
+        with mock.patch.object(pilot, "RELEASE_EVENTS_PATH", events):
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
 
         self.assertNotIn("deploy_factory_cmd", state[pilot.DEPLOY_STATE_KEY])
         self.assertIn("completed generation=3 rc=7 :: " +
                       pilot.RELEASE_DIAGNOSTICS_OMITTED,
                       log.call_args.args[0])
+        with open(events, encoding="utf-8") as event_file:
+            recorded = [json.loads(line) for line in event_file]
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["id"], "deploy_factory_cmd:3")
+        self.assertEqual(recorded[0]["kind"], "failed_release")
+        self.assertTrue(recorded[0]["rollback"])
+
+        # Re-observing a durable status after a restart cannot double-count it.
+        state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"] = {
+            "generation": 3, "status": status, "output": output, "queued": False}
+        with mock.patch.object(pilot, "RELEASE_EVENTS_PATH", events):
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+        with open(events, encoding="utf-8") as event_file:
+            self.assertEqual(len(event_file.readlines()), 1)
 
     @mock.patch.object(pilot, "log")
     def test_completed_release_keeps_only_allowlisted_diagnostics(self, log):
