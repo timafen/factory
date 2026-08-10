@@ -92,3 +92,23 @@ it("keeps the paused card and shows the resume error", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Нет доступного исполнителя");
   expect(screen.getByRole("button", { name: "Продолжить" })).toBeVisible();
 });
+
+it("shows the reason for every repeated Review return", async () => {
+  const tasks = [
+    { ...task("review-1", "[auto] [4/5 Review] Повторные возвраты", "succeeded"), created_at: "2026-08-10T10:01:00Z" },
+    { ...task("implement-1", "[auto] [3/5 Implement + Test] Повторные возвраты", "succeeded"), created_at: "2026-08-10T10:02:00Z" },
+    { ...task("review-2", "[auto] [4/5 Review] Повторные возвраты", "succeeded"), created_at: "2026-08-10T10:03:00Z" },
+    { ...task("implement-2", "[auto] [3/5 Implement + Test] Повторные возвраты", "running"), created_at: "2026-08-10T10:04:00Z" },
+  ];
+  mockAPI({
+    verdicts: { verdicts: {
+      "review-1": { stage: "Review", action: "stop", return_reason: "Нет проверки двойной оплаты" },
+      "review-2": { stage: "Review", action: "stop", return_reason: "Нет проверки двойной оплаты" },
+    } },
+  });
+  view(tasks);
+
+  expect(await screen.findByRole("heading", { name: "Исправляется автоматически" })).toBeVisible();
+  fireEvent.click(screen.getByText("Повторные возвраты"));
+  expect(screen.getAllByText("Причина возврата: Нет проверки двойной оплаты")).toHaveLength(2);
+});

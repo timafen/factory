@@ -37,6 +37,22 @@ class AgentRulesScopeTests(unittest.TestCase):
             with self.subTest(signature=signature):
                 self.assertIn(signature, pilot.AGENT_RULES)
 
+    def test_stage_verdict_keeps_review_return_reason(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(pilot, "VERDICT_DIR", temporary.name), \
+                mock.patch.object(pilot, "try_url", return_value=""), \
+                mock.patch.object(pilot, "proof_of", return_value=""):
+            pilot.save_stage_verdict("review-task", "Review", {
+                "action": "stop",
+                "reason": "Не проверен повторный сценарий оплаты",
+                "verdict_ru": "Работу нужно дополнить.",
+            }, "stage result")
+
+        with open(os.path.join(temporary.name, "review-task.json"), encoding="utf-8") as saved:
+            record = json.load(saved)
+        self.assertEqual(record["reason"], "Не проверен повторный сценарий оплаты")
+
     @mock.patch.object(pilot, "money_guard")
     @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
     def test_auto_task_receives_owner_notification_channel(self, _api, _money):
