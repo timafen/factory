@@ -4,7 +4,7 @@
 
 - Status: Implemented PASS — awaiting independent verification.
 - Branch: `factory/7a16111f-f7d-0bee668c-b9c`.
-- Head commit: `85d29f4` — добавлен безопасный аудит повреждённой кириллицы.
+- Head commit: `25c204b` — добавлен безопасный аудит повреждённой кириллицы.
 - What changed: команда инвентаризирует `?` в заголовках снимка и указанных
   Git-коммитах, сопоставляет их с проверенным экспортом и не печатает тексты.
 - Evidence: целевые пакеты и полный `go test -timeout 5m ./... -count=1` → PASS;
