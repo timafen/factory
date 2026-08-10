@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Review PASS — awaiting verification.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/6b7a512d-d08-5490389d-893`.
 - Head commit: `cf7c17e` (фактически проверенная поставка контракта завершения аудита).
 - Specification: `knowledge/specs/fable-automation-migration-audit.md`.
 - What changed: в спецификации закреплены точный файл поставки и обязательная
   команда проверки автономного сторожа.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 7 tests OK.
+- Evidence: полный Go-набор, 87 проверок `pilot` и 121 web-проверка прошли;
+  целевые `PipelineWatchTests` (7 сценариев) и Go-сценарии автоматизаций — OK.
 - Limitation: абсолютный исторический паритет с Fable без её исходников не доказан и не заявляется.
-- One next action: провести стадию проверки поставки перед вливанием в `main`.
+- One next action: человеку влить поставку в `main`.
 
 ## LOG
 
@@ -55,3 +56,13 @@ GitHub issue/PR, cron, восстановление после рестарта 
 HEAD карточки приведён к фактически проверенной поставке `cf7c17e` и текущей
 рабочей ветке. Остальные метаданные сверены с поставкой; повторный review не
 обнаружил расхождений в области, доказательствах и заявленном ограничении.
+
+### 2026-08-10 — Verify
+
+| Проверяемый критерий | Команда или проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Матрица связывает шесть известных механизмов с Factory и тестами | проверка `knowledge/specs/fable-automation-migration-audit.md` | у каждого механизма есть путь реализации и именованные автоматические сценарии |
+| Сторож автономен | `python3 -m unittest pilot.test_pilot.PipelineWatchTests` | 7 сценариев OK без сети и второго процесса |
+| Issue/PR, cron, рестарт и operator API | `go test ./internal/controlplane -run 'Test(Automation|PullRequestAutomation|HTTPAutomation|ScheduleAutomation)' -count=1` | пакет OK |
+| Полный набор проекта | `go test ./... -count=1`; `python3 -m unittest pilot.test_pilot -v`; web: `npm run lint && npm run typecheck && npm test && npm run build` | Go OK; 87 Python-проверок OK; lint/typecheck, 121 UI-тест и production build OK |
+| Граница вывода | сверка решения и остаточных пробелов в спецификации | исторический паритет с недоступным исходником Fable не заявлен |
