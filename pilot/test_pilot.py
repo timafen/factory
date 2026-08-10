@@ -1,4 +1,5 @@
 import contextlib
+import base64
 import importlib
 import json
 import os
@@ -178,6 +179,7 @@ class DeliveryAreaTests(unittest.TestCase):
                  "docs/foreign.md", "pilot/__pycache__/pilot.pyc"]
 
         with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", return_value=known), \
                 mock.patch.object(pilot, "rebuild_clean_branch",
                                   return_value="task-clean") as rebuild:
@@ -212,6 +214,7 @@ class DeliveryAreaTests(unittest.TestCase):
             return {}
 
         with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
                 mock.patch.object(pilot, "rebuild_clean_branch",
                                   return_value="browser-clean") as rebuild:
@@ -238,6 +241,7 @@ class DeliveryAreaTests(unittest.TestCase):
 
         with mock.patch.object(pilot, "branch_report",
                                return_value=("есть", ["web/src/Browser.tsx"])), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
                 mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
             result = pilot.review_gate({}, "Браузер после ожидания", "browser", "repo",
@@ -273,11 +277,53 @@ class DeliveryAreaTests(unittest.TestCase):
 
         with mock.patch.object(pilot, "branch_report", return_value=(
                 "есть", ["knowledge/cards/CARD-browser.md"])), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader):
             result = pilot.review_gate({}, "Браузер", "browser", "repo")
 
         self.assertTrue(result["back"])
         self.assertIn("документация не заменяет", result["alert_msg"])
+
+    def test_card_commit_gate_accepts_code_commit_before_final_card_commit(self):
+        implementation = "a" * 40
+        card = ("# CARD-0100\n\nImplementation commit: `" + implementation
+                + "` — реализован устойчивый факт.\n")
+        responses = [
+            {"content": base64.b64encode(card.encode()).decode()},
+            {"status": "ahead"},
+            {"files": [{"filename": "pilot/pilot.py"}]},
+        ]
+        with mock.patch.object(pilot, "gh_json", side_effect=responses):
+            result = pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", "knowledge/cards/CARD-0100.md"],
+            )
+        self.assertIsNone(result)
+
+    def test_card_commit_gate_rejects_old_head_requirement_without_stable_commit(self):
+        card = "# CARD-0100\n\nHead commit: git HEAD\n"
+        with mock.patch.object(pilot, "gh_json", return_value={
+                "content": base64.b64encode(card.encode()).decode()}):
+            result = pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", "knowledge/cards/CARD-0100.md"],
+            )
+        self.assertTrue(result["back"])
+        self.assertIn("Head commit", result["note"])
+
+    def test_card_commit_gate_rejects_invented_or_card_only_commit(self):
+        implementation = "b" * 40
+        card = ("Implementation commit: " + implementation + " — якобы код.\n")
+        responses = [
+            {"content": base64.b64encode(card.encode()).decode()},
+            {"status": "ahead"},
+            {"files": [{"filename": "knowledge/cards/CARD-0100.md"}]},
+        ]
+        with mock.patch.object(pilot, "gh_json", side_effect=responses):
+            result = pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task", ["knowledge/cards/CARD-0100.md"])
+        self.assertTrue(result["back"])
+        self.assertIn("только карточки", result["note"])
 
 
 class CodexUsageTests(unittest.TestCase):

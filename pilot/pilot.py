@@ -18,6 +18,7 @@ Planner layer (epics):
   task per subtask, then marks the epic 'running'. A UI Start button can call
   the same mechanism later.
 """
+import base64
 import calendar
 import io
 import glob
@@ -316,6 +317,12 @@ AGENT_RULES = """
    (CARD-0030 и подобные) НЕ дописывай ни строки: общий файл — магнит для
    конфликтов слияния, когда работы идут параллельно. Всё побочное — строками
    ПРЕДЛОЖЕНИЕ/НАХОДКА в отчёте, карточка заведётся сама.
+   В начале карточки обязательно напиши строку `Implementation commit: <полный
+   SHA> — <что реализовано>`: это коммит с кодом, сделанный ДО финального
+   коммита самой карточки. Хеш обязан существовать в этой ветке и содержать
+   изменения вне `knowledge/cards/`. Не пиши `Head commit` и не сверяй это
+   поле с текущим `git HEAD`: запись карточки закономерно создаёт следующий
+   документационный коммит.
 6. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
    только целевые тесты своей области (и новые). Ревью тесты не запускает —
    читает дифф, максимум целевые при сомнении. Полный набор — ровно ОДИН раз,
@@ -1815,6 +1822,71 @@ def branch_report(repo_identity, branch):
     return "есть", files
 
 
+IMPLEMENTATION_COMMIT_LINE = re.compile(
+    r"^\s*(?:[-*]\s*)?Implementation commit:\s*`?([0-9a-f]{40})`?\s*[—-]\s*\S",
+    re.M)
+
+
+def implementation_commit_gate(repo_identity, branch, files):
+    """Validate the stable code-commit evidence in every delivered card.
+
+    A card is itself committed after the implementation.  Comparing its field
+    to the moving branch tip therefore creates an impossible Review loop.  The
+    GitHub API lets the cheap gate instead prove three stable facts: the label
+    exists, its commit is an ancestor of this branch, and that commit changed
+    something other than a knowledge card.  Transport failures remain
+    non-blocking, like the rest of the pre-Review GitHub gate.
+    """
+    cards = [path for path in files if path.startswith("knowledge/cards/") and path.endswith(".md")]
+    if not cards:
+        return {"back": True, "note": (
+            "Машинная проверка перед Ревью: в поставке нет отдельной карточки "
+            "знаний в knowledge/cards/. Создай её и укажи стабильную строку "
+            "Implementation commit: <полный SHA> — <что реализовано>.")}
+    repo = repo_identity.split("github.com/")[-1]
+    if not repo:
+        return None
+    for path in cards:
+        encoded_branch = urllib.parse.quote(branch, safe="")
+        data = gh_json(["api", f"repos/{repo}/contents/{path}?ref={encoded_branch}"])
+        if not isinstance(data, dict) or not data.get("content"):
+            return None
+        try:
+            body = base64.b64decode(data["content"]).decode("utf-8")
+        except (ValueError, UnicodeDecodeError, TypeError):
+            return {"back": True, "note": f"Машинная проверка: карточка {path} повреждена или не читается как UTF-8."}
+        match = IMPLEMENTATION_COMMIT_LINE.search(body)
+        if not match:
+            return {"back": True, "note": (
+                f"Машинная проверка: в карточке {path} нет строки `Implementation commit: "
+                "<полный SHA> — <что реализовано>`. `Head commit` не подходит: "
+                "финальная запись карточки меняет HEAD.")}
+        commit = match.group(1)
+        compare = gh_json(["api", f"repos/{repo}/compare/{commit}...{encoded_branch}"])
+        if not isinstance(compare, dict):
+            return None
+        if compare.get("status") not in ("ahead", "identical"):
+            return {"back": True, "note": (
+                f"Машинная проверка: Implementation commit {commit} из {path} "
+                "не является коммитом этой ветки. Укажи реальный коммит реализации.")}
+        # `identical` proves that the claimed code commit is the card commit
+        # itself, so it cannot be the required predecessor.
+        if compare.get("status") != "ahead":
+            return {"back": True, "note": (
+                f"Машинная проверка: Implementation commit {commit} совпадает с вершиной "
+                "ветки. Сначала закоммить код, затем отдельным коммитом карточку.")}
+        details = gh_json(["api", f"repos/{repo}/commits/{commit}"])
+        changed = (details or {}).get("files") if isinstance(details, dict) else None
+        if not isinstance(changed, list):
+            return None
+        if not any(isinstance(item, dict) and not str(item.get("filename") or "").startswith("knowledge/cards/")
+                   for item in changed):
+            return {"back": True, "note": (
+                f"Машинная проверка: Implementation commit {commit} меняет только карточки. "
+                "Укажи существующий коммит с реализацией кода до карточки.")}
+    return None
+
+
 REBUILD_DIR = f"{HOME}/pilot/rebuild"
 
 
@@ -1928,6 +2000,12 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
+
+        implementation_gate = implementation_commit_gate(repo_identity, branch, files)
+        if implementation_gate:
+            implementation_gate.setdefault("alert", "Вернул сам: карточка не подтверждает реализацию")
+            implementation_gate.setdefault("alert_msg", "Карточка должна ссылаться на настоящий коммит кода до своей финальной записи.")
+            return implementation_gate
 
         # Не даём очистке маскировать уже потерянный обещанный код карточкой
         # или любым другим файлом. Проверяем исходную ветку до rebuild.

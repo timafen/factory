@@ -181,6 +181,100 @@ func TestTitleMigrationPreservesWorkflowAutomationAndTaskSnapshots(t *testing.T)
 	}
 }
 
+func TestKnowledgeCardImplementationCommitMigrationRevisesAllLiveLegacyRules(t *testing.T) {
+	database, err := sql.Open("sqlite", t.TempDir()+"/implementation-commit-migration.sqlite3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() >= "019_knowledge_card_implementation_commit.sql" {
+			continue
+		}
+		body, readErr := migrations.Files.ReadFile(entry.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := database.Exec(string(body)); execErr != nil {
+			t.Fatalf("apply %s: %v", entry.Name(), execErr)
+		}
+	}
+	if _, err := database.Exec(`
+		INSERT INTO workflows(id, enabled, current_revision_id, current_title_key, created_at, updated_at)
+		VALUES
+			('review', 1, 'review-v1', 'review', 1, 1),
+			('verify', 1, 'verify-v1', 'verify', 1, 1),
+			('implement', 1, 'implement-v1', 'implement', 1, 1),
+			('disabled-verify', 0, 'disabled-verify-v1', 'disabled verify', 1, 1);
+		INSERT INTO workflow_revisions(id, workflow_id, revision_number, request_key, request_digest, title, summary, instructions, created_at)
+		VALUES
+			('review-v1', 'review', 1, 'review-v1-request', X'01', 'Review', '', 'Review the implementation evidence already recorded in the card.', 1),
+			('verify-v1', 'verify', 1, 'verify-v1-request', X'02', 'Verify', '', 'For the card, run git rev-parse --short HEAD and record the Head commit.', 1),
+			('implement-v1', 'implement', 1, 'implement-v1-request', X'03', 'Implement + Test', '', 'Before handing off, record Head commit = git HEAD in the card.', 1),
+			('disabled-verify-v1', 'disabled-verify', 1, 'disabled-verify-v1-request', X'04', 'Verify', '', 'Require Head commit = git HEAD.', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := migrations.Files.ReadFile("019_knowledge_card_implementation_commit.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(string(body)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.Query(`
+		SELECT workflow.id, revision.revision_number, revision.request_key, revision.instructions
+		FROM workflows workflow JOIN workflow_revisions revision ON revision.id = workflow.current_revision_id
+		ORDER BY workflow.id
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]struct {
+		number       int
+		requestKey   string
+		instructions string
+	}{}
+	for rows.Next() {
+		var id, requestKey, instructions string
+		var number int
+		if err := rows.Scan(&id, &number, &requestKey, &instructions); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = struct {
+			number       int
+			requestKey   string
+			instructions string
+		}{number, requestKey, instructions}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"implement", "verify"} {
+		value := got[id]
+		if value.number != 2 || value.requestKey != "migration:019:implementation-commit:"+id ||
+			!strings.Contains(value.instructions, "Implementation commit: <полный SHA> — <что реализовано>") ||
+			strings.Contains(value.instructions, "Head commit") ||
+			strings.Contains(value.instructions, "git rev-parse --short HEAD") {
+			t.Fatalf("%s was not revised with the stable card rule: %#v", id, value)
+		}
+	}
+	if got["review"].number != 1 || got["disabled-verify"].number != 1 {
+		t.Fatalf("migration changed a current rule without legacy text or a disabled workflow: %#v", got)
+	}
+	for _, id := range []string{"implement", "review", "verify"} {
+		instructions := got[id].instructions
+		if strings.Contains(instructions, "Head commit") || strings.Contains(instructions, "git rev-parse --short HEAD") {
+			t.Fatalf("%s current instructions still contain the obsolete card rule: %q", id, instructions)
+		}
+	}
+}
+
 func TestPullRequestAutomationMigrationPreservesGitHubIssueAutomations(t *testing.T) {
 	database, err := sql.Open("sqlite", t.TempDir()+"/pull-request-automation-migration.sqlite3")
 	if err != nil {
