@@ -1033,6 +1033,132 @@ class PlanCardCleanupTest(unittest.TestCase):
         self.assertEqual(closed, [])
         self.assertEqual(updates, [])
         verdict.assert_not_called()
+
+
+class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.conf_path = os.path.join(self.temporary.name, "config.json")
+        self.conf = {"stopped_pipelines": ["Оплата продавцу"], "untouched": 7}
+        pilot.save(self.conf_path, dict(self.conf))
+
+    def cleanup(self, tasks=None, ideas=None, questions=None):
+        with mock.patch.object(pilot, "CONF_PATH", self.conf_path), \
+                mock.patch.object(pilot, "ideas_all", return_value=ideas or []), \
+                mock.patch.object(pilot, "load_questions", return_value=questions or []):
+            return pilot.cleanup_orphaned_paused_pipelines(self.conf, tasks or [])
+
+    def disk_config(self):
+        return pilot.load(self.conf_path, None)
+
+    def reset_pause(self):
+        self.conf["stopped_pipelines"] = ["Оплата продавцу"]
+        pilot.save(self.conf_path, dict(self.conf))
+
+    def test_orphan_is_removed_from_memory_and_disk(self):
+        self.assertTrue(self.cleanup())
+        self.assertEqual(self.conf["stopped_pipelines"], [])
+        self.assertEqual(self.disk_config(), {"stopped_pipelines": [], "untouched": 7})
+
+    def test_only_open_plan_states_keep_the_pause(self):
+        for state in ("new", "planned", "in_work", "done", "rejected"):
+            with self.subTest(state=state):
+                self.reset_pause()
+                self.cleanup(ideas=[{"title": "  ОПЛАТА ПРОДАВЦУ ", "state": state}])
+                expected = ["Оплата продавцу"] if state in (
+                    "new", "planned", "in_work") else []
+                self.assertEqual(self.conf["stopped_pipelines"], expected)
+                self.assertEqual(self.disk_config()["stopped_pipelines"], expected)
+
+    def test_only_exact_open_question_keeps_the_pause(self):
+        cases = (
+            ({"title": "оплата продавцу", "status": "open"}, True),
+            ({"title": "Оплата продавцу", "status": "resolved"}, False),
+            ({"title": "Оплата", "status": "open"}, False),
+            ({"title": "Оплата продавцу срочно", "status": "open"}, False),
+        )
+        for question, kept in cases:
+            with self.subTest(question=question):
+                self.reset_pause()
+                self.cleanup(questions=[question])
+                self.assertEqual(bool(self.conf["stopped_pipelines"]), kept)
+
+    def test_only_exact_live_task_keeps_the_pause(self):
+        for state in ("preparing", "queued", "running", "succeeded", "failed"):
+            with self.subTest(state=state):
+                self.reset_pause()
+                task = {"title": "[auto] [3/5 Implement] ОПЛАТА ПРОДАВЦУ",
+                        "state": state}
+                self.cleanup(tasks=[task])
+                self.assertEqual(bool(self.conf["stopped_pipelines"]), state in (
+                    "preparing", "queued", "running"))
+
+    def test_similar_task_name_does_not_keep_the_pause(self):
+        task = {"title": "[auto] [1/5 Triage] Оплата", "state": "running"}
+        self.assertTrue(self.cleanup(tasks=[task]))
+        self.assertEqual(self.conf["stopped_pipelines"], [])
+
+    def test_read_or_write_failure_keeps_memory_and_disk_aligned(self):
+        before = dict(self.conf)
+        with mock.patch.object(pilot, "CONF_PATH", self.conf_path), \
+                mock.patch.object(pilot, "load", return_value=None):
+            self.assertFalse(pilot.cleanup_orphaned_paused_pipelines(self.conf, []))
+        self.assertEqual(self.conf, before)
+        self.assertEqual(self.disk_config(), before)
+
+        with mock.patch.object(pilot, "CONF_PATH", self.conf_path), \
+                mock.patch.object(pilot, "ideas_all", return_value=[]), \
+                mock.patch.object(pilot, "load_questions", return_value=[]), \
+                mock.patch.object(pilot, "save", side_effect=OSError("disk full")):
+            self.assertFalse(pilot.cleanup_orphaned_paused_pipelines(self.conf, []))
+        self.assertEqual(self.conf, before)
+        self.assertEqual(self.disk_config(), before)
+
+    def test_cycle_cleans_after_stale_questions_are_superseded(self):
+        questions = [{"title": "Оплата продавцу", "status": "open"}]
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": []}
+            if path in ("/workers", "/repositories", "/workflows"):
+                return {path.strip("/"): []}
+            raise AssertionError(path)
+
+        def supersede(_tasks):
+            questions[0]["status"] = "obsolete"
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "handle_answers", "advance_epics", "retry_pending_factory_deploy",
+            "autostart_plan",
+        )
+        conf = dict(self.conf, stages=[{"workflow": "Implement"}], auto_plan=False)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "CONF_PATH", self.conf_path))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "load_questions",
+                                                  return_value=questions))
+            stack.enter_context(mock.patch.object(pilot, "supersede_stale_questions",
+                                                  side_effect=supersede))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(conf, {"processed": []})
+
+        self.assertEqual(conf["stopped_pipelines"], [])
+        self.assertEqual(self.disk_config()["stopped_pipelines"], [])
+
+
 class BrainFallbackTest(unittest.TestCase):
     """После лимита один провайдер должен оставаться заблокирован до
     следующего вызова brain(), а не тратить попытку снова."""
