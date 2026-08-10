@@ -155,62 +155,7 @@ if sudo -H -u "$FACTORY_USER" env \
     FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
     FACTORY_BROWSER_WEB="$PAYLOAD/web" \
     FACTORY_BROWSER_SCREENSHOT="${FACTORY_BROWSER_SCREENSHOT:-/tmp/factory-browser-smoke.png}" \
-    node - <<'NODE' >"$smoke_output" 2>&1
-const { chromium } = require(`${process.env.FACTORY_BROWSER_WEB}/node_modules/playwright`);
-
-async function requireDOM(page, url) {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.locator("body").waitFor({ state: "attached", timeout: 5000 });
-}
-
-async function withPage(browser, check) {
-  const page = await browser.newPage();
-  try {
-    return await check(page);
-  } finally {
-    await page.close();
-  }
-}
-
-(async () => {
-  const browser = await chromium.launch({
-    executablePath: process.env.FACTORY_BROWSER_LAUNCHER,
-    chromiumSandbox: true,
-    headless: true,
-  });
-  try {
-    await withPage(browser, (page) => requireDOM(page, "http://127.0.0.1:7337"));
-    await withPage(browser, async (page) => {
-      try {
-        await requireDOM(page, "https://factory.timafen.com");
-      } catch (error) {
-        const code = String(error && error.message).match(/net::(ERR_[A-Z0-9_]+)/)?.[1];
-        if (code !== "ERR_INVALID_AUTH_CREDENTIALS") throw error;
-      }
-    });
-    await withPage(browser, async (page) => {
-      await requireDOM(page, "https://staging-automation.tarser.net");
-      await page.screenshot({ path: process.env.FACTORY_BROWSER_SCREENSHOT, fullPage: true });
-    });
-    for (const url of ["https://automation.tarser.net", "https://example.com"]) {
-      await withPage(browser, async (page) => {
-        let blocked = false;
-        try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
-        } catch (_) {
-          blocked = true;
-        }
-        if (!blocked) throw new Error(`network isolation allowed forbidden URL: ${url}`);
-      });
-    }
-  } finally {
-    await browser.close();
-  }
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
-NODE
+    "$PAYLOAD/ops/test-browser-sandbox.sh" >"$smoke_output" 2>&1
 then
   cat "$smoke_output"
   rm -f -- "$smoke_output"
