@@ -1,4 +1,4 @@
-Implementation commit: c39e8852ea4b9c80f8c2291f02b0815499404608 — ожидание перед восстановлением перехода сокращено с 600 до 450 секунд
+Implementation commit: c39e8859f51f4e742c3a8a1db13ed2b56c05144e — ожидание перед восстановлением перехода сокращено с 600 до 450 секунд
 
 # CARD-0057 — Ускорение переходов конвейера
 
@@ -6,7 +6,7 @@ Implementation commit: c39e8852ea4b9c80f8c2291f02b0815499404608 — ожидан
 
 - Status: Implemented — awaiting Verify.
 - Branch: `factory/35e7811c-d36-9e9232b3-41c`.
-- Implementation commit: c39e8852ea4b9c80f8c2291f02b0815499404608 — ожидание перед восстановлением перехода сокращено с 600 до 450 секунд.
+- Implementation commit: c39e8859f51f4e742c3a8a1db13ed2b56c05144e — ожидание перед восстановлением перехода сокращено с 600 до 450 секунд.
 - What changed: патруль восстанавливает потерянный переход через 450 секунд, на 25% быстрее прежнего; сохранённые Automation-инструкции обновляются без противоречивого старого срока.
 - Evidence: `python3 -m unittest pilot.test_pilot` → 158 tests OK; `go test ./internal/controlplane -count=1` → PASS (102.991s); `git diff --check origin/main...HEAD` → OK.
 - One next action: повторить этап Verify на доставленной ветке.
