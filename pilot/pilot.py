@@ -2356,13 +2356,42 @@ def diag_sweep(conf, tasks):
         if base in seen:
             continue
         seen.add(base)
+        if is_stopped(conf, base):
+            continue
+        # The live sweep is an early warning, not a minute-by-minute brain
+        # loop. A terminal stage can still invoke deep_diagnose later through
+        # route_question, where a safe repair has enough evidence to start.
+        if cap_rescues(base, "DIAG") >= 1:
+            continue
         rounds = max(stage_attempts(tasks, "Implement + Test", base),
                      stage_attempts(tasks, "Review", base))
         if rounds < diag_at:
             continue
         try:
-            deep_diagnose(conf, base, m.group(1).strip(), rounds, tasks,
-                          repair_task=t)
+            stage = m.group(1).strip()
+            verdict = deep_diagnose(conf, base, stage, rounds, tasks,
+                                    repair_task=t)
+            if verdict and verdict.get("нужен_владелец"):
+                pause_pipeline(conf, base)
+                stages = [s.get("workflow") for s in conf.get("stages", [])]
+                resume = resume_stage_for(stages, stage, stage)
+                reason = str(verdict.get("причина") or "").strip()
+                solution = str(verdict.get("решение") or "").strip()
+                rec = write_question(
+                    t["id"], stage, resume, base,
+                    t.get("repository_id") or "",
+                    reason or f"Работа прошла {rounds} кругов и не движется.",
+                    ("Как поступить? Предложение диагностики: " + solution)
+                    if solution else "Как поступить дальше?",
+                    [], recent_stage_text(tasks, base),
+                )
+                rec["owner_only"] = True
+                rec["escalation_reason"] = (
+                    f"старшая диагностика после {rounds} кругов определила, "
+                    "что без решения владельца продолжать нельзя"
+                )
+                save(f"{QUESTION_DIR}/{t['id']}.json", rec)
+                log(f"DIAG OWNER STOP base={base!r} task={t['id']}")
         except Exception as e:
             log("diag_sweep_error", repr(e))
 
@@ -2796,18 +2825,28 @@ def handle_answers(conf, workflows, workers, tasks):
             rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")))
         except Exception:
             rounds = 0
+        selected_worker = stage_worker(conf, stage, cx_hint, workers)
         if rounds >= 2 and cx_hint != "high":
-            was = stage_worker(conf, stage, cx_hint, workers)
-            cx_hint = "high"
-            now_ = stage_worker(conf, stage, cx_hint, workers)
-            log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: {rounds} провала — {was} -> {now_}")
-            if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
-                note_cap_rescue(q.get("title") or "", "ESCNOTE")
-                notify(conf, "Исполнитель повышен",
-                       (q.get("title") or "") + "\nЭтап «" + str(stage) + "» провалился "
-                       + str(rounds) + " раз(а). Повышаю: " + str(was) + " → " + str(now_) + ".",
-                       tags="arrow_double_up", click=f"{UI_BASE}/work")
-        worker = workers.get(stage_worker(conf, stage, cx_hint, workers))
+            was = selected_worker
+            candidate = stage_worker(conf, stage, "high", workers, exact_tier=True)
+            if (candidate and worker_capability_rank(candidate)
+                    > worker_capability_rank(was)):
+                cx_hint = "high"
+                selected_worker = candidate
+                log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: "
+                    f"{rounds} провала — {was} -> {candidate}")
+                if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
+                    note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                    notify(conf, "Исполнитель повышен",
+                           (q.get("title") or "") + "\nЭтап «" + str(stage)
+                           + "» провалился " + str(rounds)
+                           + " раз(а). Повышаю: " + str(was) + " → "
+                           + str(candidate) + ".",
+                           tags="arrow_double_up", click=f"{UI_BASE}/work")
+            else:
+                log(f"ESCALATE SKIP '{q.get('title','')[:40]}' {stage}: "
+                    f"нет исполнителя сильнее {was} (кандидат={candidate})")
+        worker = workers.get(selected_worker)
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
             continue
@@ -4312,6 +4351,25 @@ def worker_price_rank(name):
     return (rank, "think" in n, n)      # без think дешевле: меньше ходов размышления
 
 
+def worker_capability_rank(name):
+    """Comparable capability for the named Codex/Claude worker.
+
+    Model family is the primary step; reasoning effort is the step inside a
+    family. The rank is deliberately used only to prevent a claimed escalation
+    from selecting the same or a weaker worker.
+    """
+    n = (name or "").lower()
+    family = next((rank for key, rank in (
+        ("haiku", 0), ("luna", 0), ("sonnet", 1), ("terra", 1),
+        ("sol", 2), ("opus", 3), ("fable", 3),
+    ) if key in n), 1)
+    effort = next((rank for suffix, rank in (
+        ("-low", 0), ("-medium", 1), ("-high", 2), ("-max", 3),
+        ("-think", 2),
+    ) if n.endswith(suffix)), 1)
+    return family * 10 + effort
+
+
 # ----------------------------------------------- Очередь у больного --------
 
 
@@ -4371,7 +4429,7 @@ def rescue_queued(conf, tasks, workflows, workers):
             log("queue_rescue_error", repr(e))
 
 
-def stage_worker(conf, stage_name, complexity, workers=None):
+def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
     """Pick the worker for a stage. Prefer the tier the orchestrator asked for,
     but never hand work to an unhealthy worker: fall back to the other tiers of
     the SAME stage, then to any healthy worker configured anywhere in the
@@ -4407,6 +4465,12 @@ def stage_worker(conf, stage_name, complexity, workers=None):
             else:
                 ordered = [s.get("worker")]
             break
+    if exact_tier and isinstance(tiers, dict):
+        exact = tiers.get(complexity)
+        if healthy(exact):
+            # An escalation must really use the configured higher tier. Queue
+            # there when it is busy instead of silently falling back downward.
+            return exact
     for name in ordered:
         if name and healthy(name) and available(name):
             return name
