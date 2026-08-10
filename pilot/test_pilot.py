@@ -638,6 +638,41 @@ class DiagnosisRepairTests(unittest.TestCase):
             pause_pipeline.assert_not_called()
             answer.assert_not_called()
 
+    def test_loop_rescue_does_not_grant_another_full_round_allowance(self):
+        rescues = {"LOOP": 0}
+
+        def cap_rescues(_base, stage):
+            return rescues.get(stage, 0)
+
+        def note_cap_rescue(_base, stage):
+            rescues[stage] = rescues.get(stage, 0) + 1
+
+        conf = dict(self.conf, deep_diag_rounds=99, max_stage_attempts=3,
+                    max_work_rounds=8, max_loop_rescues=1)
+        with mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                mock.patch.object(pilot, "set_loop_baseline") as set_baseline, \
+                mock.patch.object(pilot, "cap_rescues", side_effect=cap_rescues), \
+                mock.patch.object(pilot, "note_cap_rescue", side_effect=note_cap_rescue), \
+                mock.patch.object(pilot, "orchestrator_answer", return_value={
+                    "decision": "answer", "answer": "Исправь только найденную гонку"}), \
+                mock.patch.object(pilot, "write_question", return_value={}), \
+                mock.patch.object(pilot, "pause_pipeline") as pause:
+            first = pilot.route_question(
+                conf, "looping-task", "Review", "Implement + Test",
+                "Починить отчёт", "repo-id", "снова вернулось", "Что делать?",
+                [], "", attempts_so_far=8)
+            second = pilot.route_question(
+                conf, "looping-task-2", "Review", "Implement + Test",
+                "Починить отчёт", "repo-id", "снова вернулось", "Что делать?",
+                [], "", attempts_so_far=9)
+
+        self.assertFalse(first)
+        self.assertTrue(second)
+        pause.assert_called_once_with(conf, "Починить отчёт")
+        # Отсчёт обновляется только при настоящей остановке. Автоматическое
+        # решение не должно незаметно выдавать ещё восемь кругов.
+        set_baseline.assert_called_once_with("Починить отчёт", 9)
+
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
                  '"нужен_владелец":false}'

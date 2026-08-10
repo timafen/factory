@@ -111,7 +111,11 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       if (!it.stage) continue;
       if (LIVE.includes(it.task.state)) g.reached[it.stage] = "live";
       else if (it.task.state === "failed") g.reached[it.stage] = g.reached[it.stage] ?? "bad";
-      else if (it.task.state === "succeeded") g.reached[it.stage] = "done";
+      else if (it.task.state === "succeeded") {
+        // «Исполнитель закончил» не равно «проверка приняла». Verify может
+        // успешно вернуть BLOCKED/FAIL; зелёная стадия в таком случае врёт.
+        g.reached[it.stage] = it.verdict?.final_pass === false ? "bad" : "done";
+      }
     }
     // Работу могли завести сразу с середины конвейера: разбор и спецификацию
     // человек уже сделал руками. Такие стадии не «не дошли», а «не нужны».
@@ -559,6 +563,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
                 }}>{skipped ? `${STAGE_RU[st]} — не нужна`
                     : past ? `${STAGE_RU[st]} — прошлый круг`
                     : again ? `${STAGE_RU[st]} — заново`
+                    : s === "bad" ? `${STAGE_RU[st]} — не прошла`
                     : STAGE_RU[st]}</span>
             );
           });

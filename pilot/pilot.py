@@ -2445,7 +2445,6 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                 question, prior_result, repo_id)
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
-            set_loop_baseline(base, attempts_so_far)
             rec = write_question(task_id, stage,
                                  accept_forward(stage, v.get("answer", "")) or resume_stage,
                                  base, repo_id,
