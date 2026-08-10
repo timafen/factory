@@ -4,7 +4,7 @@
 
 - Status: Verified PASS — awaiting human merge.
 - Branch: `factory/6b7a512d-d08-5490389d-893`.
-- Head commit: `cf7c17e` (фактически проверенная поставка контракта завершения аудита).
+- Head commit: `58521ab` (фактически проверенная поставка контракта завершения аудита).
 - Specification: `knowledge/specs/fable-automation-migration-audit.md`.
 - What changed: в спецификации закреплены точный файл поставки и обязательная
   команда проверки автономного сторожа.
