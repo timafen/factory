@@ -45,6 +45,8 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 	patrolID := seedEfficiencyTask(t, store, repository.ID, "patrol", "[auto] [1/5 Triage] Патруль", "succeeded", now.Add(-80*time.Minute), now.Add(-75*time.Minute), now.Add(-65*time.Minute))
 	scheduledID := seedEfficiencyTask(t, store, repository.ID, "scheduled", "Плановое обслуживание", "succeeded", now.Add(-75*time.Minute), now.Add(-70*time.Minute), now.Add(-62*time.Minute))
 	seedEfficiencyTask(t, store, repository.ID, "helper", "[helper] обновить индекс", "succeeded", now.Add(-70*time.Minute), now.Add(-65*time.Minute), now.Add(-60*time.Minute))
+	seedEfficiencyTask(t, store, repository.ID, "debug", "[debug] проверить runner", "succeeded", now.Add(-69*time.Minute), now.Add(-64*time.Minute), now.Add(-59*time.Minute))
+	seedEfficiencyTask(t, store, repository.ID, "service", "[service] очистить кэш", "succeeded", now.Add(-68*time.Minute), now.Add(-63*time.Minute), now.Add(-58*time.Minute))
 	linkEfficiencySchedule(t, store, repository.ID, patrolID, "patrol", PipelinePatrolInstruction, now)
 	linkEfficiencySchedule(t, store, repository.ID, scheduledID, "maintenance", "Run scheduled maintenance.", now)
 
@@ -88,7 +90,7 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 		got.FinalDeadEnds.Rate == nil || math.Abs(*got.FinalDeadEnds.Rate-0.5) > 0.000001 {
 		t.Fatalf("dead-end denominator = %#v", got.FinalDeadEnds)
 	}
-	if got.ProductStageTasks != 7 || got.Excluded.Patrol != 1 || got.Excluded.Scheduled != 1 || got.Excluded.Helper != 1 || got.Excluded.Total != 3 {
+	if got.ProductStageTasks != 7 || got.Excluded.Patrol != 1 || got.Excluded.Scheduled != 1 || got.Excluded.Helper != 3 || got.Excluded.Total != 5 {
 		t.Fatalf("product/service split = product %d excluded %#v", got.ProductStageTasks, got.Excluded)
 	}
 	if got.ReleaseFailures != 1 || got.Rollbacks != 1 {

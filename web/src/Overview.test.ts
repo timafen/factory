@@ -63,6 +63,27 @@ describe("Overview active work", () => {
   });
 });
 
+describe("Overview recent work", () => {
+  it("shows human pipeline titles, proof and an honest failed result without IDs", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard" ? { recent_done: [
+        { title: "Витрина товаров", detail: "Влито в main. Проверено: сценарий прошёл.", at: "2026-08-10T12:00:00Z", status: "merged" },
+        { title: "Оплата картой", detail: "Этап «Review» не прошёл; в main не влито.", at: "2026-08-10T11:00:00Z", status: "failed" },
+      ] } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Сделано недавно" });
+    expect(within(section).getByText("Витрина товаров")).toBeVisible();
+    expect(within(section).getByText(/Влито в main. Проверено: сценарий прошёл/)).toBeVisible();
+    expect(within(section).getByText("Оплата картой")).toBeVisible();
+    expect(within(section).getByText(/в main не влито/)).toBeVisible();
+    expect(within(section).queryByText(/merged|failed/)).not.toBeInTheDocument();
+  });
+});
+
 describe("Overview Factory efficiency", () => {
   it("marks a small sample, shows exact denominators, and compares both periods", async () => {
     const share = (key: string, seconds: number, ratio: number, sample = 1) => ({
@@ -122,6 +143,31 @@ describe("Overview Factory efficiency", () => {
     expect(within(section).getByText("есть деградация")).toBeVisible();
     expect(within(section).getByText("выборка: 8 влитых работ · минимум для оценки 5")).toBeVisible();
     expect(within(section).getByText("предыдущий период: 10")).toBeVisible();
+  });
+});
+
+describe("Overview product capacity", () => {
+  it("shows the four-stream history honestly and keeps unknown explicit", async () => {
+    const period = { started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z", observation_from: "2026-08-10T11:00:00Z", samples: 2, low_data: true,
+      active_time: [0, 1, 2, 3, 4].map((active) => ({ active, seconds: active === 0 ? 3600 : 0, share: active === 0 ? 1 : 0 })), average_busy: 0, queue_p90: 2,
+      underload: [{ reason: "unknown", seconds: 3600, share: 1 }],
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/metrics/product-capacity" ? { generated_at: "2026-08-10T12:00:00Z", capacity: 4, periods: { "24h": period, "7d": period } }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
+    expect(within(section).getByText("данных мало")).toBeVisible();
+    expect(within(section).getByText("0.0 / 4")).toBeVisible();
+    expect(within(section).getByText("p90 очереди")).toBeVisible();
+    fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
+    expect(within(section).getByText(/unknown:/)).toBeVisible();
+    expect(within(section).queryByText(/лимит провайдера:/)).not.toBeInTheDocument();
+    fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
+    expect(within(section).getByText("сэмплов: 2")).toBeVisible();
   });
 });
 

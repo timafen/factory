@@ -153,6 +153,16 @@ func run() (returnErr error) {
 		cancelSweep()
 		<-sweeperDone
 	}()
+	capacityContext, cancelCapacity := context.WithCancel(rootContext)
+	capacityDone := make(chan struct{})
+	go func() {
+		defer close(capacityDone)
+		store.RunProductCapacitySampler(capacityContext, logger)
+	}()
+	defer func() {
+		cancelCapacity()
+		<-capacityDone
+	}()
 	automationService := controlplane.NewAutomationService(store, logger)
 	automationContext, cancelAutomations := context.WithCancel(rootContext)
 	automationsDone := make(chan struct{})
@@ -191,6 +201,8 @@ func run() (returnErr error) {
 			<-automationsDone
 			cancelSweep()
 			<-sweeperDone
+			cancelCapacity()
+			<-capacityDone
 			return fmt.Errorf("serve HTTP: %w", err)
 		}
 	case <-rootContext.Done():
@@ -209,6 +221,8 @@ func run() (returnErr error) {
 	}
 	cancelSweep()
 	<-sweeperDone
+	cancelCapacity()
+	<-capacityDone
 	cancelAutomations()
 	<-automationsDone
 	logger.Info("server_stopped")
