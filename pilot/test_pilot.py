@@ -1873,6 +1873,62 @@ class BrainFallbackTest(unittest.TestCase):
         self.assertEqual(len(self.claude_calls), 1)
 
 
+class PlanTerminologyTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.ideas_path = os.path.join(self.temporary.name, "ideas.json")
+        self.conf_path = os.path.join(self.temporary.name, "config.json")
+        self.patches = [
+            mock.patch.object(pilot, "IDEAS_PATH", self.ideas_path),
+            mock.patch.object(pilot, "CONF_PATH", self.conf_path),
+            mock.patch.object(pilot, "notify"),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        pilot.save(self.ideas_path, [])
+        pilot.save(self.conf_path, {})
+
+    def test_owner_and_assistant_can_only_add_proposals(self):
+        owner = pilot.add_idea("finding", "Проверить очередь", origin="owner")
+        assistant = pilot.add_idea(
+            "finding", "Добавить понятный статус", origin="assistant"
+        )
+
+        self.assertEqual(owner["kind"], "idea")
+        self.assertEqual(assistant["kind"], "idea")
+
+    def test_only_worker_result_with_source_can_be_a_finding(self):
+        finding = pilot.add_idea(
+            "finding",
+            "Воркер завис после тестов",
+            origin="worker",
+            source="Работа: проверка выпуска",
+        )
+        missing_source = pilot.add_idea(
+            "finding", "Нет источника", origin="worker"
+        )
+
+        self.assertEqual(finding["kind"], "finding")
+        self.assertEqual(missing_source["kind"], "idea")
+
+    def test_existing_manual_findings_are_migrated_to_proposals(self):
+        pilot.save(self.ideas_path, [{
+            "id": "old",
+            "key": "finding||old",
+            "kind": "finding",
+            "title": "Поставил помощник",
+            "origin": "assistant",
+            "source": "",
+        }])
+
+        migrated = pilot.ideas_all()[0]
+
+        self.assertEqual(migrated["kind"], "idea")
+        self.assertTrue(migrated["key"].startswith("idea|"))
+
+
 class PlanAutostartTest(unittest.TestCase):
     def setUp(self):
         self.conf = {

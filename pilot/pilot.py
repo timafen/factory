@@ -1664,20 +1664,33 @@ def area_busy(tasks, base, context="", repo=""):
 
 
 # ------------------------------------------------------------- предложения ---
-# Ничто найденное по пути не теряется. Агент пишет в отчёте строку
-# «ПРЕДЛОЖЕНИЕ: ...» или «НАХОДКА: ...» — и это становится карточкой
-# на экране «План», привязанной к тому же проекту, в котором шла работа.
+# Ничто найденное по пути не теряется. Термины намеренно не взаимозаменяемы:
+# помощник или владелец добавляет ПРЕДЛОЖЕНИЕ, а НАХОДКА рождается только
+# внутри выполняемой воркером работы и всегда хранит источник этой работы.
 IDEAS_PATH = f"{HOME}/pilot/ideas.json"
 IDEA_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?(ПРЕДЛОЖЕНИЕ|НАХОДКА)(?:\*\*)?\s*:\s*(.+?)\s*$", re.M)
 IDEA_KINDS = ("idea", "finding")
 IDEA_STATES = ("new", "planned", "in_work", "done", "rejected")
 IDEA_SKIP = ("нет", "none", "-", "н/д", "нету", "n/a")
+FINDING_ORIGINS = ("worker", "agent")  # ``agent`` keeps old worker records valid.
 
 
 def ideas_all():
     d = load(IDEAS_PATH, None)
-    return d if isinstance(d, list) else []
+    if not isinstance(d, list):
+        return []
+    changed = False
+    for item in d:
+        source = str(item.get("source") or "").strip()
+        if (item.get("kind") == "finding"
+                and (item.get("origin") not in FINDING_ORIGINS or not source)):
+            item["kind"] = "idea"
+            item["key"] = _idea_key("idea", item.get("repo"), item.get("title"))
+            changed = True
+    if changed:
+        save(IDEAS_PATH, d)
+    return d
 
 
 def _idea_key(kind, repo, title):
@@ -1694,13 +1707,21 @@ def _idea_id(items):
     return "p" + format(n, "x")
 
 
-def add_idea(kind, title, repo="", why="", origin="agent", source="",
+def add_idea(kind, title, repo="", why="", origin="assistant", source="",
              state="new", order=None):
-    """Заводит карточку. Повтор в том же проекте не плодится."""
+    """Заводит карточку, соблюдая словарь Плана.
+
+    Находкой считается только результат, который воркер сообщил из конкретной
+    работы. Ручной ввод владельца или помощника всегда является предложением,
+    даже если старый клиент передал ``kind=finding``.
+    """
     title = re.sub(r"\s+", " ", (title or "").strip())
     if not title:
         return None
     kind = kind if kind in IDEA_KINDS else "idea"
+    source = (source or "").strip()
+    if kind == "finding" and (origin not in FINDING_ORIGINS or not source):
+        kind = "idea"
     items = ideas_all()
     key = _idea_key(kind, repo, title)
     for it in items:
@@ -1711,7 +1732,7 @@ def add_idea(kind, title, repo="", why="", origin="agent", source="",
         order = max([int(i.get("order") or 0) for i in items] or [0]) + 10
     rec = {"id": _idea_id(items), "key": key, "kind": kind, "title": title[:300],
            "why": (why or "")[:2000], "repo": repo or "", "origin": origin,
-           "source": (source or "")[:200],
+           "source": source[:200],
            "state": state if state in IDEA_STATES else "new",
            "reason": "", "task_id": "", "order": int(order),
            "created": now, "updated": now}
@@ -1720,8 +1741,12 @@ def add_idea(kind, title, repo="", why="", origin="agent", source="",
     try:
         conf_now = load(CONF_PATH, {}) or {}
         kind_ru = "Находка" if kind == "finding" else "Предложение"
-        who = {"agent": "нашёл агент", "patrol": "нашёл Клод",
-               "owner": "поставил ты"}.get(origin, "нашёл конвейер")
+        who = {"worker": "нашёл исполнитель по ходу работы",
+               "owner": "предложил ты",
+               "assistant": "предложил помощник",
+               "codex": "предложил помощник",
+               "claude": "предложил помощник",
+               "patrol": "предложил помощник"}.get(origin, "добавлено в план")
         body = kind_ru + " · " + who + chr(10) + title[:200]
         if why:
             body += chr(10) + chr(10) + cut(why, 260)
@@ -1813,7 +1838,8 @@ def collect_ideas(result, repo_id="", source=""):
             title, sep, why = text.partition(" - ")
         if not sep and len(title) > 140:
             title, why = title[:140].rsplit(" ", 1)[0], text
-        if add_idea(kind, title or text, repo_id, why, origin="agent", source=source):
+        if add_idea(kind, title or text, repo_id, why, origin="worker",
+                    source=source):
             n += 1
     return n
 

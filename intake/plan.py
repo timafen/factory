@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Экран «План»: предложения и находки, привязанные к проектам.
 
-Ничто найденное по пути не теряется. Агент пишет в отчёте строку
-«ПРЕДЛОЖЕНИЕ: ...» или «НАХОДКА: ...» — пилот заводит карточку.
-Хозяин и помощник видят один и тот же список, сгруппированный по проектам.
+Ничто найденное по пути не теряется. Исполнитель пишет в отчёте строку
+«ПРЕДЛОЖЕНИЕ: ...» или «НАХОДКА: ...» — пилот заводит карточку. Владелец
+и помощник вручную заводят только предложения и видят тот же общий список.
 """
 import html
 import sys
@@ -211,8 +211,9 @@ summary{cursor:pointer;color:#9fb4d8;font-size:14px}
 a.back{color:#8fabe6;text-decoration:none;font-size:13px}
 """
 
-HELP = ("Здесь всё, что фабрика нашла по пути и не потеряла: предложения "
-        "(что стоило бы сделать) и находки (что выяснилось). Каждая карточка "
+HELP = ("Здесь ничего не теряется: предложения добавляешь ты или помощник, "
+        "а находки создают исполнители, когда выясняют что-то по ходу работы. "
+        "Каждая карточка "
         "привязана к проекту. «В план» — беру в работу позже, «Завести задачу» — "
         "фабрика начинает делать прямо сейчас, «Отклонить» — с причиной, "
         "чтобы через месяц не гадать, почему отказались.")
@@ -306,8 +307,8 @@ def plan_page(repo: str = "", show: str = "open"):
         groups.setdefault(it.get("repo") or "", []).append(it)
     if not groups:
         body.append('<div class="empty">Пока пусто. Карточки появятся сами, '
-                    'когда агент напишет в отчёте «ПРЕДЛОЖЕНИЕ: ...» или '
-                    '«НАХОДКА: ...», либо добавь вручную внизу.</div>')
+                    'когда исполнитель напишет в отчёте «ПРЕДЛОЖЕНИЕ: ...» или '
+                    '«НАХОДКА: ...», либо добавь предложение вручную внизу.</div>')
     for rid, lst in groups.items():
         body.append(f"<h2>{esc(repo_name(rid, rmap))} · {len(lst)}</h2>")
         for it in lst:
@@ -321,11 +322,10 @@ def plan_page(repo: str = "", show: str = "open"):
     add = (f'<details><summary>Добавить карточку вручную</summary>'
            f'<form method="post" action="plan/add">'
            f'<input type="hidden" name="back" value="{esc(back)}">'
-           f'<input name="title" placeholder="Что предлагаешь или что нашёл" required>'
-           f'<textarea name="why" placeholder="Зачем это нужно / что именно выяснилось"></textarea>'
+           f'<input name="title" placeholder="Что предлагаешь" required>'
+           f'<textarea name="why" placeholder="Зачем это нужно"></textarea>'
            f'<select name="repo">{"".join(opts)}</select>'
-           f'<select name="kind"><option value="idea">Предложение</option>'
-           f'<option value="finding">Находка</option></select>'
+           f'<input type="hidden" name="kind" value="idea">'
            f'<button class="p">Добавить</button></form></details>')
 
     return HTMLResponse(
