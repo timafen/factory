@@ -8,6 +8,7 @@ import type {
   ManagedRepositoryReadiness,
   WorkerRepositoryOption,
   TaskPage,
+  Task,
   TaskDetail,
   Worker,
   WorkflowDetail,
@@ -90,6 +91,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ version, settings }),
     }),
+  resumeWork: (title: string) => request<{ task: Task; stage: string; resumed: boolean }>("/api/v1/works/resume", {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  }),
   metrics: (window: MetricsWindow) =>
     request<MetricsSummary>(
       `/api/v1/metrics/summary?${new URLSearchParams({ window })}`,

@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -27,6 +28,7 @@ type API struct {
 	pilotConfig  *PilotConfigStore
 	dialogRunner dialogRunner
 	sandboxKeys  sandboxKeysRunner
+	resumeMu     sync.Mutex
 }
 
 type workerRegistrationRequest struct {
@@ -104,6 +106,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/dashboard", api.getDashboard)
 	mux.HandleFunc("GET /api/v1/works", api.getWorks)
 	mux.HandleFunc("GET /api/v1/work-status", api.getWorkStatus)
+	mux.HandleFunc("POST /api/v1/works/resume", api.resumeWork)
 	mux.HandleFunc("GET /api/v1/work-history", api.getWorkHistory)
 	mux.HandleFunc("GET /api/v1/promises", api.getPromises)
 	mux.HandleFunc("GET /api/v1/limits", api.getLimits)
