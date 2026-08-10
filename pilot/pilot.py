@@ -2021,7 +2021,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
-STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
+STALL_WAIT = 450      # 25% быстрее прежних 600 секунд, сохраняя безопасную паузу
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
     ("running", "queued", "pending", "created", "starting")
