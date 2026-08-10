@@ -1007,6 +1007,56 @@ def supersede_stale_questions(tasks):
             f"-> перекрыт задачей {newer['id'][:8]}")
 
 
+def cleanup_orphaned_paused_pipelines(conf, tasks):
+    """Remove pauses that no longer have a visible reason to exist.
+
+    Keep memory unchanged until the updated config is safely on disk.  A bad
+    read or failed atomic save can therefore be retried by the next cycle
+    without making this cycle believe that the pause was removed.
+    """
+    if not (conf.get("stopped_pipelines") or []):
+        return False
+
+    def name(value):
+        return base_title(str(value or "")).strip().casefold()
+
+    try:
+        disk = load(CONF_PATH, None)
+        if not isinstance(disk, dict):
+            raise ValueError("config is unavailable or invalid")
+
+        stopped = list(disk.get("stopped_pipelines") or [])
+        active_names = {
+            name(idea.get("title"))
+            for idea in ideas_all()
+            if idea.get("state") in ("new", "planned", "in_work")
+        }
+        active_names.update(
+            name(question.get("title"))
+            for question in load_questions()
+            if question.get("status") == "open"
+        )
+        active_names.update(
+            name(task.get("title"))
+            for task in (tasks or [])
+            if task.get("state") in ("preparing", "queued", "running")
+        )
+        kept = [base for base in stopped if name(base) in active_names]
+        if kept == stopped:
+            return False
+
+        updated = dict(disk)
+        updated["stopped_pipelines"] = kept
+        save(CONF_PATH, updated)
+        conf["stopped_pipelines"] = kept
+        log("PIPELINE PAUSES CLEANED " + repr(
+            [base for base in stopped if base not in kept]))
+        return True
+    except Exception as e:
+        log("paused_pipeline_cleanup_error", repr(e))
+        return False
+
+
 # --------------------------------------- Потолок ≠ решение владельца -------
 # Сколько раз оркестратор уже вытаскивал эту стадию после потолка. Без счётчика
 # «другой подход» превратится в тот же круг, только без человека.
@@ -4837,6 +4887,13 @@ def cycle(conf, state):
         supersede_stale_questions(tasks)
     except Exception as e:
         log("supersede_error", repr(e))
+
+    # После снятия устаревших вопросов забытая пауза больше не должна
+    # блокировать сторож и автоподбор в этом же цикле.
+    try:
+        cleanup_orphaned_paused_pipelines(conf, tasks)
+    except Exception as e:
+        log("paused_pipeline_cleanup_outer_error", repr(e))
 
     # Owner answers resume stopped pipelines.
     try:
