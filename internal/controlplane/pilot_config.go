@@ -347,6 +347,9 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 		if workers.Low == "" || workers.Medium == "" || workers.High == "" {
 			return nil, invalid("invalid_pilot_settings", "each stage requires low, medium, and high workers")
 		}
+		if err := validateWorkerEffortOrder(stage, workers); err != nil {
+			return nil, err
+		}
 		if cost, ok := settings.StageBaseUSD[stage]; !ok || cost <= 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
 			return nil, invalid("invalid_pilot_settings", "stage_base_usd values must be positive")
 		}
@@ -406,4 +409,34 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 	}
 	sort.Strings(warnings)
 	return warnings, nil
+}
+
+func validateWorkerEffortOrder(stage string, workers protocol.PilotStageWorkers) error {
+	ordered := []struct {
+		tier string
+		name string
+	}{{"low", workers.Low}, {"medium", workers.Medium}, {"high", workers.High}}
+	for i := 1; i < len(ordered); i++ {
+		previousFamily, previousEffort, previousOK := workerEffort(ordered[i-1].name)
+		family, effort, ok := workerEffort(ordered[i].name)
+		if previousOK && ok && previousFamily == family && effort < previousEffort {
+			return invalid("invalid_pilot_settings", fmt.Sprintf(
+				"%s %s worker %s has lower reasoning effort than %s worker %s",
+				stage, ordered[i].tier, ordered[i].name,
+				ordered[i-1].tier, ordered[i-1].name))
+		}
+	}
+	return nil
+}
+
+func workerEffort(name string) (string, int, bool) {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for suffix, rank := range map[string]int{
+		"-low": 0, "-medium": 1, "-high": 2, "-max": 3,
+	} {
+		if strings.HasSuffix(lower, suffix) {
+			return strings.TrimSuffix(lower, suffix), rank, true
+		}
+	}
+	return "", 0, false
 }

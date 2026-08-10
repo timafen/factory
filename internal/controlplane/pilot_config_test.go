@@ -110,6 +110,23 @@ func TestPilotConfigProjectProvidersAreStrictAndPreserved(t *testing.T) {
 	}
 }
 
+func TestPilotConfigRejectsReasoningDowngradeInHigherTier(t *testing.T) {
+	settings := validPilotSettings()
+	settings.AllowAnyWorker = true
+	settings.Stages[2].Workers = protocol.PilotStageWorkers{
+		Low: "codex-terra-medium", Medium: "codex-sol-medium", High: "codex-sol-low",
+	}
+
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("higher tier with lower reasoning effort was accepted")
+	}
+
+	settings.Stages[2].Workers.High = "codex-sol-high"
+	if _, err := validatePilotSettings(settings); err != nil {
+		t.Fatalf("monotonic reasoning tiers were rejected: %v", err)
+	}
+}
+
 func TestUpdatePilotSettingsRequiresCompleteSchema(t *testing.T) {
 	body := []byte(`{"version":"v","settings":{"enabled":true}}`)
 	var request protocol.UpdatePilotSettingsRequest
