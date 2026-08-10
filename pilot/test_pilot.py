@@ -2406,5 +2406,138 @@ class DashboardProjectsTest(unittest.TestCase):
         self.assertEqual(snapshot["health"], "unhealthy")
 
 
+class EpicCompletionReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.epic_dir = os.path.join(self.temp.name, "epics")
+        os.makedirs(self.epic_dir)
+        self.merges_path = os.path.join(self.temp.name, "merges.jsonl")
+        self.patches = [
+            mock.patch.object(pilot, "EPIC_DIR", self.epic_dir),
+            mock.patch.object(pilot, "MERGES_PATH", self.merges_path),
+            mock.patch.object(pilot, "load_questions", return_value=[]),
+        ]
+        for patch in self.patches:
+            patch.start()
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: [patch.stop() for patch in reversed(self.patches)])
+        self.conf = {"stages": [{"workflow": "Implement + Test"},
+                                {"workflow": "Verify"}]}
+
+    def write_epic(self, subtasks):
+        epic = {"id": "epic-1", "name": "Receipt test", "status": "running",
+                "created_at": "2026-08-10T09:00:00Z", "subtasks": subtasks,
+                "children": []}
+        pilot.save(os.path.join(self.epic_dir, "epic-1.json"), epic)
+        return epic
+
+    def read_epic(self):
+        return pilot.load(os.path.join(self.epic_dir, "epic-1.json"), {})
+
+    def advance(self, tasks=(), final_ok=True):
+        with mock.patch.object(pilot, "final_ok", return_value=final_ok), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "launch_subtask", return_value=(None, "test")) as launch:
+            pilot.advance_epics(self.conf, list(tasks), {}, {})
+        return launch
+
+    def test_done_subtask_keeps_task_history_receipt_after_cleanup(self):
+        self.write_epic([
+            {"title": "Подготовить sandbox", "status": "running",
+             "task_id": "verify-1", "started_at": "2026-08-10T10:00:00Z"},
+            {"title": "Купить ключ", "status": "pending", "hold_reason": "ждём ключ владельца"},
+        ])
+        final_task = {"id": "verify-1", "state": "succeeded",
+                      "created_at": "2026-08-10T10:01:00Z",
+                      "title": "[auto] [2/2 Verify] Подготовить sandbox"}
+
+        self.advance([final_task])
+        saved = self.read_epic()["subtasks"][0]
+        self.assertEqual(saved["status"], "done")
+        self.assertEqual(saved["completion_source"], "task_history")
+        self.assertEqual(saved["completion_receipt"]["task_id"], "verify-1")
+        self.assertTrue(saved["completed_at"])
+
+        self.advance([])
+        self.assertEqual(self.read_epic()["subtasks"][0], saved)
+
+    def test_running_subtask_recovers_only_from_matching_new_merge_receipt(self):
+        self.write_epic([
+            {"title": "Подготовить sandbox", "status": "running",
+             "started_at": "2026-08-10T10:00:00Z"},
+            {"title": "Купить ключ", "status": "pending", "hold_reason": "ждём ключ владельца"},
+        ])
+        with open(self.merges_path, "w", encoding="utf-8") as merges:
+            merges.write(json.dumps({"task_id": "near-match", "base": "Подготовить sandbox extra",
+                                     "at": "2026-08-10T10:03:00Z"}) + "\n")
+            merges.write(json.dumps({"task_id": "verify-1", "base": "Подготовить sandbox",
+                                     "at": "2026-08-10T10:02:00Z"}) + "\n")
+
+        self.advance([])
+        saved = self.read_epic()["subtasks"][0]
+        self.assertEqual(saved["status"], "done")
+        self.assertEqual(saved["completed_at"], "2026-08-10T10:02:00Z")
+        self.assertEqual(saved["completion_source"], "merge_journal")
+        self.assertEqual(saved["completion_receipt"], {
+            "task_id": "verify-1", "base": "Подготовить sandbox", "at": "2026-08-10T10:02:00Z"})
+
+    def test_old_merge_cannot_complete_restarted_generation(self):
+        self.write_epic([
+            {"title": "Подготовить sandbox", "status": "running",
+             "started_at": "2026-08-10T11:00:00Z"},
+            {"title": "Следующий шаг", "status": "pending"},
+        ])
+        with open(self.merges_path, "w", encoding="utf-8") as merges:
+            merges.write(json.dumps({"task_id": "old-verify", "base": "Подготовить sandbox",
+                                     "at": "2026-08-10T10:02:00Z"}) + "\n")
+
+        launch = self.advance([])
+        self.assertEqual(self.read_epic()["subtasks"][0]["status"], "running")
+        launch.assert_not_called()
+
+    def test_live_restart_rejects_old_receipt_after_history_is_cleaned(self):
+        self.write_epic([
+            {"title": "Подготовить sandbox", "status": "done",
+             "started_at": "2026-08-10T09:00:00Z", "completed_at": "2026-08-10T10:02:00Z",
+             "completion_source": "merge_journal",
+             "completion_receipt": {"task_id": "old", "base": "Подготовить sandbox",
+                                    "at": "2026-08-10T10:02:00Z"}},
+            {"title": "Купить ключ", "status": "pending", "hold_reason": "ждём ключ владельца"},
+        ])
+        with open(self.merges_path, "w", encoding="utf-8") as merges:
+            merges.write(json.dumps({"task_id": "old", "base": "Подготовить sandbox",
+                                     "at": "2026-08-10T10:02:00Z"}) + "\n")
+        live = {"id": "restart-1", "state": "running", "created_at": "2026-08-10T11:00:00Z",
+                "title": "[auto] [1/2 Implement + Test] Подготовить sandbox"}
+
+        self.advance([live])
+        self.assertEqual(self.read_epic()["subtasks"][0]["started_at"], "2026-08-10T11:00:00Z")
+        self.advance([])
+        self.assertEqual(self.read_epic()["subtasks"][0]["status"], "running")
+
+    def test_hold_reason_does_not_create_a_pending_subtask(self):
+        self.write_epic([
+            {"title": "Купить ключ", "status": "pending", "parallel_ok": True,
+             "hold_reason": "ждём ключ владельца"},
+            {"title": "Seed", "status": "pending"},
+        ])
+
+        launch = self.advance([])
+        launch.assert_not_called()
+
+    def test_parallel_subtask_starts_beside_running_sequential_subtask(self):
+        self.write_epic([
+            {"title": "Последовательная", "status": "running",
+             "started_at": "2026-08-10T10:00:00Z"},
+            {"title": "Независимая", "status": "pending", "parallel_ok": True},
+            {"title": "После последовательной", "status": "pending"},
+        ])
+        live = {"id": "serial-1", "state": "running", "created_at": "2026-08-10T10:01:00Z",
+                "title": "[auto] [1/2 Implement + Test] Последовательная"}
+
+        launch = self.advance([live])
+        launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
+
+
 if __name__ == "__main__":
     unittest.main()
