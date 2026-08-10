@@ -2,16 +2,17 @@
 
 ## HEAD
 
-- Status: Implement — два замечания ревью исправлены, готово к Review.
+- Status: Verified PASS — ожидает решения человека о слиянии.
 - Branch: `factory/989b3a4c-c8b-40f83321-2a1`.
-- Head commit: `43a19c6` (`Закрепить источники Bernstein за проверенным снимком`);
-  следующий commit меняет только HEAD/LOG карточки.
+- Head commit: `cbfd8ca` (`Обновить карточку после исправления источников`);
+  следующий commit меняет только HEAD/LOG этой карточки.
 - Specification: `knowledge/specs/bernstein-reuse-evaluation.md`.
 - What changed: README/tree закреплён за commit `f683ce8…`; ошибочный
   `f6bc3b43` в истории заменён на фактический commit тега 3.13.0.
 - Evidence: `git ls-remote` → тег `v3.13.0` указывает на `f683ce8…`;
-  пять закреплённых URL → HTTP 200; `git diff --check` → PASS.
-- One next action: передать два точечных исправления на повторный Review.
+  пять закреплённых URL → HTTP 200; полный Go и UI unit-наборы прошли;
+  критерии спецификации, `git diff --check` и границы diff подтверждены.
+- One next action: владелец принимает решение о слиянии спецификации.
 
 ## LOG
 
@@ -45,3 +46,13 @@ commit и лицензионной отметки прошли; трёхточе
 `f683ce8dbc6b89d3f91e578cd641d5882bf489dd`, а ошибочный `f6bc3b43` удалён
 из исторической записи. Тег `v3.13.0` проверен через `git ls-remote`,
 все пять закреплённых URL ответили HTTP 200, `git diff --check` прошёл.
+
+### 2026-08-10 — Verify
+
+| Проверка | Команда/наблюдение | Результат |
+| --- | --- | --- |
+| Закреплённый источник Bernstein | `git ls-remote --tags` и HTTP-проверка пяти первичных URL | `v3.13.0` указывает на `f683ce8…`; все ссылки доступны (200) |
+| Граница решения и приёмка | Проверка текста спецификации | Есть Apache-2.0, выключенная по умолчанию интеграция, отдельный offline PoC и все восемь критериев |
+| Регрессии Go и UI unit | `just build`, `just test`, `just ui-check`, `just test-worker-race`, `just test-tooling`, `just test-launcher` | PASS |
+| Полный агрегатор и browser suite | `just check`, `just test-browser` | Не пройдены в неизменённом коде: `staticcheck` сообщает два прежних нарушения в controlplane; browser test ждёт включения Repository в `control-plane.spec.ts:421` |
+| Чистота и область | `git diff --check`, трёхточечный diff, `git status --short` | PASS: только карточка и спецификация; после verify-коммита добавится только эта карточка |
