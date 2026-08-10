@@ -2009,7 +2009,9 @@ class PostMergeDeployTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         popen.return_value.pid = 123
         state = {}
-        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name):
+        state_path = os.path.join(temporary.name, "state.json")
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path):
             pilot.deploy_after_merge({"deploy_factory_cmd": "fx factory release"},
                                      "github.com/timafen/factory", state)
 
@@ -2019,6 +2021,38 @@ class PostMergeDeployTest(unittest.TestCase):
         self.assertTrue(release["status"].endswith(".status"))
         self.assertIn("started generation=1", log.call_args.args[0])
         self.assertIn("fx factory release", popen.call_args.args[0])
+        self.assertEqual(pilot.load(state_path, {}), state)
+
+    @mock.patch.object(pilot.subprocess, "Popen")
+    @mock.patch.object(pilot, "log")
+    def test_restart_from_state_file_resumes_release_saved_before_process_start(self, _log, popen):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        conf = {"deploy_factory_cmd": "fx factory release"}
+
+        def stop_pilot(*_args, **_kwargs):
+            saved = pilot.load(state_path, {})
+            release = saved[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+            self.assertTrue(release["queued"])
+            self.assertNotIn("pid", release)
+            raise SystemExit("Pilot stopped after durable reservation")
+
+        popen.side_effect = stop_pilot
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path):
+            with self.assertRaises(SystemExit):
+                pilot.deploy_after_merge(conf, "github.com/timafen/factory", {})
+
+            restored = pilot.load(state_path, {})
+            popen.side_effect = None
+            popen.return_value.pid = 456
+            pilot.poll_post_merge_deploys(conf, restored)
+
+        release = restored[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+        self.assertEqual(release["pid"], 456)
+        self.assertFalse(release["queued"])
+        self.assertEqual(pilot.load(state_path, {}), restored)
 
     @mock.patch.object(pilot, "log")
     def test_completed_release_logs_exit_code_and_output(self, log):
@@ -2080,7 +2114,8 @@ class PostMergeDeployTest(unittest.TestCase):
 
     @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    def test_busy_factory_release_is_coalesced_for_retry(self, _log, start):
+    @mock.patch.object(pilot, "save")
+    def test_busy_factory_release_is_coalesced_for_retry(self, save, _log, start):
         state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
             "generation": 1, "pid": 42, "queued": False}}}
         conf = {"deploy_factory_cmd": "fx factory release"}
@@ -2089,6 +2124,7 @@ class PostMergeDeployTest(unittest.TestCase):
             conf, "github.com/timafen/factory", state, now=110)
 
         self.assertTrue(state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]["queued"])
+        save.assert_called_once_with(pilot.STATE_PATH, state)
         start.assert_not_called()
 
     @mock.patch.object(pilot, "_release_running", return_value=True)

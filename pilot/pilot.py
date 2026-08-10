@@ -4732,20 +4732,32 @@ def _release_output(release):
         return ""
 
 
-def _start_post_merge_deploy(command_key, label, command, releases):
-    generation = int(releases.get("generation", 0)) + 1
-    releases["generation"] = generation
-    os.makedirs(DEPLOY_DIR, exist_ok=True)
-    stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
-    release = {"command": command, "label": label, "generation": generation,
-               "output": stem + ".log", "status": stem + ".status", "queued": False}
+def _start_post_merge_deploy(command_key, label, command, state):
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    release = releases.get(command_key)
+    if not (isinstance(release, dict) and release.get("queued") and
+            not release.get("pid") and release.get("status")):
+        generation = int(releases.get("generation", 0)) + 1
+        releases["generation"] = generation
+        os.makedirs(DEPLOY_DIR, exist_ok=True)
+        stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
+        release = {"command": command, "label": label, "generation": generation,
+                   "output": stem + ".log", "status": stem + ".status", "queued": True}
+        releases[command_key] = release
+    else:
+        generation = release["generation"]
+
+    # This atomic reservation must reach disk before Popen. If Pilot stops at
+    # the next instruction, the next process sees queued=True and resumes it.
+    save(STATE_PATH, state)
     script = (f"{command} >{shlex.quote(release['output'])} 2>&1; rc=$?; "
               f"printf '%s\\n' \"$rc\" >{shlex.quote(release['status'])}; exit \"$rc\"")
     child = subprocess.Popen(script, shell=True, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True, env=dict(os.environ, HOME=HOME))
     release["pid"] = child.pid
-    releases[command_key] = release
+    release["queued"] = False
+    save(STATE_PATH, state)
     log(f"{label} started generation={generation} pid={child.pid}")
 
 
@@ -4774,16 +4786,16 @@ def poll_post_merge_deploys(conf, state):
                 f"{_release_output(release)}")
             releases.pop(command_key, None)
             if queued and conf.get(command_key):
-                _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
         elif release.get("pid") and not _release_running(release["pid"]):
             # The runner disappeared before it could write a result. Retrying
             # one latest release is safe and prevents a restart from losing it.
             log(f"{label} lost generation={release.get('generation')}; retrying latest main")
             releases.pop(command_key, None)
             if conf.get(command_key):
-                _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
         elif release.get("queued") and not release.get("pid") and conf.get(command_key):
-            _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+            _start_post_merge_deploy(command_key, label, conf[command_key], state)
 
 
 def retry_pending_factory_deploy(conf, state, now=None):
@@ -4816,9 +4828,10 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None):
     running = releases.get(command_key)
     if running:
         running["queued"] = True
+        save(STATE_PATH, state)
         log(f"{label} queued after generation={running.get('generation')}")
         return None
-    _start_post_merge_deploy(command_key, label, command, releases)
+    _start_post_merge_deploy(command_key, label, command, state)
     return None
 
 
