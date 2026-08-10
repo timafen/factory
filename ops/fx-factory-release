@@ -180,6 +180,10 @@ if [ -f "$work/src/ops/factory-janitor.sh" ]; then
     || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
 fi
 
+step "ставлю и проверяю изолированный серверный браузер"
+bash "$work/src/ops/install-server-browser.sh" \
+  || rollback "серверный браузер не прошёл сетевую проверку" 7
+
 if [ "$deferred_pilot_restart" = 1 ]; then
   step "ставлю безопасный отложенный перезапуск Пилота"
   systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
