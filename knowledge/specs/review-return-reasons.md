@@ -121,6 +121,8 @@ Factory» показывает «Причины возврата Review»: ка�
 
 `knowledge/cards/CARD-0055-review-return-reasons.md`
 
+## Проверяемые обещания
+
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл internal/controlplane/efficiency.go
