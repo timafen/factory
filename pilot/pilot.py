@@ -4977,6 +4977,7 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
 
 DEPLOY_STATE_KEY = "post_merge_deploys"
 DEPLOY_DIR = f"{HOME}/pilot/releases"
+RELEASE_EVENTS_PATH = f"{HOME}/pilot/release-events.jsonl"
 FACTORY_DEPLOY_RETRY_DELAY = 60
 RELEASE_OUTPUT_LIMIT = 12000
 RELEASE_SAFE_DIAGNOSTICS = frozenset({
@@ -5017,6 +5018,53 @@ def _release_output(release):
     safe = [line for line in value.splitlines()
             if line in RELEASE_SAFE_DIAGNOSTICS]
     return "\n".join(safe) if safe else RELEASE_DIAGNOSTICS_OMITTED
+
+
+def _release_rolled_back(release, preview=""):
+    """Detect an actual rollback from the tail of the release runner output."""
+    text = str(preview or "")
+    try:
+        with open(release["output"], "rb") as output_file:
+            output_file.seek(0, os.SEEK_END)
+            size = output_file.tell()
+            output_file.seek(max(0, size - 65536), os.SEEK_SET)
+            text += " " + output_file.read().decode("utf-8", errors="replace")
+    except (OSError, KeyError):
+        pass
+    lowered = text.lower()
+    return any(marker in lowered for marker in (
+        "откат", "rollback", "откатыва", "возвращаю предыдущ",
+    ))
+
+
+def _record_release_failure(command_key, release, output):
+    """Append one durable, deduplicated release incident for honest metrics."""
+    generation = release.get("generation")
+    event_id = f"{command_key}:{generation}"
+    try:
+        try:
+            with open(RELEASE_EVENTS_PATH, encoding="utf-8") as events:
+                for line in events:
+                    try:
+                        if json.loads(line).get("id") == event_id:
+                            return
+                    except (TypeError, ValueError):
+                        continue
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(RELEASE_EVENTS_PATH), exist_ok=True)
+        event = {
+            "id": event_id,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": "failed_release",
+            "target": command_key,
+            "generation": generation,
+            "rollback": _release_rolled_back(release, output),
+        }
+        with open(RELEASE_EVENTS_PATH, "a", encoding="utf-8") as events:
+            events.write(json.dumps(event, ensure_ascii=False) + chr(10))
+    except Exception as exc:
+        log("release_event_error", repr(exc))
 
 
 def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):
@@ -5089,8 +5137,13 @@ def poll_post_merge_deploys(conf, state, now=None):
                 pass
         if rc is not None:
             queued = release.get("queued", False)
+            output = _release_output(release)
             log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
-                f"{_release_output(release)}")
+                f"{output}")
+            # rc=8 is only the external release lock; it is retried and is not
+            # a failed release. Every other non-zero result is an incident.
+            if rc not in (0, 8):
+                _record_release_failure(command_key, release, output)
             releases.pop(command_key, None)
             if rc == 8 and command_key == "deploy_factory_cmd" and conf.get(command_key):
                 # An independently started release owns the lock.  This must

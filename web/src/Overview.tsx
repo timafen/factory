@@ -1,5 +1,5 @@
 import {
-  Activity, CheckCircle2, Coins, HeartPulse,
+  Activity, BarChart3, CheckCircle2, Coins, HeartPulse,
   KeyRound, Loader2, MessageCircleQuestion, RefreshCw, Server, Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -35,13 +35,23 @@ type Dash = {
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
   recent_done?: RecentDone[];
-  health?: { merged_today?: number; merged_yesterday?: number;
-             rounds_median?: number | null;
-             review_first_pass?: [number, number] | null;
-             minutes_median?: number | null };
   projects?: ProductProject[];
   janitor?: string;
 };
+
+type EfficiencyDistribution = { sample: number; median: number | null; p90: number | null };
+type EfficiencyRate = { count: number; total: number; rate: number | null };
+type EfficiencyTimeShare = { key: string; seconds: number; denominator_seconds: number; share: number | null };
+type EfficiencyPeriod = {
+  started_at: string; ended_at: string; completed_works: number; product_stage_tasks: number;
+  lead_time_seconds: EfficiencyDistribution; time_shares: EfficiencyTimeShare[];
+  review_first_pass: EfficiencyRate; verify_first_pass: EfficiencyRate;
+  rounds: EfficiencyDistribution; final_dead_ends: EfficiencyRate;
+  automatic_recoveries: number; release_failures: number; rollbacks: number;
+  excluded: { patrol: number; scheduled: number; helper: number; other: number; total: number };
+};
+type EfficiencyComparison = { assessment: "low_data" | "degraded" | "mixed" | "improved" | "stable"; current: EfficiencyPeriod; previous: EfficiencyPeriod };
+type EfficiencySummary = { generated_at: string; minimum_sample: number; release_observation_started_at?: string; periods: Record<"24h" | "7d", EfficiencyComparison> };
 
 export type ProductEnvironment = { name: string; status: "available" | "unavailable"; release_label?: string; health?: "healthy" | "unhealthy" };
 export type ProductProject = { id: string; name: string; remote_identity: string; main_subject?: string; provider_status: "configured" | "not_configured"; environments: ProductEnvironment[] };
@@ -137,18 +147,118 @@ function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "bad" | "mut
   );
 }
 
+const SHARE_RU: Record<string, string> = {
+  queue: "В очереди", Triage: "Разбор", Specification: "Спецификация",
+  "Implement + Test": "Разработка", Review: "Ревью", Verify: "Проверка",
+  other: "Передача между этапами и слияние",
+};
+
+function formatDuration(seconds: number | null) {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${Math.round(seconds)} сек`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} мин`;
+  const hours = seconds / 3600;
+  if (hours < 48) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} ч`;
+  return `${(hours / 24).toFixed(1)} д`;
+}
+
+function formatRate(rate: EfficiencyRate) {
+  return rate.total ? `${rate.count} из ${rate.total} (${Math.round((rate.rate ?? 0) * 100)}%)` : "— (n=0)";
+}
+
+function assessmentView(assessment: EfficiencyComparison["assessment"]) {
+  if (assessment === "low_data") return { text: "данных мало", tone: "muted" as const };
+  if (assessment === "degraded") return { text: "есть деградация", tone: "bad" as const };
+  if (assessment === "mixed") return { text: "изменения разнонаправленные", tone: "warn" as const };
+  if (assessment === "improved") return { text: "есть улучшение", tone: "ok" as const };
+  return { text: "без явного изменения", tone: "muted" as const };
+}
+
+function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
+  const [window, setWindow] = useState<"24h" | "7d">("24h");
+  const comparison = summary.periods[window];
+  if (!comparison) return null;
+  const current = comparison.current;
+  const previous = comparison.previous;
+  const previousShares = new Map(previous.time_shares.map((share) => [share.key, share]));
+  const assessment = assessmentView(comparison.assessment);
+  const previousDates = `${new Date(previous.started_at).toLocaleDateString("ru-RU")}–${new Date(previous.ended_at).toLocaleDateString("ru-RU")}`;
+  return (
+    <section style={card} aria-label="Эффективность Factory">
+      <div className="efficiency-heading">
+        <div>
+          <div className="efficiency-title"><BarChart3 size={16} color="#8ec5ff" /><strong>Эффективность Factory</strong></div>
+          <div className="efficiency-subtitle">Только продуктовые работы, дошедшие до фактического слияния</div>
+        </div>
+        <div className="window-picker" aria-label="Период эффективности">
+          <button type="button" aria-pressed={window === "24h"} onClick={() => setWindow("24h")}>24 часа</button>
+          <button type="button" aria-pressed={window === "7d"} onClick={() => setWindow("7d")}>7 дней</button>
+        </div>
+      </div>
+
+      <div className="efficiency-verdict">
+        <Pill text={assessment.text} tone={assessment.tone} />
+        <span>выборка: {current.completed_works} влитых работ · минимум для оценки {summary.minimum_sample}</span>
+      </div>
+
+      <div className="efficiency-primary">
+        <div><strong>{current.completed_works}</strong><span>влито</span><small>предыдущий период: {previous.completed_works}</small></div>
+        <div><strong>{formatDuration(current.lead_time_seconds.median)}</strong><span>медиана до слияния</span><small>p90 {formatDuration(current.lead_time_seconds.p90)} · n={current.lead_time_seconds.sample}<br />ранее {formatDuration(previous.lead_time_seconds.median)} / p90 {formatDuration(previous.lead_time_seconds.p90)} · n={previous.lead_time_seconds.sample}</small></div>
+        <div><strong>{formatRate(current.final_dead_ends)}</strong><span>окончательные тупики</span><small>ранее {formatRate(previous.final_dead_ends)}<br />знаменатель: слияния + тупики</small></div>
+      </div>
+
+      <details className="efficiency-details">
+        <summary>Показать детали и знаменатели</summary>
+        <div className="efficiency-detail-grid">
+          <div>
+            <h3>Качество прохождения</h3>
+            <dl className="efficiency-facts">
+              <div><dt>Review с первого раза</dt><dd>{formatRate(current.review_first_pass)}<br /><small>ранее {formatRate(previous.review_first_pass)}</small></dd></div>
+              <div><dt>Verify с первого раза</dt><dd>{formatRate(current.verify_first_pass)}<br /><small>ранее {formatRate(previous.verify_first_pass)}</small></dd></div>
+              <div><dt>Круги</dt><dd>медиана {current.rounds.median ?? "—"} · p90 {current.rounds.p90 ?? "—"} · n={current.rounds.sample}<br /><small>ранее {previous.rounds.median ?? "—"} / {previous.rounds.p90 ?? "—"} · n={previous.rounds.sample}</small></dd></div>
+              <div><dt>Автовосстановления</dt><dd>{current.automatic_recoveries} (ранее {previous.automatic_recoveries})</dd></div>
+              <div><dt>Неуспешные выпуски / откаты</dt><dd>{current.release_failures} / {current.rollbacks}<br /><small>ранее {previous.release_failures} / {previous.rollbacks}</small></dd></div>
+            </dl>
+          </div>
+          <div>
+            <h3>Куда ушло время до слияния</h3>
+            <div className="efficiency-shares">
+              {current.time_shares.map((share) => <div key={share.key}>
+                <span>{SHARE_RU[share.key] ?? share.key}</span>
+                <div><i style={{ width: `${Math.round((share.share ?? 0) * 100)}%` }} /></div>
+                <strong title="сейчас / предыдущий период">{share.share == null ? "—" : `${Math.round(share.share * 100)}%`} / {previousShares.get(share.key)?.share == null ? "—" : `${Math.round((previousShares.get(share.key)?.share ?? 0) * 100)}%`}</strong>
+              </div>)}
+            </div>
+          </div>
+        </div>
+        <div className="efficiency-sources">
+          <strong>Что вошло:</strong> {current.product_stage_tasks} завершённых продуктовых этапов (ранее {previous.product_stage_tasks}). Служебные отдельно: патруль {current.excluded.patrol}, по расписанию {current.excluded.scheduled}, helper {current.excluded.helper}, прочие {current.excluded.other} (всего {current.excluded.total}; ранее {previous.excluded.total}).
+          <br />Throughput считается по записям успешного слияния, не по состоянию «агент закончил». Доли времени имеют один знаменатель: всё время от создания первой стадии до слияния; «передача» включает паузы между стадиями и до merge. Предыдущий сопоставимый период: {previousDates}.
+          <br />First-pass считается только среди влитых работ, которые дошли до соответствующей проверки. Круг — наибольшее число повторов Разработки, Ревью или Проверки; автовосстановление — повтор того же этапа после ошибки или отмены. Окончательный тупик — работа без слияния и живого продолжения, которая не менялась хотя бы 10 минут.{summary.release_observation_started_at ? ` Журнал неуспешных выпусков ведётся с ${new Date(summary.release_observation_started_at).toLocaleString("ru-RU")}; более ранние инциденты в число не входят.` : " Период наблюдения выпусков неизвестен — нули по выпускам нельзя считать подтверждённым отсутствием инцидентов."}
+        </div>
+      </details>
+    </section>
+  );
+}
+
 /** Главный экран отвечает на один вопрос: всё ли идёт, и если нет — что мешает. */
 export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   const [d, setD] = useState<Dash>({});
   const [activeWork, setActiveWork] = useState<OverviewWork[]>([]);
+  const [efficiency, setEfficiency] = useState<EfficiencySummary>();
   const [loading, setLoading] = useState(true);
 
   const pull = async () => {
     try {
-      const [dashboardResponse, tasks, worksResponse] = await Promise.all([
+      const [dashboardResponse, tasks, worksResponse, efficiencyResponse] = await Promise.all([
         fetch("/api/v1/dashboard"), fetchAllTasks(), fetch("/api/v1/works"),
+        fetch("/api/v1/metrics/efficiency"),
       ]);
       if (dashboardResponse.ok) setD((await dashboardResponse.json()) as Dash);
+      if (efficiencyResponse.ok) {
+        const value = (await efficiencyResponse.json()) as EfficiencySummary;
+        if (value.periods?.["24h"] && value.periods?.["7d"]) setEfficiency(value);
+      }
       if (worksResponse.ok) {
         const works = (await worksResponse.json()) as Record<string, WorkMeta>;
         setActiveWork(overviewWork(tasks, works));
@@ -246,38 +356,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         ))}
       </section>
 
-      {d.health && (
-        <section style={card} aria-label="Здоровье конвейера">
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <Activity size={15} color="#8ec5ff" /><strong style={{ fontSize: 14 }}>Здоровье конвейера</strong>
-            <span style={{ fontSize: 11.5, color: muted }}>по последним влитым работам</span>
-          </div>
-          <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.merged_today ?? 0}</div>
-              <div style={{ fontSize: 11.5, color: muted }}>влито сегодня{typeof d.health.merged_yesterday === "number" ? " (вчера " + d.health.merged_yesterday + ")" : ""}</div>
-            </div>
-            {d.health.rounds_median != null && (
-              <div>
-                <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.rounds_median}</div>
-                <div style={{ fontSize: 11.5, color: muted }}>кругов разработки на работу</div>
-              </div>
-            )}
-            {d.health.review_first_pass && (
-              <div>
-                <div style={{ fontSize: 19, fontWeight: 700 }}>{d.health.review_first_pass[0]} из {d.health.review_first_pass[1]}</div>
-                <div style={{ fontSize: 11.5, color: muted }}>прошли Ревью с первого раза</div>
-              </div>
-            )}
-            {d.health.minutes_median != null && (
-              <div>
-                <div style={{ fontSize: 19, fontWeight: 700 }}>~{d.health.minutes_median} мин</div>
-                <div style={{ fontSize: 11.5, color: muted }}>от старта до вливания</div>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+      {efficiency && <EfficiencyPanel summary={efficiency} />}
 
       {(d.recent_done ?? []).length > 0 && (
         <section style={card} aria-label="Сделано недавно">

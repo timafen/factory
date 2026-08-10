@@ -63,6 +63,60 @@ describe("Overview active work", () => {
   });
 });
 
+describe("Overview Factory efficiency", () => {
+  it("marks a small sample, shows exact denominators, and compares both periods", async () => {
+    const period = (overrides: Record<string, unknown> = {}) => ({
+      started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z",
+      completed_works: 2, product_stage_tasks: 14,
+      lead_time_seconds: { sample: 2, median: 3600, p90: 7200 },
+      time_shares: [
+        { key: "queue", seconds: 720, denominator_seconds: 7200, share: 0.1 },
+        { key: "Triage", seconds: 720, denominator_seconds: 7200, share: 0.1 },
+        { key: "Specification", seconds: 720, denominator_seconds: 7200, share: 0.1 },
+        { key: "Implement + Test", seconds: 2160, denominator_seconds: 7200, share: 0.3 },
+        { key: "Review", seconds: 720, denominator_seconds: 7200, share: 0.1 },
+        { key: "Verify", seconds: 720, denominator_seconds: 7200, share: 0.1 },
+        { key: "other", seconds: 1440, denominator_seconds: 7200, share: 0.2 },
+      ],
+      review_first_pass: { count: 1, total: 2, rate: 0.5 },
+      verify_first_pass: { count: 2, total: 2, rate: 1 },
+      rounds: { sample: 2, median: 1.5, p90: 2 },
+      final_dead_ends: { count: 1, total: 3, rate: 1 / 3 },
+      automatic_recoveries: 1, release_failures: 1, rollbacks: 1,
+      excluded: { patrol: 3, scheduled: 2, helper: 1, other: 4, total: 10 },
+      ...overrides,
+    });
+    const efficiency = {
+      generated_at: "2026-08-10T12:00:00Z", minimum_sample: 5,
+      periods: {
+        "24h": { assessment: "low_data", current: period(), previous: period({ completed_works: 1 }) },
+        "7d": { assessment: "degraded", current: period({ completed_works: 8 }), previous: period({ completed_works: 10 }) },
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/metrics/efficiency" ? efficiency
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null }
+        : path.endsWith("/works") ? {} : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Эффективность Factory" });
+    expect(within(section).getByText("данных мало")).toBeVisible();
+    expect(within(section).getByText("выборка: 2 влитых работ · минимум для оценки 5")).toBeVisible();
+    expect(within(section).queryByText("есть улучшение")).not.toBeInTheDocument();
+    fireEvent.click(within(section).getByText("Показать детали и знаменатели"));
+    expect(within(section).getByText("1 из 2 (50%)")).toBeVisible();
+    expect(within(section).getByText(/Служебные отдельно: патруль 3, по расписанию 2, helper 1, прочие 4/)).toBeVisible();
+
+    fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
+    expect(within(section).getByText("есть деградация")).toBeVisible();
+    expect(within(section).getByText("выборка: 8 влитых работ · минимум для оценки 5")).toBeVisible();
+    expect(within(section).getByText("предыдущий период: 10")).toBeVisible();
+  });
+});
+
 describe("Overview products", () => {
   it("renders projects in snapshot order with honest provider states", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
