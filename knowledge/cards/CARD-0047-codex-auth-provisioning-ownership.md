@@ -2,15 +2,18 @@
 
 ## HEAD
 
-- Status: Implemented — замечание о метаданных отката устранено, готово к проверке.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/5eace301-92f-e1814b8d-198`.
-- Head commit: `ea3ab77` — «Сохранять объекты ссылок Codex при откате».
+- Head commit: `2b64959` — «Записать проверку неизменного отката ссылок Codex».
 - Specification: `knowledge/specs/codex-auth-provisioning-ownership.md`.
 - What changed: исходные симлинки сохраняются как объекты и при частичном сбое
-  возвращаются через `mv`, не меняя цель, владельца и inode.
-- Evidence: `bash ops/test-provision-codex-auth.sh` — PASS с отказом второй
-  установки; `bash ops/test-fx-factory-release.sh` — PASS.
-- One next action: повторно проверить поставку и разрешить слияние.
+  возвращаются через `mv`, не меняя цель, владельца и inode; общая цель
+  принимается только как regular file с режимом 600 и владельцем `factory`.
+- Evidence: provisioning-тест PASS; 123 UI-теста, Go-тесты, tooling и launcher
+  PASS. `just check` останавливается только на двух старых замечаниях staticcheck
+  вне области карточки.
+- One next action: человеку принять решение о слиянии с учётом известной
+  проектной красноты staticcheck.
 
 ## LOG
 
@@ -52,3 +55,18 @@ Provisioner переведён на предварительную провер�
 подготовки, установки или итоговой проверки. Регрессионный сценарий с отказом
 второй установки подтверждает прежние цель, владельца и inode обеих ссылок;
 целевой и интеграционный тесты выпуска завершились PASS.
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Защищённая общая цель | `bash ops/test-provision-codex-auth.sh` | PASS: отсутствие, каталог, симлинк, режим не 600, неверные владелец и группа отклоняются до изменения ссылок. |
+| Права и владелец рабочих ссылок | тот же сценарий с корректной целью | PASS: обе ссылки указывают на общую цель и имеют владельца/группу worker-пользователя. |
+| Все 11 ссылок и интеграция релиза | `just test-tooling` | PASS: provisioning-тест и `test-fx-factory-release.sh` завершились успешно. |
+| Откат второй установки | сценарий отказа второго `mv` в provisioning-тесте | PASS: обе исходные ссылки сохранили target, owner и inode. |
+| Полный обычный набор | `just check` после `just ui-install` | BLOCKED только старыми `U1000` в `internal/controlplane/cards_http.go` и `SA4006` в `internal/controlplane/pilot_config.go`; оба файла вне CARD-0047. |
+| Остальные группы | `just format-check`, `just vet`, `just vuln`, `just boundary`, `just test`, `just ui-check`, `just test-launcher`, `just build` | PASS: Go-тесты, 123 UI-теста, launcher и сборка успешны; уязвимостей нет. |
+
+Дерево до обновления карточки чисто; `git diff --check origin/main...HEAD` не
+выявил ошибок пробелов. Перебазирование на свежий `origin/main` не потребовало
+изменений.
