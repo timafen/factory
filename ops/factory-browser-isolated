@@ -65,7 +65,7 @@ PY
   resolver_rules+=("MAP $fqdn $replacement")
 done
 printf -v rules '%s, ' "${resolver_rules[@]}"
-rules+='MAP * ~NOTFOUND, EXCLUDE localhost'
+rules+='MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1'
 
 exec systemd-run --scope --quiet --collect --expand-environment=no \
   -p IPAddressDeny=any -p IPAddressAllow=localhost "${allow_args[@]}" \

@@ -4978,6 +4978,17 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
 DEPLOY_STATE_KEY = "post_merge_deploys"
 DEPLOY_DIR = f"{HOME}/pilot/releases"
 FACTORY_DEPLOY_RETRY_DELAY = 60
+RELEASE_OUTPUT_LIMIT = 12000
+RELEASE_SAFE_DIAGNOSTICS = frozenset({
+    "apparmor_parser is required for the Chromium user namespace sandbox",
+    "Playwright full Chromium was not installed",
+    "Playwright returned a non-absolute Chromium path",
+    "Chromium path cannot be represented safely in AppArmor",
+    "Chromium sandbox smoke failed",
+    "Chromium sandbox smoke failed: No usable sandbox",
+})
+RELEASE_DIAGNOSTICS_OMITTED = "diagnostic output omitted: no allowlisted lines"
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _release_running(pid):
@@ -4996,9 +5007,16 @@ def _release_running(pid):
 def _release_output(release):
     try:
         with open(release["output"], encoding="utf-8", errors="replace") as out:
-            return out.read().strip()[:200]
+            value = out.read()
     except (OSError, KeyError):
         return ""
+    # Release output can contain arbitrary subprocess environment and command
+    # lines. Publish only exact, static diagnostics owned by our installer: a
+    # blacklist cannot enumerate every credential shape safely.
+    value = ANSI_ESCAPE.sub("", value[-RELEASE_OUTPUT_LIMIT:])
+    safe = [line for line in value.splitlines()
+            if line in RELEASE_SAFE_DIAGNOSTICS]
+    return "\n".join(safe) if safe else RELEASE_DIAGNOSTICS_OMITTED
 
 
 def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):
