@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,27 @@ import (
 func TestWorkerManagerHelperProcess(t *testing.T) {
 	if os.Getenv("FACTORY_TEST_MANAGER_HELPER") != "1" {
 		return
+	}
+	managerContext := context.Background()
+	if descriptor := os.Getenv("FACTORY_TEST_MANAGER_LIFETIME_FD"); descriptor != "" {
+		fd, err := strconv.Atoi(descriptor)
+		if err != nil || fd < 3 {
+			fmt.Fprintln(os.Stderr, "invalid test manager lifetime pipe")
+			os.Exit(2)
+		}
+		lifetime := os.NewFile(uintptr(fd), "factory-test-manager-lifetime")
+		if lifetime == nil {
+			fmt.Fprintln(os.Stderr, "open test manager lifetime pipe")
+			os.Exit(2)
+		}
+		defer lifetime.Close()
+		var cancel context.CancelFunc
+		managerContext, cancel = context.WithCancel(managerContext)
+		defer cancel()
+		go func() {
+			_, _ = io.Copy(io.Discard, lifetime)
+			cancel()
+		}()
 	}
 	config, err := LoadConfig(os.Getenv("FACTORY_TEST_MANAGER_CONFIG"))
 	if err != nil {
@@ -37,11 +59,67 @@ func TestWorkerManagerHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := manager.Run(context.Background()); err != nil {
+	if err := manager.Run(managerContext); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestWorkerManagerHelperStopsWhenParentPipeCloses(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "worker.toml")
+	dataDirectory := filepath.Join(t.TempDir(), "worker")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`server = "http://127.0.0.1:7337"
+name = "lifetime-worker"
+max_concurrent = 1
+data_directory = %q
+`, dataDirectory)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(t.TempDir(), "codex")
+	writeFakeCodex(t, codexPath)
+	lifetimeRead, lifetimeWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=TestWorkerManagerHelperProcess", "--")
+	command.ExtraFiles = []*os.File{lifetimeRead}
+	command.Env = append(os.Environ(),
+		"FACTORY_TEST_MANAGER_HELPER=1",
+		"FACTORY_TEST_MANAGER_CONFIG="+configPath,
+		"FACTORY_TEST_MANAGER_CODEX="+codexPath,
+		"FACTORY_TEST_MANAGER_LIFETIME_FD=3",
+	)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
+	reaped := false
+	t.Cleanup(func() {
+		_ = lifetimeWrite.Close()
+		if !reaped {
+			_ = command.Process.Kill()
+			<-waitDone
+		}
+	})
+	if err := lifetimeRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifetimeWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-waitDone:
+		reaped = true
+		if err != nil {
+			t.Fatalf("manager helper did not stop after its parent pipe closed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("manager helper did not stop within 5 seconds after its parent pipe closed")
+	}
 }
 
 func fixtureUUID(value int) string {
@@ -1458,11 +1536,17 @@ path = %q
 		t.Fatal(err)
 	}
 
+	lifetimeRead, lifetimeWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command(os.Args[0], "-test.run=TestWorkerManagerHelperProcess", "--")
+	command.ExtraFiles = []*os.File{lifetimeRead}
 	command.Env = append(os.Environ(),
 		"FACTORY_TEST_MANAGER_HELPER=1",
 		"FACTORY_TEST_MANAGER_CONFIG="+configPath,
 		"FACTORY_TEST_MANAGER_CODEX="+codexPath,
+		"FACTORY_TEST_MANAGER_LIFETIME_FD=3",
 	)
 	var childOutput bytes.Buffer
 	command.Stdout = &childOutput
@@ -1470,8 +1554,12 @@ path = %q
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	if err := lifetimeRead.Close(); err != nil {
+		t.Fatal(err)
+	}
 	childReaped := false
 	t.Cleanup(func() {
+		_ = lifetimeWrite.Close()
 		if !childReaped {
 			_ = command.Process.Kill()
 			_ = command.Wait()
@@ -1496,6 +1584,7 @@ path = %q
 	}
 	childReaped = true
 	waitForProcessGone(t, codexChildPID, 8*time.Second)
+	waitForProcessGone(t, int(*running.Attempts[0].SupervisorPID), 8*time.Second)
 
 	restarted, err := New(config, testOptions(codexPath), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
