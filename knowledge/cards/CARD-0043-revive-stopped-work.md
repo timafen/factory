@@ -3,12 +3,12 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: три замечания Review исправлены; целевые проверки и UI-сборка проходят
-- Branch: `factory/a8a03a69-fdb-44e79352-274`
-- Head commit: `6438327`
-- What changed: оживление продолжает работу от последнего успешного этапа текущего круга, не снимает паузу при сбое записи сигнала и не показывается в архиве.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 2 pilot-сценария, 6 UI-тестов); `go test ./internal/controlplane` и 9 `PipelineWatchTests` → PASS; typecheck/build → PASS.
-- Next action: повторить Review, затем Verify перед слиянием.
+- Status: полный набор исправлений заново собран от свежего `origin/main`; целевые проверки и сборка проходят
+- Branch: `factory/1bbe9be5-85b-fa072189-970`
+- Head commit: `432e820`
+- What changed: восстановлены API, pilot и UI кнопки «Оживить»; продолжение учитывает последний успешный этап текущего круга, а архив не предлагает оживление.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 2 pilot-сценария, 6 UI-тестов); весь `internal/controlplane` и 9 `PipelineWatchTests` → PASS; Go/UI build, lint и typecheck → PASS.
+- Next action: провести повторный Review поставленной ветки.
 
 ## LOG
 
@@ -89,3 +89,7 @@
 ### 2026-08-09 — Implement
 
 После возврата Review исправлены три замечания: выбор следующей стадии учитывает последнюю успешную попытку и повторно запускает Review после доработки; сигнал revive сохраняется до снятия паузы; закрытые карточки не показывают кнопку. Регрессии закреплены отдельными Go, Python и UI-тестами. После rebase на `origin/main` прошли `just test-revive-stopped-work`, typecheck и production build; расширенные проверки пакета `internal/controlplane` и класса `PipelineWatchTests` также прошли.
+
+### 2026-08-10 — Implement
+
+После возврата поставка заново собрана от свежего `origin/main`: в ветку вошли серверная команда revive, обработка pilot, интерфейс, встроенный bundle и регрессионные тесты, а не только recipe в `Justfile`. Прошли `just test-revive-stopped-work`, полный пакет `internal/controlplane`, все 9 `PipelineWatchTests`, `go build ./...`, UI lint, typecheck и production build.
