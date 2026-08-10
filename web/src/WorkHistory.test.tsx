@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkView } from "./Work";
@@ -25,7 +25,11 @@ function renderHistory(tasks: Task[] = [task]) {
   </QueryClientProvider>);
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 it("shows the short Russian history returned by the API", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -133,6 +137,52 @@ it("revives stuck work through its encoded name and removes the action after suc
   expect(requestedPath).toBe(`/api/v1/works/${encodeURIComponent("Работа / с пробелом")}/revive`);
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
+
+it.each(["stopped_owner", "stuck"])(
+  "keeps a revived work reviving through stale %s polling",
+  async (staleState) => {
+    let poll: (() => void) | undefined;
+    const pollInterval = ((handler: TimerHandler, delay?: number) => {
+      if (delay === 20_000) poll = handler as () => void;
+      return 1 as unknown as ReturnType<typeof window.setInterval>;
+    }) as unknown as typeof window.setInterval;
+    const setInterval = vi.spyOn(window, "setInterval").mockImplementation(pollInterval);
+    let statusRequests = 0;
+    let resolveStalePoll: ((response: Response) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/v1/work-status") {
+        statusRequests += 1;
+        if (statusRequests === 3) {
+          return new Promise<Response>((resolve) => { resolveStalePoll = resolve; });
+        }
+        return Response.json({ "Понятная история": { state: staleState, text: "старый статус" } });
+      }
+      if (path.includes("/revive")) {
+        return Response.json({ work: "Понятная история", state: "reviving" });
+      }
+      if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+      return Response.json(path === "/api/v1/verdicts" ? { verdicts: {} }
+        : path === "/api/v1/questions" ? { questions: [] } : {});
+    }));
+    renderHistory();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Оживить" }));
+    expect(await screen.findByText("оживает: пилот продолжит со следующего этапа")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
+    await waitFor(() => expect(statusRequests).toBe(2));
+
+    expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 20_000);
+    await act(async () => poll!());
+    await waitFor(() => expect(statusRequests).toBe(3));
+    await act(async () => resolveStalePoll!(Response.json({
+      "Понятная история": { state: staleState, text: "старый статус" },
+    })));
+
+    expect(screen.getByText("оживает: пилот продолжит со следующего этапа")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Оживить" })).not.toBeInTheDocument();
+  },
+);
 
 it("does not offer revive for ordinary failed work", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

@@ -1219,6 +1219,49 @@ class PipelineWatchTests(unittest.TestCase):
             pilot.AUTO_REVIVE_REQUEST_PREFIX + "2:"
         ))
 
+    def assert_revive_retries_terminal_implement_after_review(self, state):
+        old_review = self.task(stage="Review")
+        old_review.update({
+            "id": "old-review",
+            "created_at": "2026-08-09T10:00:00Z",
+        })
+        terminal_implement = self.task(stage="Implement", state=state)
+        terminal_implement.update({
+            "id": "terminal-implement",
+            "created_at": "2026-08-09T11:00:00Z",
+        })
+
+        with mock.patch.object(
+            pilot, "revive_signals", return_value=["Встроенный патруль"]
+        ):
+            self.watch([terminal_implement, old_review])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
+        self.assertTrue(self.created[0]["request_key"].startswith(
+            pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:"
+        ))
+        self.assertIn("Повтори этот этап", self.created[0]["context"])
+
+        retried_implement = {
+            **self.created[0], "id": "retried-implement", "state": "succeeded",
+            "created_at": "2026-08-09T12:00:00Z",
+        }
+        self.memory["Встроенный патруль"]["since"] = self.now - pilot.STALL_WAIT
+        self.watch([old_review, terminal_implement, retried_implement])
+
+        self.assertEqual(len(self.created), 2)
+        self.assertEqual(self.created[1]["workflow_revision_id"], "rev-review")
+        self.assertTrue(self.created[1]["request_key"].startswith(
+            pilot.AUTO_REVIVE_REQUEST_PREFIX + "2:"
+        ))
+
+    def test_revive_retries_failed_implement_after_return_from_review(self):
+        self.assert_revive_retries_terminal_implement_after_review("failed")
+
+    def test_revive_retries_cancelled_implement_after_return_from_review(self):
+        self.assert_revive_retries_terminal_implement_after_review("cancelled")
+
     def test_revive_retries_failed_first_stage(self):
         with mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]), \
                 mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:

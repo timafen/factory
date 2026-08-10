@@ -28,6 +28,7 @@ type WorkMeta = {
   closed?: string;
   closed_reason?: string;
 };
+type WorkStatus = { state: string; text: string };
 const ORIGIN_RU: Record<string, string> = {
   owner: "поставил ты",
   assistant: "поставил Клод",
@@ -42,6 +43,18 @@ const TONE: Record<string, { bg: string; fg: string }> = {
   muted: { bg: "#22262f", fg: "#8a94a6" },
 };
 const muted = "var(--text-muted, #8a94a6)";
+
+function mergeWorkStatuses(current: Record<string, WorkStatus>, fresh: Record<string, WorkStatus>) {
+  const merged = { ...fresh };
+  for (const [work, status] of Object.entries(current)) {
+    const next = fresh[work];
+    if (status.state === "reviving" &&
+        (next?.state === "stopped_owner" || next?.state === "stuck")) {
+      merged[work] = status;
+    }
+  }
+  return merged;
+}
 
 function Pill({ text, tone }: { text: string; tone: keyof typeof TONE }) {
   const c = TONE[tone];
@@ -81,7 +94,7 @@ type Group = {
 // eslint-disable-next-line react-refresh/only-export-components
 export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
                       works: Record<string, WorkMeta> = {},
-                      statuses: Record<string, { state: string; text: string }> = {},
+                      statuses: Record<string, WorkStatus> = {},
                       promises: Record<string, { files?: string[]; commands?: string[] }> = {}): Group[] {
   const openQ = new Set(
     questions.filter((q) => q.status === "open").map((q) => q.task_id),
@@ -212,7 +225,8 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const ws = statuses[g.base];
     if (!ws) continue;
     if (g.items.some((it) => LIVE.includes(it.task.state))) continue;
-    if (ws.state === "stopped_owner") g.status = { label: "остановлена: конвейер на паузе", tone: "muted" };
+    if (ws.state === "reviving") g.status = { label: ws.text, tone: "live" };
+    else if (ws.state === "stopped_owner") g.status = { label: "остановлена: конвейер на паузе", tone: "muted" };
     else if (ws.state === "stuck") g.status = { label: "застряла: сама не двигается", tone: "bad" };
     g.canRevive = (ws.state === "stopped_owner" || ws.state === "stuck") && !g.meta?.closed;
   }
@@ -270,7 +284,7 @@ export function WorkView({
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
   const [works, setWorks] = useState<Record<string, WorkMeta>>({});
-  const [statuses, setStatuses] = useState<Record<string, { state: string; text: string }>>({});
+  const [statuses, setStatuses] = useState<Record<string, WorkStatus>>({});
   const [promises, setPromises] = useState<Record<string, { files?: string[]; commands?: string[] }>>({});
   const [showArchive, setShowArchive] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -288,7 +302,10 @@ export function WorkView({
           fetch("/api/v1/verdicts"), fetch("/api/v1/questions"), fetch("/api/v1/works"),
           fetch("/api/v1/work-status"),
         ]);
-        if (ws.ok && alive) setStatuses((await ws.json()) as Record<string, { state: string; text: string }>);
+        if (ws.ok && alive) {
+          const fresh = (await ws.json()) as Record<string, WorkStatus>;
+          setStatuses((current) => mergeWorkStatuses(current, fresh));
+        }
         try {
           const pr = await fetch("/api/v1/promises");
           if (pr.ok && alive) setPromises((await pr.json()) as Record<string, { files?: string[]; commands?: string[] }>);
@@ -340,8 +357,8 @@ export function WorkView({
       setStatuses((current) => ({ ...current, [work]: { state: "reviving", text: "оживает: пилот продолжит со следующего этапа" } }));
       const response = await fetch("/api/v1/work-status");
       if (response.ok) {
-        const fresh = await response.json() as Record<string, { state: string; text: string }>;
-        setStatuses((current) => ({ ...fresh, [work]: current[work] }));
+        const fresh = await response.json() as Record<string, WorkStatus>;
+        setStatuses((current) => mergeWorkStatuses(current, fresh));
       }
     } catch (error) {
       setReviveErrors((current) => ({ ...current, [work]: error instanceof Error ? error.message : "Не удалось оживить работу" }));

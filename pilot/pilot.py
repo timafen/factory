@@ -1635,11 +1635,16 @@ def acknowledge_revive_signal(work):
 
 
 def latest_successful_transition(stage_tasks, stages):
-    """Return the last successful stage transition in the current work history."""
+    """Return the latest terminal stage task in the current work round.
+
+    A newer failed or cancelled task belongs to the current round too: it must
+    be retried before an older successful later stage can mark the work done.
+    """
     candidates = [
         (stage, task)
         for stage, task in stage_tasks
-        if task.get("state") == "succeeded" and stage in stages
+        if task.get("state") in ("succeeded", "failed", "cancelled")
+        and stage in stages
     ]
     if not candidates:
         return -1, None
@@ -1690,18 +1695,12 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec.setdefault("since", now)
             mem[base] = rec
             continue
-        far, latest_success = latest_successful_transition(lst, stages)
-        if far < 0:
-            first_terminal = next(
-                (t for st, t in lst
-                 if st == stages[0] and t.get("state") in ("failed", "cancelled")),
-                None,
-            )
-            if base not in revive or first_terminal is None:
-                continue
-        else:
-            first_terminal = None
-        if far >= len(stages) - 1:
+        far, latest_transition = latest_successful_transition(lst, stages)
+        retry_current = ((latest_transition or {}).get("state")
+                         in ("failed", "cancelled"))
+        if far < 0 or (retry_current and base not in revive):
+            continue
+        if far >= len(stages) - 1 and not retry_current:
             mem.pop(base, None)          # дошли до конца конвейера
             if base in revive:
                 acknowledge_revive_signal(base)
@@ -1722,13 +1721,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         if free_work_slots <= 0:
             continue
-        nxt = stages[far + 1]
+        next_index = far if retry_current else far + 1
+        nxt = stages[next_index]
         nw = workflows.get(nxt)
         wname = stage_worker(conf, nxt, "medium", workers)
         worker = workers.get(wname)
         if not nw or not nw.get("enabled") or not worker:
             continue
-        src = first_terminal if far < 0 else latest_success
+        src = latest_transition
         rid = (src or {}).get("repository_id") or ""
         # The workflow revision is the service metadata for the resumed stage.
         # Keep the owner's work name intact: it may already use the control
@@ -1736,18 +1736,18 @@ def pipeline_watch(conf, tasks, workflows, workers):
         title = base
         free_work_slots -= 1
         try:
-            create_task({"request_key": (AUTO_REVIVE_REQUEST_PREFIX + str(far + 1)
+            create_task({"request_key": (AUTO_REVIVE_REQUEST_PREFIX + str(next_index)
                                          + ":" + str(uuid.uuid4())), "title": title,
-                         "context": (("Первый этап конвейера завершился со статусом "
-                                      + first_terminal.get("state", "") +
+                         "context": (("Этап конвейера завершился со статусом "
+                                      + latest_transition.get("state", "") +
                                       ". Повтори этот этап для той же работы."
-                                      if far < 0 else
+                                      if retry_current else
                                       "Конвейер встал: предыдущий этап закончился, "
                                       "а следующий никто не создал. Продолжай с того "
                                       "же места, на той же ветке, ничего не начиная "
                                       "заново.") +
                                      "\n\nРабота: " + base +
-                                     ("" if far < 0 else
+                                     ("" if retry_current else
                                       "\nПредыдущий этап: " + stages[far]))[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
@@ -1758,10 +1758,10 @@ def pipeline_watch(conf, tasks, workflows, workers):
             if base in revive:
                 acknowledge_revive_signal(base)
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
-                ": " + ("повтор" if far < 0 else stages[far]) + " -> " + nxt)
+                ": " + ("повтор" if retry_current else stages[far]) + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" +
-                   (("повтор " + nxt) if far < 0 else stages[far] + " → " + nxt),
+                   (("повтор " + nxt) if retry_current else stages[far] + " → " + nxt),
                    tags="wrench")
         except Exception as e:
             free_work_slots += 1
