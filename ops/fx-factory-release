@@ -17,6 +17,8 @@ API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
+BROWSER_CHECKER="${FACTORY_BROWSER_CHECKER:-/usr/local/libexec/factory-browser-sandbox-check}"
+BRAIN_INSTALLER="${FACTORY_BRAIN_INSTALLER:-/usr/local/lib/fx-factory-install-brain}"
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -57,7 +59,10 @@ step "гоняю тесты Go"
 as_user bash -c "umask 077; cd '$work/src' && go test ./..." \
   || { fail "тесты Go не прошли — релиз не поеду"; cleanup; exit 5; }
 step "проверяю сценарий выката и отката"
-as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release.sh" \
+as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release-dispatch.sh \
+  && bash ops/test-bootstrap-factory-release.sh \
+  && bash ops/test-fx-browser-sandbox.sh \
+  && bash ops/test-fx-factory-release.sh" \
   || { fail "проверка выката и отката не прошла — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
@@ -66,6 +71,12 @@ step "собираю сервер и воркер"
 as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
+
+[ -x "$BROWSER_CHECKER" ] || {
+  fail "browser-sandbox не подготовлен; сначала выполните fx factory install-release-helper для origin/main"
+  cleanup
+  exit 4
+}
 
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \
@@ -115,7 +126,7 @@ code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashbo
 [ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
 
 systemctl stop "$WORKER_SERVICE" || rollback "воркер не остановился" 6
-worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
+worker_id=$(as_user "$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
   || rollback "не удалось определить identity воркера" 6
 [ -n "$worker_id" ] || rollback "identity воркера пуст" 6
 previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
@@ -147,8 +158,12 @@ raise SystemExit(not ok)' \
 done
 [ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
 
-if [ -x "$work/src/ops/install-brain.sh" ]; then
-  bash "$work/src/ops/install-brain.sh" "$work/src" \
+step "проверяю полную цепочку остановки серверного браузера"
+FACTORY_BROWSER_WORKER="$WORKER_BIN" "$BROWSER_CHECKER" \
+  || rollback "browser-sandbox не завершил зависший Chromium и cleanup" 6
+
+if [ -x "$BRAIN_INSTALLER" ]; then
+  "$BRAIN_INSTALLER" "$work/src" \
     || fail "мозг не встал — сервер и воркер уже обновлены"
 fi
 

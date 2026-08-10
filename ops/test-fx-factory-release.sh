@@ -8,36 +8,58 @@ trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -Fx "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
+assert_trusted_unchanged() {
+  assert_file "$1/system/trusted-helper" trusted-release-helper
+  assert_file "$1/system/browser-checker" '#!/bin/bash'
+  assert_file "$1/system/brain-installer" '#!/bin/bash'
+}
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web"
+  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" "$case_dir/system"
   printf 'old-server\n' >"$case_dir/install/factory-server"
   printf 'old-worker\n' >"$case_dir/install/factory-worker"
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
+  printf 'trusted-release-helper\n' >"$case_dir/system/trusted-helper"
+  cat >"$case_dir/system/browser-checker" <<'CHECKER'
+#!/bin/bash
+printf 'browser-chain worker=%s\n' "${FACTORY_BROWSER_WORKER:-}" >>"$TEST_SYSTEM_EVENTS"
+[ "$TEST_MODE" != browser-chain-fail ]
+CHECKER
+  cat >"$case_dir/system/brain-installer" <<'BRAIN'
+#!/bin/bash
+printf 'brain-installer source=%s\n' "$1" >>"$TEST_SYSTEM_EVENTS"
+BRAIN
+  chmod +x "$case_dir/system/browser-checker" "$case_dir/system/brain-installer"
 
-  cat >"$case_dir/bin/git" <<'EOF'
+  cat >"$case_dir/bin/git" <<'GIT'
 #!/bin/bash
 case "$*" in
-  *'clone --quiet'*) destination=${@: -1}; mkdir -p "$destination/web" "$destination/ops" ;;
+  *'clone --quiet'*)
+    destination=${@: -1}
+    mkdir -p "$destination/web" "$destination/ops"
+    for file in fx fx-factory-release bootstrap-factory-release.sh install-brain.sh install-server-browser.sh factory-browser-sandbox test-browser-sandbox.sh; do
+      printf '#!/bin/sh\nprintf "untrusted %%s\\n" "$0" >>"$TEST_UNTRUSTED_EXECUTED"\n' >"$destination/ops/$file"
+      chmod 755 "$destination/ops/$file"
+    done
+    ;;
+  *'checkout --quiet'*) exit 0 ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1'*) echo 'Проверочный релиз' ;;
 esac
-EOF
-  cat >"$case_dir/bin/npm" <<'EOF'
+GIT
+  cat >"$case_dir/bin/npm" <<'NPM'
 #!/bin/bash
 echo "npm $*" >>"$TEST_GATES"
 [ "$TEST_MODE" != ui-test-fail ] || [ "${1:-}" != test ] || exit 1
-exit 0
-EOF
-  cat >"$case_dir/bin/npx" <<'EOF'
+NPM
+  cat >"$case_dir/bin/npx" <<'NPX'
 #!/bin/bash
 echo "npx $*" >>"$TEST_GATES"
-exit 0
-EOF
-  cat >"$case_dir/bin/go" <<'EOF'
+NPX
+  cat >"$case_dir/bin/go" <<'GO'
 #!/bin/bash
 echo "go $*" >>"$TEST_GATES"
 [ "${1:-}" != test ] || { [ "$TEST_MODE" != go-test-fail ]; exit; }
@@ -60,22 +82,23 @@ WORKER
   *) printf '#!/bin/bash\nexit 0\n' >"$output" ;;
 esac
 chmod +x "$output"
-EOF
-  cat >"$case_dir/bin/bash" <<'EOF'
+GO
+  cat >"$case_dir/bin/bash" <<'BASH'
 #!/bin/bash
-if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
-  echo "bash $1" >>"$TEST_GATES"
-  [ "$TEST_MODE" != release-test-fail ]
-  exit
-fi
+case "${1:-}" in
+  ops/test-fx-factory-release-dispatch.sh|ops/test-bootstrap-factory-release.sh|ops/test-fx-browser-sandbox.sh|ops/test-fx-factory-release.sh)
+    echo "bash $1" >>"$TEST_GATES"
+    [ "$TEST_MODE" != release-test-fail ] || [ "$1" != ops/test-fx-factory-release.sh ]
+    exit
+    ;;
+esac
 exec /bin/bash "$@"
-EOF
-  cat >"$case_dir/bin/systemctl" <<'EOF'
+BASH
+  cat >"$case_dir/bin/systemctl" <<'SYSTEMCTL'
 #!/bin/bash
 echo "$1 $2" >>"$TEST_EVENTS"
-exit 0
-EOF
-  cat >"$case_dir/bin/mv" <<'EOF'
+SYSTEMCTL
+  cat >"$case_dir/bin/mv" <<'MV'
 #!/bin/bash
 /bin/mv "$@" || exit
 target=${@: -1}
@@ -84,19 +107,14 @@ if [ "$TEST_MODE" = interrupt-between-install ] \
   : >"$TEST_INTERRUPT_MARK"
   kill -TERM "$PPID"
 fi
-EOF
-  cat >"$case_dir/bin/sleep" <<'EOF'
+MV
+  printf '#!/bin/bash\nexit 0\n' >"$case_dir/bin/sleep"
+  cat >"$case_dir/bin/chmod" <<'CHMOD'
 #!/bin/bash
-exit 0
-EOF
-  cat >"$case_dir/bin/chmod" <<'EOF'
-#!/bin/bash
-if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]]; then
-  exit 1
-fi
+if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]]; then exit 1; fi
 exec /bin/chmod "$@"
-EOF
-  cat >"$case_dir/bin/curl" <<'EOF'
+CHMOD
+  cat >"$case_dir/bin/curl" <<'CURL'
 #!/bin/bash
 case "$*" in
   *'/api/v1/dashboard'*)
@@ -117,23 +135,22 @@ case "$*" in
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     fi ;;
 esac
-EOF
+CURL
   chmod +x "$case_dir/bin/"*
 }
 
 run_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
-    TEST_SERVER_BIN="$case_dir/install/factory-server" \
-    TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
-    FACTORY_RELEASE_REPO="$case_dir/repo" \
-    FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
-    FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
-    FACTORY_RELEASE_DIR="$case_dir/releases" \
-    FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    TEST_SYSTEM_EVENTS="$case_dir/system-events" TEST_UNTRUSTED_EXECUTED="$case_dir/untrusted-executed" \
+    TEST_SERVER_BIN="$case_dir/install/factory-server" TEST_INTERRUPT_MARK="$case_dir/interrupted" \
+    PATH="$case_dir/bin:$PATH" FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_SERVER_BIN="$case_dir/install/factory-server" FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
+    FACTORY_RELEASE_DIR="$case_dir/releases" FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
-    FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_BROWSER_CHECKER="$case_dir/system/browser-checker" \
+    FACTORY_BRAIN_INSTALLER="$case_dir/system/brain-installer" \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
 }
@@ -142,62 +159,66 @@ success="$temporary/success"
 make_fixture "$success" success
 run_release "$success" success || fail "successful release failed"
 diff -u <(printf '%s\n' \
-  'npm ci --no-audit --no-fund --silent' \
-  'npx tsc -p tsconfig.app.json --noEmit' \
-  'npm test' \
-  'go test ./...' \
-  'bash ops/test-fx-factory-release.sh' \
-  'npx vite build' \
-  'go build -o PLACEHOLDER ./cmd/factory-server' \
-  'go build -o PLACEHOLDER ./cmd/factory-worker') \
+  'npm ci --no-audit --no-fund --silent' 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
+  'go test ./...' 'bash ops/test-fx-factory-release-dispatch.sh' \
+  'bash ops/test-bootstrap-factory-release.sh' 'bash ops/test-fx-browser-sandbox.sh' \
+  'bash ops/test-fx-factory-release.sh' 'npx vite build' \
+  'go build -o PLACEHOLDER ./cmd/factory-server' 'go build -o PLACEHOLDER ./cmd/factory-worker') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
     -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' "$success/gates") >/dev/null \
   || fail "release gates ran in the wrong order"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
-[ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
-  || fail "server was not restarted first"
-[ "$(sed -n '2p' "$success/events")" = 'stop factory-worker.service' ] \
-  || fail "worker was not stopped before taking the heartbeat baseline"
-[ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
-  || fail "worker was not started after taking the heartbeat baseline"
+grep -F "browser-chain worker=$success/install/factory-worker" "$success/system-events" >/dev/null \
+  || fail "installed worker/browser chain was not checked"
+grep -F 'brain-installer source=' "$success/system-events" >/dev/null \
+  || fail "trusted brain installer was not used"
+[ ! -e "$success/untrusted-executed" ] || fail "candidate checkout ops file ran as root"
+assert_trusted_unchanged "$success"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release did not explain the deployed change"
 ! grep -F '1234567890abcdef' "$success/output" >/dev/null \
   || fail "release exposed a bare technical version in owner-facing output"
+[ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
+  || fail "server was not restarted first"
+[ "$(sed -n '2p' "$success/events")" = 'stop factory-worker.service' ] \
+  || fail "worker was not stopped before determining its identity"
+[ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
+  || fail "worker was not started after taking the heartbeat baseline"
 
-for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install; do
+for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install browser-chain-fail; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
-  tail -n 2 "$failed/events" | diff -u - <(printf '%s\n' \
-    'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
-    || fail "$mode rollback restart order is wrong"
+  assert_trusted_unchanged "$failed"
+  [ ! -e "$failed/untrusted-executed" ] || fail "$mode executed candidate checkout ops"
 done
+
+missing_transition="$temporary/missing-transition"
+make_fixture "$missing_transition" success
+rm -f "$missing_transition/system/browser-checker"
+if run_release "$missing_transition" success; then fail "release without trusted transition succeeded"; fi
+assert_file "$missing_transition/install/factory-server" old-server
+assert_file "$missing_transition/install/factory-worker" old-worker
+[ ! -s "$missing_transition/events" ] || fail "services changed before trusted transition"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
 if run_release "$build_failed" worker-build-fail; then fail "worker build unexpectedly succeeded"; fi
 assert_file "$build_failed/install/factory-server" old-server
 assert_file "$build_failed/install/factory-worker" old-worker
-[ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 
 for mode in ui-test-fail go-test-fail release-test-fail; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
-  set +e
-  run_release "$gate_failed" "$mode"
-  status=$?
-  set -e
+  set +e; run_release "$gate_failed" "$mode"; status=$?; set -e
   [ "$status" -eq 5 ] || fail "$mode returned $status instead of build error 5"
   assert_file "$gate_failed/install/factory-server" old-server
   assert_file "$gate_failed/install/factory-worker" old-worker
-  [ ! -s "$gate_failed/events" ] || fail "services restarted after $mode"
-  ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
-    || fail "binaries were built after $mode"
+  ! grep -F 'go build ' "$gate_failed/gates" >/dev/null || fail "binaries were built after $mode"
 done
 
 locked="$temporary/locked"
@@ -213,4 +234,4 @@ flock -u 8
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
 
-echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
+echo "PASS: штатный выпуск не исполняет checkout от root и проверяет browser cleanup"
