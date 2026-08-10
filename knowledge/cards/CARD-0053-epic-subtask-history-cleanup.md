@@ -4,9 +4,9 @@
 
 Status: Verified PASS.
 Branch: `factory/023dd2af-e56-ed52b787-599`.
-Head commit: `d88fa5a`.
+Head commit: `f41bd20`.
 What changed: из поставки убраны изменения `pilot/pilot.py`, `pilot/test_pilot.py` и общего журнала `CARD-0030`; их версии возвращены к `origin/main`.
-Evidence: `git diff --name-only origin/main...HEAD` не выводит файлов; `git diff --check origin/main...HEAD` завершилась без замечаний.
+Evidence: `python3 -m unittest pilot.test_pilot` — 108 tests, OK; предметный diff содержит только эту карточку, `git diff --check origin/main...HEAD` завершилась без замечаний.
 One next action: перед слиянием подтвердить состав поставки трёхточечным сравнением с актуальным `origin/main`.
 
 ## LOG
@@ -14,3 +14,7 @@ One next action: перед слиянием подтвердить состав
 ### 2026-08-10 — Implement
 
 В ветке завершения подзадач эпика обнаружены три файла вне заявленной области. Они возвращены к состоянию `origin/main`; после rebase предметный diff пуст, пробельных ошибок нет. Риск: изменения предыдущей реализации намеренно не доставляются этой веткой, поскольку они признаны чужими.
+
+### 2026-08-10 — Test
+
+`python3 -m unittest pilot.test_pilot` завершилась успешно: 108 проверок. После финального rebase трёхточечное сравнение с `origin/main` содержит только эту карточку, поэтому изменения пилота и общего журнала не попадут в поставку.
