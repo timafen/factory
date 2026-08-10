@@ -54,9 +54,11 @@ as_factory() {
   fi
 }
 
-original_targets=()
 had_original=()
 temporaries=()
+backups=()
+moved_original=()
+installed=()
 
 # Validate every destination before changing any auth link.
 for i in "${!homes[@]}"; do
@@ -79,13 +81,15 @@ for i in "${!homes[@]}"; do
   fi
 
   if [ -L "$link" ]; then
-    original_targets[$i]=$(readlink -- "$link") \
+    readlink -- "$link" >/dev/null \
       || fail "cannot inspect auth link: $link"
     had_original[$i]=yes
   else
-    original_targets[$i]=
     had_original[$i]=no
   fi
+  backups[$i]=$home/.auth.json.original.$$
+  moved_original[$i]=no
+  installed[$i]=no
 done
 
 # Prepare every replacement before changing the first auth link.
@@ -97,6 +101,13 @@ for i in "${!homes[@]}"; do
   fi
   temporary=$home/.auth.json.provision.$$
   temporaries[$i]=$temporary
+  [ ! -e "${backups[$i]}" ] && [ ! -L "${backups[$i]}" ] \
+    || {
+      for prepared in "${temporaries[@]}"; do
+        as_factory rm -f -- "$prepared" 2>/dev/null || true
+      done
+      fail "temporary backup already exists: ${backups[$i]}"
+    }
   as_factory ln -s -- "$AUTH_TARGET" "$temporary" \
     || {
       for prepared in "${temporaries[@]}"; do
@@ -107,17 +118,15 @@ for i in "${!homes[@]}"; do
 done
 
 rollback_links() {
-  local last=$1 rollback_failed=no j rollback_tmp rollback_link
-  for ((j=last; j>=0; j--)); do
+  local rollback_failed=no j rollback_link
+  for ((j=${#homes[@]} - 1; j>=0; j--)); do
     rollback_link=${homes[$j]}/auth.json
-    if [ "${had_original[$j]}" = yes ]; then
-      rollback_tmp=${homes[$j]}/.auth.json.rollback.$$
-      as_factory rm -f -- "$rollback_tmp" 2>/dev/null || true
-      if ! as_factory ln -s -- "${original_targets[$j]}" "$rollback_tmp" ||
-         ! as_factory mv -Tf -- "$rollback_tmp" "$rollback_link"; then
+    if [ "${moved_original[$j]}" = yes ]; then
+      if ! as_factory mv -Tf -- "${backups[$j]}" "$rollback_link"; then
         rollback_failed=yes
       fi
-    elif ! as_factory rm -f -- "$rollback_link"; then
+    elif [ "${installed[$j]}" = yes ] &&
+         ! as_factory rm -f -- "$rollback_link"; then
       rollback_failed=yes
     fi
   done
@@ -127,26 +136,43 @@ rollback_links() {
   [ "$rollback_failed" = no ] || fail "rollback failed; inspect auth links"
 }
 
+# Keep each original symlink object so rollback preserves its inode and owner.
+for i in "${!homes[@]}"; do
+  [ "${had_original[$i]}" = yes ] || continue
+  link=${homes[$i]}/auth.json
+  if ! as_factory mv -T -- "$link" "${backups[$i]}"; then
+    rollback_links
+    fail "cannot preserve auth link: $link; previous links restored"
+  fi
+  moved_original[$i]=yes
+done
+
 for i in "${!homes[@]}"; do
   home=${homes[$i]}
   link=$home/auth.json
   if ! as_factory mv -Tf -- "${temporaries[$i]}" "$link"; then
-    rollback_links "$i"
+    rollback_links
     fail "cannot install auth link: $link; previous links restored"
   fi
+  installed[$i]=yes
 done
 
 for i in "${!homes[@]}"; do
   link=${homes[$i]}/auth.json
   read -r link_user link_group < <(stat -c '%U %G' "$link") \
     || {
-      rollback_links "$((${#homes[@]} - 1))"
+      rollback_links
       fail "cannot inspect auth link: $link; previous links restored"
     }
   if [ "$link_user:$link_group" != "$FACTORY_USER:$FACTORY_GROUP" ]; then
-    rollback_links "$((${#homes[@]} - 1))"
+    rollback_links
     fail "$link must be owned by $FACTORY_USER:$FACTORY_GROUP; previous links restored"
   fi
+done
+
+for i in "${!homes[@]}"; do
+  [ "${moved_original[$i]}" = yes ] || continue
+  as_factory rm -f -- "${backups[$i]}" 2>/dev/null || true
 done
 
 printf 'Codex auth ready: %d link(s), protected shared target\n' "${#homes[@]}"

@@ -131,6 +131,12 @@ printf secret >"$rollback/.codex/auth.json"
 chmod 600 "$rollback/.codex/auth.json"
 ln -s /original/first "$rollback/.codex-first/auth.json"
 ln -s /original/second "$rollback/.codex-second/auth.json"
+first_target=$(readlink "$rollback/.codex-first/auth.json")
+first_owner=$(stat -c '%U:%G' "$rollback/.codex-first/auth.json")
+first_inode=$(stat -c '%i' "$rollback/.codex-first/auth.json")
+second_target=$(readlink "$rollback/.codex-second/auth.json")
+second_owner=$(stat -c '%U:%G' "$rollback/.codex-second/auth.json")
+second_inode=$(stat -c '%i' "$rollback/.codex-second/auth.json")
 real_mv=$(command -v mv)
 printf '%s\n' \
   '#!/bin/bash' \
@@ -151,9 +157,17 @@ PATH="$rollback/bin:$PATH" run_provisioner "$rollback" \
 [ "$status" -ne 0 ] || fail "failure while installing the second link passed"
 grep -F 'previous links restored' "$rollback/output" >/dev/null \
   || fail "second-link failure did not report rollback"
-[ "$(readlink "$rollback/.codex-first/auth.json")" = /original/first ] \
+[ "$(readlink "$rollback/.codex-first/auth.json")" = "$first_target" ] \
   || fail "first link was not restored after second-link failure"
-[ "$(readlink "$rollback/.codex-second/auth.json")" = /original/second ] \
+[ "$(stat -c '%U:%G' "$rollback/.codex-first/auth.json")" = "$first_owner" ] \
+  || fail "first link owner changed during rollback"
+[ "$(stat -c '%i' "$rollback/.codex-first/auth.json")" = "$first_inode" ] \
+  || fail "first link inode changed during rollback"
+[ "$(readlink "$rollback/.codex-second/auth.json")" = "$second_target" ] \
   || fail "second link changed despite its failed installation"
+[ "$(stat -c '%U:%G' "$rollback/.codex-second/auth.json")" = "$second_owner" ] \
+  || fail "second link owner changed during rollback"
+[ "$(stat -c '%i' "$rollback/.codex-second/auth.json")" = "$second_inode" ] \
+  || fail "second link inode changed during rollback"
 
 echo "PASS: Codex auth links are owned by the worker and unsafe targets fail closed"
