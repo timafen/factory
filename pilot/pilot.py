@@ -4140,6 +4140,26 @@ def host_load_admits(tasks, stage, load, respect_host_load=True):
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
 
 
+def merge_recorded(task_id):
+    """True when this Verify task has already completed its merge.
+
+    ``state[\"processed\"]`` is deliberately only a short-lived cursor: a
+    restart between the merge and saving that cursor must not turn one Verify
+    PASS into a second merge or a second entry on the dashboard.
+    """
+    try:
+        with open(MERGES_PATH, encoding="utf-8") as merges:
+            for line in merges:
+                try:
+                    if json.loads(line).get("task_id") == task_id:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return False
+
+
 def _median(xs):
     xs = sorted(xs)
     return xs[len(xs) // 2] if xs else None
@@ -4908,6 +4928,9 @@ def cycle(conf, state):
         if not next_stage:
             # end of pipeline (Verify): auto-merge on PASS, then optional staging deploy
             if conf.get("auto_merge", True) and verify_passed(result):
+                if merge_recorded(tid):
+                    log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
+                    continue
                 mark_final(tid, wf, True)
                 branch = extract_branch(result, detail.get("context", ""))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
@@ -4925,7 +4948,8 @@ def cycle(conf, state):
                     if ok:
                         try:
                             with open(MERGES_PATH, "a", encoding="utf-8") as mf:
-                                mf.write(json.dumps({"base": base_title(title),
+                                mf.write(json.dumps({"task_id": tid,
+                                    "base": base_title(title),
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")},
                                     ensure_ascii=False) + chr(10))
                         except Exception as e:
