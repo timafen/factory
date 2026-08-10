@@ -31,7 +31,9 @@ echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_
 [ "${FACTORY_BRAIN_DEFER_PILOT_RESTART:-}" = 1 ] || exit 9
 : >"$FACTORY_BRAIN_RESTART_MARKER"
 BRAIN
+    touch "$destination/ops/install-server-browser.sh"
     chmod +x "$destination/ops/install-brain.sh"
+    chmod +x "$destination/ops/install-server-browser.sh"
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
@@ -83,6 +85,11 @@ fi
 if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
   echo "bash ops/install-factory-control.sh" >>"$TEST_GATES"
   [ "$TEST_MODE" != control-install-fail ]
+  exit
+fi
+if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
+  echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != browser-install-fail ]
   exit
 fi
 if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
@@ -180,7 +187,8 @@ diff -u <(printf '%s\n' \
   'go build -o PLACEHOLDER ./cmd/factory-worker' \
   'bash ops/provision-codex-auth.sh' \
   'bash ops/install-factory-control.sh' \
-  'brain defer=1 marker=PLACEHOLDER') \
+  'brain defer=1 marker=PLACEHOLDER' \
+  'bash ops/install-server-browser.sh') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
     -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' \
     -e 's|marker=[^ ]*/restart-pilot|marker=PLACEHOLDER|' "$success/gates") >/dev/null \
@@ -206,7 +214,7 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
 ! grep -F '1234567890abcdef' "$success/output" >/dev/null \
   || fail "release exposed a bare technical version in owner-facing output"
 
-for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install control-install-fail; do
+for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install control-install-fail browser-install-fail; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi

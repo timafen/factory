@@ -1,0 +1,54 @@
+#!/bin/bash
+# Root side of the browser launcher. The sudoers rule permits only this helper;
+# Chromium itself is dropped back to the unprivileged Factory account.
+set -euo pipefail
+
+SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
+CONFIG=$(dirname "$SCRIPT")/factory-browser.conf
+[ "$(id -u)" -eq 0 ] || { echo "browser isolation helper must run as root" >&2; exit 1; }
+[ -f "$CONFIG" ] || { echo "Factory browser configuration is missing" >&2; exit 1; }
+[ "$(stat -c '%u:%a' "$CONFIG")" = 0:600 ] \
+  || { echo "Factory browser configuration has unsafe ownership or mode" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONFIG"
+[ -x "$FACTORY_BROWSER_EXECUTABLE" ] || { echo "Factory Chromium executable is missing" >&2; exit 1; }
+
+case "${SUDO_USER:-$FACTORY_BROWSER_USER}" in
+  "$FACTORY_BROWSER_USER"|root) ;;
+  *) echo "browser isolation helper called by an unexpected user" >&2; exit 1 ;;
+esac
+for argument in "$@"; do
+  case "$argument" in
+    --host-resolver-rules*|--host-rules*|--proxy-server*|--proxy-pac-url*)
+      echo "unsafe Chromium network override rejected: ${argument%%=*}" >&2
+      exit 1
+      ;;
+  esac
+done
+
+declare -a allow_args=() resolver_rules=()
+for fqdn in factory.timafen.com staging-automation.tarser.net; do
+  mapfile -t addresses < <(getent ahosts "$fqdn" | awk '!seen[$1]++ {print $1}')
+  [ "${#addresses[@]}" -gt 0 ] || { echo "cannot resolve allowed browser host: $fqdn" >&2; exit 1; }
+  replacement=
+  for address in "${addresses[@]}"; do
+    python3 - "$address" <<'PY'
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PY
+    allow_args+=(-p "IPAddressAllow=$address")
+    [ -n "$replacement" ] || replacement=$address
+  done
+  [[ "$replacement" != *:* ]] || replacement="[$replacement]"
+  resolver_rules+=("MAP $fqdn $replacement")
+done
+rules=$(IFS=', '; echo "${resolver_rules[*]}, EXCLUDE localhost")
+
+exec systemd-run --scope --quiet --collect \
+  -p IPAddressDeny=any -p IPAddressAllow=localhost "${allow_args[@]}" \
+  -p 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
+  -p NoNewPrivileges=yes \
+  setpriv --reuid="$FACTORY_BROWSER_USER" --regid="$FACTORY_BROWSER_GROUP" \
+    --init-groups --inh-caps=-all --ambient-caps=-all -- \
+    env HOME="$FACTORY_BROWSER_HOME" \
+    "$FACTORY_BROWSER_EXECUTABLE" --host-resolver-rules="$rules" "$@"
