@@ -2002,98 +2002,134 @@ class DashboardSnapshotTest(unittest.TestCase):
 
 
 class PostMergeDeployTest(unittest.TestCase):
+    @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
-    def test_trading_repository_releases_only_trading_staging(self, run_shell, log):
+    def test_release_is_started_in_background_and_saved_for_next_cycle(self, log, popen):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        popen.return_value.pid = 123
+        state = {}
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name):
+            pilot.deploy_after_merge({"deploy_factory_cmd": "fx factory release"},
+                                     "github.com/timafen/factory", state)
+
+        release = state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+        self.assertEqual(release["pid"], 123)
+        self.assertEqual(release["generation"], 1)
+        self.assertTrue(release["status"].endswith(".status"))
+        self.assertIn("started generation=1", log.call_args.args[0])
+        self.assertIn("fx factory release", popen.call_args.args[0])
+
+    @mock.patch.object(pilot, "log")
+    def test_completed_release_logs_exit_code_and_output(self, log):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        status = os.path.join(temporary.name, "done.status")
+        output = os.path.join(temporary.name, "done.log")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("7\n")
+        with open(output, "w", encoding="utf-8") as f:
+            f.write("health check failed\n")
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 3, "status": status, "output": output, "queued": False}}}
+
+        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+
+        self.assertNotIn("deploy_factory_cmd", state[pilot.DEPLOY_STATE_KEY])
+        self.assertIn("completed generation=3 rc=7 :: health check failed",
+                      log.call_args.args[0])
+
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
+    @mock.patch.object(pilot, "log")
+    def test_trading_repository_releases_only_trading_staging(self, log, start):
         conf = {
             "deploy_staging_cmd": "fx staging release",
             "deploy_factory_cmd": "fx factory release",
         }
 
-        result = pilot.deploy_after_merge(
-            conf, "github.com/timafen/tarser-operations")
+        result = pilot.deploy_after_merge(conf, "github.com/timafen/tarser-operations", {})
 
-        self.assertEqual(result, 0)
-        run_shell.assert_called_once_with("fx staging release")
-        self.assertIn("AUTOMATION-STAGING-DEPLOY", log.call_args.args[0])
+        self.assertIsNone(result)
+        start.assert_called_once_with("deploy_staging_cmd", "AUTOMATION-STAGING-DEPLOY",
+                                      "fx staging release", mock.ANY)
 
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
-    def test_factory_repository_never_releases_trading_staging(self, run_shell, log):
+    def test_factory_repository_never_releases_trading_staging(self, log, start):
         conf = {"deploy_staging_cmd": "fx staging release"}
 
         result = pilot.deploy_after_merge(conf, "github.com/timafen/factory")
 
         self.assertIsNone(result)
-        run_shell.assert_not_called()
+        start.assert_not_called()
         self.assertIn("deploy_factory_cmd is not configured", log.call_args.args[0])
 
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
-    def test_factory_repository_uses_its_own_release_command(self, run_shell, _log):
+    def test_factory_repository_uses_its_own_release_command(self, _log, start):
         conf = {
             "deploy_staging_cmd": "fx staging release",
             "deploy_factory_cmd": "fx factory release",
         }
 
-        result = pilot.deploy_after_merge(conf, "github.com/timafen/factory.git")
+        result = pilot.deploy_after_merge(conf, "github.com/timafen/factory.git", {})
 
-        self.assertEqual(result, 0)
-        run_shell.assert_called_once_with("fx factory release")
+        self.assertIsNone(result)
+        start.assert_called_once_with("deploy_factory_cmd", "FACTORY-DEPLOY",
+                                      "fx factory release", mock.ANY)
 
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(8, "another release is running"))
-    def test_busy_factory_release_is_coalesced_for_retry(self, run_shell, _log):
-        state = {}
+    def test_busy_factory_release_is_coalesced_for_retry(self, _log, start):
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 1, "pid": 42, "queued": False}}}
         conf = {"deploy_factory_cmd": "fx factory release"}
 
-        result = pilot.deploy_after_merge(
-            conf, "github.com/timafen/factory", state, now=100)
         pilot.deploy_after_merge(
             conf, "github.com/timafen/factory", state, now=110)
 
-        self.assertEqual(result, 8)
-        self.assertEqual(state["pending_factory_deploy"], {
-            "due": 170, "attempts": 0,
-        })
-        self.assertEqual(run_shell.call_count, 2)
+        self.assertTrue(state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]["queued"])
+        start.assert_not_called()
 
+    @mock.patch.object(pilot, "_release_running", return_value=True)
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(0, "released latest main"))
-    def test_pending_factory_release_waits_then_clears_on_success(self, run_shell, _log):
-        state = {"pending_factory_deploy": {"due": 160, "attempts": 2}}
+    def test_restart_keeps_running_release_until_durable_status(self, _log, start, _running):
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "pid": 42, "generation": 2, "status": "/not-yet", "queued": False}}}
         conf = {"deploy_factory_cmd": "fx factory release"}
 
-        self.assertIsNone(pilot.retry_pending_factory_deploy(conf, state, now=159))
-        self.assertEqual(
-            pilot.retry_pending_factory_deploy(conf, state, now=160), 0)
+        pilot.poll_post_merge_deploys(conf, state)
 
-        run_shell.assert_called_once_with("fx factory release")
-        self.assertNotIn("pending_factory_deploy", state)
+        start.assert_not_called()
+        self.assertIn("deploy_factory_cmd", state[pilot.DEPLOY_STATE_KEY])
 
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(8, "still running"))
-    def test_pending_factory_release_backs_off_while_lock_is_busy(self, _run_shell, _log):
-        state = {"pending_factory_deploy": {"due": 100, "attempts": 0}}
+    def test_completed_release_starts_one_coalesced_successor(self, _log, start):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        status = os.path.join(temporary.name, "done")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("0\n")
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 1, "status": status, "queued": True, "output": "/missing"}}}
 
-        result = pilot.retry_pending_factory_deploy(
-            {"deploy_factory_cmd": "fx factory release"}, state, now=100)
+        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
 
-        self.assertEqual(result, 8)
-        self.assertEqual(state["pending_factory_deploy"], {
-            "due": 160, "attempts": 1,
-        })
+        start.assert_called_once_with("deploy_factory_cmd", "FACTORY-DEPLOY",
+                                      "fx factory release", mock.ANY)
 
+    @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
-    @mock.patch.object(pilot, "run_shell", return_value=(5, "tests failed"))
-    def test_real_release_failure_is_not_retried_forever(self, _run_shell, _log):
-        state = {"pending_factory_deploy": {"due": 100, "attempts": 1}}
+    def test_lost_release_after_restart_is_restarted(self, _log, start):
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "pid": 999999, "generation": 1, "status": "/not-yet", "queued": False}}}
 
-        result = pilot.retry_pending_factory_deploy(
-            {"deploy_factory_cmd": "fx factory release"}, state, now=100)
+        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
 
-        self.assertEqual(result, 5)
-        self.assertNotIn("pending_factory_deploy", state)
+        start.assert_called_once_with("deploy_factory_cmd", "FACTORY-DEPLOY",
+                                      "fx factory release", mock.ANY)
 
 
 class DashboardProjectsTest(unittest.TestCase):

@@ -21,7 +21,7 @@ Planner layer (epics):
 import calendar
 import io
 import glob
-import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -4707,11 +4707,92 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
                     make_epic_from(tid, title, detail)
 
 
-FACTORY_DEPLOY_RETRY_DELAY = 60
+DEPLOY_STATE_KEY = "post_merge_deploys"
+DEPLOY_DIR = f"{HOME}/pilot/releases"
+
+
+def _release_running(pid):
+    """Whether the child recorded in state is still alive.
+
+    Completion is determined by the durable status file, rather than this
+    probe: after a Pilot restart the child has a different parent.
+    """
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _release_output(release):
+    try:
+        with open(release["output"], encoding="utf-8", errors="replace") as out:
+            return out.read().strip()[:200]
+    except (OSError, KeyError):
+        return ""
+
+
+def _start_post_merge_deploy(command_key, label, command, releases):
+    generation = int(releases.get("generation", 0)) + 1
+    releases["generation"] = generation
+    os.makedirs(DEPLOY_DIR, exist_ok=True)
+    stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
+    release = {"command": command, "label": label, "generation": generation,
+               "output": stem + ".log", "status": stem + ".status", "queued": False}
+    script = (f"{command} >{shlex.quote(release['output'])} 2>&1; rc=$?; "
+              f"printf '%s\\n' \"$rc\" >{shlex.quote(release['status'])}; exit \"$rc\"")
+    child = subprocess.Popen(script, shell=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, env=dict(os.environ, HOME=HOME))
+    release["pid"] = child.pid
+    releases[command_key] = release
+    log(f"{label} started generation={generation} pid={child.pid}")
+
+
+def poll_post_merge_deploys(conf, state):
+    """Collect finished releases and start one coalesced successor per target."""
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    # Compatibility with the short-lived retry marker used by older Pilots.
+    if state.pop("pending_factory_deploy", None):
+        releases.setdefault("deploy_factory_cmd", {"queued": True})
+    for command_key, release in list(releases.items()):
+        if command_key == "generation" or not isinstance(release, dict):
+            continue
+        label = release.get("label") or ("FACTORY-DEPLOY" if command_key == "deploy_factory_cmd"
+                                           else "AUTOMATION-STAGING-DEPLOY")
+        status = release.get("status")
+        rc = None
+        if status:
+            try:
+                with open(status, encoding="utf-8") as f:
+                    rc = int(f.read().strip())
+            except (OSError, ValueError):
+                pass
+        if rc is not None:
+            queued = release.get("queued", False)
+            log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
+                f"{_release_output(release)}")
+            releases.pop(command_key, None)
+            if queued and conf.get(command_key):
+                _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+        elif release.get("pid") and not _release_running(release["pid"]):
+            # The runner disappeared before it could write a result. Retrying
+            # one latest release is safe and prevents a restart from losing it.
+            log(f"{label} lost generation={release.get('generation')}; retrying latest main")
+            releases.pop(command_key, None)
+            if conf.get(command_key):
+                _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+        elif release.get("queued") and not release.get("pid") and conf.get(command_key):
+            _start_post_merge_deploy(command_key, label, conf[command_key], releases)
+
+
+def retry_pending_factory_deploy(conf, state, now=None):
+    """Compatibility name for the cycle hook; releases are now all polled."""
+    poll_post_merge_deploys(conf, state)
 
 
 def deploy_after_merge(conf, repo_identity, state=None, now=None):
-    """Release only the environment owned by the repository that was merged."""
+    """Queue a durable background release for the repository that was merged."""
     identity = (repo_identity or "").lower()
     if identity.endswith(".git"):
         identity = identity[:-4]
@@ -4729,46 +4810,16 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None):
     if not command:
         log(f"{label} skipped: {command_key} is not configured")
         return None
-    rc, output = run_shell(command)
-    log(f"{label} rc={rc} :: {output[:200]}")
-    if command_key == "deploy_factory_cmd" and state is not None:
-        if rc == 8:
-            due = (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY
-            pending = state.get("pending_factory_deploy") or {}
-            state["pending_factory_deploy"] = {
-                "due": due,
-                "attempts": int(pending.get("attempts") or 0),
-            }
-            log("FACTORY-DEPLOY занят: свежий main поставлен на повторный выпуск")
-        elif rc == 0:
-            state.pop("pending_factory_deploy", None)
-    return rc
-
-
-def retry_pending_factory_deploy(conf, state, now=None):
-    """Retry one coalesced Factory release after a concurrent release ends."""
-    pending = state.get("pending_factory_deploy")
-    if not pending:
+    if state is None:
+        state = {}
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    running = releases.get(command_key)
+    if running:
+        running["queued"] = True
+        log(f"{label} queued after generation={running.get('generation')}")
         return None
-    current = time.time() if now is None else now
-    if current < float(pending.get("due") or 0):
-        return None
-    command = conf.get("deploy_factory_cmd")
-    if not command:
-        log("FACTORY-DEPLOY repeat skipped: deploy_factory_cmd is not configured")
-        state.pop("pending_factory_deploy", None)
-        return None
-    rc, output = run_shell(command)
-    log(f"FACTORY-DEPLOY-RETRY rc={rc} :: {output[:200]}")
-    if rc == 0:
-        state.pop("pending_factory_deploy", None)
-    elif rc == 8:
-        pending["attempts"] = int(pending.get("attempts") or 0) + 1
-        pending["due"] = current + FACTORY_DEPLOY_RETRY_DELAY
-    else:
-        # A real build or health failure needs diagnosis, not an endless loop.
-        state.pop("pending_factory_deploy", None)
-    return rc
+    _start_post_merge_deploy(command_key, label, command, releases)
+    return None
 
 
 def cycle(conf, state):
@@ -5289,8 +5340,7 @@ def cycle(conf, state):
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
 
-    # A merge that lost the release lock must not be forgotten. Several such
-    # merges collapse into one release of the latest main.
+    # Releases are polled after pipeline work, never awaited in this cycle.
     retry_pending_factory_deploy(conf, state)
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
