@@ -65,6 +65,10 @@ exports.chromium = {
 JS
 cat >"$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome" <<'SH'
 #!/bin/bash
+if [ "${TEST_CHROMIUM_NO_USABLE_SANDBOX:-0}" = 1 ]; then
+  echo '[ERROR:sandbox_linux.cc(377)] No usable sandbox!' >&2
+  exit 1
+fi
 printf 'chromium-args=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 SH
 chmod 755 "$share/ops/"*
@@ -295,6 +299,26 @@ grep -Fx 'goto=https://example.com' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку внешнего интернета"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
+
+smoke_failure="$temporary/smoke-failure"
+status=0
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  TEST_CHROMIUM_NO_USABLE_SANDBOX=1 PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$smoke_failure/libexec" \
+  FACTORY_BROWSER_SUDOERS="$smoke_failure/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$smoke_failure/apparmor.d/factory-browser" \
+  FACTORY_BROWSER_SCREENSHOT="$smoke_failure/screenshot.png" \
+  bash "$linked_installer" >"$smoke_failure-output" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "installer продолжил работу после реального сбоя Chromium smoke"
+grep -Fx 'Chromium sandbox smoke failed: No usable sandbox' "$smoke_failure-output" >/dev/null \
+  || fail "installer не нормализовал реальный Chromium sandbox failure"
+if grep -F '[ERROR:sandbox_linux.cc' "$smoke_failure-output" >/dev/null; then
+  fail "installer опубликовал произвольный Chromium stderr вместо безопасной диагностики"
+fi
+[ ! -e "$smoke_failure/libexec/factory-browser-sandbox" ] \
+  || fail "ошибка Chromium smoke оставила launcher"
+[ ! -e "$smoke_failure/apparmor.d/factory-browser" ] \
+  || fail "ошибка Chromium smoke оставила AppArmor profile"
 
 apparmor_failure="$temporary/apparmor-failure"
 status=0

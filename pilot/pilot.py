@@ -4748,6 +4748,7 @@ RELEASE_SAFE_DIAGNOSTICS = frozenset({
     "Playwright full Chromium was not installed",
     "Playwright returned a non-absolute Chromium path",
     "Chromium path cannot be represented safely in AppArmor",
+    "Chromium sandbox smoke failed",
     "Chromium sandbox smoke failed: No usable sandbox",
 })
 RELEASE_DIAGNOSTICS_OMITTED = "diagnostic output omitted: no allowlisted lines"

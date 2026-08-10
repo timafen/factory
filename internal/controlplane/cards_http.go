@@ -34,6 +34,7 @@ type cardSummary struct {
 type cardsCacheEntry struct {
 	fetched time.Time
 	cards   []cardSummary
+	err     string
 }
 
 var (

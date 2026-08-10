@@ -150,10 +150,21 @@ step "разрешаю user namespace только установленному 
 apparmor_parser -r "$APPARMOR" >/dev/null
 
 step "запускаю живую проверку Chromium sandbox и сетевого allowlist"
-sudo -H -u "$FACTORY_USER" env \
-  FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
-  FACTORY_BROWSER_WEB="$PAYLOAD/web" \
-  "$PAYLOAD/ops/test-browser-sandbox.sh"
+smoke_output=$backup/browser-smoke.log
+if sudo -H -u "$FACTORY_USER" env \
+    FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
+    FACTORY_BROWSER_WEB="$PAYLOAD/web" \
+    "$PAYLOAD/ops/test-browser-sandbox.sh" >"$smoke_output" 2>&1; then
+  cat "$smoke_output"
+  rm -f -- "$smoke_output"
+else
+  if grep -Fq -- 'No usable sandbox' "$smoke_output"; then
+    echo "Chromium sandbox smoke failed: No usable sandbox" >&2
+  else
+    echo "Chromium sandbox smoke failed" >&2
+  fi
+  false
+fi
 changed=0
 rm -rf -- "$backup"
 backup=
