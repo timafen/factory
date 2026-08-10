@@ -3,11 +3,11 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: полный набор исправлений заново собран от свежего `origin/main`; целевые проверки и сборка проходят
-- Branch: `factory/1bbe9be5-85b-fa072189-970`
-- Head commit: `432e820`
-- What changed: восстановлены API, pilot и UI кнопки «Оживить»; продолжение учитывает последний успешный этап текущего круга, а архив не предлагает оживление.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 2 pilot-сценария, 6 UI-тестов); весь `internal/controlplane` и 9 `PipelineWatchTests` → PASS; Go/UI build, lint и typecheck → PASS.
+- Status: обе блокирующие ошибки Review исправлены; целевые проверки и сборка проходят
+- Branch: `factory/3c1a3a3f-b7a-c7cffcef-20a`
+- Head commit: `ebc4ec8`
+- What changed: pilot атомарно забирает revive-сигналы и не стирает конкурентную запись API; кнопка скрыта для фактического раздела «Архив», включая старые незакрытые работы.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 3 pilot-сценария, 7 UI-тестов); весь `internal/controlplane` и 16 pilot-тестов → PASS; `npx tsc -p tsconfig.app.json --noEmit`, Go/UI build и lint → PASS.
 - Next action: провести повторный Review поставленной ветки.
 
 ## LOG
@@ -93,3 +93,7 @@
 ### 2026-08-10 — Implement
 
 После возврата поставка заново собрана от свежего `origin/main`: в ветку вошли серверная команда revive, обработка pilot, интерфейс, встроенный bundle и регрессионные тесты, а не только recipe в `Justfile`. Прошли `just test-revive-stopped-work`, полный пакет `internal/controlplane`, все 9 `PipelineWatchTests`, `go build ./...`, UI lint, typecheck и production build.
+
+### 2026-08-10 — Implement
+
+После повторного Review устранены две блокирующие ошибки: pilot атомарно отделяет входной `revive.json` в восстанавливаемый spool, поэтому запись API во время обработки остаётся на следующий цикл; `GroupRow` получает фактический раздел и не показывает «Оживить» в архиве, даже если незакрытая работа попала туда по возрасту. Конкурентное окно и старая незакрытая карточка закреплены регрессионными тестами. Прошли `just test-revive-stopped-work`, весь `internal/controlplane`, 16 тестов `ReviveSignalTests`/`PipelineWatchTests`, обязательный typecheck, lint и обе сборки.
