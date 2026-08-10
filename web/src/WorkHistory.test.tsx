@@ -38,6 +38,7 @@ it("shows the short Russian history returned by the API", async () => {
   }));
   renderHistory();
 
+  fireEvent.click(screen.getByRole("button", { name: /Архив/ }));
   fireEvent.click(screen.getByText("Понятная история"));
   expect(await screen.findByText("Этап успешно завершён")).toBeVisible();
 });
@@ -51,6 +52,7 @@ it("keeps the work screen usable when the history API fails", async () => {
   }));
   renderHistory();
 
+  fireEvent.click(screen.getByRole("button", { name: /Архив/ }));
   fireEvent.click(screen.getByText("Понятная история"));
   expect(await screen.findByText("отработала")).toBeVisible();
   expect(screen.queryByText("Этап успешно завершён")).not.toBeInTheDocument();
@@ -76,6 +78,7 @@ it("loads and combines history for more than 100 tasks in batches", async () => 
 
   renderHistory(tasks);
 
+  fireEvent.click(screen.getByRole("button", { name: /Архив/ }));
   fireEvent.click(screen.getByText("Работа 101"));
   expect(await screen.findByText("История task-101")).toBeVisible();
   expect(historyRequests).toHaveLength(2);

@@ -544,9 +544,10 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
     "aria-current",
     "page",
   );
-  await expect(page.getByRole("heading", { name: "Идёт сейчас" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Не вышло / остановлено" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
+  await expect(page.getByText("Не вышло / остановлено")).toHaveCount(0);
   await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Архив/ }).click();
   await expect(page.getByText("Cancelled queue cleanup", { exact: true })).toBeVisible();
   await expect(page.getByText("Long operational title", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/work-desktop.png", fullPage: true });
@@ -713,7 +714,10 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Идёт сейчас" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
+  const explanation = page.locator(".work-explanation").first();
+  await expect(explanation).toBeVisible();
+  expect(await explanation.evaluate("element => getComputedStyle(element).gridTemplateColumns.split(' ').length")).toBe(1);
   const main = page.locator("main");
   expect(await main.evaluate("element => element.scrollWidth <= element.clientWidth")).toBe(true);
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
