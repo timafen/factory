@@ -90,7 +90,7 @@ func (w *limitedWriter) Write(body []byte) (int, error) {
 
 func serializeDialog(messages []protocol.DialogMessage) string {
 	var b strings.Builder
-	b.WriteString("Продолжи разговор. Ответь только на последний вопрос.\n\n")
+	b.WriteString("Продолжи разговор. Ответь только на последний вопрос. Если нужно увидеть тестовый стенд глазами, используй factory-worker browser; он разрешает только https://staging-automation.tarser.net и его пути.\n\n")
 	for _, message := range messages {
 		label := "Пользователь"
 		if message.Role == "assistant" {
