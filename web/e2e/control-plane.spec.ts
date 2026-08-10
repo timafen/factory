@@ -833,11 +833,19 @@ test("manages repository routing end to end and preserves add input while pollin
 
   await page.getByRole("button", { name: "Delegate task" }).click();
   const delegate = page.getByRole("dialog", { name: "Delegate task" });
+  await delegate.getByLabel("Title").fill("Delegate configured managed repository");
+  await delegate.getByLabel("Context").fill("Acquire this repository on the selected worker.");
   await delegate.getByLabel("Worker").selectOption(managedWorker);
   const repositoryPicker = delegate.getByLabel("Repository");
   const managedOption = repositoryPicker.locator("option").filter({ hasText: "github.com/example/browser-managed" });
-  await expect(managedOption).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  await expect(managedOption).toBeEnabled();
+  await expect(managedOption).toContainText("acquired on demand");
+  await repositoryPicker.selectOption((await managedOption.getAttribute("value"))!);
+  await delegate.getByRole("button", { name: "Delegate task" }).click();
+  await expect(page.getByRole("heading", { name: "Delegate configured managed repository" })).toBeVisible();
+  const delegatedTaskID = new URL(page.url()).pathname.split("/").at(-1)!;
+  const delegatedTask = await json<TaskDetail>(await api.get(`/api/v1/tasks/${delegatedTaskID}`));
+  expect(delegatedTask.execution.assigned_worker_id).toBe(managedWorker);
   await api.dispose();
   browser.assertClean();
 });
