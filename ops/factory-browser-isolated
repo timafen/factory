@@ -19,7 +19,7 @@ case "${SUDO_USER:-$FACTORY_BROWSER_USER}" in
 esac
 for argument in "$@"; do
   case "$argument" in
-    --host-resolver-rules*|--host-rules*|--proxy-server*|--proxy-pac-url*)
+    --host-resolver-rules*|--host-rules*|--*proxy*)
       echo "unsafe Chromium network override rejected: ${argument%%=*}" >&2
       exit 1
       ;;
@@ -42,7 +42,8 @@ PY
   [[ "$replacement" != *:* ]] || replacement="[$replacement]"
   resolver_rules+=("MAP $fqdn $replacement")
 done
-rules=$(IFS=', '; echo "${resolver_rules[*]}, EXCLUDE localhost")
+printf -v rules '%s, ' "${resolver_rules[@]}"
+rules+='MAP * ~NOTFOUND, EXCLUDE localhost'
 
 exec systemd-run --scope --quiet --collect \
   -p IPAddressDeny=any -p IPAddressAllow=localhost "${allow_args[@]}" \
@@ -51,4 +52,5 @@ exec systemd-run --scope --quiet --collect \
   setpriv --reuid="$FACTORY_BROWSER_USER" --regid="$FACTORY_BROWSER_GROUP" \
     --init-groups --inh-caps=-all --ambient-caps=-all -- \
     env HOME="$FACTORY_BROWSER_HOME" \
-    "$FACTORY_BROWSER_EXECUTABLE" --host-resolver-rules="$rules" "$@"
+    "$FACTORY_BROWSER_EXECUTABLE" --host-resolver-rules="$rules" \
+      --no-proxy-server "$@"
