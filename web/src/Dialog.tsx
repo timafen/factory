@@ -50,6 +50,8 @@ export function Dialog() {
   const [reading, setReading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [standURL, setStandURL] = useState("https://staging-automation.tarser.net/");
+  const [capturing, setCapturing] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -82,7 +84,7 @@ export function Dialog() {
   }, [question]);
 
   const take = (file?: File | null) => {
-    if (!file) return;
+    if (!file || pending || capturing) return;
     const mine = ++selection.current;
     if (!OK_TYPES.includes(file.type) || file.size > 4 * 1024 * 1024) {
       setScreenshot(null); setReading(false);
@@ -109,7 +111,7 @@ export function Dialog() {
 
   const send = async () => {
     const content = question.trim();
-    if ((!content && !screenshot) || brainIndex === null || pending || reading) return;
+    if ((!content && !screenshot) || brainIndex === null || pending || reading || capturing) return;
     const history: DialogMessage[] = [
       ...messages.map(({ role, content }) => ({ role, content })),
       { role: "user", content: content || "Посмотри скриншот" },
@@ -133,7 +135,7 @@ export function Dialog() {
   };
 
   const current = brainIndex !== null ? models[brainIndex] : undefined;
-  const canSend = !pending && !reading && brainIndex !== null && (!!question.trim() || !!screenshot);
+  const canSend = !pending && !reading && !capturing && brainIndex !== null && (!!question.trim() || !!screenshot);
 
   return (
     <section className="dlg" aria-labelledby="dialog-title"
@@ -167,6 +169,25 @@ export function Dialog() {
           )}
         </div>
       </header>
+
+      <div className="dlg-browser">
+        <input aria-label="Адрес страницы стенда" value={standURL} disabled={capturing || pending}
+          onChange={(event) => setStandURL(event.target.value)} />
+        <button type="button" disabled={capturing || pending} onClick={async () => {
+          const mine = ++selection.current;
+          setReading(false); setScreenshot(null);
+          setCapturing(true); setError("");
+          try {
+            const capture = await api.browserCapture(standURL);
+            if (mine !== selection.current) return;
+            setStandURL(capture.url);
+            setScreenshot({ name: "стенд.png", content_type: capture.content_type, data: capture.data });
+          } catch (cause) {
+            if (mine !== selection.current) return;
+            setError(cause instanceof APIError ? cause.message : "Не удалось открыть тестовый стенд");
+          } finally { setCapturing(false); }
+        }}>{capturing ? "Открываю…" : "Посмотреть стенд"}</button>
+      </div>
 
       <div className="dlg-feed">
         {messages.length === 0 && !pending && (
@@ -223,7 +244,7 @@ export function Dialog() {
 
         <div className="dlg-input">
           <button type="button" className="dlg-clip" title="Прикрепить скриншот"
-            onClick={() => fileRef.current?.click()} disabled={pending}>📎</button>
+            onClick={() => fileRef.current?.click()} disabled={pending || capturing}>📎</button>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden
             aria-label="Скриншот к вопросу"
             onChange={(e) => { take(e.target.files?.[0]); e.target.value = ""; }} />

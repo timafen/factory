@@ -124,6 +124,8 @@ fx — разрешённые операции:
                                   автоматический откат при неудаче
   fx factory rollback             вернуть предыдущую версию Фабрики
   fx factory release-info         какая версия Фабрики сейчас выкачена
+  fx factory browser-sandbox install  установить Chromium и сетевую песочницу
+  fx factory browser-sandbox check    проверить отказ TCP, UDP и DNS вне прокси
 
   fx repo status                  есть ли доступ к GitHub и от чьего имени
   fx repo head <ветка>            вершина ветки на origin (только чтение)
@@ -527,6 +529,30 @@ case "$scope" in
     FBIN=/opt/factory-data/bin/factory-server
     FINFO=/opt/factory-data/releases/factory-current.json
     case "$verb" in
+      browser-sandbox)
+        action="${arg:-check}"
+        case "$action" in
+          install)
+            installer=/usr/local/share/factory/browser-sandbox/ops/install-server-browser.sh
+            [ -x "$installer" ] || die "установщик browser-sandbox отсутствует; сначала обновите системные файлы Factory"
+            say factory browser-sandbox-install OK
+            "$installer"
+            ;;
+          check)
+            checker=/usr/local/libexec/factory-browser-sandbox-check
+            [ -x "$checker" ] || die "browser-sandbox не установлен; выполните fx factory browser-sandbox install"
+            say factory browser-sandbox-check OK
+            "$checker"
+            ;;
+          run)
+            launcher=/usr/local/libexec/factory-browser-sandbox
+            [ -x "$launcher" ] || die "browser-sandbox не установлен"
+            shift 3
+            exec "$launcher" run "$@"
+            ;;
+          *) die "browser-sandbox: можно install | check" ;;
+        esac
+        ;;
       status)
         say factory status OK
         systemctl --no-pager --plain status factory-server.service 2>&1 \
