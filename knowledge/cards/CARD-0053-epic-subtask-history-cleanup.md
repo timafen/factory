@@ -2,14 +2,13 @@
 
 ## HEAD
 
-Status: Verified PASS — готово к слиянию.
-Branch: `factory/80aca1a3-f87-4b58af7e-2a5`.
-Implementation commit: `4e40ff2` — Пилот помнит завершение подзадач после очистки истории.
-What changed: Пилот сохраняет durable receipt завершения и восстанавливает running-подзадачу только по точному свежему merge после её `started_at`.
-Перезапуск с `failed` или `stuck` фиксирует границу по новейшей одноимённой задаче, поэтому очистка истории не применяет старую квитанцию.
-`hold_reason` удерживает очередь, а `parallel_ok` продолжает разрешать независимый запуск.
-Evidence: `python3 -m unittest pilot.test_pilot` — 115 tests OK; `just build` — OK; `git diff --check origin/main...HEAD` — OK.
-One next action: влить ветку в `main`.
+Status: Implemented — готово к проверке и слиянию.
+Branch: `factory/e6a73fe0-450-d846e2b1-caa`.
+Implementation commit: `68761c3e98f1a92a22419e92a1131c426bd9bf1f` — Пилот восстанавливает завершённую подзадачу из legacy-квитанции после очистки истории.
+What changed: Разбор квитанции явно снимает только конечный UTC-суффикс и сохраняет поддержку старой локальной даты merge-журнала.
+Регрессия подтверждает, что такая свежая точная квитанция переводит running-подзадачу в `done` после очистки истории.
+Evidence: `python3 -m unittest pilot.test_pilot.EpicCompletionReceiptTests` — 8 tests OK; `python3 -m unittest pilot.test_pilot` — 146 tests OK; `just build` — OK.
+One next action: проверить и влить ветку в `main`.
 
 ## LOG
 
@@ -43,3 +42,10 @@ One next action: влить ветку в `main`.
 `4e40ff2` сохраняет durable receipt, отсеивает старый merge после `failed` и
 `stuck`, и не меняет семантику `hold_reason` и `parallel_ok`.
 `python3 -m unittest pilot.test_pilot` — 115 OK; `just build` — OK.
+
+### 2026-08-10 — Implement
+
+Legacy merge-квитанция с локальной датой без `Z` вновь подтверждает завершение
+running-подзадачи после очистки истории; снятие UTC-суффикса сделано явным.
+`python3 -m unittest pilot.test_pilot.EpicCompletionReceiptTests` — 8 OK;
+`python3 -m unittest pilot.test_pilot` — 146 OK; `just build` — OK.
