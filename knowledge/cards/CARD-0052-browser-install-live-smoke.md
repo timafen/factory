@@ -2,17 +2,33 @@
 
 ## HEAD
 
-- Status: Implemented PASS — замечание Review устранено, готово к повторному Review.
+- Status: BLOCKED — живой привилегированный smoke не может быть выполнен в worker-окружении.
 - Branch: `factory/90b2fdd8-3bf-36abeb90-5cf`.
-- Head commit: `b0a827d` — проверенная реализация на свежем `origin/main`.
+- Head commit: верифицируемая ветка содержит реализацию и запись Verify ниже.
 - What changed: installer нормализует фактический `No usable sandbox` в статическую
   строку и не публикует Chromium stderr; интеграционный тест проходит через штатный
   browser smoke. Обе посторонние правки controlplane исключены из diff.
-- Evidence: installer/release shell suites PASS; Pilot 13/13 PASS;
-  `npx tsc -p tsconfig.app.json --noEmit` PASS; `npm run build` PASS.
-- One next action: Review повторно проверяет достижимость диагностики и чистоту diff.
+- Evidence: shell suites PASS; Pilot 110/110, Go-тесты, UI lint/typecheck/tests
+  (123) и production build PASS. Полный `just check` останавливается на двух
+  старых staticcheck-диагностиках вне diff. Реальный privileged smoke не запускался:
+  `sudo -n true` требует пароль.
+- One next action: выполнить installer на Factory host от root (или предоставить
+  безпарольный sudo) и подтвердить AppArmor/systemd/Chromium smoke без restart worker.
 
 ## LOG
+
+### 2026-08-10 — Verify
+
+Ветка получена от implementation без переключения рабочего branch. Трёхточечный
+diff от `origin/main` содержит семь заявленных файлов, `git diff --check` чист.
+
+`bash ops/test-install-server-browser.sh` доказывает `NEEDRESTART_MODE=l`, отсутствие
+`systemctl restart`, systemd BPF allowlist, sandbox smoke и rollback. Release-suite,
+110 Pilot-тестов, Go-тесты и UI-проверки прошли; UI component suite: 123 теста.
+
+Проверка настоящих AppArmor profile, systemd BPF scope и Chromium остановлена до
+изменения машины: worker uid не root, а `sudo -n true` возвращает запрос пароля.
+Это блокирует утверждение живого smoke, но не является падением реализации.
 
 ### 2026-08-10 — Implement
 
