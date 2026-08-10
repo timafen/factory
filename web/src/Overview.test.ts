@@ -103,6 +103,7 @@ describe("Overview Factory efficiency", () => {
       ],
       unclassified_too_high: true, unclassified_threshold: 0.2,
       review_first_pass: { count: 1, total: 2, rate: 0.5 },
+      review_return_reasons: [{ category: "тесты", count: 2 }, { category: "не классифицировано", count: 1 }], review_returns_total: 3,
       verify_first_pass: { count: 2, total: 2, rate: 1 },
       rounds: { sample: 2, median: 1.5, p90: 2 },
       final_dead_ends: { count: 1, total: 3, rate: 1 / 3 },
@@ -114,7 +115,7 @@ describe("Overview Factory efficiency", () => {
       generated_at: "2026-08-10T12:00:00Z", minimum_sample: 5,
       periods: {
         "24h": { assessment: "low_data", current: period(), previous: period({ completed_works: 1 }) },
-        "7d": { assessment: "degraded", current: period({ completed_works: 8 }), previous: period({ completed_works: 10 }) },
+        "7d": { assessment: "degraded", current: period({ completed_works: 8, review_return_reasons: [], review_returns_total: 0 }), previous: period({ completed_works: 10 }) },
       },
     };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -133,6 +134,8 @@ describe("Overview Factory efficiency", () => {
     expect(within(section).queryByText("есть улучшение")).not.toBeInTheDocument();
     fireEvent.click(within(section).getByText("Показать детали и знаменатели"));
     expect(within(section).getByText("1 из 2 (50%)")).toBeVisible();
+    expect(within(section).getByText("Причины возврата Review")).toBeVisible();
+    expect(within(section).getByText("тесты: 2 (67%)")).toBeVisible();
     expect(within(section).getByText("Ожидание решения владельца")).toBeVisible();
     expect(within(section).getByText("Определение owner_decision_wait")).toBeVisible();
     expect(within(section).getAllByText("360 сек · 5%")).toHaveLength(3);
@@ -143,6 +146,7 @@ describe("Overview Factory efficiency", () => {
     expect(within(section).getByText("есть деградация")).toBeVisible();
     expect(within(section).getByText("выборка: 8 влитых работ · минимум для оценки 5")).toBeVisible();
     expect(within(section).getByText("предыдущий период: 10")).toBeVisible();
+    expect(within(section).getByText("Возвратов Review не было")).toBeVisible();
   });
 });
 

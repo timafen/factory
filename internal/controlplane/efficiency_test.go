@@ -111,6 +111,10 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 	if got.UnclassifiedThreshold != efficiencyUnclassifiedThreshold || !got.UnclassifiedTooHigh {
 		t.Fatalf("unclassified signal = threshold %f high=%v", got.UnclassifiedThreshold, got.UnclassifiedTooHigh)
 	}
+	if got.ReviewReturnsTotal != 1 || len(got.ReviewReturnReasons) != 1 ||
+		got.ReviewReturnReasons[0] != (EfficiencyReviewReturnReason{Category: "не классифицировано", Count: 1}) {
+		t.Fatalf("legacy review return = total %d reasons %#v", got.ReviewReturnsTotal, got.ReviewReturnReasons)
+	}
 	if shares["stage_handoff_wait"].Seconds != 30*time.Minute.Seconds() ||
 		shares["merge_release_wait"].Seconds != 10*time.Minute.Seconds() ||
 		shares["unclassified"].Seconds != 50*time.Minute.Seconds() ||
@@ -121,6 +125,21 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 		if share.Definition == "" {
 			t.Fatalf("time share %q has no API definition", share.Key)
 		}
+	}
+}
+
+func TestEfficiencyReviewReturnReasonsUseJournalAndFixedOrder(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	work := efficiencyWork{mergeAt: now, tasks: []*efficiencyTask{
+		{id: "review-tests", stage: "Review", state: "succeeded", createdAt: now.Add(-2 * time.Hour)},
+		{id: "review-legacy", stage: "Review", state: "failed", createdAt: now.Add(-time.Hour)},
+	}}
+	period := summarizeEfficiencyPeriod(now.Add(-24*time.Hour), now.Add(time.Hour), nil,
+		[]efficiencyWork{work}, nil, nil, nil, []efficiencyReviewReturn{{taskID: "review-tests", category: "тесты"}})
+	if period.ReviewReturnsTotal != 2 || len(period.ReviewReturnReasons) != 2 ||
+		period.ReviewReturnReasons[0] != (EfficiencyReviewReturnReason{Category: "тесты", Count: 1}) ||
+		period.ReviewReturnReasons[1] != (EfficiencyReviewReturnReason{Category: "не классифицировано", Count: 1}) {
+		t.Fatalf("review return reasons = total %d reasons %#v", period.ReviewReturnsTotal, period.ReviewReturnReasons)
 	}
 }
 

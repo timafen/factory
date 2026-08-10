@@ -40,22 +40,24 @@ type EfficiencyPeriodComparison struct {
 }
 
 type EfficiencyPeriod struct {
-	StartedAt             time.Time                   `json:"started_at"`
-	EndedAt               time.Time                   `json:"ended_at"`
-	CompletedWorks        int                         `json:"completed_works"`
-	ProductStageTasks     int                         `json:"product_stage_tasks"`
-	LeadTimeSeconds       EfficiencyDistribution      `json:"lead_time_seconds"`
-	TimeShares            []EfficiencyTimeShare       `json:"time_shares"`
-	UnclassifiedTooHigh   bool                        `json:"unclassified_too_high"`
-	UnclassifiedThreshold float64                     `json:"unclassified_threshold"`
-	ReviewFirstPass       EfficiencyRate              `json:"review_first_pass"`
-	VerifyFirstPass       EfficiencyRate              `json:"verify_first_pass"`
-	Rounds                EfficiencyDistribution      `json:"rounds"`
-	FinalDeadEnds         EfficiencyRate              `json:"final_dead_ends"`
-	AutomaticRecoveries   int                         `json:"automatic_recoveries"`
-	ReleaseFailures       int                         `json:"release_failures"`
-	Rollbacks             int                         `json:"rollbacks"`
-	Excluded              EfficiencyExcludedBreakdown `json:"excluded"`
+	StartedAt             time.Time                      `json:"started_at"`
+	EndedAt               time.Time                      `json:"ended_at"`
+	CompletedWorks        int                            `json:"completed_works"`
+	ProductStageTasks     int                            `json:"product_stage_tasks"`
+	LeadTimeSeconds       EfficiencyDistribution         `json:"lead_time_seconds"`
+	TimeShares            []EfficiencyTimeShare          `json:"time_shares"`
+	UnclassifiedTooHigh   bool                           `json:"unclassified_too_high"`
+	UnclassifiedThreshold float64                        `json:"unclassified_threshold"`
+	ReviewFirstPass       EfficiencyRate                 `json:"review_first_pass"`
+	ReviewReturnReasons   []EfficiencyReviewReturnReason `json:"review_return_reasons"`
+	ReviewReturnsTotal    int                            `json:"review_returns_total"`
+	VerifyFirstPass       EfficiencyRate                 `json:"verify_first_pass"`
+	Rounds                EfficiencyDistribution         `json:"rounds"`
+	FinalDeadEnds         EfficiencyRate                 `json:"final_dead_ends"`
+	AutomaticRecoveries   int                            `json:"automatic_recoveries"`
+	ReleaseFailures       int                            `json:"release_failures"`
+	Rollbacks             int                            `json:"rollbacks"`
+	Excluded              EfficiencyExcludedBreakdown    `json:"excluded"`
 }
 
 type EfficiencyDistribution struct {
@@ -68,6 +70,11 @@ type EfficiencyRate struct {
 	Count int      `json:"count"`
 	Total int      `json:"total"`
 	Rate  *float64 `json:"rate"`
+}
+
+type EfficiencyReviewReturnReason struct {
+	Category string `json:"category"`
+	Count    int    `json:"count"`
 }
 
 type EfficiencyTimeShare struct {
@@ -111,6 +118,11 @@ type efficiencyAttempt struct {
 type efficiencyMerge struct {
 	taskID string
 	at     time.Time
+}
+
+type efficiencyReviewReturn struct {
+	taskID   string
+	category string
 }
 
 type efficiencyReleaseEvent struct {
@@ -175,6 +187,10 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	if err != nil {
 		return EfficiencySummary{}, unavailable(err)
 	}
+	returns, err := loadEfficiencyReviewReturns()
+	if err != nil {
+		return EfficiencySummary{}, unavailable(err)
+	}
 	releases, err := loadEfficiencyReleaseEvents()
 	if err != nil {
 		return EfficiencySummary{}, unavailable(err)
@@ -191,8 +207,8 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	} {
 		start := now.Add(-duration)
 		previousStart := start.Add(-duration)
-		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions)
-		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions)
+		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions, returns)
+		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions, returns)
 		periods[key] = EfficiencyPeriodComparison{
 			Assessment: compareEfficiencyPeriods(current, previous),
 			Current:    current, Previous: previous,
@@ -328,6 +344,38 @@ func loadEfficiencyMerges() ([]efficiencyMerge, error) {
 	}
 	sort.Slice(merges, func(i, j int) bool { return merges[i].at.Before(merges[j].at) })
 	return merges, nil
+}
+
+func loadEfficiencyReviewReturns() ([]efficiencyReviewReturn, error) {
+	path := filepath.Join(efficiencyDataHome(), "pilot", "review-returns.jsonl")
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return []efficiencyReviewReturn{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	allowed := map[string]bool{"требования": true, "ошибка реализации": true, "тесты": true,
+		"интерфейс и понятность": true, "безопасность": true, "документация или процесс": true, "прочее": true}
+	seen := make(map[string]struct{})
+	returns := make([]efficiencyReviewReturn, 0)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var raw struct {
+			TaskID   string `json:"task_id"`
+			Category string `json:"category"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &raw) != nil || raw.TaskID == "" || !allowed[raw.Category] {
+			continue
+		}
+		if _, ok := seen[raw.TaskID]; ok {
+			continue
+		}
+		seen[raw.TaskID] = struct{}{}
+		returns = append(returns, efficiencyReviewReturn{taskID: raw.TaskID, category: raw.Category})
+	}
+	return returns, scanner.Err()
 }
 
 func parseEfficiencyMergeTime(value string) (time.Time, error) {
@@ -480,7 +528,7 @@ func buildEfficiencyWorks(tasks []*efficiencyTask, merges []efficiencyMerge) ([]
 	return works, tails
 }
 
-func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent, questions []efficiencyQuestion) EfficiencyPeriod {
+func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent, questions []efficiencyQuestion, returns []efficiencyReviewReturn) EfficiencyPeriod {
 	period := EfficiencyPeriod{
 		StartedAt: start, EndedAt: end,
 		UnclassifiedThreshold: efficiencyUnclassifiedThreshold,
@@ -496,6 +544,11 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	roundValues := make([]float64, 0, len(selected))
 	shareSeconds := make(map[string]float64)
 	shareSamples := make(map[string]int)
+	returnByTask := make(map[string]string, len(returns))
+	for _, returned := range returns {
+		returnByTask[returned.taskID] = returned.category
+	}
+	returnCounts := make(map[string]int)
 	var shareDenominator float64
 	for _, work := range selected {
 		first := work.tasks[0].createdAt
@@ -520,6 +573,13 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 			stages[task.stage] = append(stages[task.stage], task)
 		}
 		reviews := stages["Review"]
+		for _, review := range reviews {
+			if category := returnByTask[review.id]; category != "" {
+				returnCounts[category]++
+			} else if review.state != "succeeded" {
+				returnCounts["не классифицировано"]++
+			}
+		}
 		if len(reviews) > 0 {
 			period.ReviewFirstPass.Total++
 			if len(reviews) == 1 && reviews[0].state == "succeeded" {
@@ -548,6 +608,13 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	period.Rounds = efficiencyDistribution(roundValues)
 	period.ReviewFirstPass = efficiencyRate(period.ReviewFirstPass.Count, period.ReviewFirstPass.Total)
 	period.VerifyFirstPass = efficiencyRate(period.VerifyFirstPass.Count, period.VerifyFirstPass.Total)
+	for _, category := range []string{"требования", "ошибка реализации", "тесты", "интерфейс и понятность", "безопасность", "документация или процесс", "прочее", "не классифицировано"} {
+		count := returnCounts[category]
+		period.ReviewReturnsTotal += count
+		if count > 0 {
+			period.ReviewReturnReasons = append(period.ReviewReturnReasons, EfficiencyReviewReturnReason{Category: category, Count: count})
+		}
+	}
 	period.TimeShares = efficiencyTimeShares(shareSeconds, shareSamples, shareDenominator)
 	if shareDenominator > 0 {
 		period.UnclassifiedTooHigh = shareSeconds["unclassified"]/shareDenominator > efficiencyUnclassifiedThreshold

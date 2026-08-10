@@ -41,12 +41,14 @@ type Dash = {
 
 type EfficiencyDistribution = { sample: number; median: number | null; p90: number | null };
 type EfficiencyRate = { count: number; total: number; rate: number | null };
+type EfficiencyReviewReturnReason = { category: string; count: number };
 type EfficiencyTimeShare = { key: string; definition: string; sample: number; seconds: number; denominator_seconds: number; share: number | null };
 type EfficiencyPeriod = {
   started_at: string; ended_at: string; completed_works: number; product_stage_tasks: number;
   lead_time_seconds: EfficiencyDistribution; time_shares: EfficiencyTimeShare[];
   unclassified_too_high: boolean; unclassified_threshold: number;
   review_first_pass: EfficiencyRate; verify_first_pass: EfficiencyRate;
+  review_return_reasons: EfficiencyReviewReturnReason[]; review_returns_total: number;
   rounds: EfficiencyDistribution; final_dead_ends: EfficiencyRate;
   automatic_recoveries: number; release_failures: number; rollbacks: number;
   excluded: { patrol: number; scheduled: number; helper: number; other: number; total: number };
@@ -184,6 +186,10 @@ function formatRate(rate: EfficiencyRate) {
   return rate.total ? `${rate.count} из ${rate.total} (${Math.round((rate.rate ?? 0) * 100)}%)` : "— (n=0)";
 }
 
+function formatReviewReturnRate(reason: EfficiencyReviewReturnReason, total: number) {
+  return `${reason.count} (${Math.round(reason.count / total * 100)}%)`;
+}
+
 function assessmentView(assessment: EfficiencyComparison["assessment"]) {
   if (assessment === "low_data") return { text: "данных мало", tone: "muted" as const };
   if (assessment === "degraded") return { text: "есть деградация", tone: "bad" as const };
@@ -237,6 +243,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
             <h3>Качество прохождения</h3>
             <dl className="efficiency-facts">
               <div><dt>Review с первого раза</dt><dd>{formatRate(current.review_first_pass)}<br /><small>ранее {formatRate(previous.review_first_pass)}</small></dd></div>
+              <div><dt>Причины возврата Review</dt><dd>{current.review_returns_total === 0 ? "Возвратов Review не было" : <><span>всего {current.review_returns_total}</span><ul>{current.review_return_reasons.map((reason) => <li key={reason.category}>{reason.category}: {formatReviewReturnRate(reason, current.review_returns_total)}</li>)}</ul></>}<br /><small>ранее {previous.review_returns_total}</small></dd></div>
               <div><dt>Verify с первого раза</dt><dd>{formatRate(current.verify_first_pass)}<br /><small>ранее {formatRate(previous.verify_first_pass)}</small></dd></div>
               <div><dt>Круги</dt><dd>медиана {current.rounds.median ?? "—"} · p90 {current.rounds.p90 ?? "—"} · n={current.rounds.sample}<br /><small>ранее {previous.rounds.median ?? "—"} / {previous.rounds.p90 ?? "—"} · n={previous.rounds.sample}</small></dd></div>
               <div><dt>Автовосстановления</dt><dd>{current.automatic_recoveries} (ранее {previous.automatic_recoveries})</dd></div>

@@ -33,6 +33,7 @@ EPIC_DIR = f"{HOME}/pilot/epics"
 QUESTION_DIR = f"{HOME}/pilot/questions"
 CONTEXT_PATH = f"{HOME}/pilot/context.md"
 VERDICT_DIR = f"{HOME}/pilot/verdicts"
+REVIEW_RETURNS_PATH = f"{HOME}/pilot/review-returns.jsonl"
 PREFIX = "[auto]"
 STAGE_TITLE_RE = re.compile(r"^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.*)$")
 EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
@@ -1476,6 +1477,56 @@ ACCEPT_MARK = re.compile(
     r"^\s*[«\"']?(ПРИНЯТО\b|Принима\w*|"
     r"Работа\s+выполнена|Считаю\s+выполненн)", re.I)
 NEXT_STAGE = {"Implement + Test": "Review", "Review": "Verify", "Verify": "Verify"}
+
+REVIEW_RETURN_CATEGORIES = (
+    "требования", "ошибка реализации", "тесты", "интерфейс и понятность",
+    "безопасность", "документация или процесс", "прочее",
+)
+REVIEW_REQUEST_CHANGES = re.compile(r"^\s*REQUEST CHANGES\b", re.I)
+REVIEW_RETURN_REASON = re.compile(r"^ПРИЧИНА ВОЗВРАТА:\s*(.+?)\s*$", re.M)
+REVIEW_RETURN_EXPLANATION = re.compile(r"^ПОЯСНЕНИЕ ПРИЧИНЫ:\s*(.+?)\s*$", re.M)
+REVIEW_RETURN_CONTRACT = (
+    "При REQUEST CHANGES укажи отдельными точными строками:\n"
+    "ПРИЧИНА ВОЗВРАТА: <требования | ошибка реализации | тесты | интерфейс и понятность | безопасность | документация или процесс | прочее>\n"
+    "ПОЯСНЕНИЕ ПРИЧИНЫ: <кратко; обязательно только для «прочее»>.\n"
+    "Категорию нельзя заменять свободным текстом."
+)
+
+
+def review_return_reason(report):
+    """Return a strictly declared Review return reason, never infer one."""
+    if not REVIEW_REQUEST_CHANGES.match(report or ""):
+        return None
+    match = REVIEW_RETURN_REASON.search(report or "")
+    category = match.group(1).strip() if match else ""
+    if category not in REVIEW_RETURN_CATEGORIES:
+        return None
+    explanation_match = REVIEW_RETURN_EXPLANATION.search(report or "")
+    explanation = explanation_match.group(1).strip() if explanation_match else ""
+    if category == "прочее" and not explanation:
+        return None
+    return {"category": category, "explanation": explanation}
+
+
+def record_review_return(task_id, reason, path=REVIEW_RETURNS_PATH):
+    """Append once per Review task so a restarted pilot cannot double-count it."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    if json.loads(line).get("task_id") == task_id:
+                        return False
+                except (ValueError, AttributeError):
+                    continue
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    record = {"task_id": task_id, "category": reason["category"],
+              "explanation": reason["explanation"],
+              "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return True
 
 
 def accept_forward(stage, answer):
@@ -6051,6 +6102,49 @@ def cycle(conf, state):
                 save_promises(base_title(title), result)
             except Exception as e:
                 log("promises_error", repr(e))
+        # REQUEST CHANGES is a machine-routable Review result only when its
+        # fixed reason is present.  Free prose must not silently become data.
+        if wf == "Review" and REVIEW_REQUEST_CHANGES.match(result):
+            reason = review_return_reason(result)
+            base = base_title(title)
+            rid = detail["task"].get("repository_id") or ""
+            if reason:
+                if record_review_return(tid, reason):
+                    back = "Implement + Test"
+                    if back in stages:
+                        back_idx = stages.index(back)
+                        back_worker = workers.get(stage_worker(conf, back, "medium", workers))
+                        back_workflow = workflows.get(back)
+                        if back_worker and back_workflow and back_workflow.get("enabled"):
+                            create_task({
+                                "request_key": str(uuid.uuid4()),
+                                "title": f"[auto] [{back_idx + 1}/{len(stages)} {back}] {base}"[:200],
+                                "context": (f"Pipeline: {base}\nPrevious stage: Review\n\n"
+                                            f"Review вернул работу. Причина: {reason['category']}\n"
+                                            f"Пояснение: {reason['explanation'] or 'не указано'}\n\n"
+                                            f"Отчёт Review:\n{result}")[:20000],
+                                "worker_id": back_worker["id"], "repository_id": rid,
+                                "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                "workflow_revision_id": back_workflow["revision_id"],
+                            }, conf)
+                            log(f"REVIEW RETURN task={tid} category={reason['category']}")
+                            continue
+                else:
+                    log(f"REVIEW RETURN SKIP task={tid}: already recorded")
+                    continue
+            elif stage_attempts(tasks, "Review", base) <= 1:
+                context = (detail.get("context") or detail["task"].get("context") or "")
+                create_task({
+                    "request_key": str(uuid.uuid4()), "title": title[:200],
+                    "context": (context + "\n\n" + REVIEW_RETURN_CONTRACT +
+                                "\nПрошлый REQUEST CHANGES не принят: укажи точную категорию; "
+                                "для «прочее» добавь пояснение.")[:20000],
+                    "worker_id": detail["task"].get("worker_id") or "", "repository_id": rid,
+                    "timeout_seconds": conf.get("timeout_seconds", 7200),
+                    "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id"),
+                }, conf)
+                log(f"REVIEW RETURN FORMAT task={tid}: repeat Review")
+                continue
         verdict = decide(conf, wf, next_stage, title, result,
                          detail["task"].get("repository_id") or "")
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
@@ -6320,10 +6414,11 @@ def cycle(conf, state):
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
+        review_contract = ("\n\n" + REVIEW_RETURN_CONTRACT) if next_stage == "Review" else ""
         context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}"
                    f"Orchestrator handoff: {handoff}\n\n"
                    f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
-                   + gate_note)[:20000]
+                   + gate_note + review_contract)[:20000]
         body = {
             "request_key": str(uuid.uuid4()),
             "title": next_title,

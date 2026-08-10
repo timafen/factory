@@ -124,6 +124,33 @@ class AgentRulesScopeTests(unittest.TestCase):
         self.assertIn("=== КОНЕЦ ПРАВИЛ ===", body["context"])
 
 
+class ReviewReturnReasonTests(unittest.TestCase):
+    def test_accepts_only_fixed_categories_and_requires_other_explanation(self):
+        for category in pilot.REVIEW_RETURN_CATEGORIES:
+            report = "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: " + category
+            if category == "прочее":
+                report += "\nПОЯСНЕНИЕ ПРИЧИНЫ: нужен особый случай"
+            with self.subTest(category=category):
+                self.assertEqual(pilot.review_return_reason(report)["category"], category)
+        self.assertIsNone(pilot.review_return_reason(
+            "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: свободный текст"))
+        self.assertIsNone(pilot.review_return_reason(
+            "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: прочее"))
+
+    def test_does_not_guess_reason_and_journal_is_idempotent(self):
+        self.assertIsNone(pilot.review_return_reason("REQUEST CHANGES\nНужно больше тестов"))
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = os.path.join(temporary.name, "review-returns.jsonl")
+        reason = {"category": "тесты", "explanation": ""}
+        self.assertTrue(pilot.record_review_return("review-1", reason, path))
+        self.assertFalse(pilot.record_review_return("review-1", reason, path))
+        with open(path, encoding="utf-8") as stream:
+            records = [json.loads(line) for line in stream]
+        self.assertEqual(records, [{"task_id": "review-1", "category": "тесты",
+                                    "explanation": "", "at": records[0]["at"]}])
+
+
 class OwnerMessageTests(unittest.TestCase):
     def test_internal_identifiers_become_human_words(self):
         text = (
