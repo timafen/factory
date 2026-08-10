@@ -5226,6 +5226,12 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
+        match = PIPELINE_TITLE.match(task.get("title") or "")
+        if (task.get("state") == "succeeded" and match
+                and int(match.group(1)) < int(match.group(2))):
+            # A successful intermediate stage advances the same pipeline; it
+            # is progress, not completed owner work for this dashboard block.
+            continue
         title, stage = parsed
         if not title or is_service_work(title):
             continue

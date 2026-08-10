@@ -3356,6 +3356,22 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_does_not_count_successful_intermediate_triage_as_done(self):
+        tasks = [
+            {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",
+             "state": "succeeded", "updated_at": "2026-08-10T12:00:00Z"},
+            {"id": "single", "title": "[auto] [1/1 Triage] Разобрать обращение",
+             "state": "succeeded", "updated_at": "2026-08-10T11:00:00Z"},
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(pilot, "MERGES_PATH", os.path.join(temporary.name, "none")), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual([item["title"] for item in recent], ["Разобрать обращение"])
+        self.assertEqual(recent[0]["status"], "passed")
+
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
             {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",
