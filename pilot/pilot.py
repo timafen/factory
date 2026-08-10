@@ -21,7 +21,7 @@ Planner layer (epics):
 import calendar
 import io
 import glob
-import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
+import json, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -4708,67 +4708,147 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
 
 
 FACTORY_DEPLOY_RETRY_DELAY = 60
+_DEPLOY_JOBS = {}
 
 
-def deploy_after_merge(conf, repo_identity, state=None, now=None):
-    """Release only the environment owned by the repository that was merged."""
+def _deploy_target(conf, repo_identity):
     identity = (repo_identity or "").lower()
     if identity.endswith(".git"):
         identity = identity[:-4]
     if identity.endswith("timafen/tarser-operations"):
-        command_key = "deploy_staging_cmd"
-        label = "AUTOMATION-STAGING-DEPLOY"
-    elif identity.endswith("timafen/factory"):
-        command_key = "deploy_factory_cmd"
-        label = "FACTORY-DEPLOY"
-    else:
+        return "automation_staging", "deploy_staging_cmd", "AUTOMATION-STAGING-DEPLOY"
+    if identity.endswith("timafen/factory"):
+        return "factory", "deploy_factory_cmd", "FACTORY-DEPLOY"
+    return None
+
+
+def _persist_deploy_state(state):
+    """A queued release must be on disk before it is allowed to start."""
+    try:
+        save(STATE_PATH, state)
+        return True
+    except Exception as e:
+        log("POST-MERGE-DEPLOY state save failed:", repr(e))
+        return False
+
+
+def _start_deploy(conf, state, environment, current):
+    pending = (state.get("post_merge_deploys") or {}).get(environment)
+    if not pending or environment in _DEPLOY_JOBS:
+        return False
+    command = conf.get(pending["command_key"])
+    if not command:
+        log(f"{pending['label']} skipped: {pending['command_key']} is not configured")
+        state["post_merge_deploys"].pop(environment, None)
+        _persist_deploy_state(state)
+        return False
+
+    pending["status"] = "running"
+    pending["launched"] = int(pending.get("requested") or 1)
+    pending["started_at"] = current
+    if not _persist_deploy_state(state):
+        pending["status"] = "pending"
+        return False
+
+    job = {"result": None}
+
+    def release():
+        job["result"] = run_shell(command)
+
+    thread = threading.Thread(target=release,
+                              name=f"post-merge-{environment}", daemon=True)
+    job["thread"] = thread
+    _DEPLOY_JOBS[environment] = job
+    log(f"{pending['label']} started: request={pending['launched']}")
+    thread.start()
+    return True
+
+
+def deploy_after_merge(conf, repo_identity, state=None, now=None):
+    """Durably enqueue, then asynchronously start the repository's environment."""
+    target = _deploy_target(conf, repo_identity)
+    if not target:
         log(f"POST-MERGE-DEPLOY skipped: unknown repository {repo_identity!r}")
         return None
-
-    command = conf.get(command_key)
-    if not command:
+    environment, command_key, label = target
+    if not conf.get(command_key):
         log(f"{label} skipped: {command_key} is not configured")
         return None
-    rc, output = run_shell(command)
-    log(f"{label} rc={rc} :: {output[:200]}")
-    if command_key == "deploy_factory_cmd" and state is not None:
-        if rc == 8:
-            due = (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY
-            pending = state.get("pending_factory_deploy") or {}
-            state["pending_factory_deploy"] = {
-                "due": due,
-                "attempts": int(pending.get("attempts") or 0),
-            }
-            log("FACTORY-DEPLOY занят: свежий main поставлен на повторный выпуск")
-        elif rc == 0:
-            state.pop("pending_factory_deploy", None)
-    return rc
+    if state is None:
+        log(f"{label} skipped: durable state is unavailable")
+        return None
+
+    current = time.time() if now is None else now
+    deployments = state.setdefault("post_merge_deploys", {})
+    pending = deployments.get(environment) or {
+        "requested": 0, "launched": 0, "attempts": 0,
+        "command_key": command_key, "label": label,
+    }
+    pending["requested"] = int(pending.get("requested") or 0) + 1
+    pending["command_key"], pending["label"] = command_key, label
+    deployments[environment] = pending
+    if pending.get("status") != "running":
+        pending["status"], pending["due"] = "pending", current
+    if not _persist_deploy_state(state):
+        return None
+    if pending["status"] == "running" or environment in _DEPLOY_JOBS:
+        log(f"{label} queued: request={pending['requested']} (coalesced)")
+        return "queued"
+    _start_deploy(conf, state, environment, current)
+    return "started"
 
 
 def retry_pending_factory_deploy(conf, state, now=None):
-    """Retry one coalesced Factory release after a concurrent release ends."""
-    pending = state.get("pending_factory_deploy")
-    if not pending:
-        return None
+    """Collect asynchronous releases and start pending/recovered ones."""
     current = time.time() if now is None else now
-    if current < float(pending.get("due") or 0):
-        return None
-    command = conf.get("deploy_factory_cmd")
-    if not command:
-        log("FACTORY-DEPLOY repeat skipped: deploy_factory_cmd is not configured")
-        state.pop("pending_factory_deploy", None)
-        return None
-    rc, output = run_shell(command)
-    log(f"FACTORY-DEPLOY-RETRY rc={rc} :: {output[:200]}")
-    if rc == 0:
-        state.pop("pending_factory_deploy", None)
-    elif rc == 8:
-        pending["attempts"] = int(pending.get("attempts") or 0) + 1
-        pending["due"] = current + FACTORY_DEPLOY_RETRY_DELAY
-    else:
-        # A real build or health failure needs diagnosis, not an endless loop.
-        state.pop("pending_factory_deploy", None)
-    return rc
+    legacy = state.pop("pending_factory_deploy", None)
+    if legacy and "factory" not in (state.get("post_merge_deploys") or {}):
+        state.setdefault("post_merge_deploys", {})["factory"] = {
+            "requested": 1, "launched": 0,
+            "attempts": int(legacy.get("attempts") or 0),
+            "command_key": "deploy_factory_cmd", "label": "FACTORY-DEPLOY",
+            "status": "pending", "due": float(legacy.get("due") or current),
+        }
+        log("FACTORY-DEPLOY recovered: legacy pending release migrated")
+        _persist_deploy_state(state)
+    deployments = state.get("post_merge_deploys") or {}
+    results = {}
+    for environment, pending in list(deployments.items()):
+        job = _DEPLOY_JOBS.get(environment)
+        if job and not job["thread"].is_alive():
+            rc, output = job["result"]
+            del _DEPLOY_JOBS[environment]
+            results[environment] = rc
+            short = " ".join((output or "").split())[:200]
+            log(f"{pending['label']} completed: rc={rc} :: {short}")
+            newer_request = int(pending.get("requested") or 0) > int(
+                pending.get("launched") or 0)
+            if newer_request:
+                pending["status"], pending["due"] = "pending", current
+            elif rc == 8:
+                pending["attempts"] = int(pending.get("attempts") or 0) + 1
+                pending["status"] = "pending"
+                pending["due"] = current + FACTORY_DEPLOY_RETRY_DELAY
+                log(f"{pending['label']} занят: выпуск поставлен на повтор")
+            else:
+                deployments.pop(environment, None)
+            _persist_deploy_state(state)
+            pending = deployments.get(environment)
+            if not pending:
+                continue
+        elif pending.get("status") == "running" and not job:
+            # After a Pilot restart the old child may be gone or may still own
+            # the external lock. Retrying is safe and makes either case visible.
+            pending["status"], pending["due"] = "pending", current
+            log(f"{pending['label']} recovered: uncollected run queued again")
+            _persist_deploy_state(state)
+
+        if (pending.get("status") == "pending"
+                and current >= float(pending.get("due") or 0)):
+            _start_deploy(conf, state, environment, current)
+    if not deployments:
+        state.pop("post_merge_deploys", None)
+    return results or None
 
 
 def cycle(conf, state):
