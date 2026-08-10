@@ -34,7 +34,8 @@ BRAIN
     chmod +x "$destination/ops/install-brain.sh"
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
-  *'log -1'*) echo 'Проверочный релиз' ;;
+  *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
+  *'log -1 --pretty=%B'*) printf 'Merge pull request #123 from factory/readable-release\n\nПроверочный релиз (#123)\n' ;;
 esac
 EOF
   cat >"$case_dir/bin/npm" <<'EOF'
@@ -198,6 +199,10 @@ grep -E '^systemd-run .*--on-active=30s /bin/systemctl restart factory-pilot.ser
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release did not explain the deployed change"
+! grep -F 'Merge pull request' "$success/output" >/dev/null \
+  || fail "release exposed GitHub merge plumbing instead of a human title"
+! grep -F '#123' "$success/output" >/dev/null \
+  || fail "release exposed a pull request number in owner-facing output"
 ! grep -F '1234567890abcdef' "$success/output" >/dev/null \
   || fail "release exposed a bare technical version in owner-facing output"
 
