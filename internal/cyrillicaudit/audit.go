@@ -249,7 +249,13 @@ func compare(damaged, original string) string {
 
 func gitSubject(ctx context.Context, repositoryPath, revision string) (string, error) {
 	command := exec.CommandContext(ctx, "git", "-C", repositoryPath, "show", "--no-patch", "--format=%s", revision)
-	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LANG=C.UTF-8", "LC_ALL=C.UTF-8")
+	command.Env = append(os.Environ(),
+		"GIT_NO_LAZY_FETCH=1",
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_OPTIONAL_LOCKS=0",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+	)
 	output, err := command.Output()
 	if err != nil {
 		return "", errors.New("git show failed")

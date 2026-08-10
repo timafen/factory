@@ -148,6 +148,58 @@ func TestCompareDoesNotTreatExistingQuestionMarkAsEvidence(t *testing.T) {
 	}
 }
 
+func TestGitSubjectDoesNotLazyFetchMissingPromisorObject(t *testing.T) {
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin")
+	client := filepath.Join(root, "client")
+	if err := os.Mkdir(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(client, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, origin, "init", "-q")
+	runGit(t, origin, "config", "user.name", "Audit Test")
+	runGit(t, origin, "config", "user.email", "audit@example.invalid")
+	runGit(t, origin, "commit", "--allow-empty", "-q", "-m", "???? ??????")
+	revision := strings.TrimSpace(runGit(t, origin, "rev-parse", "HEAD"))
+
+	runGit(t, client, "init", "-q")
+	runGit(t, client, "remote", "add", "origin", origin)
+	runGit(t, client, "config", "remote.origin.promisor", "true")
+	runGit(t, client, "config", "remote.origin.partialclonefilter", "blob:none")
+	objectsPath := filepath.Join(client, ".git", "objects")
+	before := countFiles(t, objectsPath)
+
+	if _, err := gitSubject(context.Background(), client, revision); err == nil {
+		t.Fatal("missing promisor commit was fetched")
+	}
+	if after := countFiles(t, objectsPath); after != before {
+		t.Fatalf("git object store changed: before %d files, after %d", before, after)
+	}
+}
+
+func TestGitSubjectIgnoresReplacementRefs(t *testing.T) {
+	repository := t.TempDir()
+	runGit(t, repository, "init", "-q")
+	runGit(t, repository, "config", "user.name", "Audit Test")
+	runGit(t, repository, "config", "user.email", "audit@example.invalid")
+	damagedSubject := "???? ??????"
+	runGit(t, repository, "commit", "--allow-empty", "-q", "-m", damagedSubject)
+	revision := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
+	runGit(t, repository, "commit", "--allow-empty", "-q", "-m", "Подменённый заголовок")
+	replacement := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
+	runGit(t, repository, "replace", revision, replacement)
+
+	subject, err := gitSubject(context.Background(), repository, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject != damagedSubject {
+		t.Fatalf("subject = %q, want original object subject", subject)
+	}
+}
+
 func questionDamage(value string) string {
 	return strings.Map(func(character rune) rune {
 		if character > 127 {
@@ -166,4 +218,22 @@ func runGit(t *testing.T, directory string, arguments ...string) string {
 		t.Fatalf("git %v: %v: %s", arguments, err, output)
 	}
 	return string(output)
+}
+
+func countFiles(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
