@@ -5032,6 +5032,13 @@ def cycle(conf, state):
     except Exception as e:
         log("epic_advance_error", repr(e))
 
+    # Сторож использует тот же снимок цикла после ответов владельца: так
+    # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
+    try:
+        pipeline_watch(conf, tasks, workflows, workers)
+    except Exception as e:
+        log("pipeline_watch_error", repr(e))
+
     for t in tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
