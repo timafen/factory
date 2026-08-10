@@ -4,7 +4,7 @@
 
 - Status: Implemented — проверка запуска Automation выполнена.
 - Branch: `factory/850c1e5e-d5e-17f49600-f1f`.
-- Head commit: `e4ee5bc` — перенос патруля в расписание Automation.
+- Head commit: `7ba9dba` — перенос патруля в расписание Automation.
 - What changed: существующая schedule Automation получает durable инструкции патруля и включается без создания второго расписания; `pilot` больше не запускает legacy patrol в цикле.
 - Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)'` → PASS; `python3 -m unittest pilot.test_pilot` → PASS.
 - One next action: проверить provisioner на runtime Automation с реальным существующим расписанием.
