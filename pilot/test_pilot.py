@@ -1901,6 +1901,114 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
 
 
+class OrchestratorWaitActionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.question_dir = os.path.join(self.temporary.name, "questions")
+        self.conf_path = os.path.join(self.temporary.name, "config.json")
+        self.patches = (
+            mock.patch.object(pilot, "QUESTION_DIR", self.question_dir),
+            mock.patch.object(pilot, "CONF_PATH", self.conf_path),
+        )
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.conf = {
+            "stages": [{"workflow": "Specification", "worker": "worker"}],
+            "stopped_pipelines": [],
+            "timeout_seconds": 900,
+            "deep_diag_rounds": 5,
+            "max_stage_attempts": 3,
+            "max_work_rounds": 8,
+        }
+        pilot.save(self.conf_path, dict(self.conf))
+        self.workflows = {
+            "Specification": {"enabled": True, "revision_id": "revision"},
+        }
+        self.workers = {
+            "worker": {"id": "worker-id", "online": True,
+                       "health": "healthy", "capacity": 1, "active_count": 0},
+        }
+
+    def route(self, verdict, task_id="question-id"):
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "load_limits", return_value={}):
+            return pilot.route_question(
+                self.conf, task_id, "Triage", "Specification", "Новая работа",
+                "repo-id", "вердикт WAIT", "Что делать дальше?", [],
+                "WAIT до трёх зелёных циклов")
+
+    def apply_answers_twice(self):
+        created = []
+        with mock.patch.object(pilot, "load_limits", return_value={}), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=lambda body, _conf: created.append(body)
+                    or {"task": {"id": "created-task"}},
+                ):
+            pilot.handle_answers(self.conf, self.workflows, self.workers, [])
+            pilot.handle_answers(self.conf, self.workflows, self.workers, [])
+        return created
+
+    def test_wait_resolves_question_pauses_pipeline_and_never_creates_task(self):
+        self.assertFalse(self.route({
+            "decision": "wait",
+            "reason": "Отложить до трёх подряд зелёных полных циклов",
+        }))
+
+        question = pilot.load(os.path.join(self.question_dir, "question-id.json"), {})
+        self.assertEqual(question["status"], "resolved")
+        self.assertEqual(question["machine_action"], "wait")
+        self.assertEqual(question["answered_by"], "orchestrator")
+        self.assertIn("трёх подряд зелёных", question["answer"])
+        self.assertEqual(self.conf["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(self.apply_answers_twice(), [])
+        self.assertEqual(os.stat(self.conf_path).st_mode & 0o777, 0o600)
+
+    def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
+        self.assertFalse(self.route({
+            "decision": "answer",
+            "answer": "Исправь найденную гонку и повтори проверку",
+        }))
+
+        created = self.apply_answers_twice()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["title"],
+                         "[auto] [1/1 Specification] Новая работа")
+        question = pilot.load(os.path.join(self.question_dir, "question-id.json"), {})
+        self.assertEqual(question["status"], "resolved")
+        self.assertEqual(question["resumed_task_id"], "created-task")
+
+    def test_manual_wait_word_is_not_reinterpreted_as_machine_action(self):
+        question = pilot.write_question(
+            "manual-question", "Triage", "Specification", "Ручная работа",
+            "repo-id", "нужен выбор", "Продолжать?", [], "", status="answered")
+        question["answer"] = "Отложить и сначала исправить окружение"
+        question["answered_by"] = "owner"
+        pilot.save(os.path.join(self.question_dir, "manual-question.json"), question)
+
+        created = self.apply_answers_twice()
+
+        self.assertEqual(len(created), 1)
+        self.assertIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
+
+    def test_orchestrator_contract_accepts_explicit_wait_decision(self):
+        reply = json.dumps({
+            "decision": "wait",
+            "reason": "Условие продолжения ещё не выполнено",
+        })
+        with mock.patch.object(pilot, "brain", return_value=(reply, "test")):
+            verdict = pilot.orchestrator_answer(
+                {"auto_answer": True}, "Triage", "Работа", "WAIT", "Дальше?", "")
+
+        self.assertEqual(verdict["decision"], "wait")
+        self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
+
+
 class HostLoadAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.cpu_over = {
