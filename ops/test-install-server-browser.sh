@@ -115,6 +115,9 @@ printf 'chromium-args=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 SH
 chmod 755 "$share/ops/"*
 chmod 755 "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"
+cp "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome" \
+  "$factory_home/pristine-chromium"
+touch "$factory_home/.cache/ms-playwright/chromium-1234/INSTALLATION_COMPLETE"
 : >"$temporary/events"
 
 cat >"$test_bin/id" <<'SH'
@@ -152,6 +155,16 @@ printf 'npx-cwd=%s args=%s needrestart=%s frontend=%s\n' \
   >>"$TEST_BROWSER_EVENTS"
 if [ "$*" = "playwright install-deps chromium" ] && [ "${NEEDRESTART_MODE:-}" != l ]; then
   systemctl restart factory-worker.service
+fi
+browser_revision="$TEST_BROWSER_HOME/.cache/ms-playwright/chromium-1234"
+if [ "$*" = "playwright install chromium" ]; then
+  # Playwright trusts this marker and skips an already recorded installation.
+  [ -e "$browser_revision/INSTALLATION_COMPLETE" ] || \
+    cp "$TEST_BROWSER_HOME/pristine-chromium" "$browser_revision/chrome-linux64/chrome"
+elif [ "$*" = "playwright install --force chromium" ]; then
+  cp "$TEST_BROWSER_HOME/pristine-chromium" "$browser_revision/chrome-linux64/chrome"
+  chmod 755 "$browser_revision/chrome-linux64/chrome"
+  touch "$browser_revision/INSTALLATION_COMPLETE"
 fi
 SH
 cat >"$test_bin/curl" <<'SH'
@@ -297,9 +310,9 @@ grep -Fx "npx-cwd=$share/web args=playwright install-deps chromium needrestart=l
 if grep -F 'systemctl=restart ' "$temporary/events" >/dev/null; then
   fail "install-deps перезапустил службу"
 fi
-grep -Fx "npx-cwd=$share/web args=playwright install chromium needrestart= frontend=" \
+grep -Fx "npx-cwd=$share/web args=playwright install --force chromium needrestart= frontend=" \
   "$temporary/events" >/dev/null \
-  || fail "installer не выполнил обязательную установку Playwright Chromium"
+  || fail "installer не выполнил принудительную установку Playwright Chromium"
 grep -Fx "playwright-launcher=$libexec/factory-browser-sandbox sandbox=true" \
   "$temporary/events" >/dev/null \
   || fail "Playwright не получил установленный launcher с включённым Chromium sandbox"
@@ -379,7 +392,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   || fail "повторный выпуск с неизменным Chromium завершился ошибкой"
 grep -F 'Chromium не изменился — переустановку пропускаю' "$temporary/second-output" >/dev/null \
   || fail "повторный выпуск не распознал неизменный Chromium"
-! grep -F 'args=playwright install chromium' "$temporary/events" >/dev/null \
+! grep -F 'args=playwright install ' "$temporary/events" >/dev/null \
   || fail "повторный выпуск переустановил неизменный Chromium"
 ! grep -F 'args=playwright install-deps chromium needrestart=l' "$temporary/events" >/dev/null \
   || fail "повторный выпуск переустановил системные зависимости Chromium"
@@ -399,7 +412,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   FACTORY_BROWSER_SCREENSHOT="$temporary/ambiguous-screenshot.png" \
   bash "$linked_installer" >"$temporary/ambiguous-output" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "неоднозначный Factory smoke неожиданно прошёл"
-! grep -F 'args=playwright install chromium' "$temporary/events" >/dev/null \
+! grep -F 'args=playwright install ' "$temporary/events" >/dev/null \
   || fail "неоднозначный Factory smoke переустановил Chromium"
 grep -F 'повторяю smoke и отдельно проверяю доступность Factory' "$temporary/ambiguous-output" >/dev/null \
   || fail "неоднозначный Factory smoke не был повторён"
@@ -409,7 +422,11 @@ cmp -s "$temporary/state-before-ambiguous-smoke" "$libexec/factory-browser-insta
   || fail "неоднозначный Factory smoke испортил fingerprint исправного Chromium"
 
 # Corruption is unambiguous: the executable checksum no longer matches the
-# recorded cache and the installer must repair Chromium on the next release.
+# recorded cache. Even with Playwright's completion marker present, the
+# installer must force a download and verify the restored binary before saving
+# the fingerprint.
+test -e "$factory_home/.cache/ms-playwright/chromium-1234/INSTALLATION_COMPLETE" \
+  || fail "регрессия повреждения не моделирует маркер Playwright"
 printf '\n# corruption\n' >>"$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"
 : >"$temporary/events"
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
@@ -420,8 +437,13 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   FACTORY_BROWSER_SCREENSHOT="$temporary/repaired-screenshot.png" \
   bash "$linked_installer" >"$temporary/repaired-output" 2>&1 \
   || fail "повреждённый Chromium не был восстановлен"
-grep -F 'args=playwright install chromium' "$temporary/events" >/dev/null \
-  || fail "несовпадение checksum не переустановило Chromium"
+grep -F 'args=playwright install --force chromium' "$temporary/events" >/dev/null \
+  || fail "несовпадение checksum не запустило принудительную установку Chromium"
+cmp -s "$factory_home/pristine-chromium" \
+  "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome" \
+  || fail "маркер Playwright помешал реально восстановить Chromium"
+cmp -s "$temporary/state-before-ambiguous-smoke" "$libexec/factory-browser-install.state" \
+  || fail "после восстановления сохранён fingerprint повреждённого Chromium"
 
 status=0
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \

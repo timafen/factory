@@ -125,7 +125,7 @@ if [ "$install_browser" = 1 ]; then
   DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
     npx playwright install-deps chromium
   step "ставлю закреплённую версию Chromium для пользователя Factory"
-  sudo -H -u "$FACTORY_USER" bash -c 'cd "$1" && npx playwright install chromium' bash "$PAYLOAD/web"
+  sudo -H -u "$FACTORY_USER" bash -c 'cd "$1" && npx playwright install --force chromium' bash "$PAYLOAD/web"
   [ -x "$browser" ] || { echo "Playwright Chromium was not installed" >&2; exit 1; }
   browser_sha=$(sha256 "$browser")
 else
