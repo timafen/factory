@@ -4,7 +4,7 @@
 
 - Status: done
 - Branch: `factory/b9d1e46b-6da-f0a19ceb-4af`
-- Head commit: `a972390`
+- Head commit: `cc56fff`
 - What changed: ветка собрана от свежего `origin/main`; изменения в настройках
   Пилота и его тестах не перенесены, поскольку они находятся вне заявленной области.
 - Evidence: сравнение с `origin/main` не содержит четырёх запрещённых файлов;
