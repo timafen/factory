@@ -2,20 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented and targeted checks passed; ready for repeated Review.
-- Branch: `factory/d06e6638-8ac-e9d16bcb-121`.
-- Head commit: `ea83ba6` (`Дать агентам безопасно видеть стенд серверным браузером`).
-- What changed: the exact `origin/main` commit is materialized in a root-owned
-  mode-700 staging directory before helpers run; agents and `/dialog` use the
-  installed worker path. Browser HTTP checks mutation safety before its slot.
-- What changed: the root chain check starts the worker through `runuser` and its
-  emergency cleanup terminates tracked process groups and removes every new
-  browser namespace.
-- Evidence: browser/control-plane/protocol/worker Go checks — PASS; Dialog 8/8,
-  lint and production UI build — PASS; four release/security shell suites and
-  both Go binary builds — PASS.
-- One next action: repeat Review; after merge, Verify runs the live root release
-  and browser cleanup through the штатный `fx factory release` path.
+- Status: Implemented; targeted checks passed; ready for Review.
+- Branch: `factory/cd7889d0-135-5dd06ff3-1c7`.
+- Head commit: `c0692c8` (`Дать агентам безопасно видеть стенд серверным браузером`).
+- What changed: agents and `/dialog` capture approved stands through the installed
+  server Chromium sandbox; the trusted bootstrap installs one rollback-safe system set.
+- What changed: a signal before `rollback_armed=1` now only removes checkout and
+  transaction directories; restoration starts only after every backup succeeds.
+- Evidence: targeted Go packages — PASS; Dialog 8/8, lint, UI build — PASS;
+  bootstrap/release/dispatch/fx-sandbox shell suites and two Go builds — PASS.
+- One next action: Review the rebuilt 33-file diff, then Verify the live root release.
 
 ## LOG
 
@@ -75,3 +71,13 @@ chain-тест запускает установленный worker через `
 cleanup завершает отслеживаемые группы и удаляет все созданные namespace. Это
 подтверждено целевыми Go/UI/shell-тестами, lint и обеими production-сборками;
 живая root-проверка штатным `fx factory release` оставлена этапу Verify после merge.
+
+### 2026-08-10 — Implement
+
+Поставка заново собрана от свежего `origin/main` только из файлов CARD-0045.
+Обработчик сигнала до полного backup теперь сохраняет системные файлы и удаляет
+оба временных каталога без частичного восстановления; детерминированная регрессия
+прерывает первый `backup_path` и проверяет все семь системных путей. Сохранены
+влитые защиты release: остановка воркера до identity и понятный вывод без голого
+hash. Целевые Go/UI/shell-проверки, lint и обе production-сборки прошли; живой
+root-only sandbox-check оставлен Verify, поскольку worker не имеет root.
