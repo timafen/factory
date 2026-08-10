@@ -2,16 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented PASS — awaiting review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/b8ff06a8-775-3687a9ac-8f8`.
 - Head commit: `2aa9748` — полные проверки не оставляют test-helper процессы.
 - What changed: manager-helper получает pipe жизни родительского теста и
   завершает manager при его закрытии; `Wait` выполняется в goroutine с таймаутом,
   а cleanup после таймаута убивает и освобождает дочерний процесс.
-- Evidence: две целевые регрессии → PASS за 6,837 с;
-  `go test -count=1 -timeout 5m ./...` → PASS; `go build ./...` → PASS;
-  после прогонов manager-, supervisor- и worker test-helper не осталось.
-- One next action: ревью проверяет двухфайловую область поставки и готовит слияние.
+- Evidence: целевые регрессии lifetime pipe и аварийной остановки → PASS за
+  7,945 с; `env GOFLAGS= go test -count=1 -timeout 10m ./...` → PASS;
+  `env GOFLAGS= go build ./...` → PASS; после прогонов test-helper процессов
+  не обнаружено.
+- One next action: влить проверенную ветку в `main`.
 
 ## LOG
 
@@ -36,3 +37,10 @@ manager-helper и забирает результат `Wait`, поэтому с�
 Пилота. В область вошли только регрессия lifetime pipe и эта карточка. Две
 целевые проверки и полный Go-набор прошли; сборка успешна, а проверка процессов
 после каждого прогона не обнаружила оставшихся test-helper.
+
+### 2026-08-10 — Verify
+
+Проверены обе приемочные ситуации: закрытие parent pipe штатно останавливает
+manager-helper, а аварийная остановка manager очищает supervisor и дочерний
+runtime-процесс. Целевые тесты прошли за 7,945 с; полный Go-набор и сборка
+успешны. После прогонов поиск не обнаружил запущенных `test-helper` процессов.
