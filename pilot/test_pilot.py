@@ -136,6 +136,11 @@ class ReviewReturnReasonTests(unittest.TestCase):
             "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: свободный текст"))
         self.assertIsNone(pilot.review_return_reason(
             "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: прочее"))
+        self.assertIsNone(pilot.review_return_reason(
+            "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: тесты\n"
+            "ПРИЧИНА ВОЗВРАТА: ошибка реализации"))
+        self.assertIsNone(pilot.review_return_reason(
+            "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: тесты\nПРИЧИНА ВОЗВРАТА:"))
 
     def test_does_not_guess_reason_and_journal_is_idempotent(self):
         self.assertIsNone(pilot.review_return_reason("REQUEST CHANGES\nНужно больше тестов"))
@@ -149,6 +154,84 @@ class ReviewReturnReasonTests(unittest.TestCase):
             records = [json.loads(line) for line in stream]
         self.assertEqual(records, [{"task_id": "review-1", "category": "тесты",
                                     "explanation": "", "at": records[0]["at"]}])
+
+
+class ReviewReturnRoutingTests(unittest.TestCase):
+    def test_failed_return_task_creation_is_retried_without_premature_journal(self):
+        review = {"id": "review-1", "title": "[auto] [2/2 Review] Исправить отчёт",
+                  "state": "succeeded", "repository_id": "repo-id"}
+        detail = {
+            "task": {"repository_id": "repo-id"},
+            "workflow": {"title": "Review", "revision_id": "review-rev"},
+            "attempts": [{"result": "REQUEST CHANGES\nПРИЧИНА ВОЗВРАТА: тесты"}],
+        }
+        workflows = [
+            {"id": "implement", "enabled": True,
+             "current_revision": {"id": "implement-rev", "title": "Implement + Test"}},
+            {"id": "review", "enabled": True,
+             "current_revision": {"id": "review-rev", "title": "Review"}},
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "review-returns.jsonl")
+        created = []
+
+        def fake_api(path, body=None):
+            if path.startswith("/tasks?limit="):
+                return {"tasks": [review], "next_cursor": None}
+            if path == "/tasks/review-1":
+                return detail
+            if path == "/workers":
+                return {"workers": [{"id": "worker-id", "name": "worker"}]}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id", "remote_identity": "acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": workflows}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        conf = {"stages": [{"workflow": "Implement + Test"}, {"workflow": "Review"}],
+                "timeout_seconds": 900, "auto_plan": False}
+        state = {"processed": []}
+
+        def create_return_task(body, _conf):
+            if not created:
+                created.append("failed")
+                raise RuntimeError("temporary API failure")
+            created.append(body)
+            return {"task": {"id": "retry"}}
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={
+                "worker": {"id": "worker-id"}}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "REVIEW_RETURNS_PATH", journal))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create_return_task))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+            self.assertEqual(state["processed"], [])
+            self.assertFalse(os.path.exists(journal))
+            pilot.cycle(conf, state)
+
+        self.assertEqual(len(created), 2)
+        self.assertEqual(created[1]["request_key"], "review-return:review-1")
+        self.assertTrue(pilot.review_return_recorded("review-1", journal))
 
 
 class OwnerMessageTests(unittest.TestCase):

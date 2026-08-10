@@ -1483,7 +1483,8 @@ REVIEW_RETURN_CATEGORIES = (
     "безопасность", "документация или процесс", "прочее",
 )
 REVIEW_REQUEST_CHANGES = re.compile(r"^\s*REQUEST CHANGES\b", re.I)
-REVIEW_RETURN_REASON = re.compile(r"^ПРИЧИНА ВОЗВРАТА:\s*(.+?)\s*$", re.M)
+REVIEW_RETURN_REASON = re.compile(
+    r"^ПРИЧИНА ВОЗВРАТА:[ \t]*([^\r\n]*?)[ \t]*$", re.M)
 REVIEW_RETURN_EXPLANATION = re.compile(r"^ПОЯСНЕНИЕ ПРИЧИНЫ:\s*(.+?)\s*$", re.M)
 REVIEW_RETURN_CONTRACT = (
     "При REQUEST CHANGES укажи отдельными точными строками:\n"
@@ -1497,8 +1498,12 @@ def review_return_reason(report):
     """Return a strictly declared Review return reason, never infer one."""
     if not REVIEW_REQUEST_CHANGES.match(report or ""):
         return None
-    match = REVIEW_RETURN_REASON.search(report or "")
-    category = match.group(1).strip() if match else ""
+    matches = REVIEW_RETURN_REASON.findall(report or "")
+    # A conflicting report must be sent back for clarification rather than
+    # silently routing by whichever line happened to appear first.
+    if len(matches) != 1:
+        return None
+    category = matches[0].strip()
     if category not in REVIEW_RETURN_CATEGORIES:
         return None
     explanation_match = REVIEW_RETURN_EXPLANATION.search(report or "")
@@ -1508,18 +1513,27 @@ def review_return_reason(report):
     return {"category": category, "explanation": explanation}
 
 
-def record_review_return(task_id, reason, path=REVIEW_RETURNS_PATH):
-    """Append once per Review task so a restarted pilot cannot double-count it."""
+def review_return_recorded(task_id, path=None):
+    """Whether a Review return was durably counted for this task."""
+    path = path or REVIEW_RETURNS_PATH
     try:
         with open(path, encoding="utf-8") as stream:
             for line in stream:
                 try:
                     if json.loads(line).get("task_id") == task_id:
-                        return False
+                        return True
                 except (ValueError, AttributeError):
                     continue
     except FileNotFoundError:
         pass
+    return False
+
+
+def record_review_return(task_id, reason, path=None):
+    """Append once per Review task so a restarted pilot cannot double-count it."""
+    path = path or REVIEW_RETURNS_PATH
+    if review_return_recorded(task_id, path):
+        return False
     os.makedirs(os.path.dirname(path), exist_ok=True)
     record = {"task_id": task_id, "category": reason["category"],
               "explanation": reason["explanation"],
@@ -6109,24 +6123,35 @@ def cycle(conf, state):
             base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             if reason:
-                if record_review_return(tid, reason):
+                if not review_return_recorded(tid):
                     back = "Implement + Test"
                     if back in stages:
                         back_idx = stages.index(back)
                         back_worker = workers.get(stage_worker(conf, back, "medium", workers))
                         back_workflow = workflows.get(back)
                         if back_worker and back_workflow and back_workflow.get("enabled"):
-                            create_task({
-                                "request_key": str(uuid.uuid4()),
-                                "title": f"[auto] [{back_idx + 1}/{len(stages)} {back}] {base}"[:200],
-                                "context": (f"Pipeline: {base}\nPrevious stage: Review\n\n"
-                                            f"Review вернул работу. Причина: {reason['category']}\n"
-                                            f"Пояснение: {reason['explanation'] or 'не указано'}\n\n"
-                                            f"Отчёт Review:\n{result}")[:20000],
-                                "worker_id": back_worker["id"], "repository_id": rid,
-                                "timeout_seconds": conf.get("timeout_seconds", 7200),
-                                "workflow_revision_id": back_workflow["revision_id"],
-                            }, conf)
+                            try:
+                                create_task({
+                                    # The same source Review uses one request key on retry,
+                                    # so a journal write failure cannot duplicate the return.
+                                    "request_key": f"review-return:{tid}",
+                                    "title": f"[auto] [{back_idx + 1}/{len(stages)} {back}] {base}"[:200],
+                                    "context": (f"Pipeline: {base}\nPrevious stage: Review\n\n"
+                                                f"Review вернул работу. Причина: {reason['category']}\n"
+                                                f"Пояснение: {reason['explanation'] or 'не указано'}\n\n"
+                                                f"Отчёт Review:\n{result}")[:20000],
+                                    "worker_id": back_worker["id"], "repository_id": rid,
+                                    "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                    "workflow_revision_id": back_workflow["revision_id"],
+                                }, conf)
+                                record_review_return(tid, reason)
+                            except Exception as e:
+                                # The Review must be reconsidered on the next cycle.  It was
+                                # marked processed above, so undo that optimistic mark only
+                                # when the return was not fully sent and recorded.
+                                state["processed"].remove(tid)
+                                log(f"REVIEW RETURN RETRY task={tid}: {e!r}")
+                                continue
                             log(f"REVIEW RETURN task={tid} category={reason['category']}")
                             continue
                 else:
