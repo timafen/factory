@@ -4,7 +4,7 @@
 
 - Status: Implemented PASS — awaiting review.
 - Branch: `factory/2d4b6ee0-c6e-1ab21fde-4f9`.
-- Head commit: `e53dcb4` — ожидание manager-helper ограничено и безопасно очищается.
+- Head commit: `c8aeb2c` — ожидание manager-helper ограничено и безопасно очищается.
 - What changed: manager-helper получает pipe жизни родительского теста и
   завершает manager при его закрытии; `Wait` выполняется в goroutine с таймаутом,
   а cleanup после таймаута убивает и освобождает дочерний процесс.
