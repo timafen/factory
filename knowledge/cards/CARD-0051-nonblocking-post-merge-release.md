@@ -2,16 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented + Tested — блокер восстановления устранён.
-- Branch: `factory/ed5fa1ca-db3-e29b3696-7ed`.
-- Head commit: `4c1cda8` (`Сохранять автовыпуск до запуска фонового процесса`).
-- What changed: запись запуска атомарно попадает в `state.json` до `Popen`, PID
-  фиксируется после старта, а коалесцированный повтор сохраняется немедленно.
-  Новый Pilot восстанавливает сохранённый, но ещё не запущенный выпуск с диска.
-- Evidence: `python3 -m unittest pilot.test_pilot.PostMergeDeployTest` — 10/10 OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` — OK;
-  `git diff --check` — OK.
-- One next action: проверить изменения Review и влить их в `main`.
+- Status: Implemented + Tested — повтор после внешней блокировки не теряется.
+- Branch: `factory/3ea10dee-e5d-6daabe49-3e0`.
+- Head commit: `bbd2429` (`Не терять автовыпуск при занятой внешней блокировке`).
+- What changed: при `rc=8` Pilot сохраняет на диск один отложенный повтор, даже
+  если новый merge ещё не успел выставить очередь. Повтор запускается после 60 секунд.
+- Evidence: `python3 -m unittest pilot.test_pilot.PostMergeDeployTest` — 11/11 OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и `git diff --check` — OK.
+- One next action: проверить исправление внешней блокировки в Review и влить в `main`.
 
 ## LOG
 
@@ -46,3 +44,11 @@
 коалесцированный повтор также пишется сразу. Тест останавливает Pilot на границе
 после сохранения, заново читает состояние с диска и подтверждает автозапуск:
 `PostMergeDeployTest` — 10/10 OK; `py_compile` и `git diff --check` — OK.
+
+### 2026-08-10 — Implement
+
+После завершения фонового выпуска с `rc=8` Pilot не удаляет запрос: он сразу
+сохраняет на диск один отложенный повтор на 60 секунд. Проверка моделирует внешний
+release-lock, подтверждает сохранение очереди без нового merge и её запуск после
+освобождения блокировки; `PostMergeDeployTest` — 11/11 OK, `py_compile` и
+`git diff --check` — OK.
