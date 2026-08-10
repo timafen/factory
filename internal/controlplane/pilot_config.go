@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/owainlewis/factory/internal/protocol"
+	"golang.org/x/sys/unix"
 )
 
 const maxPilotConfigBytes = 1 << 20
@@ -24,11 +25,19 @@ const maxPilotConfigBytes = 1 << 20
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
 
 type PilotConfigStore struct {
-	path string
-	mu   sync.Mutex
+	path   string
+	rename func(string, string) error
+	mu     sync.Mutex
 }
 
-func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
+type ReviveWorkResponse struct {
+	Work  string `json:"work"`
+	State string `json:"state"`
+}
+
+func NewPilotConfigStore(path string) *PilotConfigStore {
+	return &PilotConfigStore{path: path, rename: os.Rename}
+}
 
 func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
 	s.mu.Lock()
@@ -43,6 +52,11 @@ func (s *PilotConfigStore) Read() (protocol.PilotSettingsResponse, error) {
 func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings) (protocol.PilotSettingsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := s.lockConfig()
+	if err != nil {
+		return protocol.PilotSettingsResponse{}, err
+	}
+	defer unlockConfig(lock)
 	_, current, err := s.read()
 	if err != nil {
 		return protocol.PilotSettingsResponse{}, err
@@ -59,6 +73,119 @@ func (s *PilotConfigStore) Write(version string, settings protocol.PilotSettings
 		return protocol.PilotSettingsResponse{}, err
 	}
 	return protocol.PilotSettingsResponse{Settings: settings, Version: pilotDigest(body), Warnings: []string{}}, nil
+}
+
+func (s *PilotConfigStore) lockConfig() (*os.File, error) {
+	lockPath := s.path + ".lock"
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	lock := os.NewFile(uintptr(fd), lockPath)
+	if err := lock.Chmod(0o600); err != nil {
+		_ = lock.Close()
+		return nil, unavailable(err)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		_ = lock.Close()
+		return nil, unavailable(err)
+	}
+	return lock, nil
+}
+
+func unlockConfig(lock *os.File) {
+	_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	_ = lock.Close()
+}
+
+// Revive leaves an idempotent signal for pipeline_watch. The pilot is the sole
+// writer of config.json and removes the requested owner pause when it consumes
+// this signal.
+func (s *PilotConfigStore) Revive(work string) (ReviveWorkResponse, error) {
+	work = strings.TrimSpace(work)
+	if work == "" {
+		return ReviveWorkResponse{}, invalid("invalid_work", "work name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, _, err := s.read()
+	if err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	signals, err := s.readReviveSignals()
+	if err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	known := signals[work]
+	for _, name := range settings.StoppedPipelines {
+		if name == work {
+			known = true
+		}
+	}
+	if !known {
+		stalls, readErr := s.readStalls()
+		if readErr != nil {
+			return ReviveWorkResponse{}, readErr
+		}
+		if rec, ok := stalls[work]; ok && rec.Why == "give_up" {
+			known = true
+		}
+	}
+	if !known {
+		return ReviveWorkResponse{}, &ServiceError{Code: "work_not_stopped", Message: "work is not stopped", Status: 404}
+	}
+	signals[work] = true
+	if err := s.atomicWritePath(s.revivePath(), signals); err != nil {
+		return ReviveWorkResponse{}, err
+	}
+	return ReviveWorkResponse{Work: work, State: "reviving"}, nil
+}
+
+type pilotStall struct {
+	Why string `json:"why"`
+}
+
+func (s *PilotConfigStore) revivePath() string {
+	return filepath.Join(filepath.Dir(s.path), "revive.json")
+}
+func (s *PilotConfigStore) stallPath() string {
+	return filepath.Join(filepath.Dir(s.path), "stalled.json")
+}
+
+func (s *PilotConfigStore) readReviveSignals() (map[string]bool, error) {
+	result := map[string]bool{}
+	body, err := os.ReadFile(s.revivePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil || json.Unmarshal(body, &result) != nil {
+		return nil, &ServiceError{Code: "pilot_state_invalid", Message: "pilot revive state is unavailable", Status: 503}
+	}
+	return result, nil
+}
+
+func (s *PilotConfigStore) readStalls() (map[string]pilotStall, error) {
+	result := map[string]pilotStall{}
+	body, err := os.ReadFile(s.stallPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil || json.Unmarshal(body, &result) != nil {
+		return nil, &ServiceError{Code: "pilot_state_invalid", Message: "pilot stall state is unavailable", Status: 503}
+	}
+	return result, nil
+}
+
+func (s *PilotConfigStore) atomicWritePath(path string, value any) error {
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return unavailable(err)
+	}
+	original := s.path
+	s.path = path
+	err = s.atomicWrite(append(body, '\n'))
+	s.path = original
+	return err
 }
 
 func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
@@ -142,7 +269,7 @@ func (s *PilotConfigStore) atomicWrite(body []byte) error {
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(tmpName, s.path)
+		err = s.rename(tmpName, s.path)
 	}
 	if err == nil {
 		if d, openErr := os.Open(dir); openErr == nil {

@@ -1,14 +1,19 @@
 package controlplane
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
@@ -280,4 +285,270 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 		t.Fatalf("PUT status %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestReviveWorkWritesSignalWithoutChangingConfigAndIsIdempotent(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+
+	first, err := store.Revive("Работа")
+	if err != nil || first.State != "reviving" {
+		t.Fatalf("first revive = %#v, %v", first, err)
+	}
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatalf("idempotent revive: %v", err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 2 || got[0] != "Работа" || got[1] != "Работа рядом" {
+		t.Fatalf("stopped pipelines = %#v", got)
+	}
+	var signals map[string]bool
+	body, _ := os.ReadFile(filepath.Join(filepath.Dir(path), "revive.json"))
+	if err := json.Unmarshal(body, &signals); err != nil || !signals["Работа"] || len(signals) != 1 {
+		t.Fatalf("signals = %#v, %v", signals, err)
+	}
+}
+
+func TestReviveWorkDoesNotLosePauseAddedWhileSignalIsWritten(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	store, path := writePilotFixture(t, settings)
+	store.rename = func(oldPath, newPath string) error {
+		if newPath == filepath.Join(filepath.Dir(path), "revive.json") {
+			latest := validPilotSettings()
+			latest.StoppedPipelines = []string{"Работа", "Параллельная пауза"}
+			body, err := json.MarshalIndent(latest, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+				return err
+			}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 2 || got[0] != "Работа" || got[1] != "Параллельная пауза" {
+		t.Fatalf("concurrent pause was lost: %#v", got)
+	}
+}
+
+func TestReviveConfigWritesUseSharedGoPythonLock(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Другая пауза"}
+	store, path := writePilotFixture(t, settings)
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `
+import sys
+sys.path.insert(0, sys.argv[1])
+from pilot import pilot
+
+pilot.CONF_PATH = sys.argv[2]
+original_load = pilot.load
+
+def load_after_go_starts(path, default):
+    value = original_load(path, default)
+    if path == pilot.CONF_PATH:
+        print("READY", flush=True)
+        sys.stdin.readline()
+    return value
+
+pilot.load = load_after_go_starts
+conf = {"stopped_pipelines": ["Работа", "Другая пауза"]}
+pilot.release_revive_pauses(conf, {"Работа": True})
+if conf.get("stopped_pipelines") != ["Другая пауза"]:
+    raise SystemExit("revive did not update Python config")
+`
+	command := exec.Command("python3", "-c", script, root, path)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+	})
+
+	ready := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(stdout).ReadString('\n')
+		ready <- line
+	}()
+	select {
+	case line := <-ready:
+		if line != "READY\n" {
+			t.Fatalf("python ready line = %q", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("python did not acquire the config lock")
+	}
+
+	updated := current.Settings
+	updated.PollSeconds = 15
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := store.Write(current.Version, updated)
+		writeDone <- writeErr
+	}()
+	select {
+	case writeErr := <-writeDone:
+		t.Fatalf("Go write escaped Python lock: %v", writeErr)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	_, _ = stdin.Write([]byte("\n"))
+	_ = stdin.Close()
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case writeErr := <-writeDone:
+		if writeErr == nil {
+			t.Fatal("stale Go write succeeded after Python changed config")
+		}
+		var serviceErr *ServiceError
+		if !errors.As(writeErr, &serviceErr) || serviceErr.Code != "config_conflict" {
+			t.Fatalf("Go write error = %v", writeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Go write remained blocked after Python released config")
+	}
+
+	after, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Settings.PollSeconds != 10 {
+		t.Fatalf("stale Go settings overwrote Python config: poll_seconds = %v", after.Settings.PollSeconds)
+	}
+	if got := after.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Другая пауза" {
+		t.Fatalf("Python revive change was lost: %#v", got)
+	}
+}
+
+func TestReviveWorkAcceptsStuckAndRejectsUnknown(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	stall := []byte(`{"Застрявшая":{"why":"give_up"},"Другая":{"why":"nudged"}}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "stalled.json"), stall, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revive("Застрявшая"); err != nil {
+		t.Fatalf("stuck revive: %v", err)
+	}
+	if _, err := store.Revive("Неизвестная"); err == nil {
+		t.Fatal("unknown work was accepted")
+	}
+}
+
+func TestReviveWorkKeepsOwnerPauseWhenSignalWriteFails(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+	store.rename = func(oldPath, newPath string) error {
+		if newPath == filepath.Join(filepath.Dir(path), "revive.json") {
+			return errors.New("injected revive signal write failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+
+	if _, err := store.Revive("Работа"); err == nil {
+		t.Fatal("revive succeeded despite signal write failure")
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 2 || got[0] != "Работа" || got[1] != "Работа рядом" {
+		t.Fatalf("stopped pipelines changed after failed signal write: %#v", got)
+	}
+}
+
+func TestReviveWorkHTTPRejectsCrossOrigin(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа с пробелом"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://evil.example")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		response.Body.Close()
+		t.Fatalf("cross-origin status = %d", response.StatusCode)
+	}
+	var rejection protocol.ErrorBody
+	if err := json.NewDecoder(response.Body).Decode(&rejection); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if rejection.Error.Code != "cross_origin_request" {
+		t.Fatalf("cross-origin error = %q", rejection.Error.Code)
+	}
+	current, err := pilot.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Работа с пробелом" {
+		t.Fatalf("cross-origin request changed stopped pipelines: %#v", got)
+	}
+}
+
+func TestReviveWorkHTTPValidatesPathAndReturnsStatus(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа с пробелом"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+
+	response, err := server.Client().Post(server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var got ReviveWorkResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil || got.Work != "Работа с пробелом" || got.State != "reviving" {
+		t.Fatalf("response = %#v, %v", got, err)
+	}
 }
