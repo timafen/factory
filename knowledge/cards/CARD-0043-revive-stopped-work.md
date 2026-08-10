@@ -3,13 +3,14 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: implemented and ready for Review
-- Branch: `factory/a0fcacd2-789-cfe85c15-bb4`
-- Head commit: `57ecafb` (implementation)
-- What changed: revive создаёт raw-title задачу с явным auto-маркером в `request_key`; он защищает следующий цикл, capacity, money_guard и AGENT_RULES.
-- What changed: `canRevive` вычисляется в данных карточки и запрещён для закрытых и архивных работ.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 17 pilot, 8 UI); typecheck, UI build и `just build` → PASS.
-- Next action: Review повторно проверяет три устранённых блокирующих замечания.
+- Status: implemented and ready for repeat Review
+- Branch: `factory/51e0e84b-b2a-8d485f8d-e5b`
+- Head commit: `2b6f898`
+- What changed: revive-изменения перенесены на свежий `origin/main` без отката трёх защит пилота.
+- What changed: raw-title объединён с паузой/лимитом диагностики, реальным escalation и проверкой порядка effort.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 21 pilot, 8 UI).
+- Evidence: 6 регрессий диагностики/escalation и Go-регрессия порядка effort → PASS; web и Go build → PASS.
+- Next action: repeat Review проверяет чистый diff и три восстановленные защиты.
 
 ## LOG
 
@@ -118,3 +119,7 @@
 ### 2026-08-09 — Implement
 
 Работа перенесена патчем на свежий `origin/main`, чтобы не затереть новые изменения API. В `request_key` добавлен единый явный маркер оживлённой автоматической задачи: raw-title теперь участвует в защите от дублей, лимите работ, `money_guard` и доставке `AGENT_RULES`, а следующий цикл распознаёт завершённый raw-title этап. UI получает вычисленный `canRevive`, который выключен для закрытых и архивных карточек. `just test-revive-stopped-work`, TypeScript, UI production build и сборка Go-бинарников прошли.
+
+### 2026-08-09 — Implement
+
+По решению владельца revive-изменения собраны заново на `origin/main`. Metadata-aware raw-title объединён с защитой от повторной диагностики и паузой владельца; escalation снова требует точный high-tier и реальное усиление; валидация не допускает понижения reasoning effort в более высоком tier. `just test-revive-stopped-work` прошёл (Go API, 21 pilot, 8 UI), шесть целевых регрессий пилота и Go-регрессия порядка effort прошли; production-сборки web и Go успешны.
