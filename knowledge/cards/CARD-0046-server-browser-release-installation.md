@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented — два блокера закрыты, замечание Review устранено.
+- Status: Verified PASS — ожидает человеческого слияния.
 - Branch: `factory/2b096285-bc0-93f942e4-23c`.
-- Head commit: `058d8dc` (`Выпуск ставит Chromium и проверяет запуск в песочнице`).
+- Head commit: `ed05554` (`Карточка фиксирует проверку обязательной установки Chromium`).
 - What changed: штатный выпуск обязательно устанавливает Chromium и прерывается
-  при ошибке; тест исполняет заглушку `npx` через записанный вызов `sudo` и
-  проверяет точные аргументы `playwright install chromium`.
-- Evidence: мутация без команды установки — FAIL; shell-регрессии и синтаксис —
-  PASS; Vitest 123/123, typecheck, lint, web build и `go build ./...` — PASS.
-- One next action: повторный Review проверяет закрытие замечания об установке Chromium.
+  при ошибке; smoke запускает Chromium через launcher без root и с включённой
+  Linux-песочницей.
+- Evidence: полный чистый прогон: Vitest 60/60, typecheck, lint, production
+  build, Playwright E2E, `go test ./...`, `go build ./...` и shell-регрессии — PASS.
+- One next action: человек сливает проверенную поставку в `main`.
 
 ## LOG
 
@@ -42,3 +42,12 @@ production web build и `go build ./...` завершились без ошиб�
 
 Целевые shell-проверки и синтаксис прошли; полный Vitest дал 123/123,
 typecheck, lint, production web build и `go build ./...` завершились успешно.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда/проверка | Наблюдаемый результат |
+| --- | --- | --- |
+| Chromium обязателен до замены бинарей | `bash ops/test-fx-factory-release.sh` | Установщик идёт после сборок и до сохранения бинарей; его сбой даёт код 5, не перезапускает службы и сохраняет прежние бинарии. |
+| Установщик действительно ставит браузер | `bash ops/test-install-server-browser.sh` | Зафиксирован вызов от пользователя Factory: `playwright install chromium`; мутация без этой команды делает регрессию красной. |
+| Smoke не ослабляет песочницу | `bash ops/test-install-server-browser.sh`; `npm run test:browser` | Playwright получает установленный launcher с `chromiumSandbox: true`; launcher отказывает root и не содержит флагов отключения песочницы. |
+| Смежные проверки поставки | чистый прогон `npm test`, typecheck, lint, build, browser E2E, `go test ./...`, `go build ./...`, shell syntax | Все команды завершились успешно; Vitest: 60/60. |
