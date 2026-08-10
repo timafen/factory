@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -27,6 +30,15 @@ type resumeWorkResponse struct {
 type resumedStageTask struct {
 	protocol.Task
 	stage string
+}
+
+// resumeWorkMetadata is written by Pilot when a work deliberately starts after
+// the first pipeline stage.  It is provenance, rather than an inference from
+// a missing task: a low-complexity work that starts at Implement must not be
+// sent back to a Triage task that was never required.
+type resumeWorkMetadata struct {
+	StartStage string   `json:"start_stage"`
+	Skipped    []string `json:"skipped"`
 }
 
 // resumeWork turns an owner pause into one concrete queued task.  The mutex is
@@ -88,7 +100,8 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 		return resumeWorkResponse{}, conflict("work_not_paused", "this work is not owner-paused")
 	}
 
-	target, source := resumeTarget(tasks, settings.Stages)
+	metadata := readResumeWorkMetadata(base)
+	target, source := resumeTarget(tasks, settings.Stages, metadata)
 	if target == "" || source == nil {
 		return resumeWorkResponse{}, conflict("pipeline_completed", "all required pipeline stages have already completed")
 	}
@@ -169,26 +182,111 @@ func firstLivePipelineTask(tasks []resumedStageTask) *resumedStageTask {
 	return nil
 }
 
-// resumeTarget walks every configured stage in order. This is intentionally
-// not "last stage + 1": a failed/cancelled first stage must restart itself,
-// and Review and Verify are therefore never skipped.
-func resumeTarget(tasks []resumedStageTask, stages []protocol.PilotStage) (string, *resumedStageTask) {
+// resumeTarget returns the first required stage that has not actually passed.
+// Execution success is enough for ordinary stages, but it is not evidence that
+// a Review or Verify passed: Pilot writes their decision to verdicts/<task>.json
+// and only action=advance clears those gates.  A stop at either gate returns to
+// implementation, because the verdict means the implementation needs work.
+func resumeTarget(tasks []resumedStageTask, stages []protocol.PilotStage, metadata resumeWorkMetadata) (string, *resumedStageTask) {
 	latest := map[string]*resumedStageTask{}
 	for i := range tasks {
 		latest[tasks[i].stage] = &tasks[i]
 	}
-	var previous *resumedStageTask
+	required := resumeRequiredStages(stages, metadata)
+	implementation := ""
 	for _, route := range stages {
+		if route.Workflow == "Implement + Test" {
+			implementation = route.Workflow
+			break
+		}
+	}
+	implementationTask := latest[implementation]
+	reviewTask := latest["Review"]
+	var source *resumedStageTask
+	for _, route := range required {
 		current := latest[route.Workflow]
 		if current == nil {
-			return route.Workflow, previous
+			return route.Workflow, source
 		}
 		if current.State != "succeeded" {
 			return route.Workflow, current
 		}
-		previous = current
+		if route.Workflow == "Review" || route.Workflow == "Verify" {
+			action := resumeVerdictAction(current.ID)
+			if action == "stop" && implementation != "" {
+				// A later implementation is the response to this old stop. It
+				// must be reviewed again, rather than being sent back through an
+				// already completed rework task forever.
+				if route.Workflow == "Review" && implementationTask != nil && implementationTask.CreatedAt.After(current.CreatedAt) {
+					return route.Workflow, implementationTask
+				}
+				// Verify can only be retried after a fresh Review. If it already
+				// has an advancing review after this stop, the missing task is a
+				// new Verify; otherwise the first unfinished gate is Review.
+				if route.Workflow == "Verify" && implementationTask != nil && implementationTask.CreatedAt.After(current.CreatedAt) {
+					if reviewTask != nil && reviewTask.CreatedAt.After(current.CreatedAt) {
+						return route.Workflow, reviewTask
+					}
+					return "Review", implementationTask
+				}
+				return implementation, current
+			}
+			if action != "advance" {
+				return route.Workflow, current
+			}
+		}
+		source = current
 	}
 	return "", nil
+}
+
+func resumeRequiredStages(stages []protocol.PilotStage, metadata resumeWorkMetadata) []protocol.PilotStage {
+	start := 0
+	if want := strings.TrimSpace(metadata.StartStage); want != "" {
+		for i, route := range stages {
+			if route.Workflow == want {
+				start = i
+				break
+			}
+		}
+	}
+	skipped := map[string]bool{}
+	for _, stage := range metadata.Skipped {
+		skipped[strings.TrimSpace(stage)] = true
+	}
+	required := make([]protocol.PilotStage, 0, len(stages)-start)
+	for i, route := range stages {
+		if i >= start && !skipped[route.Workflow] {
+			required = append(required, route)
+		}
+	}
+	return required
+}
+
+func readResumeWorkMetadata(base string) resumeWorkMetadata {
+	data, err := os.ReadFile(worksPath())
+	if err != nil {
+		return resumeWorkMetadata{}
+	}
+	works := map[string]resumeWorkMetadata{}
+	if json.Unmarshal(data, &works) != nil {
+		return resumeWorkMetadata{}
+	}
+	return works[base]
+}
+
+func resumeVerdictAction(taskID string) string {
+	data, err := os.ReadFile(filepath.Join(verdictsDir(), taskID+".json"))
+	if err != nil {
+		return ""
+	}
+	var verdict struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal(data, &verdict) != nil {
+		return ""
+	}
+	return verdict.Action
 }
 
 func (a *API) resumeWorker(ctx context.Context, settings protocol.PilotSettings, stage, repositoryID string) (protocol.Worker, error) {

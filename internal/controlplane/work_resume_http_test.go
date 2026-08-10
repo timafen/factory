@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -14,6 +17,11 @@ import (
 
 func resumeFixture(t *testing.T, base string) (*Store, *PilotConfigStore, *httptest.Server, protocol.Repository, map[string]protocol.Workflow) {
 	t.Helper()
+	dataHome := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", dataHome)
+	if err := os.MkdirAll(filepath.Join(dataHome, "pilot", "verdicts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	store := newTestStore(t)
 	settings := validPilotSettings()
 	settings.StoppedPipelines = []string{base}
@@ -35,8 +43,31 @@ func resumeFixture(t *testing.T, base string) (*Store, *PilotConfigStore, *httpt
 	return store, pilot, server, worker.Repositories[0], workflows
 }
 
-func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository, workflows map[string]protocol.Workflow, base string, stages []string, state string) {
+func writeResumeWork(t *testing.T, base string, metadata resumeWorkMetadata) {
 	t.Helper()
+	data, err := json.Marshal(map[string]resumeWorkMetadata{base: metadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(worksPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeResumeVerdict(t *testing.T, taskID, action string) {
+	t.Helper()
+	data, err := json.Marshal(map[string]string{"action": action})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verdictsDir(), taskID+".json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository, workflows map[string]protocol.Workflow, base string, stages []string, state string) map[string]protocol.Task {
+	t.Helper()
+	history := make(map[string]protocol.Task, len(stages))
 	for index, stage := range stages {
 		workflow := workflows[stage]
 		detail, created, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
@@ -51,7 +82,9 @@ func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository
 		if _, err := store.db.Exec(`UPDATE executions SET state=? WHERE task_id=?`, state, detail.Task.ID); err != nil {
 			t.Fatal(err)
 		}
+		history[stage] = detail.Task
 	}
+	return history
 }
 
 func postResume(t *testing.T, server *httptest.Server, base string) (int, resumeWorkResponse) {
@@ -67,15 +100,19 @@ func postResume(t *testing.T, server *httptest.Server, base string) (int, resume
 	return response.StatusCode, result
 }
 
-func TestResumePausedWorkRestartsTerminalFirstStageAndIsIdempotent(t *testing.T) {
+func TestResumePausedWorkRestartsFailedFirstEffectiveStageAndIsIdempotent(t *testing.T) {
 	for _, terminal := range []string{"failed", "cancelled"} {
 		t.Run(terminal, func(t *testing.T) {
-			base := "Возобновить первую стадию " + terminal
+			base := "Возобновить первую обязательную стадию " + terminal
 			store, pilot, server, repo, workflows := resumeFixture(t, base)
-			addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, terminal)
+			writeResumeWork(t, base, resumeWorkMetadata{
+				StartStage: "Implement + Test",
+				Skipped:    []string{"Triage", "Specification"},
+			})
+			addResumeHistory(t, store, repo, workflows, base, []string{"Implement + Test"}, terminal)
 
 			status, first := postResume(t, server, base)
-			if status != http.StatusOK || first.Stage != "Triage" || !first.Resumed || first.Task.State != "queued" {
+			if status != http.StatusOK || first.Stage != "Implement + Test" || !first.Resumed || first.Task.State != "queued" {
 				t.Fatalf("first resume = status %d %#v", status, first)
 			}
 			status, second := postResume(t, server, base)
@@ -94,13 +131,48 @@ func TestResumePausedWorkRestartsTerminalFirstStageAndIsIdempotent(t *testing.T)
 	}
 }
 
-func TestResumePausedWorkContinuesAfterReviewWithoutSkippingVerify(t *testing.T) {
-	const base = "Продолжить после ревью"
-	store, _, server, repo, workflows := resumeFixture(t, base)
-	addResumeHistory(t, store, repo, workflows, base, []string{"Triage", "Specification", "Implement + Test", "Review"}, "succeeded")
-	status, resumed := postResume(t, server, base)
-	if status != http.StatusOK || resumed.Stage != "Verify" || resumed.Task.State != "queued" {
-		t.Fatalf("resume after review = status %d %#v", status, resumed)
+func TestResumePausedWorkUsesVerdictActionForReviewAndVerify(t *testing.T) {
+	all := []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
+	for _, tc := range []struct {
+		name       string
+		stages     []string
+		verdicts   map[string]string
+		wantStatus int
+		wantStage  string
+	}{
+		{
+			name:   "review stop returns to implementation",
+			stages: all[:4], verdicts: map[string]string{"Review": "stop"},
+			wantStatus: http.StatusOK, wantStage: "Implement + Test",
+		},
+		{
+			name:   "verify stop returns to implementation",
+			stages: all, verdicts: map[string]string{"Review": "advance", "Verify": "stop"},
+			wantStatus: http.StatusOK, wantStage: "Implement + Test",
+		},
+		{
+			name:   "review advance proceeds to verify",
+			stages: all[:4], verdicts: map[string]string{"Review": "advance"},
+			wantStatus: http.StatusOK, wantStage: "Verify",
+		},
+		{
+			name:   "verify advance completes pipeline",
+			stages: all, verdicts: map[string]string{"Review": "advance", "Verify": "advance"},
+			wantStatus: http.StatusConflict,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := "Вердикт " + tc.name
+			store, _, server, repo, workflows := resumeFixture(t, base)
+			history := addResumeHistory(t, store, repo, workflows, base, tc.stages, "succeeded")
+			for stage, action := range tc.verdicts {
+				writeResumeVerdict(t, history[stage].ID, action)
+			}
+			status, resumed := postResume(t, server, base)
+			if status != tc.wantStatus || (tc.wantStage != "" && resumed.Stage != tc.wantStage) {
+				t.Fatalf("resume = status %d %#v, want status %d stage %q", status, resumed, tc.wantStatus, tc.wantStage)
+			}
+		})
 	}
 }
 
@@ -120,5 +192,35 @@ func TestResumePausedWorkOnlyClearsStalePauseForAlreadyActiveTask(t *testing.T) 
 	settings, err := pilot.Read()
 	if err != nil || len(settings.Settings.StoppedPipelines) != 0 {
 		t.Fatalf("active pause = %#v, %v", settings.Settings.StoppedPipelines, err)
+	}
+}
+
+func TestResumePausedWorkRetryAfterSettingsWriteFailureDoesNotDuplicateTask(t *testing.T) {
+	const base = "Повтор после ошибки записи"
+	store, pilot, server, repo, workflows := resumeFixture(t, base)
+	addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+
+	pilot.writeFile = func([]byte) error { return errors.New("disk unavailable") }
+	status, _ := postResume(t, server, base)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("resume with write failure status = %d, want %d", status, http.StatusInternalServerError)
+	}
+	page, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 200})
+	if err != nil || len(page.Tasks) != 2 {
+		t.Fatalf("tasks after failed write = %#v, %v", page, err)
+	}
+	var createdID string
+	if err := store.db.QueryRow(`SELECT id FROM tasks WHERE request_key LIKE 'resume:%'`).Scan(&createdID); err != nil {
+		t.Fatal(err)
+	}
+
+	pilot.writeFile = nil
+	status, retried := postResume(t, server, base)
+	if status != http.StatusOK || retried.Resumed || retried.Task.ID != createdID {
+		t.Fatalf("retry = status %d %#v, want existing task %s", status, retried, createdID)
+	}
+	page, err = store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 200})
+	if err != nil || len(page.Tasks) != 2 {
+		t.Fatalf("retry duplicated task: %#v, %v", page, err)
 	}
 }
