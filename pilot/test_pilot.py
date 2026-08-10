@@ -1312,7 +1312,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(create.call_args.args[0]["request_key"],
                          "plan-autostart:top:second-run")
 
-    def test_cycle_recounts_slots_after_pipeline_continuation(self):
+    def test_cycle_does_not_run_legacy_pipeline_patrol(self):
         tasks = [
             {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
             {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
@@ -1343,6 +1343,7 @@ class PlanAutostartTest(unittest.TestCase):
                                                   return_value=False))
             stack.enter_context(mock.patch.object(pilot, "host_overloaded",
                                                   return_value=False))
+            watch = stack.enter_context(mock.patch.object(pilot, "pipeline_watch"))
             create = stack.enter_context(mock.patch.object(pilot, "create_task"))
             ideas = stack.enter_context(mock.patch.object(pilot, "ideas_all",
                 return_value=self.cards))
@@ -1351,8 +1352,8 @@ class PlanAutostartTest(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
             pilot.cycle(self.conf, state)
 
-        ideas.assert_not_called()
-        create.assert_not_called()
+        watch.assert_not_called()
+        self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
         report = "ОБЛАСТЬ: pilot/pilot.py, docs/additional.md"
