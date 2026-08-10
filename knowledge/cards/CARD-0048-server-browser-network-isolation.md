@@ -2,20 +2,18 @@
 
 ## HEAD
 
-- Status: Implement PASS — оба обхода закрыты, ожидает слияния.
-- Branch: `factory/78242a74-6a0-4df57466-3dc`.
-- Head commit: `8035180` — проверенная реализация после rebase на `main`.
-- What changed: после allowlist FQDN resolver блокирует все остальные имена;
-  Chromium всегда работает с `--no-proxy-server`, proxy/resolver overrides отклоняются.
-- Delivery: installer проверяет BPF до изменений, атомарно ставит полный комплект,
-  выполняет allow/deny smoke со screenshot; release делает этот gate обязательным.
-- Evidence: installer/release negative tests — PASS; Go — PASS; UI 123/123;
-  tooling, launcher и сборка двух бинарей — PASS; shell syntax/`git diff --check` — PASS.
-- Known baseline: общий `just check` останавливается на двух прежних staticcheck
-  findings в `internal/controlplane`; изменённые browser/release файлы не затронуты.
-- Host check: user systemd bus недоступен, passwordless sudo отсутствует; поэтому
-  root-проба встроена в installer и при неподдерживаемом BPF останавливает выпуск.
-- One next action: слить доставленную ветку и выполнить штатный release на Factory host.
+- Status: Implement PASS — замечания Review исправлены, готово к повторному Review.
+- Branch: `factory/95ae34c5-fbd-ecb206ad-67a`.
+- Head commit: `6b3b35e` — исправление запуска и обходов после rebase на `main`.
+- What changed: transient scope получает только поддерживаемые `IPAddress*`;
+  `NoNewPrivileges` задаётся через `setpriv --no-new-privs`.
+- Chromium-аргументы нормализуются по пробелам и одно-/двухдефисному префиксу,
+  поэтому resolver/proxy overrides отклоняются до запуска браузера.
+- Evidence: реальный parser `systemd-run` — PASS; installer smoke и отрицательные
+  тесты — PASS; release gate — PASS; сборка server/worker — PASS.
+- Host check: root BPF-smoke нельзя выполнить в Factory-контейнере из-за внешнего
+  `no_new_privs`; installer сохраняет обязательную fail-closed пробу на целевом хосте.
+- One next action: передать доставленную ветку на повторный Review.
 
 ## LOG
 
@@ -50,3 +48,13 @@ network namespace с deny-by-default nftables как равноценная бу
 Отрицательные installer и release tests прошли; Go, UI 123/123, tooling,
 launcher и сборка двух бинарей также прошли. Общий `just check`
 останавливается только на двух прежних staticcheck findings вне этой области.
+
+### 2026-08-10 — Implement
+
+Из transient scope удалены неподдерживаемые service-свойства; запрет новых
+привилегий перенесён в совместимый `setpriv`. Реальный `systemd-run` теперь
+принимает полный набор свойств scope без `Unknown assignment`.
+
+Фильтр повторяет нормализацию POSIX-аргументов Chromium и закрывает одно-дефисные
+и whitespace-варианты resolver override. Installer smoke, отрицательные тесты,
+release gate, shell syntax и сборка обоих бинарей прошли.
