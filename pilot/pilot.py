@@ -924,15 +924,21 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         "последствиями.\n"
         "Всё остальное (какую среду использовать, как чинить, перезапускать ли "
         "упавший по таймауту этап, где взять сведения о коде) — решай САМ.\n\n"
-        'Ответь ТОЛЬКО JSON: {"decision": "answer" или "escalate", '
+        "Если правильное решение — ждать выполнения условия и пока НЕ запускать "
+        "следующий этап, выбери отдельное решение wait. Не маскируй паузу текстом "
+        "обычного answer.\n\n"
+        'Ответь ТОЛЬКО JSON: {"decision": "answer", "wait" или "escalate", '
         '"answer": "<если answer: конкретный исполнимый ответ агенту по-русски, '
         '2-5 предложений, как будто это сказал владелец>", '
-        '"reason": "<если escalate: одной фразой почему это решение владельца>"}'
+        '"reason": "<если wait: почему работу надо оставить на паузе; если '
+        'escalate: одной фразой почему это решение владельца>"}'
     )
     try:
         text, _eng = brain(conf, prompt, timeout=240)
         v = json.loads(text[text.find("{"):text.rfind("}") + 1])
         if v.get("decision") == "answer" and (v.get("answer") or "").strip():
+            return v
+        if v.get("decision") == "wait" and (v.get("reason") or "").strip():
             return v
         return {"decision": "escalate", "answer": "",
                 "reason": v.get("reason", "оркестратор передал решение владельцу")}
@@ -1066,7 +1072,10 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
         active_names.update(
             name(question.get("title"))
             for question in load_questions()
-            if question.get("status") == "open"
+            if question.get("status") == "open" or (
+                question.get("status") == "resolved"
+                and question.get("machine_action") == "wait"
+            )
         )
         active_names.update(
             name(task.get("title"))
@@ -2503,6 +2512,29 @@ def diag_sweep(conf, tasks):
             log("diag_sweep_error", repr(e))
 
 
+def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
+                              repo_id, situation, question, options,
+                              prior_result, branch):
+    """Persist an explicit Pilot pause without turning it into a resume answer."""
+    if verdict.get("decision") != "wait":
+        return False
+    reason = str(verdict.get("reason") or "").strip()
+    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
+                         question, options, prior_result, branch,
+                         status="resolved")
+    rec["answer"] = reason
+    rec["answered_by"] = "orchestrator"
+    rec["machine_action"] = "wait"
+    rec["escalation_reason"] = reason
+    save(f"{QUESTION_DIR}/{task_id}.json", rec)
+    pause_pipeline(conf, base)
+    log(f"AUTO-WAIT task={task_id} stage={stage}: {reason[:100]}")
+    notify(conf, f"Поставил на паузу · {stage}",
+           f"{base}\n\n{reason}\n\nСледующий этап не запущен.",
+           priority="low", tags="hourglass", click=f"{UI_BASE}/answer")
+    return True
+
+
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch="",
                    repair_task=None):
@@ -2543,6 +2575,10 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+        if resolve_orchestrator_wait(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch):
+            return False
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
             rec = write_question(task_id, stage,
@@ -2604,6 +2640,10 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if resolve_orchestrator_wait(
+                    conf, v, task_id, stage, resume_stage, base, repo_id,
+                    situation, question, options, prior_result, branch):
+                return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 note_cap_rescue(base, stage)
                 rec = write_question(task_id, stage,
@@ -2631,6 +2671,10 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if resolve_orchestrator_wait(
+                    conf, v, task_id, stage, resume_stage, base, repo_id,
+                    situation, question, options, prior_result, branch):
+                return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 rec = write_question(task_id, stage,
                                      accept_forward(stage, v.get("answer", "")) or resume_stage,
@@ -2663,6 +2707,10 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
+    if resolve_orchestrator_wait(
+            conf, verdict, task_id, stage, resume_stage, base, repo_id,
+            situation, question, options, prior_result, branch):
+        return False
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch)
     if verdict["decision"] == "answer":

@@ -1161,6 +1161,8 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
         cases = (
             ({"title": "оплата продавцу", "status": "open"}, True),
             ({"title": "Оплата продавцу", "status": "resolved"}, False),
+            ({"title": "Оплата продавцу", "status": "resolved",
+              "machine_action": "wait"}, True),
             ({"title": "Оплата", "status": "open"}, False),
             ({"title": "Оплата продавцу срочно", "status": "open"}, False),
         )
@@ -1903,6 +1905,191 @@ class AnswerEscalationTests(unittest.TestCase):
                   if title == "Исполнитель повышен"]
         self.assertEqual(len(raised), 1)
         self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
+
+
+class OrchestratorWaitActionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.question_dir = os.path.join(self.temporary.name, "questions")
+        self.conf_path = os.path.join(self.temporary.name, "config.json")
+        self.patches = (
+            mock.patch.object(pilot, "QUESTION_DIR", self.question_dir),
+            mock.patch.object(pilot, "CONF_PATH", self.conf_path),
+        )
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.conf = {
+            "stages": [{"workflow": "Specification", "worker": "worker"}],
+            "stopped_pipelines": [],
+            "timeout_seconds": 900,
+            "deep_diag_rounds": 5,
+            "max_stage_attempts": 3,
+            "max_work_rounds": 8,
+        }
+        pilot.save(self.conf_path, dict(self.conf))
+        self.workflows = {
+            "Specification": {"enabled": True, "revision_id": "revision"},
+        }
+        self.workers = {
+            "worker": {"id": "worker-id", "online": True,
+                       "health": "healthy", "capacity": 1, "active_count": 0},
+        }
+
+    def route(self, verdict, task_id="question-id"):
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "load_limits", return_value={}):
+            return pilot.route_question(
+                self.conf, task_id, "Triage", "Specification", "Новая работа",
+                "repo-id", "вердикт WAIT", "Что делать дальше?", [],
+                "WAIT до трёх зелёных циклов")
+
+    def apply_answers_twice(self):
+        created = []
+        with mock.patch.object(pilot, "load_limits", return_value={}), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=lambda body, _conf: created.append(body)
+                    or {"task": {"id": "created-task"}},
+                ):
+            pilot.handle_answers(self.conf, self.workflows, self.workers, [])
+            pilot.handle_answers(self.conf, self.workflows, self.workers, [])
+        return created
+
+    def test_wait_resolves_question_pauses_pipeline_and_never_creates_task(self):
+        self.assertFalse(self.route({
+            "decision": "wait",
+            "reason": "Отложить до трёх подряд зелёных полных циклов",
+        }))
+
+        question = pilot.load(os.path.join(self.question_dir, "question-id.json"), {})
+        self.assertEqual(question["status"], "resolved")
+        self.assertEqual(question["machine_action"], "wait")
+        self.assertEqual(question["answered_by"], "orchestrator")
+        self.assertIn("трёх подряд зелёных", question["answer"])
+        self.assertEqual(self.conf["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(
+            pilot.load(self.conf_path, {})["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(self.apply_answers_twice(), [])
+
+    def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
+        self.assertFalse(self.route({
+            "decision": "answer",
+            "answer": "Исправь найденную гонку и повтори проверку",
+        }))
+
+        created = self.apply_answers_twice()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["title"],
+                         "[auto] [1/1 Specification] Новая работа")
+        question = pilot.load(os.path.join(self.question_dir, "question-id.json"), {})
+        self.assertEqual(question["status"], "resolved")
+        self.assertEqual(question["resumed_task_id"], "created-task")
+
+    def test_manual_wait_word_is_not_reinterpreted_as_machine_action(self):
+        question = pilot.write_question(
+            "manual-question", "Triage", "Specification", "Ручная работа",
+            "repo-id", "нужен выбор", "Продолжать?", [], "", status="answered")
+        question["answer"] = "Отложить и сначала исправить окружение"
+        question["answered_by"] = "owner"
+        pilot.save(os.path.join(self.question_dir, "manual-question.json"), question)
+
+        created = self.apply_answers_twice()
+
+        self.assertEqual(len(created), 1)
+        self.assertIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
+
+    def test_orchestrator_contract_accepts_explicit_wait_decision(self):
+        reply = json.dumps({
+            "decision": "wait",
+            "reason": "Условие продолжения ещё не выполнено",
+        })
+        with mock.patch.object(pilot, "brain", return_value=(reply, "test")):
+            verdict = pilot.orchestrator_answer(
+                {"auto_answer": True}, "Triage", "Работа", "WAIT", "Дальше?", "")
+
+        self.assertEqual(verdict["decision"], "wait")
+        self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
+
+    def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
+        self.conf["stages"] = [
+            {"workflow": "Triage", "worker": "worker"},
+            {"workflow": "Specification", "worker": "worker"},
+        ]
+        pilot.save(self.conf_path, dict(self.conf))
+        self.assertFalse(self.route({
+            "decision": "wait",
+            "reason": "Владелец явно снимет паузу после проверки",
+        }))
+        task = {
+            "id": "question-id",
+            "title": "[auto] [1/2 Triage] Новая работа",
+            "state": "succeeded",
+            "repository_id": "repo-id",
+        }
+        worker = {
+            "id": "worker-id", "name": "worker", "online": True,
+            "health": "healthy", "capacity": 1, "active_count": 0,
+        }
+        workflows = [
+            {"id": "triage", "enabled": True,
+             "current_revision": {"title": "Triage", "id": "rev-triage"}},
+            {"id": "spec", "enabled": True,
+             "current_revision": {
+                 "title": "Specification", "id": "rev-spec"}},
+        ]
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/workers":
+                return {"workers": [worker]}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": workflows}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "advance_epics",
+            "retry_pending_factory_deploy", "autostart_plan",
+        )
+        created = []
+        state = {"processed": ["question-id"]}
+        stall_path = os.path.join(self.temporary.name, "pipeline_stalls.json")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "STALL_PATH", stall_path))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "load_limits", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "work_status_write"))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {"id": "unexpected"}}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, state)
+            pilot.cycle(self.conf, state)
+
+        self.assertEqual(created, [])
+        self.assertEqual(self.conf["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(
+            pilot.load(self.conf_path, {})["stopped_pipelines"], ["Новая работа"])
+        self.assertEqual(pilot.load(stall_path, {})["Новая работа"]["why"], "owner")
 
 
 class HostLoadAdmissionTests(unittest.TestCase):
