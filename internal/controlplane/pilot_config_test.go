@@ -2,12 +2,17 @@ package controlplane
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -263,4 +268,236 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 		t.Fatalf("PUT status %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestReviveWorkRemovesOnlyExactPauseAndIsIdempotent(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа", "Работа рядом"}
+	store, path := writePilotFixture(t, settings)
+
+	first, err := store.Revive("Работа")
+	if err != nil || first.State != "reviving" {
+		t.Fatalf("first revive = %#v, %v", first, err)
+	}
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatalf("idempotent revive: %v", err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Работа рядом" {
+		t.Fatalf("stopped pipelines = %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "revive", reviveSignalName("Работа"))); err != nil {
+		t.Fatalf("revive signal: %v", err)
+	}
+}
+
+func TestReviveWorkRemainsIdempotentAfterPilotAcknowledgesSignal(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	store, _ := writePilotFixture(t, settings)
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(store.reviveSignalPath("Работа"), store.reviveReceiptPath("Работа")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := store.Revive("Работа"); err != nil || got.State != "reviving" {
+		t.Fatalf("repeat after acknowledgement = %#v, %v", got, err)
+	}
+}
+
+func TestReviveWorkCreatesFreshSignalWhenSameWorkStopsAgain(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	store, _ := writePilotFixture(t, settings)
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(store.reviveSignalPath("Работа"), store.reviveReceiptPath("Работа")); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Settings.StoppedPipelines = []string{"Работа"}
+	if _, err := store.Write(current.Version, current.Settings); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Revive("Работа"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.reviveSignalPath("Работа")); err != nil {
+		t.Fatalf("fresh signal: %v", err)
+	}
+}
+
+func TestReviveWorkConcurrentSignalsAreNotLost(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Первая", "Вторая"}
+	store, path := writePilotFixture(t, settings)
+	var wg sync.WaitGroup
+	for _, work := range []string{"Первая", "Вторая"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Revive(work); err != nil {
+				t.Errorf("revive %q: %v", work, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for _, work := range []string{"Первая", "Вторая"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), "revive", reviveSignalName(work))); err != nil {
+			t.Fatalf("signal for %q: %v", work, err)
+		}
+	}
+}
+
+func TestReviveWorkSupportsMaximumLengthUnicodeName(t *testing.T) {
+	work := strings.Repeat("я", 200)
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{work}
+	store, path := writePilotFixture(t, settings)
+
+	if _, err := store.Revive(work); err != nil {
+		t.Fatalf("revive 200-character work: %v", err)
+	}
+	signalPath := filepath.Join(filepath.Dir(path), "revive", reviveSignalName(work))
+	body, err := os.ReadFile(signalPath)
+	if err != nil {
+		t.Fatalf("read revive signal: %v", err)
+	}
+	if string(body) != work {
+		t.Fatalf("signal body does not preserve work name")
+	}
+	if len(filepath.Base(signalPath)) != sha256.Size*2 {
+		t.Fatalf("signal filename length = %d", len(filepath.Base(signalPath)))
+	}
+}
+
+func TestRevivedMaximumLengthTitleIsAcceptedByRealControlPlane(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	worker := registerHTTPWorker(t, fixture, workerA, "factory", "github.com/owainlewis/factory", 1)
+	workflow := createTestWorkflow(t, fixture.store, "revive-implement", "Implement", "Continue the existing work.")
+	work := strings.Repeat("я", 200)
+
+	response := fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", "", protocol.CreateTaskRequest{
+		RequestKey: "revive-maximum-title", Title: work, Context: "Работа оживлена; продолжить со следующего этапа.",
+		WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60,
+		WorkflowRevisionID: workflow.Workflow.CurrentRevision.ID,
+	})
+	requireStatus(t, response, http.StatusCreated)
+	created := decodeResponse[protocol.TaskDetail](t, response)
+	if created.Task.Title != work || created.Workflow == nil || created.Workflow.Title != "Implement" {
+		t.Fatalf("revived task lost title or stage metadata: %#v", created)
+	}
+}
+
+func reviveSignalName(work string) string {
+	sum := sha256.Sum256([]byte(work))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestReviveWorkSignalFailureLeavesWorkStopped(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	store, path := writePilotFixture(t, settings)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "revive"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Revive("Работа"); err == nil {
+		t.Fatal("revive succeeded despite signal creation failure")
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Settings.StoppedPipelines; len(got) != 1 || got[0] != "Работа" {
+		t.Fatalf("stopped pipelines changed after signal failure: %#v", got)
+	}
+}
+
+func TestReviveWorkAcceptsStuckAndRejectsUnknown(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	stall := []byte(`{"Застрявшая":{"why":"give_up"},"Другая":{"why":"nudged"}}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "stalled.json"), stall, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revive("Застрявшая"); err != nil {
+		t.Fatalf("stuck revive: %v", err)
+	}
+	if _, err := store.Revive("Неизвестная"); err == nil {
+		t.Fatal("unknown work was accepted")
+	}
+}
+
+func TestReviveWorkHTTPValidatesPathAndReturnsStatus(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа с пробелом"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+
+	response, err := server.Client().Post(server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var got ReviveWorkResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil || got.Work != "Работа с пробелом" || got.State != "reviving" {
+		t.Fatalf("response = %#v, %v", got, err)
+	}
+	if err := os.Rename(pilot.reviveSignalPath("Работа с пробелом"), pilot.reviveReceiptPath("Работа с пробелом")); err != nil {
+		t.Fatal(err)
+	}
+	repeat, err := server.Client().Post(server.URL+"/api/v1/works/"+url.PathEscape("Работа с пробелом")+"/revive", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeat.Body.Close()
+	if repeat.StatusCode != http.StatusOK {
+		t.Fatalf("repeat status after pilot acknowledgement = %d", repeat.StatusCode)
+	}
+}
+
+func TestReviveWorkHTTPRejectsCrossOriginAndNonJSON(t *testing.T) {
+	settings := validPilotSettings()
+	settings.StoppedPipelines = []string{"Работа"}
+	pilot, _ := writePilotFixture(t, settings)
+	store := newTestStore(t)
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	defer server.Close()
+	for _, test := range []struct {
+		origin, contentType string
+		status              int
+	}{
+		{"https://evil.example", "application/json", http.StatusForbidden},
+		{"", "application/x-www-form-urlencoded", http.StatusUnsupportedMediaType},
+	} {
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/works/"+url.PathEscape("Работа")+"/revive", bytes.NewReader([]byte(`{}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", test.contentType)
+		req.Header.Set("Origin", test.origin)
+		response, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status {
+			t.Fatalf("status = %d, want %d", response.StatusCode, test.status)
+		}
+	}
 }

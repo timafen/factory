@@ -46,6 +46,24 @@ class AgentRulesScopeTests(unittest.TestCase):
 
         self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
 
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_revived_raw_title_uses_auto_budget_and_rules(self, _api, money):
+        body = {
+            "request_key": pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:request-id",
+            "title": "Пользовательское имя без служебного префикса",
+            "context": "Контекст",
+        }
+
+        pilot.create_task(body, {"stages": [
+            {"workflow": "Specification"}, {"workflow": "Implement"},
+        ]})
+
+        money.assert_called_once_with(
+            mock.ANY, "Пользовательское имя без служебного префикса"
+        )
+        self.assertIn("ПРАВИЛА ДЛЯ АГЕНТА", body["context"])
+
 
 class DeliveryAreaTests(unittest.TestCase):
     def test_stage_report_extends_delivery_area(self):
@@ -656,6 +674,8 @@ class PipelineWatchTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pilot, "load", side_effect=self._load),
             mock.patch.object(pilot, "save", side_effect=self._save),
+            mock.patch.object(pilot, "revive_signals", return_value=[]),
+            mock.patch.object(pilot, "acknowledge_revive_signal"),
             mock.patch.object(pilot.time, "time", side_effect=lambda: self.now),
             mock.patch.object(pilot, "stage_worker", return_value="worker"),
             mock.patch.object(pilot, "create_task", side_effect=self._create),
@@ -711,7 +731,7 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.created[0]["repository_id"], "repo-id")
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
         self.assertEqual(self.created[0]["worker_id"], "worker-id")
-        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
 
         self.watch()
         self.assertEqual(len(self.created), 1)
@@ -724,6 +744,38 @@ class PipelineWatchTests(unittest.TestCase):
 
         self.assertNotIn("Встроенный патруль", self.memory)
         self.assertEqual(self.created, [])
+
+    def test_raw_title_revived_task_occupies_slot_and_prevents_duplicate(self):
+        revived = self.task(stage="Implement", state="running")
+        revived["title"] = "Встроенный патруль"
+        revived["request_key"] = pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:running-id"
+        self.conf["max_parallel_works"] = 1
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": 1, "why": "nudged"}
+        }
+
+        self.watch([self.task(), revived])
+
+        self.assertEqual(pilot.active_auto_works([revived]), {"Встроенный патруль"})
+        self.assertNotIn("Встроенный патруль", self.memory)
+        self.assertEqual(self.created, [])
+
+    def test_next_cycle_continues_after_succeeded_raw_title_stage(self):
+        revived = self.task(stage="Implement")
+        revived["title"] = "Встроенный патруль"
+        revived["request_key"] = pilot.AUTO_REVIVE_REQUEST_PREFIX + "1:succeeded-id"
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+
+        self.watch([self.task(), revived])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
+        self.assertTrue(self.created[0]["request_key"].startswith(
+            pilot.AUTO_REVIVE_REQUEST_PREFIX + "2:"
+        ))
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-review")
 
     def test_owner_pause_is_not_resumed(self):
         self.conf["stopped_pipelines"] = ["Встроенный патруль"]
@@ -767,6 +819,64 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_revive_restarts_next_unfinished_stage_and_keeps_other_stalls(self):
+        self.memory = {
+            "Встроенный патруль": {"since": 1, "nudges": pilot.STALL_NUDGES, "why": "give_up"},
+            "Другая работа": {"since": 2, "nudges": 1, "why": "nudged"},
+        }
+        with mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], "Встроенный патруль")
+        self.assertEqual(self.memory["Встроенный патруль"]["why"], "nudged")
+        self.assertEqual(self.memory["Другая работа"]["why"], "nudged")
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_revive_signal_waits_for_owner_pause_and_capacity(self):
+        self.conf["stopped_pipelines"] = ["Встроенный патруль"]
+        with mock.patch.object(pilot, "revive_signals", return_value=["Встроенный патруль"]), \
+                mock.patch.object(pilot, "acknowledge_revive_signal") as acknowledge:
+            self.watch()
+            acknowledge.assert_not_called()
+            self.conf["stopped_pipelines"] = []
+            self.conf["max_parallel_works"] = 1
+            running = self.task(state="running")
+            running["title"] = "[auto] [1/3 Specification] Уже запущена"
+            self.watch([self.task(), running])
+            acknowledge.assert_not_called()
+            self.conf["max_parallel_works"] = 2
+            self.watch([self.task(), running])
+
+        self.assertEqual(len(self.created), 1)
+        acknowledge.assert_called_once_with("Встроенный патруль")
+
+    def test_revive_preserves_full_maximum_length_unicode_work_name(self):
+        work = "я" * 200
+        task = self.task()
+        task["title"] = "[auto] [1/3 Specification] " + work
+        with mock.patch.object(pilot, "revive_signals", return_value=[work]):
+            self.watch([task])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["title"], work)
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
+
+    def test_acknowledge_keeps_durable_receipt_for_safe_retry(self):
+        self.patches[3].stop()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "REVIVE_DIR", directory):
+            path = pilot.revive_signal_path("Работа")
+            with open(path, "x", encoding="utf-8") as signal:
+                signal.write("Работа")
+
+            pilot.acknowledge_revive_signal("Работа")
+
+            self.assertFalse(os.path.exists(path))
+            self.assertTrue(os.path.exists(path + ".done"))
+            self.assertEqual(pilot.revive_signals(), [])
 
 
 class PlanCardCleanupTest(unittest.TestCase):

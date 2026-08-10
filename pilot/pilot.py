@@ -19,6 +19,7 @@ Planner layer (epics):
   the same mechanism later.
 """
 import calendar
+import hashlib
 import io
 import glob
 import json, re, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
@@ -33,6 +34,8 @@ CONTEXT_PATH = f"{HOME}/pilot/context.md"
 VERDICT_DIR = f"{HOME}/pilot/verdicts"
 PREFIX = "[auto]"
 STAGE_TITLE_RE = re.compile(r"^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.*)$")
+AUTO_REVIVE_REQUEST_PREFIX = "pilot:auto-revive:"
+AUTO_REVIVE_REQUEST_RE = re.compile(r"^pilot:auto-revive:(\d+):")
 EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
 EPIC_PLAN_PREFIX = "[epic-plan]"     # or any task titled like this
 EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
@@ -72,6 +75,35 @@ def log(*a):
 
 def base_title(title):
     return re.sub(r"^\[auto\]\s*(\[\d+/\d+[^\]]*\]\s*)?", "", title).strip()
+
+
+def revived_stage_index(task):
+    """Return the stage index stored on a revived automatic task."""
+    match = AUTO_REVIVE_REQUEST_RE.match(str(task.get("request_key", "") or ""))
+    return int(match.group(1)) if match else None
+
+
+def is_automatic_task(task):
+    """Automatic work is identified by task metadata, not display text alone."""
+    return (str(task.get("title", "") or "").startswith(PREFIX)
+            or revived_stage_index(task) is not None)
+
+
+def automatic_work_title(task):
+    match = STAGE_TITLE_RE.match(str(task.get("title", "") or ""))
+    if match:
+        return match.group(2).strip()
+    if revived_stage_index(task) is not None:
+        return str(task.get("title", "") or "").strip()
+    return ""
+
+
+def automatic_stage(task, stages=()):
+    match = STAGE_TITLE_RE.match(str(task.get("title", "") or ""))
+    if match:
+        return match.group(1).strip()
+    index = revived_stage_index(task)
+    return stages[index] if index is not None and index < len(stages) else ""
 
 
 def verify_passed(result):
@@ -237,11 +269,11 @@ def _recent_tasks():
     return out
 
 
-def money_guard(conf, title):
+def money_guard(conf, work):
     """Бросает исключение, если создание задачи прожжёт лимиты подписок.
     Работает по числу задач, а не по долларам: доллары кодекса мы пока
     не видим, а число задач видим всегда и для всех провайдеров."""
-    base = base_title(title)
+    base = base_title(work)
     rec = _recent_tasks()
     wcap = int(conf.get("work_day_cap", 12))
     dcap = int(conf.get("day_task_cap", 120))
@@ -328,13 +360,15 @@ AGENT_RULES = """
 
 
 def create_task(body, conf=None):
+    automatic = is_automatic_task(body)
+    stages = stage_names(conf) if conf else ()
     if conf and not host_load_admits(
-            conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
+            conf.get("_host_load_tasks"), automatic_stage(body, stages),
             conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
         raise RuntimeError("host_load_admission: stage deferred")
-    if conf and str(body.get("title", "")).startswith(PREFIX):
-        money_guard(conf, body["title"])
-    if str(body.get("title", "")).startswith(PREFIX):
+    if conf and automatic:
+        money_guard(conf, automatic_work_title(body) or base_title(body.get("title", "")))
+    if automatic:
         ctx = body.get("context") or ""
         if "ПРАВИЛА ДЛЯ АГЕНТА" not in ctx:
             body["context"] = (ctx + "\n\n" + AGENT_RULES)[:60000]
@@ -1433,15 +1467,15 @@ def active_auto_works(tasks):
     """Unique pipeline works that occupy an automatic-start slot."""
     active = set()
     for task in tasks:
-        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
-        if match and task.get("state") in PLAN_ACTIVE_STATES:
-            active.add(match.group(2).strip())
+        work = automatic_work_title(task)
+        if work and task.get("state") in PLAN_ACTIVE_STATES:
+            active.add(work)
     open_questions = {q.get("task_id") for q in load_questions()
                       if q.get("status") == "open"}
     for task in tasks:
-        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
-        if match and task.get("id") in open_questions:
-            active.add(match.group(2).strip())
+        work = automatic_work_title(task)
+        if work and task.get("id") in open_questions:
+            active.add(work)
     return active
 
 
@@ -1516,6 +1550,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1551,6 +1586,38 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, hashlib.sha256(work.encode()).hexdigest())
+
+
+def revive_signals():
+    """Return the signals present at scan time; acknowledgement is separate."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            path = os.path.join(REVIVE_DIR, name)
+            with open(path, encoding="utf-8") as signal:
+                work = signal.read()
+            if hashlib.sha256(work.encode()).hexdigest() != name:
+                continue
+        except (OSError, UnicodeError):
+            continue
+        result.append(work)
+    return result
+
+
+def acknowledge_revive_signal(work):
+    try:
+        path = revive_signal_path(work)
+        os.replace(path, path + ".done")
+    except FileNotFoundError:
+        pass
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1558,14 +1625,23 @@ def pipeline_watch(conf, tasks, workflows, workers):
     stopped = set(conf.get("stopped_pipelines") or [])
     groups = {}
     for t in tasks:
-        m = STAGE_TITLE_RE.match(t.get("title", "") or "")
-        if m:
-            groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
+        stage = automatic_stage(t, stages)
+        work = automatic_work_title(t)
+        if stage and work:
+            groups.setdefault(work, []).append((stage, t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    revive = set(revive_signals())
+    free_work_slots = max(0, int(conf.get("max_parallel_works", 4)) -
+                          len(active_auto_works(tasks)))
+    for base in revive:
+        if base not in stopped:
+            mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
+            if base in revive and base not in stopped:
+                acknowledge_revive_signal(base)
             continue
         if base in stopped:
             rec = mem.get(base) or {}
@@ -1580,6 +1656,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
         far = max(idx)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
+            if base in revive:
+                acknowledge_revive_signal(base)
             continue
         rec = mem.get(base) or {}
         rec.setdefault("since", now)
@@ -1595,6 +1673,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
                        "а следующий не запускается даже после двух попыток.",
                        priority="high", tags="warning")
             continue
+        if free_work_slots <= 0:
+            continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
         wname = stage_worker(conf, nxt, "medium", workers)
@@ -1603,9 +1683,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
-        title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        # The workflow revision is the service metadata for the resumed stage.
+        # Keep the owner's work name intact: it may already use the control
+        # plane's full 200-character title allowance.
+        title = base
+        free_work_slots -= 1
         try:
-            create_task({"request_key": str(uuid.uuid4()), "title": title,
+            create_task({"request_key": (AUTO_REVIVE_REQUEST_PREFIX + str(far + 1)
+                                         + ":" + str(uuid.uuid4())), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
@@ -1617,11 +1702,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
+            if base in revive:
+                acknowledge_revive_signal(base)
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
                 ": " + stages[far] + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" + stages[far] + " → " + nxt, tags="wrench")
         except Exception as e:
+            free_work_slots += 1
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
     try:
