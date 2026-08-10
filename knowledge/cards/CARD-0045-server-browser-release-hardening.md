@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented; targeted checks passed; ready for repeated Review.
-- Branch: `factory/9620477a-43e-07b91c2b-1aa`.
-- Head commit: `2228046` (`Дать агентам браузер без доступа root к checkout`).
-- What changed: agents and `/dialog` capture the approved stand through the installed
-  Chromium sandbox; root-installed brain and janitor read a `0700` exact-commit snapshot.
-- What changed: release and brain-installer use `lstat` preflight and reject every
-  symlink before any brain file is read or installed.
-- Evidence: exact-commit/mutated brain+janitor checkout and symlink regressions — PASS;
-  targeted Go and Dialog 8/8, lint, UI and both Go builds — PASS.
-- Evidence: live browser namespace check requires root and returned expected code 3.
-- One next action: Repeat Review against the repaired root trust boundary.
+- Status: Implemented; both release blockers fixed; ready for repeated Review.
+- Branch: `factory/3452f7a4-383-26020b1c-fd7`.
+- Head commit: `15b31f1` (`Закрыть два блокера выпуска серверного браузера`).
+- What changed: the installed browser installer reuses its payload without copying
+  package and helper files onto themselves, proven by executing the installed copy.
+- What changed: release and brain rollback copies live in private `0700` directories;
+  source and destination symlinks are rejected before root reads or writes them.
+- Evidence: release/browser shell scenarios 6/6 — PASS after rebase; full Go suite
+  and both Go builds — PASS; web 124/124, lint and production build — PASS.
+- Evidence: live browser namespace check remains Verify because it requires host root.
+- One next action: Repeat Review of the two repaired blocker paths.
 
 ## LOG
 
@@ -92,3 +92,12 @@ commit повторно материализуется в root-owned катал�
 вызова уязвимого installer и неизменность источника после подмены checkout по
 окончании сборки. Целевые Go/UI/shell-проверки, lint и обе сборки прошли; живая
 namespace-проверка оставлена Verify, потому что worker не имеет root.
+
+### 2026-08-10 — Implement
+
+Закрыты два blocker замечания повторного Review. Установленный browser installer
+запускает `npm` из установленного payload и безопасно пропускает копирование файла
+поверх себя. Rollback-копии release и brain перенесены из доступных factory путей
+в отдельные каталоги `0700`; симлинки источников и назначений отклоняются до
+изменений. После rebase прошли 6/6 release/browser сценариев и целевой Go-набор;
+до rebase также прошли полный Go, 124 UI-теста, lint и обе production-сборки.
