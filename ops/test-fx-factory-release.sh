@@ -21,6 +21,7 @@ make_fixture() {
   printf 'old-worker\n' >"$case_dir/install/factory-worker"
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
   : >"$case_dir/events"
+  : >"$case_dir/backup-events"
   : >"$case_dir/worker.toml"
   printf 'root-only secret\n' >"$case_dir/secret"
   printf 'trusted-release-helper\n' >"$case_dir/system/trusted-helper"
@@ -107,7 +108,7 @@ GO
   cat >"$case_dir/bin/bash" <<'BASH'
 #!/bin/bash
 case "${1:-}" in
-  ops/test-fx-factory-release-dispatch.sh|ops/test-bootstrap-factory-release.sh|ops/test-fx-browser-sandbox.sh|ops/test-install-brain.sh|ops/test-fx-factory-release.sh)
+  ops/test-fx-factory-release-dispatch.sh|ops/test-bootstrap-factory-release.sh|ops/test-install-server-browser.sh|ops/test-fx-browser-sandbox.sh|ops/test-install-brain.sh|ops/test-fx-factory-release.sh)
     echo "bash $1" >>"$TEST_GATES"
     [ "$TEST_MODE" != release-test-fail ] || [ "$1" != ops/test-fx-factory-release.sh ]
     exit
@@ -132,9 +133,20 @@ MV
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/bin/sleep"
   cat >"$case_dir/bin/chmod" <<'CHMOD'
 #!/bin/bash
-if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]]; then exit 1; fi
+if [ "$TEST_MODE" = worker-install-fail ] \
+  && [[ "${*: -1}" = *.factory-release-factory-worker.* ]]; then exit 1; fi
 exec /bin/chmod "$@"
 CHMOD
+  cat >"$case_dir/bin/cp" <<'CP'
+#!/bin/bash
+target=${@: -1}
+case "$target" in
+  /tmp/factory-release-backup-*/*.prev)
+    printf 'backup=%s mode=%s\n' "$target" "$(stat -c %a "$(dirname "$target")")" >>"$TEST_BACKUP_EVENTS"
+    ;;
+esac
+exec /bin/cp "$@"
+CP
   cat >"$case_dir/bin/curl" <<'CURL'
 #!/bin/bash
 case "$*" in
@@ -163,6 +175,7 @@ CURL
 run_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_BACKUP_EVENTS="$case_dir/backup-events" \
     TEST_SYSTEM_EVENTS="$case_dir/system-events" TEST_UNTRUSTED_EXECUTED="$case_dir/untrusted-executed" \
     TEST_SECRET="$case_dir/secret" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" TEST_INTERRUPT_MARK="$case_dir/interrupted" \
@@ -184,7 +197,8 @@ run_release "$success" success || fail "successful release failed"
 diff -u <(printf '%s\n' \
   'npm ci --no-audit --no-fund --silent' 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release-dispatch.sh' \
-  'bash ops/test-bootstrap-factory-release.sh' 'bash ops/test-fx-browser-sandbox.sh' \
+  'bash ops/test-bootstrap-factory-release.sh' 'bash ops/test-install-server-browser.sh' \
+  'bash ops/test-fx-browser-sandbox.sh' \
   'bash ops/test-install-brain.sh' 'bash ops/test-fx-factory-release.sh' 'npx vite build' \
   'go build -o PLACEHOLDER ./cmd/factory-server' 'go build -o PLACEHOLDER ./cmd/factory-worker') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
@@ -217,6 +231,12 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "worker was not stopped before determining its identity"
 [ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
+grep -E 'backup=/tmp/factory-release-backup-.+/factory-server.prev mode=700' \
+  "$success/backup-events" >/dev/null || fail "release rollback backup is not closed with mode 0700"
+while read -r entry _; do
+  backup_path=${entry#backup=}
+  [ ! -e "$(dirname "$backup_path")" ] || fail "release rollback backup was not removed"
+done <"$success/backup-events"
 
 mutated="$temporary/checkout-mutated"
 make_fixture "$mutated" checkout-mutated
@@ -238,6 +258,19 @@ run_release "$symlinked" snapshot-symlink || fail "safe rejection of a snapshot 
 grep -F 'снимок выпуска содержит симлинк: pilot/context.md' "$symlinked/output" >/dev/null \
   || fail "release did not explain why the root snapshot was rejected"
 assert_file "$symlinked/system/janitor" 'old janitor'
+
+destination_symlink="$temporary/destination-symlink"
+make_fixture "$destination_symlink" success
+printf 'do not overwrite\n' >"$destination_symlink/destination-secret"
+rm "$destination_symlink/install/factory-server"
+ln -s "$destination_symlink/destination-secret" "$destination_symlink/install/factory-server"
+if run_release "$destination_symlink" success; then
+  fail "release accepted a server destination symlink"
+fi
+assert_file "$destination_symlink/destination-secret" 'do not overwrite'
+[ ! -s "$destination_symlink/events" ] || fail "destination symlink changed services"
+grep -F 'не являются обычными файлами' "$destination_symlink/output" >/dev/null \
+  || fail "release did not explain the unsafe destination"
 
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install browser-chain-fail; do
   failed="$temporary/$mode"

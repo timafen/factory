@@ -62,16 +62,92 @@ PY
 
 validate_sources || exit 7
 
+validate_destinations() {
+  python3 - "$LIVE" pilot/pilot.py pilot/context.md intake/app.py intake/plan.py <<'PY'
+import os
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+current = os.path.sep
+for component in [part for part in root.split(os.path.sep) if part]:
+    current = os.path.join(current, component)
+    try:
+        value = os.lstat(current)
+    except OSError as error:
+        print("!! не смог проверить каталог назначения %s: %s" % (current, error), file=sys.stderr)
+        raise SystemExit(1)
+    if stat.S_ISLNK(value.st_mode) or not stat.S_ISDIR(value.st_mode):
+        print("!! каталог назначения небезопасен: %s" % current, file=sys.stderr)
+        raise SystemExit(1)
+for relative in sys.argv[2:]:
+    current = root
+    components = relative.split("/")
+    for index, component in enumerate(components):
+        current = os.path.join(current, component)
+        try:
+            value = os.lstat(current)
+        except FileNotFoundError:
+            if index != len(components) - 1:
+                print("!! каталог назначения отсутствует: %s" % relative, file=sys.stderr)
+                raise SystemExit(1)
+            break
+        except OSError as error:
+            print("!! не смог проверить назначение %s: %s" % (relative, error), file=sys.stderr)
+            raise SystemExit(1)
+        if stat.S_ISLNK(value.st_mode):
+            print("!! назначение содержит симлинк: %s" % relative, file=sys.stderr)
+            raise SystemExit(1)
+        final = index == len(components) - 1
+        if final and not stat.S_ISREG(value.st_mode):
+            print("!! назначение не является обычным файлом: %s" % relative, file=sys.stderr)
+            raise SystemExit(1)
+        if not final and not stat.S_ISDIR(value.st_mode):
+            print("!! путь назначения не является каталогом: %s" % relative, file=sys.stderr)
+            raise SystemExit(1)
+PY
+}
+
+validate_destinations || exit 7
+
+backup_dir=$(mktemp -d /tmp/factory-brain-backup-XXXXXX) \
+  || { fail "не смог создать закрытую папку отката мозга"; exit 7; }
+chmod 700 "$backup_dir" \
+  || { fail "не смог закрыть папку отката мозга"; rm -rf -- "$backup_dir"; exit 7; }
+cleanup_backups() { rm -rf -- "$backup_dir"; }
+trap cleanup_backups EXIT
+trap 'exit 130' HUP INT TERM
+
 changed=""
+declare -A backups=()
+declare -A backup_present=()
+
+install_atomically() {
+  local source=$1 target=$2 temporary
+  [ -f "$source" ] && [ ! -L "$source" ] || return 1
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    [ -f "$target" ] && [ ! -L "$target" ] || return 1
+  fi
+  temporary=$(mktemp "$(dirname "$target")/.factory-brain-install-XXXXXX") || return 1
+  install -o "$INSTALL_OWNER" -g "$INSTALL_GROUP" -m 644 "$source" "$temporary" \
+    && mv -fT -- "$temporary" "$target" \
+    || { rm -f -- "$temporary"; return 1; }
+}
+
 install_one() {  # $1 файл в репо, $2 живой путь, $3 py|txt
-  local s="$SRC/$1" d="$2"
-  [ -f "$s" ] || { echo "   $1: в репозитории нет — пропускаю"; return 0; }
+  local s="$SRC/$1" d="$2" backup="$backup_dir/${1//\//_}"
+  [ -f "$s" ] && [ ! -L "$s" ] \
+    || { echo "   $1: в репозитории нет обычного файла — пропускаю"; return 0; }
   if [ "$3" = py ]; then
     python3 -m py_compile "$s" || { fail "$1 не компилируется — мозг не трогаю"; return 1; }
   fi
   if cmp -s "$s" "$d"; then echo "   $1: без изменений"; return 0; fi
-  cp -f "$d" "$d.prev" 2>/dev/null || true
-  install -o "$INSTALL_OWNER" -g "$INSTALL_GROUP" -m 644 "$s" "$d" \
+  if [ -e "$d" ]; then
+    cp --no-dereference -- "$d" "$backup" || return 1
+    backup_present["$d"]=1
+  fi
+  backups["$d"]=$backup
+  install_atomically "$s" "$d" \
     || { fail "не смог поставить $1"; return 1; }
   changed="$changed $d"
   echo "   $1: обновлён"
@@ -133,7 +209,13 @@ PY
 fi
 if [ "$ok" != 1 ]; then
   fail "мозг после обновления не ответил правильно — возвращаю прежние файлы"
-  for d in $changed; do [ -f "$d.prev" ] && cp -f "$d.prev" "$d"; done
+  for d in $changed; do
+    if [ "${backup_present[$d]:-0}" = 1 ]; then
+      install_atomically "${backups[$d]}" "$d" || fail "не смог вернуть $d"
+    else
+      rm -f -- "$d"
+    fi
+  done
   # shellcheck disable=SC2086
   systemctl restart $restart
   exit 7

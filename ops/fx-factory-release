@@ -20,6 +20,7 @@ LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 BROWSER_CHECKER="${FACTORY_BROWSER_CHECKER:-/usr/local/libexec/factory-browser-sandbox-check}"
 BRAIN_INSTALLER="${FACTORY_BRAIN_INSTALLER:-/usr/local/lib/fx-factory-install-brain}"
 release_snapshot=
+release_backup=
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -38,6 +39,7 @@ work=$(as_user mktemp -d "$REL/build-XXXXXX") \
 cleanup() {
   rm -rf "$work"
   [ -z "$release_snapshot" ] || rm -rf -- "$release_snapshot"
+  [ -z "$release_backup" ] || rm -rf -- "$release_backup"
 }
 
 step "беру исходники: $ref"
@@ -65,6 +67,7 @@ as_user bash -c "umask 077; cd '$work/src' && go test ./..." \
 step "проверяю сценарий выката и отката"
 as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release-dispatch.sh \
   && bash ops/test-bootstrap-factory-release.sh \
+  && bash ops/test-install-server-browser.sh \
   && bash ops/test-fx-browser-sandbox.sh \
   && bash ops/test-install-brain.sh \
   && bash ops/test-fx-factory-release.sh" \
@@ -84,18 +87,45 @@ as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/fact
 }
 
 step "сохраняю работающую пару бинарей"
-cp -f "$SERVER_BIN" "$work/factory-server.prev" \
-  && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
+release_backup=$(mktemp -d /tmp/factory-release-backup-XXXXXX) \
+  && chmod 700 "$release_backup" \
+  || { fail "не смог создать закрытую папку отката"; cleanup; exit 4; }
+is_regular_file() {
+  python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+path = os.path.abspath(sys.argv[1])
+current = os.path.sep
+components = [part for part in path.split(os.path.sep) if part]
+for index, component in enumerate(components):
+    current = os.path.join(current, component)
+    try:
+        value = os.lstat(current)
+    except OSError:
+        raise SystemExit(1)
+    final = index == len(components) - 1
+    if stat.S_ISLNK(value.st_mode):
+        raise SystemExit(1)
+    if final and not stat.S_ISREG(value.st_mode):
+        raise SystemExit(1)
+    if not final and not stat.S_ISDIR(value.st_mode):
+        raise SystemExit(1)
+PY
+}
+is_regular_file "$SERVER_BIN" && is_regular_file "$WORKER_BIN" \
+  || { fail "текущие сервер или воркер не являются обычными файлами"; cleanup; exit 4; }
+cp --no-dereference -- "$SERVER_BIN" "$release_backup/factory-server.prev" \
+  && cp --no-dereference -- "$WORKER_BIN" "$release_backup/factory-worker.prev" \
   || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
 rollback() {
   trap - EXIT HUP INT TERM
   rollback_armed=0
   fail "$1 — возвращаю предыдущие сервер и воркер"
-  cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
-    && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
-  cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
-    && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
+  install_binary "$release_backup/factory-server.prev" "$SERVER_BIN"
+  install_binary "$release_backup/factory-worker.prev" "$WORKER_BIN"
   systemctl restart "$SERVER_SERVICE" || true
   systemctl restart "$WORKER_SERVICE" || true
   cleanup
@@ -116,9 +146,16 @@ trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 
 install_binary() {
-  source=$1 target=$2
-  cp -f "$source" "$target.new" && set_owner "$target.new" \
-    && chmod 755 "$target.new" && mv -f "$target.new" "$target"
+  local source=$1 target=$2 temporary
+  is_regular_file "$source" || return 1
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    is_regular_file "$target" || return 1
+  fi
+  temporary=$(mktemp "$(dirname "$target")/.factory-release-$(basename "$target").XXXXXX") \
+    || return 1
+  cp --no-dereference -- "$source" "$temporary" && set_owner "$temporary" \
+    && chmod 755 "$temporary" && mv -fT -- "$temporary" "$target" \
+    || { rm -f -- "$temporary"; return 1; }
 }
 
 step "ставлю новую пару и перезапускаю сервер"
