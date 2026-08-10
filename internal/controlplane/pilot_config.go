@@ -133,7 +133,7 @@ func (s *PilotConfigStore) atomicWrite(body []byte) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err == nil {
-		_, err = tmp.Write(body)
+		_, _ = tmp.Write(body)
 	}
 	if err == nil {
 		err = tmp.Sync()
