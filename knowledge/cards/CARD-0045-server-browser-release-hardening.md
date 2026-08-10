@@ -2,19 +2,20 @@
 
 ## HEAD
 
-- Status: Implemented and locally verified; do not repeat Review until the
-  trusted transition and following `origin/main` release pass on the host.
-- Branch: `factory/e7cf0b36-4cb-21448632-2b7`.
-- Head commit: `6aed44b` (`Дать агентам безопасно видеть утверждённый стенд`).
-- What changed: agents and `/dialog` capture the approved stand through isolated
-  Chromium; `fx factory install-release-helper <commit>` installs root-owned
-  helpers only from exact `origin/main`, and ordinary releases never execute
-  checkout `ops/*` as root. Launcher alone stops Chromium and cleans namespaces.
-- Evidence: affected Go packages and builds — PASS; Dialog 8/8, lint and UI
-  build — PASS; four release/bootstrap/security shell suites — PASS.
-- One next action: install trusted `fx`/bootstrap on the Factory host, run
-  `fx factory install-release-helper <full origin/main commit>`, then release
-  `origin/main` and retain the real hung-Chromium cleanup output for Review.
+- Status: Implemented and targeted checks passed; ready for repeated Review.
+- Branch: `factory/d06e6638-8ac-e9d16bcb-121`.
+- Head commit: `ea83ba6` (`Дать агентам безопасно видеть стенд серверным браузером`).
+- What changed: the exact `origin/main` commit is materialized in a root-owned
+  mode-700 staging directory before helpers run; agents and `/dialog` use the
+  installed worker path. Browser HTTP checks mutation safety before its slot.
+- What changed: the root chain check starts the worker through `runuser` and its
+  emergency cleanup terminates tracked process groups and removes every new
+  browser namespace.
+- Evidence: browser/control-plane/protocol/worker Go checks — PASS; Dialog 8/8,
+  lint and production UI build — PASS; four release/security shell suites and
+  both Go binary builds — PASS.
+- One next action: repeat Review; after merge, Verify runs the live root release
+  and browser cleanup through the штатный `fx factory release` path.
 
 ## LOG
 
@@ -64,3 +65,13 @@ release-helper больше не запускает helper или installer из
 launcher-группе и ждёт; реальный launcher единолично убивает зависший Chromium и
 удаляет namespace. Целевые Go/UI проверки, обе сборки и четыре shell-регрессии
 прошли; живая установка доверенного перехода остаётся следующим действием хозяина.
+
+### 2026-08-09 — Implement
+
+Одним ограниченным проходом закрыты все пять findings Review. Commit кандидата
+теперь материализуется и проверяется в недоступном `factory` root-owned staging;
+chain-тест запускает установленный worker через `runuser`, использует абсолютный
+путь в агентских подсказках, а HTTP-защита срабатывает до browser slot. Аварийный
+cleanup завершает отслеживаемые группы и удаляет все созданные namespace. Это
+подтверждено целевыми Go/UI/shell-тестами, lint и обеими production-сборками;
+живая root-проверка штатным `fx factory release` оставлена этапу Verify после merge.
