@@ -70,7 +70,10 @@ type ActiveTask = {
   created_at?: string;
 };
 type WorkMeta = { origin?: "owner" | "assistant" | "orchestrator" };
-export type RecentDone = { title: string; detail?: string; at?: string };
+export type RecentDone = {
+  title: string; detail?: string; at?: string;
+  status?: "merged" | "passed" | "failed" | "legacy";
+};
 type OverviewWork = {
   id: string;
   title: string;
@@ -367,7 +370,9 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10,
                                   padding: "7px 0",
                                   borderTop: i ? "1px solid #1d2430" : "none" }}>
-              <span style={{ color: "#7ee2a8", fontSize: 13, flex: "none" }}>✓</span>
+              <span style={{ color: r.status === "failed" ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
+                {r.status === "failed" ? "!" : "✓"}
+              </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
                               whiteSpace: "nowrap" }}>{r.title}</div>

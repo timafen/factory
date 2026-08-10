@@ -3260,6 +3260,64 @@ class PostMergeDeployTest(unittest.TestCase):
                                       "fx factory release", mock.ANY)
 
 
+class RecentDoneTest(unittest.TestCase):
+    def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
+        tasks = [
+            {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",
+             "state": "succeeded", "updated_at": f"2026-08-10T10:0{i}:00Z"}
+            for i, name in enumerate(("Smoke check", "Helper cleanup", "Debug probe",
+                                       "Idempotency final", "Идемпотентный финал"))
+        ] + [
+            {"id": "merged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "state": "succeeded", "updated_at": "2026-08-10T11:00:00Z"},
+            {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "state": "failed", "updated_at": "2026-08-10T12:00:00Z"},
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        merges = os.path.join(temporary.name, "merges.jsonl")
+        with open(merges, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"task_id": "merged"}) + "\n")
+
+        def detail(path, body=None):
+            return {"attempts": [{"result": "ПРОВЕРКА: браузерный сценарий прошёл."}]}
+
+        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+                mock.patch.object(pilot, "api", side_effect=detail):
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
+        self.assertEqual(recent[0]["status"], "failed")
+        self.assertIn("в main не влито", recent[0]["detail"])
+        self.assertEqual(recent[1]["status"], "merged")
+        self.assertIn("Влито в main", recent[1]["detail"])
+
+    def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        notifications = os.path.join(temporary.name, "notifications.jsonl")
+        with open(notifications, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"title": "Задача выполнена", "message": "Идемпотентный финал"}) + "\n")
+            stream.write(json.dumps({"title": "Задача выполнена", "message": "Старый настоящий результат\nПроверено вручную"}) + "\n")
+        with mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
+                mock.patch.object(pilot, "MERGES_PATH", os.path.join(temporary.name, "none")), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block([], n=3)
+
+        self.assertEqual([item["title"] for item in recent], ["Старый настоящий результат"])
+        self.assertEqual(recent[0]["status"], "legacy")
+
+    def test_reads_every_task_page(self):
+        pages = [
+            {"tasks": [{"id": "new"}], "next_cursor": "older"},
+            {"tasks": [{"id": "old"}], "next_cursor": None},
+        ]
+        with mock.patch.object(pilot, "api", side_effect=pages) as api:
+            self.assertEqual([task["id"] for task in pilot.all_tasks()], ["new", "old"])
+        self.assertEqual(api.call_args_list[0].args[0], "/tasks?limit=200")
+        self.assertEqual(api.call_args_list[1].args[0], "/tasks?limit=200&cursor=older")
+
+
 class DashboardProjectsTest(unittest.TestCase):
     def setUp(self):
         pilot._dash_slow = {"at": 0, "data": {}}
