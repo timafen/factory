@@ -6,6 +6,7 @@ import type { Task, TaskState, Worker } from "./types";
 import {
   EmptyState, ErrorState, LoadingState, StaleBanner, ViewHeader, type ViewStateProps,
 } from "./ui";
+import { api } from "./api";
 
 const STAGE_ORDER = ["Triage", "Specification", "Implement + Test", "Review", "Verify"];
 const STAGE_RU: Record<string, string> = {
@@ -266,6 +267,8 @@ export function WorkView({
   const [history, setHistory] = useState<Record<string, string>>({});
   const [byStage, setByStage] = useState(false);
   const [open, setOpen] = useState<string>("");
+  const [reviving, setReviving] = useState<string>("");
+  const [reviveErrors, setReviveErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let alive = true;
@@ -318,6 +321,24 @@ export function WorkView({
 
   const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
   const groups = build(tasks ?? [], verdicts, questions, works, statuses, promises);
+  const revive = async (work: string) => {
+    if (reviving) return;
+    setReviving(work);
+    setReviveErrors((current) => ({ ...current, [work]: "" }));
+    try {
+      await api.reviveWork(work);
+      setStatuses((current) => ({ ...current, [work]: { state: "reviving", text: "оживает: пилот продолжит со следующего этапа" } }));
+      const response = await fetch("/api/v1/work-status");
+      if (response.ok) {
+        const fresh = await response.json() as Record<string, { state: string; text: string }>;
+        setStatuses((current) => ({ ...fresh, [work]: current[work] }));
+      }
+    } catch (error) {
+      setReviveErrors((current) => ({ ...current, [work]: error instanceof Error ? error.message : "Не удалось оживить работу" }));
+    } finally {
+      setReviving("");
+    }
+  };
 
   return (
     <div className="page page-work">
@@ -365,6 +386,7 @@ export function WorkView({
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
                             history={history}
+                            onRevive={revive} reviving={reviving === g.base} reviveError={reviveErrors[g.base]}
                             project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
@@ -391,6 +413,7 @@ export function WorkView({
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
                             onTask={onTask} onAnswer={onAnswer}
                             history={history}
+                            onRevive={revive} reviving={reviving === g.base} reviveError={reviveErrors[g.base]}
                             project={projectName(g.latest.repository_id)} />
                 ))}
               </div>
@@ -410,11 +433,12 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project, onRevive, reviving, reviveError }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
   onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void;
   history: Record<string, string>;
   project?: string;
+  onRevive: (work: string) => void; reviving: boolean; reviveError?: string;
 }) {
   const worker = workerMap.get(g.latest.worker_id);
   // Самая свежая ссылка «посмотреть» по всей работе: её называет стадия
@@ -506,6 +530,15 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
             }}>{ORIGIN_RU[g.meta.origin] ?? g.meta.origin}</span>
         )}
         <strong style={{ fontSize: 15, opacity: g.meta?.closed ? 0.65 : 1 }}>{g.base}</strong>
+        {(g.status.label.startsWith("остановлена:") || g.status.label.startsWith("застряла:")) && (
+          <>
+            <button className="button" disabled={reviving}
+              onClick={(event) => { event.stopPropagation(); void onRevive(g.base); }}>
+              {reviving ? "Оживляю…" : "Оживить"}
+            </button>
+            {reviveError && <span role="alert" style={{ color: "#ffb4b4", fontSize: 12 }}>{reviveError}</span>}
+          </>
+        )}
         {(g.lap ?? 1) > 1 && (
           <span title="Работа возвращалась на доработку — идёт повторный круг"
                 style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999,
