@@ -68,13 +68,29 @@ type Group = {
   base: string;
   items: { task: Task; stage: string | null; verdict?: Verdict }[];
   latest: Task;
-  status: { label: string; tone: keyof typeof TONE };
+  status: WorkStatus;
   currentStage: string | null;
   reached: Record<string, "done" | "live" | "bad" | "skipped" | "again">;
   lap?: number;
   meta?: WorkMeta;
   promise?: { files?: string[]; commands?: string[] };
 };
+
+type WorkKind = "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive";
+type WorkStatus = {
+  kind: WorkKind;
+  label: string;
+  tone: keyof typeof TONE;
+  happened: string;
+  next: string;
+  owner: string;
+};
+
+const neutralStatus = (): WorkStatus => ({
+  kind: "archive", label: "в истории", tone: "muted",
+  happened: "Активного шага нет.", next: "Factory не получила данных о следующем шаге.",
+  owner: "Участие владельца не требуется.",
+});
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function build(tasks: Task[], verdicts: Record<string, Verdict>, questions: Question[],
@@ -98,7 +114,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const v = verdicts[t.id];
     const g = map.get(base) ?? {
       base, items: [], latest: t,
-      status: { label: "", tone: "muted" as const }, currentStage: null, reached: {},
+      status: neutralStatus(), currentStage: null, reached: {},
     };
     g.items.push({ task: t, stage: stage ?? v?.stage ?? null, verdict: v });
     if ((t.created_at ?? "") > (g.latest.created_at ?? "")) g.latest = t;
@@ -160,7 +176,16 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const failed = g.items[g.items.length - 1]?.task.state === "failed";
     const allCancelled = g.items.every((i) => i.task.state === "cancelled");
 
-    if (live) {
+    if (waiting) {
+      g.status = {
+        kind: "decision", label: "Нужно твоё решение", tone: "warn",
+        happened: waiting.task.id && questions.find((q) => q.task_id === waiting.task.id)?.question
+          ? `Factory задала вопрос: ${questions.find((q) => q.task_id === waiting.task.id)?.question}`
+          : "Factory ждёт ответа на открытый вопрос.",
+        next: "После ответа Factory сможет обработать вопрос.",
+        owner: "Нужно твоё решение.",
+      };
+    } else if (live) {
       g.currentStage = live.stage;
       // «Заново» относится к повторно запущенной текущей стадии, а не к
       // уже пройденным шагам справа: они остаются историей прошлого круга.
@@ -168,37 +193,71 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       if (live.stage && g.items.slice(0, liveIndex).some((it) => it.stage === live.stage)) {
         g.reached[live.stage] = "again";
       }
-      g.status = { label: live.task.state === "queued" ? "ждёт исполнителя" : "идёт", tone: "live" };
-    } else if (waiting) {
-      g.status = { label: "ждёт твоего ответа", tone: "warn" };
+      if (rework) {
+        const rejected = [...g.items].reverse().find((it) => it.verdict?.final_pass === false);
+        g.status = {
+          kind: "repairing", label: "Исправляется автоматически", tone: "live",
+          happened: rejected?.stage
+            ? `Проверка вернула «${STAGE_RU[rejected.stage] ?? rejected.stage}» на доработку.`
+            : "Проверка вернула работу на доработку.",
+          next: live.stage
+            ? `Factory сейчас выполняет «${STAGE_RU[live.stage] ?? live.stage}».`
+            : "Factory сейчас выполняет запущенную задачу.",
+          owner: "Участие владельца не требуется.",
+        };
+      } else {
+        g.status = {
+          kind: "active", label: live.task.state === "queued" ? "В очереди Factory" : "Factory работает", tone: "live",
+          happened: live.stage
+            ? `Выполняется «${STAGE_RU[live.stage] ?? live.stage}».`
+            : "Выполняется задача Factory.",
+          next: live.stage
+            ? `Текущий шаг: «${STAGE_RU[live.stage] ?? live.stage}».`
+            : "Текущий шаг уже запущен.",
+          owner: "Участие владельца не требуется.",
+        };
+      }
     } else if (noWorker) {
-      g.status = { label: "ответ есть, ждёт свободного исполнителя", tone: "warn" };
+      g.status = {
+        kind: "active", label: "Ждёт свободного исполнителя", tone: "warn",
+        happened: "Ответ на вопрос уже есть, но исполнитель ещё не назначен.",
+        next: "Factory ждёт свободного исполнителя.", owner: "Участие владельца не требуется.",
+      };
     } else if (passed) {
-      g.status = { label: "работа принята", tone: "ok" };
+      g.status = {
+        kind: "done", label: "работа принята", tone: "ok",
+        happened: "Проверка приняла результат.", next: "Работа завершена.",
+        owner: "Участие владельца не требуется.",
+      };
     } else if (rework) {
-      // Ревью вернуло работу — это ход конвейера, а не владельца.
-      g.status = { label: "вернули на доработку, продолжаем", tone: "live" };
+      g.status = {
+        kind: "archive", label: "доработка в истории", tone: "muted",
+        happened: "Последняя известная проверка вернула работу на доработку.",
+        next: "Новый активный шаг в API не найден.", owner: "Участие владельца не требуется.",
+      };
     } else if (allCancelled) {
-      g.status = { label: "отменена", tone: "muted" };
+      g.status = {
+        kind: "archive", label: "отменена", tone: "muted",
+        happened: "Все попытки этой работы отменены.", next: "Factory не выполняет новых шагов.",
+        owner: "Участие владельца не требуется.",
+      };
     } else {
-      // Кто ходит следующим. Свежий сбой без вопроса — оркестратор ещё не
-      // добрался до него: он обходит задачи раз в полминуты. Если прошло
-      // много времени и вопроса так и нет — никто не взялся, и это плохо.
       const newest = g.items[g.items.length - 1];
       const qs = newest ? qState.get(newest.task.id) : undefined;
-      const ageMin = newest
-        ? (Date.now() - Date.parse(newest.task.created_at ?? "")) / 60000
-        : 1e9;
       if (qs === "answered") {
-        g.status = { label: "оркестратор ответил, продолжаем", tone: "live" };
-      } else if (failed && !qs && ageMin < 10) {
-        g.status = { label: "сорвалась, оркестратор разбирается", tone: "warn" };
+        g.status = {
+          kind: "active", label: "Ответ передан Factory", tone: "live",
+          happened: "На вопрос уже дан ответ.", next: "Factory обрабатывает полученный ответ.",
+          owner: "Участие владельца не требуется.",
+        };
       } else if (failed) {
-        g.status = { label: "сорвалась и стоит — никто не взялся", tone: "bad" };
-      } else if (!qs && ageMin < 10) {
-        g.status = { label: "закончила ход, оркестратор решает", tone: "warn" };
+        g.status = {
+          kind: "archive", label: "сбой в истории", tone: "muted",
+          happened: "Последняя попытка завершилась сбоем.", next: "Новый активный шаг в API не найден.",
+          owner: "Участие владельца не требуется.",
+        };
       } else {
-        g.status = { label: "остановлена, ждёт решения", tone: "warn" };
+        g.status = neutralStatus();
       }
     }
   }
@@ -208,9 +267,22 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   for (const g of map.values()) {
     const ws = statuses[g.base];
     if (!ws) continue;
-    if (g.items.some((it) => LIVE.includes(it.task.state))) continue;
-    if (ws.state === "stopped_owner") g.status = { label: "остановлена: конвейер на паузе", tone: "muted" };
-    else if (ws.state === "stuck") g.status = { label: "застряла: сама не двигается", tone: "bad" };
+    if (g.items.some((it) => LIVE.includes(it.task.state)) || g.status.kind === "decision") continue;
+    if (ws.state === "stopped_owner") {
+      g.status = {
+        kind: "paused", label: "Поставлено на паузу", tone: "muted",
+        happened: ws.text || "Конвейер по этой работе поставлен на паузу владельцем.",
+        next: "Factory не запускает следующий шаг, пока пауза включена.",
+        owner: "Чтобы продолжить, сними паузу в настройках.",
+      };
+    } else if (ws.state === "stuck") {
+      g.status = {
+        kind: "stuck", label: "Factory не может продолжить", tone: "bad",
+        happened: ws.text || "Следующий шаг не запустился.",
+        next: "Автоматический следующий шаг не запланирован.",
+        owner: "Нужно твоё решение.",
+      };
+    }
   }
 
   // Внутри раздела всё сортируется одинаково — по времени, новое сверху.
@@ -222,43 +294,30 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   );
 }
 
-// Возраст, после которого работа уходит в архив, если от неё ничего не ждут.
-const FRESH_DAYS = 2;
-
-/** Куда попадёт работа. Порядок разделов — это порядок срочности:
- *  сначала то, что стоит без человека, потом живое, потом свежий итог. */
-function sectionOf(g: Group): "waiting" | "live" | "won" | "lost" | "archive" {
-  // Закрытую работу владелец видеть в делах не должен, даже если она свежая:
-  // от него по ней ничего не ждут и ждать не будут.
+/** Разделы не вычисляют движение по возрасту: их определяют только факт
+ * активной задачи, открытый вопрос и состояние, которое записал пилот. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function sectionOf(g: Group): "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive" {
   if (g.meta?.closed) return "archive";
-  if (g.status.label === "ждёт твоего ответа") return "waiting";
-  if (g.status.tone === "bad") return "waiting";
-  // Пока ход оркестратора — это не дело владельца, ему туда смотреть незачем.
-  if (g.status.label === "оркестратор ответил, продолжаем") return "live";
-  if (g.status.label.includes("оркестратор")) return "live";
-  if (g.status.tone === "live") return "live";
-  const age = Date.now() - Date.parse(g.latest.created_at ?? "");
-  const fresh = Number.isFinite(age) && age < FRESH_DAYS * 864e5;
-  if (g.status.label === "остановлена" && fresh) return "waiting";
-  if (!fresh) return "archive";
-  // Итог итогу рознь: принятая работа и брошенная — разные полки.
-  return g.status.tone === "ok" ? "won" : "lost";
+  return g.status.kind;
 }
 
-const SECTIONS: { key: "waiting" | "live" | "won" | "lost"; title: string;
+const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
                    hint: string; accent: string }[] = [
-  { key: "waiting", title: "Нужен ты", hint: "Без тебя не сдвинется", accent: "#ffb86b" },
-  { key: "live", title: "Идёт сейчас", hint: "Работает или вот-вот продолжится — от тебя ничего не нужно", accent: "#8ec5ff" },
-  { key: "won", title: "Сделано", hint: "Принято за последние два дня — результат можно смотреть", accent: "#7ee2a8" },
-  { key: "lost", title: "Не вышло / остановлено", hint: "Закончились без результата — реши, нужны ли они ещё", accent: "#ffb4b4" },
+  { key: "decision", title: "Нужно твоё решение", hint: "Factory ждёт ответа на открытый вопрос", accent: "#ffb86b" },
+  { key: "stuck", title: "Factory не может продолжить", hint: "Автоматического следующего шага нет", accent: "#ffb4b4" },
+  { key: "paused", title: "Поставлено на паузу", hint: "Продолжение включается в настройках", accent: "#8a94a6" },
+  { key: "repairing", title: "Исправляется автоматически", hint: "Factory уже выполняет повторную попытку", accent: "#8ec5ff" },
+  { key: "active", title: "В работе", hint: "Factory выполняет известный активный шаг", accent: "#8ec5ff" },
+  { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 
 export function WorkView({
   tasks, workers, pending, error, fetching, updatedAt,
-  onTask, onAnswer, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
+  onTask, onAnswer, onResume, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
 }: ViewStateProps & {
   tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
-  onTask: (id: string) => void; onAnswer?: () => void; onDelegate: () => void;
+  onTask: (id: string) => void; onAnswer?: () => void; onResume?: () => void; onDelegate: () => void;
   hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
@@ -330,7 +389,7 @@ export function WorkView({
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: muted }}>
-          {byStage ? "Каждая карточка — отдельный этап." : "Сверху то, что стоит без тебя. Ниже — что идёт и что уже сделано. Старое в архиве."}
+          {byStage ? "Каждая карточка — отдельный этап." : "Отдельно — твоё решение, паузы, настоящий тупик и работа, которую Factory продолжает сама."}
         </span>
         <span style={{ flex: 1 }} />
         <button className="button" onClick={() => setByStage((v) => !v)}>
@@ -367,7 +426,7 @@ export function WorkView({
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
-                            onTask={onTask} onAnswer={onAnswer}
+                            onTask={onTask} onAnswer={onAnswer} onResume={onResume}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
@@ -386,14 +445,14 @@ export function WorkView({
                 </button>
                 {!showArchive && (
                   <span style={{ fontSize: 12.5, color: muted }}>
-                    Закрытые работы и всё, что старше двух дней и никого не ждёт.
+                    Закрытые, отменённые и завершённые работы, а также прежние попытки внутри истории работы.
                   </span>
                 )}
                 {showArchive && old.map((g) => (
                   <GroupRow key={g.base} g={g} workerMap={workerMap}
                             expanded={open === g.base}
                             onToggle={() => setOpen(open === g.base ? "" : g.base)}
-                            onTask={onTask} onAnswer={onAnswer}
+                            onTask={onTask} onAnswer={onAnswer} onResume={onResume}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
                 ))}
@@ -414,9 +473,9 @@ export function WorkView({
   );
 }
 
-function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history, project }: {
+function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume, history, project }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
-  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void;
+  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void; onResume?: () => void;
   history: Record<string, string>;
   project?: string;
 }) {
@@ -444,7 +503,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
        ...(g.promise.commands ?? []).map((c) => `команда: ${c}`)].join(" · ")
     : "";
   return (
-    <section style={{
+    <section className="work-card" style={{
       background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)",
       borderColor: g.status.tone === "live" ? "#2a4560" : g.status.tone === "warn" ? "#4a3f22" : "var(--border, #262c38)",
       borderRadius: 12, padding: "12px 16px",
@@ -463,14 +522,14 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }}
            onClick={onToggle}>
-        {g.status.label === "работа принята" && !tryUrl && proofTxt && !g.meta?.closed && (
+        {g.status.kind === "done" && !tryUrl && proofTxt && !g.meta?.closed && (
           <span title="Результат не видно на экране — вот как машина его подтвердила"
                 style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999,
                          background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741" }}>
             принята · {proofShort}
           </span>
         )}
-        {g.status.label === "работа принята" && tryUrl && !g.meta?.closed ? (
+        {g.status.kind === "done" && tryUrl && !g.meta?.closed ? (
           // Итог принят — значит изменение уже на стенде. Сама плашка и есть
           // дверь туда: «сделано» без возможности посмотреть — просто слово.
           <a href={tryUrl} target="_blank" rel="noreferrer"
@@ -481,7 +540,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
                background: "#16341f", color: "#7ee2a8", border: "1px solid #2f5741",
                textDecoration: "none", whiteSpace: "nowrap",
              }}>работа принята · посмотреть →</a>
-        ) : g.status.label === "ждёт твоего ответа" && onAnswer ? (
+        ) : g.status.kind === "decision" && onAnswer ? (
           // Плашка про долг перед владельцем обязана вести туда, где долг
           // закрывают. Сообщить о проблеме и не дать способа её решить —
           // худший вид экрана.
@@ -492,7 +551,16 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
               fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
               background: "#4a3f22", color: "#e0cf9f", border: "1px solid #7a6a3a",
               cursor: "pointer", whiteSpace: "nowrap",
-            }}>ждёт твоего ответа →</button>
+            }}>Ответить Factory →</button>
+        ) : g.status.kind === "paused" && onResume ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onResume(); }}
+            title="Открыть настройки, где можно снять паузу с конвейера"
+            style={{
+              fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999,
+              background: "#22262f", color: "#c5ccd8", border: "1px solid #4b5362",
+              cursor: "pointer", whiteSpace: "nowrap",
+            }}>Продолжить в настройках →</button>
         ) : (
           <Pill text={g.meta?.closed ? "закрыта" : g.status.label}
                 tone={g.meta?.closed ? "muted" : g.status.tone} />
@@ -525,6 +593,14 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
         </span>
         <ChevronRight size={14} style={{ transform: expanded ? "rotate(90deg)" : undefined, color: muted }} />
       </div>
+
+      {g.status.kind !== "done" && g.status.kind !== "archive" && (
+        <div className="work-explanation" aria-label="Что будет дальше">
+          <div><span>Что случилось</span><p>{g.status.happened}</p></div>
+          <div><span>Дальше Factory</span><p>{g.status.next}</p></div>
+          <div><span>Твоё участие</span><p>{g.status.owner}</p></div>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         {(() => {
@@ -587,7 +663,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, history,
               : verdict?.action === "advance" ? "этап пройден"
               : stopped && !isLast && stage === "Review" ? "вернул на доработку"
               : stopped && !isLast ? "ход закончен, работа пошла дальше"
-              : stopped ? "остановлена, ждёт решения"
+              : stopped ? "пауза по решению"
               : "отработала";
             const tone =
               LIVE.includes(task.state) ? "live"

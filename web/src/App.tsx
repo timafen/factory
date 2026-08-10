@@ -374,6 +374,7 @@ export function App() {
               updatedAt={tasks.dataUpdatedAt}
               onTask={(id) => navigate({ page: "task", id })}
               onAnswer={() => navigate({ page: "answer" })}
+              onResume={() => navigate({ page: "settings" })}
               onDelegate={() => openDelegate()}
               onRefresh={() => void tasks.refetch()}
               hasMore={Boolean(taskHistoryCursor)}

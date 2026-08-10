@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { build } from "./Work";
+import { build, sectionOf } from "./Work";
 import type { Task } from "./types";
 
 function task(id: string, stage: string, state: Task["state"], minute: number): Task {
@@ -65,5 +65,62 @@ describe("build", () => {
 
     expect(group.reached.Verify).toBe("bad");
     expect(group.reached["Implement + Test"]).toBe("live");
+  });
+
+  it("keeps an active retry in work and states the real current step", () => {
+    const group = build([
+      task("verify", "Verify", "succeeded", 1),
+      task("implement-retry", "Implement + Test", "running", 2),
+    ], { verify: { final_pass: false } }, [])[0];
+
+    expect(group.status).toMatchObject({
+      kind: "repairing",
+      label: "Исправляется автоматически",
+      next: "Factory сейчас выполняет «Разработка».",
+      owner: "Участие владельца не требуется.",
+    });
+  });
+
+  it("puts an open owner question ahead of a running task", () => {
+    const group = build([task("implement", "Implement + Test", "running", 1)], {}, [{
+      task_id: "implement", status: "open", question: "Выбрать вариант A или B?",
+    }])[0];
+
+    expect(group.status).toMatchObject({
+      kind: "decision",
+      label: "Нужно твоё решение",
+      happened: "Factory задала вопрос: Выбрать вариант A или B?",
+    });
+  });
+
+  it("uses the pilot's paused and stuck statuses without guessing a retry", () => {
+    const paused = build([task("paused", "Review", "failed", 1)], {}, [], {}, {
+      "Экран Работа": { state: "stopped_owner", text: "остановлена: конвейер по этой работе на паузе" },
+    })[0];
+    const stuck = build([task("stuck", "Review", "failed", 1)], {}, [], {}, {
+      "Экран Работа": { state: "stuck", text: "следующий этап не запускается" },
+    })[0];
+
+    expect(paused.status).toMatchObject({ kind: "paused", label: "Поставлено на паузу" });
+    expect(stuck.status).toMatchObject({
+      kind: "stuck", label: "Factory не может продолжить", happened: "следующий этап не запускается",
+    });
+  });
+
+  it("archives cancelled, closed, and inactive old attempts instead of calling them unfinished", () => {
+    const cancelled = build([task("cancelled", "Review", "cancelled", 1)], {}, [])[0];
+    const closed = build([task("closed", "Review", "succeeded", 1)], {}, [], {
+      "Экран Работа": { closed: "2026-08-08" },
+    })[0];
+    const inactiveRework = build([task("rework", "Review", "succeeded", 1)], {
+      rework: { final_pass: false },
+    }, [])[0];
+
+    expect(cancelled.status.kind).toBe("archive");
+    expect(closed.status.kind).toBe("archive");
+    expect(sectionOf(closed)).toBe("archive");
+    expect(inactiveRework.status).toMatchObject({
+      kind: "archive", next: "Новый активный шаг в API не найден.",
+    });
   });
 });
