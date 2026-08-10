@@ -8,6 +8,9 @@ trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+"$SCRIPT_DIR/test-systemd-browser-firewall.sh" --check-properties \
+  || fail "systemd-run не принимает свойства browser scope"
+
 share="$temporary/share"
 libexec="$temporary/libexec"
 test_bin="$temporary/bin"
@@ -132,11 +135,22 @@ cat >"$test_bin/systemd-run" <<'SH'
 #!/bin/bash
 printf 'systemd-run=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 while [ "$#" -gt 0 ]; do
-  case "$1" in --scope|--quiet|--collect) shift;; -p) shift 2;; *) exec "$@";; esac
+  case "$1" in
+    --scope|--quiet|--collect|--no-ask-password) shift ;;
+    -p)
+      case "$2" in
+        IPAddressDeny=*|IPAddressAllow=*) ;;
+        *) echo "Unknown assignment: $2" >&2; exit 1 ;;
+      esac
+      shift 2
+      ;;
+    *) exec "$@" ;;
+  esac
 done
 SH
 cat >"$test_bin/setpriv" <<'SH'
 #!/bin/bash
+printf 'setpriv=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 while [ "$#" -gt 0 ]; do [ "$1" != -- ] || { shift; exec "$@"; }; shift; done
 SH
 cat >"$test_bin/visudo" <<'SH'
@@ -199,6 +213,8 @@ grep -F 'MAP factory.timafen.com 192.0.2.10, MAP staging-automation.tarser.net 1
   || fail "Chromium resolver не запретил DNS для всех неразрешённых FQDN"
 grep -F -- '--no-proxy-server' "$temporary/events" >/dev/null \
   || fail "Chromium не запущен с принудительно отключённым proxy"
+grep -F 'setpriv=' "$temporary/events" | grep -F -- '--no-new-privs' >/dev/null \
+  || fail "Chromium не получил NoNewPrivileges через setpriv"
 grep -Fx 'goto=https://factory.timafen.com' "$temporary/events" >/dev/null \
   || fail "smoke не открыл разрешённый Factory FQDN"
 grep -Fx 'goto=https://staging-automation.tarser.net' "$temporary/events" >/dev/null \
@@ -212,7 +228,11 @@ grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
 
 for unsafe_argument in \
   '--host-resolver-rules=MAP * 127.0.0.1' \
+  '-host-resolver-rules=MAP * 127.0.0.1' \
+  ' --host-resolver-rules=MAP * 127.0.0.1' \
   '--host-rules=MAP * 127.0.0.1' \
+  '-host-rules=MAP * 127.0.0.1' \
+  $'\t--host-rules=MAP * 127.0.0.1\t' \
   '--proxy-auto-detect' \
   '--proxy-bypass-list=example.com' \
   '--proxy-server=http://127.0.0.1:8080' \

@@ -18,9 +18,19 @@ case "${SUDO_USER:-$FACTORY_BROWSER_USER}" in
   *) echo "browser isolation helper called by an unexpected user" >&2; exit 1 ;;
 esac
 for argument in "$@"; do
-  case "$argument" in
-    --host-resolver-rules*|--host-rules*|--*proxy*)
-      echo "unsafe Chromium network override rejected: ${argument%%=*}" >&2
+  # Chromium trims surrounding ASCII whitespace and accepts either one or two
+  # dashes before a POSIX switch. Normalize both before checking the name.
+  normalized=${argument#"${argument%%[![:space:]]*}"}
+  normalized=${normalized%"${normalized##*[![:space:]]}"}
+  case "$normalized" in
+    --*) switch=${normalized#--} ;;
+    -*) switch=${normalized#-} ;;
+    *) continue ;;
+  esac
+  switch=${switch%%=*}
+  case "$switch" in
+    host-resolver-rules|host-rules|*proxy*)
+      echo "unsafe Chromium network override rejected: $switch" >&2
       exit 1
       ;;
   esac
@@ -47,10 +57,8 @@ rules+='MAP * ~NOTFOUND, EXCLUDE localhost'
 
 exec systemd-run --scope --quiet --collect \
   -p IPAddressDeny=any -p IPAddressAllow=localhost "${allow_args[@]}" \
-  -p 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
-  -p NoNewPrivileges=yes \
   setpriv --reuid="$FACTORY_BROWSER_USER" --regid="$FACTORY_BROWSER_GROUP" \
-    --init-groups --inh-caps=-all --ambient-caps=-all -- \
+    --init-groups --inh-caps=-all --ambient-caps=-all --no-new-privs -- \
     env HOME="$FACTORY_BROWSER_HOME" \
     "$FACTORY_BROWSER_EXECUTABLE" --host-resolver-rules="$rules" \
       --no-proxy-server "$@"

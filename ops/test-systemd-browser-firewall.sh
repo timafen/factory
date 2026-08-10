@@ -11,6 +11,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+check_scope_properties() {
+  local output status=0
+  output=$("$SYSTEMD_RUN" --no-ask-password --scope --quiet --collect \
+    -p IPAddressDeny=any -p IPAddressAllow=localhost true 2>&1) || status=$?
+  if grep -Fq 'Unknown assignment:' <<<"$output"; then
+    printf '%s\n' "$output" >&2
+    echo "browser firewall uses a property unsupported by transient scopes" >&2
+    return 1
+  fi
+  if [ "$status" -ne 0 ] && ! grep -Eq \
+    'Interactive authentication required|Access denied|Failed to connect to bus|System has not been booted with systemd' \
+    <<<"$output"; then
+    printf '%s\n' "$output" >&2
+    echo "cannot validate transient scope properties with systemd-run" >&2
+    return 1
+  fi
+  echo "PASS: systemd-run accepts browser firewall scope properties"
+}
+
+if [ "${1:-}" = --check-properties ]; then
+  check_scope_properties
+  exit
+fi
+
 [ "$(id -u)" -eq 0 ] || { echo "browser firewall probe must run as root" >&2; exit 1; }
 host_ip=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')
 [ -n "$host_ip" ] || { echo "cannot find a non-loopback address for browser firewall probe" >&2; exit 1; }
@@ -39,7 +63,6 @@ PY
 
 "$SYSTEMD_RUN" --scope --collect --quiet \
   -p IPAddressDeny=any -p IPAddressAllow=localhost \
-  -p 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
   python3 - "$host_ip" "$port" <<'PY'
 import socket, sys
 port = int(sys.argv[2])
