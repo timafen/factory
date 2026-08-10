@@ -930,6 +930,40 @@ class PlanAutostartTest(unittest.TestCase):
              "run_generation": "first-run"},
         ]
 
+    def test_completed_automation_findings_are_added_to_plan_once(self):
+        tasks = [
+            {"id": "automation-ok", "title": "Patrol: run now",
+             "request_key": "automation:patrol:schedule:run:one",
+             "state": "succeeded"},
+            {"id": "automation-failed", "title": "Patrol: scheduled",
+             "request_key": "automation:patrol:schedule:two",
+             "state": "failed"},
+            {"id": "pipeline", "title": "[auto] [1/1 Triage] Work",
+             "request_key": "regular-task", "state": "succeeded"},
+        ]
+        detail = {
+            "task": {"repository_id": "repo-1"},
+            "workflow": {"title": "Factory Patrol"},
+            "attempts": [{"result": "НАХОДКА: Offline worker - stale worktrees"}],
+        }
+        state = {}
+
+        with mock.patch.object(pilot, "api", return_value=detail) as api, \
+                mock.patch.object(pilot, "collect_ideas", return_value=1) as collect:
+            self.assertEqual(pilot.collect_automation_findings(state, tasks), 1)
+            self.assertEqual(pilot.collect_automation_findings(state, tasks), 0)
+
+        api.assert_called_once_with("/tasks/automation-ok")
+        collect.assert_called_once_with(
+            "НАХОДКА: Offline worker - stale worktrees",
+            "repo-1",
+            "Automation: Factory Patrol",
+        )
+        self.assertEqual(
+            state["automation_results_processed"],
+            ["automation-ok", "automation-failed"],
+        )
+
     @mock.patch.object(pilot.uuid, "uuid4", side_effect=["generation-1", "generation-2"])
     @mock.patch.object(pilot, "set_idea")
     def test_each_explicit_planning_gets_a_new_generation(self, set_idea, _uuid):
