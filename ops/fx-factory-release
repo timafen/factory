@@ -54,7 +54,7 @@ step "гоняю тесты интерфейса"
 as_user bash -c "cd '$work/src/web' && npm test" \
   || { fail "тесты интерфейса не прошли — релиз не поеду"; cleanup; exit 5; }
 step "гоняю тесты Go"
-as_user bash -c "cd '$work/src' && go test ./..." \
+as_user bash -c "umask 077; cd '$work/src' && go test ./..." \
   || { fail "тесты Go не прошли — релиз не поеду"; cleanup; exit 5; }
 step "проверяю сценарий выката и отката"
 as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release.sh" \
