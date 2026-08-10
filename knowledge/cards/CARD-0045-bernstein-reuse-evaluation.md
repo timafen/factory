@@ -4,7 +4,7 @@
 
 - Status: Verified PASS — ожидает решения человека о слиянии.
 - Branch: `factory/989b3a4c-c8b-40f83321-2a1`.
-- Head commit: `cbfd8ca` (`Обновить карточку после исправления источников`);
+- Head commit: `70357ea` (`Обновить карточку после исправления источников`);
   следующий commit меняет только HEAD/LOG этой карточки.
 - Specification: `knowledge/specs/bernstein-reuse-evaluation.md`.
 - What changed: README/tree закреплён за commit `f683ce8…`; ошибочный
