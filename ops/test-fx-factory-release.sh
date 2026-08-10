@@ -68,6 +68,11 @@ if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
   [ "$TEST_MODE" != release-test-fail ]
   exit
 fi
+if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
+  echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != browser-install-fail ]
+  exit
+fi
 exec /bin/bash "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
@@ -149,7 +154,8 @@ diff -u <(printf '%s\n' \
   'bash ops/test-fx-factory-release.sh' \
   'npx vite build' \
   'go build -o PLACEHOLDER ./cmd/factory-server' \
-  'go build -o PLACEHOLDER ./cmd/factory-worker') \
+  'go build -o PLACEHOLDER ./cmd/factory-worker' \
+  'bash ops/install-server-browser.sh') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
     -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' "$success/gates") >/dev/null \
   || fail "release gates ran in the wrong order"
@@ -199,6 +205,19 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
   ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
     || fail "binaries were built after $mode"
 done
+
+browser_failed="$temporary/browser-install-fail"
+make_fixture "$browser_failed" browser-install-fail
+set +e
+run_release "$browser_failed" browser-install-fail
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "browser-install-fail returned $status instead of build error 5"
+assert_file "$browser_failed/install/factory-server" old-server
+assert_file "$browser_failed/install/factory-worker" old-worker
+[ ! -s "$browser_failed/events" ] || fail "services restarted after browser installer failure"
+grep -F 'серверный браузер не установился — релиз не поеду' "$browser_failed/output" >/dev/null \
+  || fail "release did not explain the browser installation failure"
 
 locked="$temporary/locked"
 make_fixture "$locked" locked
