@@ -3,12 +3,15 @@
 ## HEAD
 
 - Stage: Implement + Test
-- Status: PASS — оживление продолжает актуальный круг без пропуска обязательного Review.
-- Branch: `factory/c96c33be-a30-e86c21de-5e9`.
-- Head commit: `a8c95fb`.
-- What changed: реализация заново собрана на свежем `origin/main`; следующий этап выбирается по последнему успешному переходу, а не по максимальному этапу всей истории.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 24 pilot, 8 UI); `just build`, web typecheck и production build → PASS.
-- Next action: провести Review исправленного выбора этапа текущего круга.
+- Status: PASS — исправлены два адресных замечания Review о выборе круга и stale polling.
+- Branch: `factory/349d771f-301-934ee9e8-a85`.
+- Head commit: `a02fcf0` (`Не пропускать Review при оживлении упавшего этапа`).
+- What changed: текущий круг определяется самым новым terminal Task; failed/cancelled
+  Implement повторяется до обязательного Review. Экран сохраняет «оживает» при
+  старом `stopped_owner`/`stuck` до ответа backend о прогрессе.
+- Evidence: целевой Python-набор (26) и `WorkHistory.test.tsx` (10) → PASS;
+  `npm run typecheck && npm run build` → PASS.
+- Next action: провести адресный Review двух исправлений.
 
 ## LOG
 
@@ -154,3 +157,17 @@
 ### 2026-08-10 — Implement
 
 После блокирующего замечания Review работа заново собрана на свежем `origin/main`. `pipeline_watch` определяет продолжение по хронологически последнему успешному переходу текущего круга: регрессия «старый Review → новый Implement → revive» создаёт новый Review. `just test-revive-stopped-work` прошёл (Go API, 24 pilot-теста, 8 UI-тестов); `just build`, TypeScript-проверка и production-сборка web успешны. Коммит реализации: `a8c95fb`.
+
+### 2026-08-10 — Implement
+
+После адресного Review более новый failed/cancelled Implement стал текущим
+terminal Task: revive повторяет Implement, а после успеха создаёт обязательный
+Review. UI не заменяет локальный статус «оживает» старым `stopped_owner`/`stuck`
+из 20-секундного polling. Целевые 26 pilot- и 10 UI-тестов, typecheck и production
+build прошли. Коммит реализации: `7724b07`.
+
+### 2026-08-10 — Rebase
+
+Ветка перебазирована на свежий `origin/main` без конфликтов; актуальный коммит
+реализации после rebasing — `a02fcf0`. Целевые проверки выполнены до rebasing;
+содержимое исправления не менялось.
