@@ -2,20 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented — готово к проверке и выкладке.
-- Branch: `factory/ae2c3cee-02e-75b9c303-11f`.
-- Head commit: `d56f07d` — «Защитить общую авторизацию Codex при выпуске».
+- Status: Implemented — замечания устранены, готово к повторной проверке.
+- Branch: `factory/94b33761-1ca-a0495f87-382`.
+- Head commit: `ae85b93` — «Откатывать все ссылки Codex при сбое обновления».
 - Specification: `knowledge/specs/codex-auth-provisioning-ownership.md`.
-- What changed: релиз до установки проверяет общую цель как обычный файл
-  `600 factory:factory` и атомарно обновляет существующие auth-ссылки от имени
-  `factory`; явный `CODEX_HOME` поддерживает provisioning нового воркера.
-- Evidence: `bash ops/test-provision-codex-auth.sh` — PASS для корректной цели и
-  fail-closed матрицы; `bash ops/test-fx-factory-release.sh` — PASS для порядка
-  релиза; `just build`, Go-тесты, UI (123 теста), tooling и launcher — PASS.
-- Known baseline: общий `just check` останавливается на двух существующих
-  `staticcheck`-ошибках в `internal/controlplane`, вне diff этой задачи.
-- One next action: выложить ветку и подтвердить владельца ссылок обязательной
-  командой проверки метаданных на целевой машине.
+- What changed: все назначения проходят предварительную проверку и подготовку;
+  при сбое установки provisioner восстанавливает исходные цели всех ссылок.
+- Evidence: целевые тесты provisioning и выпуска — PASS, включая отказ на второй
+  ссылке; рабочая машина — 11 из 11 ссылок принадлежат `factory:factory`, общая
+  цель подтверждена как `regular file 600 factory factory` с кодом 0.
+- One next action: повторно проверить поставку и разрешить слияние.
 
 ## LOG
 
@@ -40,3 +36,12 @@
 Go-пакеты, 123 UI-теста, tooling и launcher. Сам `just check` остановился только
 на существующих `U1000` в `cards_http.go` и `SA4006` в `pilot_config.go`; оба
 файла находятся вне области CARD-0047.
+
+### 2026-08-10 — Implement
+
+Provisioner переведён на предварительную проверку и подготовку всех ссылок с
+полным восстановлением прежних целей при любой ошибке установки или итоговой
+проверки. Регрессионный тест принудительно прерывает установку второй ссылки и
+подтверждает неизменность обеих исходных целей. Целевые тесты provisioning и
+релиза прошли; на рабочей машине provisioning завершился кодом 0, все 11 ссылок
+и общая цель имеют требуемых владельцев и режим.
