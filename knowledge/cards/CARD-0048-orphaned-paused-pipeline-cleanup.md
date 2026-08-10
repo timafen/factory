@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented — целевая проверка зелёная.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/f663ebdd-354-c441eda2-67e`.
-- Head commit: `624aeb8`.
+- Head commit: `a5d1577`.
 - Specification: `knowledge/specs/orphaned-paused-pipeline-cleanup.md`.
 - What changed: пилот после снятия устаревших вопросов удаляет паузу без
   открытой карточки Плана, вопроса или живой задачи; похожие названия не
   считаются совпадением, а сбой I/O оставляет память согласованной с диском.
-- Evidence: `python3 -m unittest
-  pilot.test_pilot.OrphanedPausedPipelineCleanupTest` → 7 tests, OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0.
-- One next action: проверить реализацию на стадии Review.
+- Evidence: `python3 -m unittest pilot.test_pilot` → 99 tests, OK;
+  `python3 -m unittest pilot.test_pilot.OrphanedPausedPipelineCleanupTest` →
+  7 tests, OK; `git diff --check origin/main...HEAD` → no errors.
+- One next action: human merge into `main`.
 
 ## LOG
 
@@ -29,3 +29,12 @@
 снятия устаревших вопросов. Семь целевых тестов подтвердили удаление из памяти
 и `config.json`, защиту по Плану, вопросу и живой задаче, точное сопоставление
 названий и сохранение согласованности при ошибках чтения и записи.
+
+### 2026-08-10 — Verify
+
+Полный набор `python3 -m unittest pilot.test_pilot` завершён успешно: 99 тестов.
+Отдельно подтверждены семь сценариев CARD-0048: удаление осиротевшей паузы из
+памяти и `config.json`, сохранение по открытому Плану, вопросу или живой задаче,
+точное сопоставление названий, терминальные состояния, сбои I/O и порядок вызова
+после снятия устаревшего вопроса. `git diff --check origin/main...HEAD` не нашёл
+ошибок пробелов; в рабочем дереве нет посторонних файлов.
