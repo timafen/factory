@@ -925,7 +925,7 @@ describe("App", () => {
     await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-offline");
     expect(within(dialog).getByText(/task will queue until it returns/i)).toBeVisible();
     expect(within(repository).getByRole("option", { name: /archive/ })).toBeInTheDocument();
-    expect(within(repository).queryByRole("option", { name: /github.com\/example\/factory/ })).not.toBeInTheDocument();
+    expect(within(repository).getByRole("option", { name: /github.com\/example\/factory/ })).toBeDisabled();
   });
 
   it("confirms permanent deletion only for terminal task history", async () => {
@@ -1143,6 +1143,19 @@ describe("App", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("offers an enabled managed repository for on-demand acquisition by the selected worker", async () => {
+    mockControlPlane();
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
+    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
+    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
+
+    const option = await within(dialog).findByRole("option", { name: /github\.com\/example\/managed.*acquired on demand/ });
+    expect(option).toBeEnabled();
   });
 
   it("reuses the request key after an ambiguous create failure and accepts 200 Unicode characters", async () => {

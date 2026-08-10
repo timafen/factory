@@ -230,6 +230,34 @@ const [factoryRepository, handbookRepository] = await Promise.all([
 
 await mkdir(workerData, { recursive: true });
 await mkdir(join(temporary, "pilot"), { recursive: true });
+await writeFile(join(temporary, "pilot", "dashboard.json"), JSON.stringify({
+  updated_at: "2026-08-09T12:00:00Z",
+  projects: [
+    {
+      id: "factory-demo",
+      name: "factory-demo",
+      remote_identity: "github.com/example/factory",
+      main_subject: "Show every project product on the overview",
+      provider_status: "configured",
+      environments: [
+        {
+          name: "Production",
+          status: "available",
+          release_label: "factory-e2e-release",
+          health: "healthy",
+        },
+      ],
+    },
+    {
+      id: "handbook-demo",
+      name: "handbook-demo",
+      remote_identity: "github.com/example/handbook",
+      main_subject: "Document the product overview",
+      provider_status: "not_configured",
+      environments: [],
+    },
+  ],
+}, null, 2));
 const pilotStages = ["Triage", "Specification", "Implement + Test", "Review", "Verify"];
 await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   _note: "browser fixture",
@@ -239,18 +267,26 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   auto_merge: true,
   auto_answer: false,
   max_stage_attempts: 2,
+  allow_any_worker: true,
+  allowed_workers: [],
   max_parallel_subtasks: 2,
   day_cap_usd: 20,
   deploy_staging_cmd: "deploy",
   owner_chat_url: "https://example.test/chat",
   owner_ui_url: "https://example.test/ui",
-  stages: Object.fromEntries(pilotStages.map((stage) => [stage, { low: workerID, medium: workerID, high: workerID }])),
+  stages: pilotStages.map((workflow) => ({
+    workflow,
+    workers: { low: workerID, medium: workerID, high: workerID },
+  })),
   skip_stages_for_low: ["Review"],
   stopped_pipelines: [],
   stage_base_usd: Object.fromEntries(pilotStages.map((stage) => [stage, 1])),
   complexity_factor: { low: 1, medium: 2, high: 3 },
   work_cap_usd: { low: 2, medium: 4, high: 8 },
   ntfy_topic: "factory", ntfy_server: "https://ntfy.sh", ntfy_owner_topic: "owner",
+  project_providers: [
+    { remote_identity: "github.com/example/factory", type: "factory" },
+  ],
   brain_chain: [{ cli: "codex", model: "gpt", provider: "openai", note: "first" }],
 }, null, 2));
 await writeFile(join(workerData, "worker-id"), `${workerID}\n`, { mode: 0o600 });
