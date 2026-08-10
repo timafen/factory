@@ -36,6 +36,92 @@ class AgentRulesScopeTests(unittest.TestCase):
             with self.subTest(signature=signature):
                 self.assertIn(signature, pilot.AGENT_RULES)
 
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_auto_task_receives_owner_notification_channel(self, _api, _money):
+        body = {
+            "title": "[auto] [3/5 Implement + Test] Задача",
+            "context": "Контекст",
+        }
+        conf = {
+            "ntfy_server": "https://notify.example/",
+            "ntfy_owner_topic": "owner alerts",
+        }
+
+        pilot.create_task(body, conf)
+
+        self.assertIn(
+            "Канал срочных уведомлений владельца: "
+            "https://notify.example/owner%20alerts",
+            body["context"],
+        )
+
+    def test_incomplete_notification_settings_are_not_exposed(self):
+        self.assertNotIn(
+            "Канал срочных уведомлений владельца",
+            pilot.agent_rules({"ntfy_server": "https://notify.example"}),
+        )
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_repeated_auto_task_replaces_changed_notification_channel(self, _api, _money):
+        first = {
+            "title": "[auto] [3/5 Implement + Test] Задача",
+            "context": "Контекст",
+        }
+        pilot.create_task(first, {
+            "ntfy_server": "https://old.example",
+            "ntfy_owner_topic": "old-owner",
+        })
+        repeated = {"title": first["title"], "context": first["context"]}
+
+        pilot.create_task(repeated, {
+            "ntfy_server": "https://new.example",
+            "ntfy_owner_topic": "new-owner",
+        })
+
+        self.assertNotIn("https://old.example/old-owner", repeated["context"])
+        self.assertIn("https://new.example/new-owner", repeated["context"])
+        self.assertEqual(repeated["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_repeated_auto_task_removes_stale_channel_for_incomplete_config(
+            self, _api, _money):
+        first = {
+            "title": "[auto] [3/5 Implement + Test] Задача",
+            "context": "Контекст",
+        }
+        pilot.create_task(first, {
+            "ntfy_server": "https://old.example",
+            "ntfy_owner_topic": "old-owner",
+        })
+        repeated = {"title": first["title"], "context": first["context"]}
+
+        pilot.create_task(repeated, {"ntfy_server": "https://new.example"})
+
+        self.assertNotIn("https://old.example/old-owner", repeated["context"])
+        self.assertNotIn("Канал срочных уведомлений владельца", repeated["context"])
+        self.assertEqual(repeated["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
+    def test_long_context_keeps_notification_channel_and_rules(self):
+        body = {
+            "title": "[auto] [3/5 Implement + Test] Задача",
+            "context": "x" * 60000,
+        }
+        conf = {
+            "ntfy_server": "https://notify.example",
+            "ntfy_owner_topic": "owner",
+        }
+
+        with mock.patch.object(pilot, "money_guard"), \
+                mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}}):
+            pilot.create_task(body, conf)
+
+        self.assertLessEqual(len(body["context"]), 60000)
+        self.assertIn("https://notify.example/owner", body["context"])
+        self.assertIn("=== КОНЕЦ ПРАВИЛ ===", body["context"])
+
 
 class OwnerMessageTests(unittest.TestCase):
     def test_internal_identifiers_become_human_words(self):
