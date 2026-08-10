@@ -4,7 +4,7 @@
 
 - Status: Implemented PASS — замечание ревью о регистре полного SHA исправлено.
 - Branch: `factory/25f8a66a-2f6-c9f1b31b-368`.
-- Head commit: `0efc240` — аудит принимает полный commit SHA в любом регистре.
+- Head commit: `8b4681b` — аудит принимает полный commit SHA в любом регистре.
 - What changed: `%H` и входной полный SHA сравниваются через `strings.EqualFold`;
   проверка типа `commit` и запрет tree/blob сохранены.
 - Evidence: целевые Go-тесты, обязательный тест `internal/worker`, сборка команды,
