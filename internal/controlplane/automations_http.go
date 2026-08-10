@@ -121,6 +121,23 @@ func (a *API) setAutomationEnabled(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detail)
 }
 
+func (a *API) provisionPipelinePatrol(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input struct{}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	detail, err := a.store.ProvisionPipelinePatrol(r.Context(), r.PathValue("automation_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	a.automations.Wake()
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func (a *API) testAutomation(w http.ResponseWriter, r *http.Request) {
 	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
 		return
