@@ -131,14 +131,21 @@ def notify_allowed(conf, title):
     return bool(on.get(group, NOTIFY_DEFAULTS.get(group, True)))
 
 
-HEX_TOKEN = re.compile(r"(?<![0-9a-zA-Z])[0-9a-f]{7,40}(?![0-9a-zA-Z])")
+WORK_BRANCH_TOKEN = re.compile(r"`?factory/[0-9a-f][0-9a-f-]{15,}`?", re.IGNORECASE)
+UUID_TOKEN = re.compile(
+    r"`?[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`?",
+    re.IGNORECASE,
+)
+HEX_TOKEN = re.compile(r"`?(?<![0-9a-zA-Z])[0-9a-f]{7,40}(?![0-9a-zA-Z])`?")
 
 
 def no_bare_hashes(text):
     """Хозяин читает пуши на телефоне. Голый хеш ему не говорит ничего,
     поэтому в уведомления он не проходит никогда — это правило кода,
     а не пожелание агентам."""
-    return HEX_TOKEN.sub("(служебный код)", str(text or ""))
+    value = WORK_BRANCH_TOKEN.sub("рабочая ветка", str(text or ""))
+    value = UUID_TOKEN.sub("внутренняя задача", value)
+    return HEX_TOKEN.sub("проверенная версия", value)
 
 
 NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"

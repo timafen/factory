@@ -123,7 +123,9 @@ fx — разрешённые операции:
                                   и сервера, установка, перезапуск, проверка здоровья,
                                   автоматический откат при неудаче
   fx factory rollback             вернуть предыдущую версию Фабрики
-  fx factory release-info         какая версия Фабрики сейчас выкачена
+  fx factory release-info [--technical]
+                                  что изменилось в текущей версии; служебный код
+                                  показывается только с флагом --technical
 
   fx repo status                  есть ли доступ к GitHub и от чьего имени
   fx repo head <ветка>            вершина ветки на origin (только чтение)
@@ -555,7 +557,11 @@ case "$scope" in
       release-info)
         say factory release-info OK
         if [ -s "$FINFO" ]; then
-          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name','?')); print('точка сборки: '+d.get('sha','?'))" "$FINFO"
+          case "$arg" in
+            "") python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name','?'))" "$FINFO" ;;
+            --technical) python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name','?')); print('техническая версия: '+d.get('sha','?'))" "$FINFO" ;;
+            *) die "для release-info допустим только диагностический флаг --technical" ;;
+          esac
         else
           echo "через fx Фабрику ещё ни разу не выкатывали"
         fi
