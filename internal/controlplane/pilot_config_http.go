@@ -63,6 +63,25 @@ func (a *API) updatePilotSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (a *API) reviveWork(w http.ResponseWriter, r *http.Request) {
+	if a.pilotConfig == nil {
+		writeError(w, &ServiceError{Code: "pilot_config_unavailable", Message: "pilot settings are not configured", Status: 503})
+		return
+	}
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	if !decodeEmptyJSON(w, r) {
+		return
+	}
+	response, err := a.pilotConfig.Revive(r.PathValue("work"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (a *API) initializeAllowedWorkers(ctx context.Context, settings *protocol.PilotSettings) error {
 	if settings.AllowedWorkers != nil {
 		return nil
