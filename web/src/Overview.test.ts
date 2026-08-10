@@ -129,7 +129,7 @@ describe("Overview product capacity", () => {
   it("shows the four-stream history honestly and keeps unknown explicit", async () => {
     const period = { started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z", observation_from: "2026-08-10T11:00:00Z", samples: 2, low_data: true,
       active_time: [0, 1, 2, 3, 4].map((active) => ({ active, seconds: active === 0 ? 3600 : 0, share: active === 0 ? 1 : 0 })), average_busy: 0, queue_p90: 2,
-      underload: ["no_ready_work", "owner_question", "provider_limit", "repository_conflict", "release_lock", "unknown"].map((reason) => ({ reason, seconds: reason === "unknown" ? 3600 : 0, share: reason === "unknown" ? 1 : 0 })),
+      underload: [{ reason: "unknown", seconds: 3600, share: 1 }],
     };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -144,6 +144,7 @@ describe("Overview product capacity", () => {
     expect(within(section).getByText("p90 очереди")).toBeVisible();
     fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
     expect(within(section).getByText(/unknown:/)).toBeVisible();
+    expect(within(section).queryByText(/лимит провайдера:/)).not.toBeInTheDocument();
     fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
     expect(within(section).getByText("сэмплов: 2")).toBeVisible();
   });

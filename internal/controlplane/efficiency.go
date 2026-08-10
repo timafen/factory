@@ -411,7 +411,7 @@ func loadEfficiencyQuestions() ([]efficiencyQuestion, error) {
 }
 
 func isProductEfficiencyTask(task *efficiencyTask) bool {
-	if task.base == "" || task.stage == "" || task.automationLinked {
+	if task.base == "" || task.stage == "" || classifyEfficiencyWork(task) != workClassProduct {
 		return false
 	}
 	for _, stage := range efficiencyStages {
@@ -420,6 +420,13 @@ func isProductEfficiencyTask(task *efficiencyTask) bool {
 		}
 	}
 	return false
+}
+
+func classifyEfficiencyWork(task *efficiencyTask) workClass {
+	return classifyWork(workClassificationFacts{
+		title: task.title, automationLinked: task.automationLinked, scheduled: task.scheduled,
+		automationName: task.automationName, automationText: task.automationText,
+	})
 }
 
 func efficiencyWorkKey(task *efficiencyTask) string {
@@ -745,14 +752,14 @@ func countEfficiencyRecoveriesInWindow(works []efficiencyWork, tails map[string]
 }
 
 func classifyExcludedEfficiencyTask(task *efficiencyTask, excluded *EfficiencyExcludedBreakdown) {
-	lower := strings.ToLower(task.title + " " + task.automationName + " " + task.automationText)
-	if task.scheduled && strings.Contains(lower, "factory pipeline patrol") {
+	switch classifyEfficiencyWork(task) {
+	case workClassPatrol:
 		excluded.Patrol++
-	} else if task.scheduled {
+	case workClassScheduled:
 		excluded.Scheduled++
-	} else if strings.Contains(lower, "helper") || strings.HasPrefix(lower, "[epic-plan]") {
+	case workClassHelper:
 		excluded.Helper++
-	} else {
+	default:
 		excluded.Other++
 	}
 }
