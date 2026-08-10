@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs Chromium in its own session. Chromium's own Linux sandbox remains enabled:
-# this launcher deliberately never adds --no-sandbox or related bypass flags.
+# this launcher deliberately never adds sandbox-bypass flags.
 set -euo pipefail
 
 if [ "$(id -u)" -eq 0 ]; then
