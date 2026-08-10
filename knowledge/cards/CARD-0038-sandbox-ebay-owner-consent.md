@@ -2,10 +2,11 @@
 
 ## HEAD
 
-- Status: Verified PASS — Factory-часть уже есть в `main`; staging OAuth/callback
-  по-прежнему заблокирован зависимостью [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
-- Branch: `factory/14e18bad-9dd-d47e5880-15a`.
-- Head commit: `3888b55` (проверенная исходная вершина `origin/main`).
+- Status: Verified PASS — ожидает человеческого слияния; Factory-часть уже есть
+  в `main`, а staging OAuth/callback по-прежнему заблокирован зависимостью
+  [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
+- Branch: `factory/d658d6d6-9fc-896236a3-6e2`.
+- Head commit: current HEAD (verification commit for this card).
 - What changed: повторных изменений кода не требуется: `ops/fx` допускает только
   staging seller consent, а controlplane не выдаёт секреты в ответах start/status.
 - Evidence: `bash -n ops/fx`, `bash ops/test-fx-sandbox-consent.sh` и
@@ -14,6 +15,22 @@
   и повторить живой seller consent smoke.
 
 ## LOG
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Владелец сам начинает seller consent и открывает eBay | `just ui-check` | 123/123 UI-теста прошли, включая 8 `SandboxKeys`; eBay открывается только после клика владельца. |
+| Ожидание статуса не зависает | `just ui-check` | Тесты `SandboxKeys` подтверждают последовательный polling, повтор после временной ошибки с задержкой не более 12 секунд и остановку при уходе со страницы. |
+| Bridge принимает только безопасный staging seller-вызов | `bash -n ops/fx && bash ops/test-fx-sandbox-consent.sh` | Синтаксис корректен; allowlist пропускает только интерактивный seller start или одиночный status ID, подмены отклонены. |
+| API не раскрывает OAuth-секреты | `go test ./internal/controlplane` | Успешно; start/status тестируют строгий URL, совпадение operation ID и отсечение токенов, state и URL из status. |
+
+Полный Go-набор `just test` прошёл. `just test-tooling test-launcher` прошёл.
+Полный `just check` останавливается только на двух прежних предупреждениях
+`staticcheck` в не затронутых карточкой `cards_http.go` и `pilot_config.go`;
+после штатного `just ui-install` полный `just ui-check` прошёл 123/123.
+Живой staging smoke не выполнен: он требует завершения `tarser-operations#24`
+и установки bridge; production не вызывался.
 
 ### 2026-08-10 — Implement
 
