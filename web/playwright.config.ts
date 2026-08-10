@@ -1,4 +1,14 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+
+const defaultBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox";
+
+export function serverBrowserLaunchOptions(
+  launcher = process.env.FACTORY_BROWSER_LAUNCHER ?? defaultBrowserLauncher,
+) {
+  if (!existsSync(launcher)) return undefined;
+  return { executablePath: launcher, chromiumSandbox: true };
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -10,6 +20,7 @@ export default defineConfig({
   outputDir: "test-results/artifacts",
   use: {
     baseURL: "http://127.0.0.1:17437",
+    launchOptions: serverBrowserLaunchOptions(),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
