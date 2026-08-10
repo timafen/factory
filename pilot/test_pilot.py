@@ -3356,7 +3356,7 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class RecentDoneTest(unittest.TestCase):
-    def test_does_not_count_successful_intermediate_triage_as_done(self):
+    def test_ignores_succeeded_intermediate_triage(self):
         tasks = [
             {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",
              "state": "succeeded", "updated_at": "2026-08-10T12:00:00Z"},
