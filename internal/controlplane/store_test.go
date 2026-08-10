@@ -181,6 +181,90 @@ func TestTitleMigrationPreservesWorkflowAutomationAndTaskSnapshots(t *testing.T)
 	}
 }
 
+func TestKnowledgeCardImplementationCommitMigrationRevisesLiveReviewAndVerify(t *testing.T) {
+	database, err := sql.Open("sqlite", t.TempDir()+"/implementation-commit-migration.sqlite3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() >= "018_knowledge_card_implementation_commit.sql" {
+			continue
+		}
+		body, readErr := migrations.Files.ReadFile(entry.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := database.Exec(string(body)); execErr != nil {
+			t.Fatalf("apply %s: %v", entry.Name(), execErr)
+		}
+	}
+	if _, err := database.Exec(`
+		INSERT INTO workflows(id, enabled, current_revision_id, current_title_key, created_at, updated_at)
+		VALUES
+			('review', 1, 'review-v1', 'review', 1, 1),
+			('verify', 1, 'verify-v1', 'verify', 1, 1),
+			('implement', 1, 'implement-v1', 'implement', 1, 1),
+			('disabled-review', 0, 'disabled-review-v1', 'disabled review', 1, 1);
+		INSERT INTO workflow_revisions(id, workflow_id, revision_number, request_key, request_digest, title, summary, instructions, created_at)
+		VALUES
+			('review-v1', 'review', 1, 'review-v1-request', X'01', 'Review', '', 'Require Head commit = git HEAD.', 1),
+			('verify-v1', 'verify', 1, 'verify-v1-request', X'02', 'Verify', '', 'Require Head commit = git HEAD.', 1),
+			('implement-v1', 'implement', 1, 'implement-v1-request', X'03', 'Implement + Test', '', 'Implement safely.', 1),
+			('disabled-review-v1', 'disabled-review', 1, 'disabled-review-v1-request', X'04', 'Review', '', 'Require Head commit = git HEAD.', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := migrations.Files.ReadFile("018_knowledge_card_implementation_commit.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(string(body)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.Query(`
+		SELECT workflow.id, revision.revision_number, revision.instructions
+		FROM workflows workflow JOIN workflow_revisions revision ON revision.id = workflow.current_revision_id
+		ORDER BY workflow.id
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]struct {
+		number       int
+		instructions string
+	}{}
+	for rows.Next() {
+		var id, instructions string
+		var number int
+		if err := rows.Scan(&id, &number, &instructions); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = struct {
+			number       int
+			instructions string
+		}{number, instructions}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"review", "verify"} {
+		value := got[id]
+		if value.number != 2 || !strings.Contains(value.instructions, "Implementation commit") ||
+			!strings.Contains(value.instructions, "не является причиной REQUEST CHANGES") {
+			t.Fatalf("%s was not revised with the stable card rule: %#v", id, value)
+		}
+	}
+	if got["implement"].number != 1 || got["disabled-review"].number != 1 {
+		t.Fatalf("migration changed an unrelated or disabled workflow: %#v", got)
+	}
+}
+
 func TestPullRequestAutomationMigrationPreservesGitHubIssueAutomations(t *testing.T) {
 	database, err := sql.Open("sqlite", t.TempDir()+"/pull-request-automation-migration.sqlite3")
 	if err != nil {

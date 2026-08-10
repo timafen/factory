@@ -37,7 +37,9 @@
 ## Репозитории
 
 - `github.com/timafen/tarser-operations` — основной репозиторий работ.
-  Карточки знаний: `knowledge/cards/`, формат HEAD/LOG (`knowledge/CARD_FORMAT.md`),
+  Карточки знаний: `knowledge/cards/`; в финальной карточке указывается
+  `Implementation commit: <полный SHA> — <что реализовано>` — настоящий коммит
+  кода до коммита карточки, а не меняющийся `HEAD`.
   правила работы `knowledge/OPERATING_RULES.md`, сквозной бэклог
   `knowledge/cards/CARD-0030-infra-findings-backlog.md`.
 
