@@ -29,6 +29,10 @@
 Полный `just check` останавливается только на двух прежних предупреждениях
 `staticcheck` в не затронутых карточкой `cards_http.go` и `pilot_config.go`;
 после штатного `just ui-install` полный `just ui-check` прошёл 123/123.
+Смежный `just test-browser` не прошёл: после одного успешного сценария
+`control-plane.spec.ts` завис на выборе отключённого repository в форме
+делегирования (120 секунд); остальные 16 browser-сценариев не запускались.
+Этот путь не затронут карточкой и не относится к seller consent.
 Живой staging smoke не выполнен: он требует завершения `tarser-operations#24`
 и установки bridge; production не вызывался.
 
