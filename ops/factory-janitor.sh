@@ -25,21 +25,8 @@ while read -r unit; do
   [ -n "$name" ] && UNIT["$name"]="$unit|$dir"
 done < <(systemctl list-units 'factory*' --no-legend --no-pager | awk '{print $1}')
 
-SICK=$(python3 - "$API" <<'PY'
-import json, sys, urllib.request
-try:
-    data = json.loads(urllib.request.urlopen(sys.argv[1] + "/workers", timeout=20).read())
-except Exception:
-    raise SystemExit
-for worker in data.get("workers", []):
-    retained = worker.get("retained_worktrees") or []
-    if worker.get("online") and not worker.get("active_count") and (
-            worker.get("health") != "healthy" or retained):
-        print(worker["name"])
-PY
-)
-
-for name in $SICK; do
+while IFS=$'\t' read -r name worker_id retained_b64; do
+  [ -n "$name" ] || continue
   entry="${UNIT[$name]:-}"
   if [ -z "$entry" ]; then
     say "воркер $name требует освобождения, но служба не найдена"
@@ -77,10 +64,13 @@ PY
   systemctl stop "$unit"
   sleep 2
   stamp=$(date +%s)
+  moved=()
   for worktree in "$dir"/worktrees/*; do
     [ -e "$worktree" ] || continue
-    mv "$worktree" "$QUAR/$(basename "$dir")-$(basename "$worktree").$stamp" \
-      && say "  результат сохранён в карантине: $(basename "$worktree")"
+    if mv "$worktree" "$QUAR/$(basename "$dir")-$(basename "$worktree").$stamp"; then
+      moved+=("$worktree")
+      say "  результат сохранён в карантине: $(basename "$worktree")"
+    fi
   done
   for attempt in "$dir"/attempts/*.json; do
     [ -e "$attempt" ] || continue
@@ -91,10 +81,43 @@ PY
     su -s /bin/bash factory -c \
       "git -c safe.directory='*' -C '$repository' worktree prune" >>"$LOG" 2>&1
   done
+  if [ "${#moved[@]}" -gt 0 ]; then
+    confirmed=$(python3 - "$retained_b64" "${moved[@]}" <<'PY'
+import base64, json, sys
+retained = json.loads(base64.b64decode(sys.argv[1]))
+moved = set(sys.argv[2:])
+confirmed = [worktree for worktree in retained if worktree.get("path") in moved]
+print(json.dumps({"retained_worktrees": confirmed}, separators=(",", ":")))
+PY
+)
+    if [ "$confirmed" != '{"retained_worktrees":[]}' ]; then
+      if curl --fail --silent --show-error -X POST \
+        -H 'Content-Type: application/json' \
+        --data "$confirmed" \
+        "$API/workers/$worker_id/retained-worktrees/clear" >>"$LOG" 2>&1; then
+        say "  подтверждена очистка retained worktree: $name"
+      else
+        say "  не удалось подтвердить очистку retained worktree: $name"
+      fi
+    fi
+  fi
   chown -R factory:factory "$dir" 2>/dev/null
   systemctl start "$unit"
   say "  $name снова запущен; сохранённые результаты лежат в $QUAR"
-done
+done < <(python3 - "$API" <<'PY'
+import json, sys, urllib.request
+from base64 import b64encode
+try:
+    data = json.loads(urllib.request.urlopen(sys.argv[1] + "/workers", timeout=20).read())
+except Exception:
+    raise SystemExit
+for worker in data.get("workers", []):
+    retained = worker.get("retained_worktrees") or []
+    if worker.get("online") and not worker.get("active_count") and (
+            worker.get("health") != "healthy" or retained):
+        print(worker["name"], worker["id"], b64encode(json.dumps(retained).encode()).decode(), sep="\t")
+PY
+)
 
 find "$QUAR" -maxdepth 1 -mtime +3 -exec rm -rf {} + 2>/dev/null
 exit 0

@@ -1442,6 +1442,36 @@ func TestDeleteTaskRequiresTerminalUnretainedHistoryAndPreservesUnrelatedData(t 
 	}
 }
 
+func TestClearRetainedWorktreesRemovesOnlyConfirmedSnapshots(t *testing.T) {
+	store := newTestStore(t)
+	first := protocol.RetainedWorktree{AttemptID: "attempt-1", RepositoryID: "repo-1", Path: "/worktrees/first", Reason: "failed", CleanupCommand: "cleanup first"}
+	second := protocol.RetainedWorktree{AttemptID: "attempt-2", RepositoryID: "repo-1", Path: "/worktrees/second", Reason: "failed", CleanupCommand: "cleanup second"}
+	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: "worker-a", WorkerVersion: "test", RuntimeVersion: "codex-test", Capacity: 1, Health: "healthy",
+		RetainedWorktrees: []protocol.RetainedWorktree{first, second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := store.ClearRetainedWorktrees(context.Background(), worker.ID, []protocol.RetainedWorktree{first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.RetainedWorktrees) != 1 || cleared.RetainedWorktrees[0] != second {
+		t.Fatalf("retained worktrees after targeted cleanup = %#v", cleared.RetainedWorktrees)
+	}
+	cleared, err = store.ClearRetainedWorktrees(context.Background(), worker.ID, []protocol.RetainedWorktree{first})
+	if err != nil {
+		t.Fatalf("repeated cleanup: %v", err)
+	}
+	if len(cleared.RetainedWorktrees) != 1 || cleared.RetainedWorktrees[0] != second {
+		t.Fatalf("repeated cleanup changed retained worktrees = %#v", cleared.RetainedWorktrees)
+	}
+	if _, err := store.ClearRetainedWorktrees(context.Background(), "missing-worker", []protocol.RetainedWorktree{first}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing worker cleanup = %v", err)
+	}
+}
+
 func TestTaskCreationIsNormalizedAndIdempotent(t *testing.T) {
 	store := newTestStore(t)
 	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{

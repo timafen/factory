@@ -1762,6 +1762,51 @@ func (s *Store) Worker(ctx context.Context, id string) (protocol.Worker, error) 
 	return worker, err
 }
 
+// ClearRetainedWorktrees removes only the retained-worktree snapshots confirmed
+// by the janitor after their local directories reached quarantine.
+func (s *Store) ClearRetainedWorktrees(ctx context.Context, workerID string, cleared []protocol.RetainedWorktree) (protocol.Worker, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	defer tx.Rollback()
+
+	var encoded string
+	if err := tx.QueryRowContext(ctx, `SELECT retained_worktrees_json FROM workers WHERE id = ?`, workerID).Scan(&encoded); errors.Is(err, sql.ErrNoRows) {
+		return protocol.Worker{}, ErrNotFound
+	} else if err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	var retained []protocol.RetainedWorktree
+	if err := json.Unmarshal([]byte(encoded), &retained); err != nil {
+		return protocol.Worker{}, unavailable(fmt.Errorf("decode retained worktree report: %w", err))
+	}
+	remaining := retained[:0]
+	for _, candidate := range retained {
+		matched := false
+		for _, confirmed := range cleared {
+			if candidate == confirmed {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			remaining = append(remaining, candidate)
+		}
+	}
+	updated, err := json.Marshal(remaining)
+	if err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workers SET retained_worktrees_json = ? WHERE id = ?`, updated, workerID); err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	return s.Worker(ctx, workerID)
+}
+
 type scanner interface {
 	Scan(...any) error
 }

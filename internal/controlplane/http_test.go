@@ -98,6 +98,28 @@ func registerHTTPWorker(t *testing.T, fixture *httpFixture, id, key, remote stri
 	return decodeResponse[protocol.Worker](t, response)
 }
 
+func TestHTTPClearRetainedWorktrees(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	retained := protocol.RetainedWorktree{AttemptID: "attempt-1", RepositoryID: "repo-1", Path: "/worktrees/retained", Reason: "failed", CleanupCommand: "cleanup"}
+	response := fixture.request(http.MethodPut, "/api/v1/workers/worker-1", "application/json", "", protocol.WorkerRegistration{
+		Name: "worker-1", WorkerVersion: "test", RuntimeVersion: "test", Capacity: 1, Health: "healthy",
+		RetainedWorktrees: []protocol.RetainedWorktree{retained},
+	})
+	requireStatus(t, response, http.StatusOK)
+	response = fixture.request(http.MethodPost, "/api/v1/workers/worker-1/retained-worktrees/clear", "application/json", "", retainedWorktreeCleanupRequest{RetainedWorktrees: []protocol.RetainedWorktree{retained}})
+	requireStatus(t, response, http.StatusOK)
+	worker := decodeResponse[protocol.Worker](t, response)
+	if len(worker.RetainedWorktrees) != 0 {
+		t.Fatalf("retained worktrees after cleanup = %#v", worker.RetainedWorktrees)
+	}
+	response = fixture.request(http.MethodPost, "/api/v1/workers/missing/retained-worktrees/clear", "application/json", "", retainedWorktreeCleanupRequest{})
+	requireStatus(t, response, http.StatusNotFound)
+	response.Body.Close()
+	response = fixture.request(http.MethodPost, "/api/v1/workers/worker-1/retained-worktrees/clear", "application/json", "", "{")
+	requireStatus(t, response, http.StatusBadRequest)
+	response.Body.Close()
+}
+
 func TestHTTPManagedRepositoryCatalog(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	response := fixture.request(http.MethodPost, "/api/v1/repositories", "application/json", "", map[string]string{
