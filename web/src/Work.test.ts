@@ -56,4 +56,14 @@ describe("build", () => {
     expect(group.reached.Verify).toBe("again");
     expect(group.reached.Review).toBe("done");
   });
+
+  it("does not paint a rejected verification green", () => {
+    const group = build([
+      task("verify-1", "Verify", "succeeded", 1),
+      task("implement-2", "Implement + Test", "running", 2),
+    ], { "verify-1": { final_pass: false } }, [])[0];
+
+    expect(group.reached.Verify).toBe("bad");
+    expect(group.reached["Implement + Test"]).toBe("live");
+  });
 });
