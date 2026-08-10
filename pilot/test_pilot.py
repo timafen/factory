@@ -2181,6 +2181,176 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(pilot.load(stall_path, {})["Новая работа"]["why"], "owner")
 
 
+class AdaptivePollingTests(unittest.TestCase):
+    def test_fully_idle_pipeline_keeps_thirty_second_interval(self):
+        self.assertEqual(pilot.next_poll_hint({"poll_seconds": 30}, []), {
+            "seconds": 30, "reason": "idle",
+        })
+
+    def test_loop_uses_fast_handoff_then_idle_hint_with_fake_clock_and_sleep(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"processed": []}
+        sleeps = []
+        clock = iter((100.0, 102.0))
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "cycle", side_effect=[
+                    {"seconds": 2, "reason": "handoff"},
+                    {"seconds": 30, "reason": "idle"},
+                ]):
+            pilot.run_loop(max_cycles=2, sleep_fn=sleeps.append,
+                           clock_fn=lambda: next(clock))
+
+        self.assertEqual(sleeps, [2, 30])
+        self.assertEqual(state["next_poll"], {
+            "seconds": 30, "reason": "idle", "chosen_at": 102.0,
+        })
+
+    def test_network_errors_back_off_and_success_resets_interval(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"processed": []}
+        sleeps = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "cycle", side_effect=[
+                    urllib.error.URLError("network down"),
+                    urllib.error.URLError("network still down"),
+                    {"seconds": 10, "reason": "active"},
+                ]):
+            pilot.run_loop(max_cycles=3, sleep_fn=sleeps.append,
+                           clock_fn=iter((100.0, 130.0, 190.0)).__next__)
+
+        self.assertEqual(sleeps, [30, 60, 10])
+        self.assertEqual(state["next_poll"]["reason"], "active")
+
+    def test_rate_limit_retry_after_never_shortens_error_backoff(self):
+        error = urllib.error.HTTPError(
+            "https://factory.invalid", 429, "rate limited",
+            {"Retry-After": "75"}, None,
+        )
+
+        self.assertEqual(pilot.error_poll_hint(
+            {"poll_seconds": 30}, 1, error), {
+                "seconds": 75, "reason": "error_backoff",
+            })
+
+    def test_stopped_owner_work_does_not_select_fast_or_active_poll(self):
+        conf = {"poll_seconds": 30, "stopped_pipelines": ["Пауза владельца"]}
+        tasks = [{
+            "id": "stopped", "state": "succeeded",
+            "title": "[auto] [2/5 Specification] Пауза владельца",
+        }]
+        state = {}
+
+        self.assertFalse(pilot.remember_new_terminal_tasks(conf, state, tasks))
+        self.assertEqual(pilot.next_poll_hint(conf, tasks), {
+            "seconds": 30, "reason": "idle",
+        })
+        self.assertEqual(state["poll_terminal_seen"], ["stopped"])
+
+    def test_poll_choice_is_logged_only_when_choice_changes(self):
+        state = {}
+        with mock.patch.object(pilot, "log") as log:
+            pilot.record_poll_hint(state, {"seconds": 10, "reason": "active"}, 1)
+            pilot.record_poll_hint(state, {"seconds": 10, "reason": "active"}, 2)
+            pilot.record_poll_hint(state, {"seconds": 30, "reason": "idle"}, 3)
+
+        self.assertEqual(log.call_count, 2)
+        self.assertEqual(state["next_poll"]["chosen_at"], 3)
+
+    def test_four_parallel_handoffs_create_each_next_stage_once(self):
+        conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        tasks = [{
+            "id": f"done-{number}",
+            "title": f"[auto] [1/2 Triage] Работа {number}",
+            "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
+            "repository_id": "repo-id",
+        } for number in range(4)]
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path.startswith("/tasks/done-"):
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "attempts": [{"result": "READY"}],
+                }
+            if path == "/tasks" and body is not None:
+                new_task = {
+                    "id": f"next-{len(created)}", "title": body["title"],
+                    "state": "created", "created_at": "2026-08-10T11:00:00Z",
+                    "repository_id": "repo-id",
+                }
+                created.append(new_task)
+                tasks.append(new_task)
+                return {"task": new_task}
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 4, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {"id": "rev-spec", "title": "Specification"},
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker",
+                                                  return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            first_hint = pilot.cycle(conf, state)
+            second_hint = pilot.cycle(conf, state)
+
+        self.assertEqual(first_hint, {"seconds": 2, "reason": "handoff"})
+        self.assertEqual(second_hint, {"seconds": 10, "reason": "active"})
+        self.assertEqual(len(created), 4)
+        self.assertEqual(len({task["title"] for task in created}), 4)
+
+
 class HostLoadAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.cpu_over = {
