@@ -107,6 +107,12 @@ export interface DialogResponse {
   model_label: string;
 }
 
+export interface BrowserCapture {
+  url: string;
+  content_type: "image/png";
+  data: string;
+}
+
 export interface ManagedRepository {
   id: string;
   remote_identity: string;

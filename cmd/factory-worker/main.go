@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/factory/internal/buildinfo"
+	"github.com/owainlewis/factory/internal/serverbrowser"
 	"github.com/owainlewis/factory/internal/worker"
 )
 
@@ -26,10 +30,68 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "browser" {
+		if err := runBrowser(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "factory-worker browser:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "factory-worker:", err)
 		os.Exit(1)
 	}
+}
+
+func runBrowser(arguments []string) error {
+	flags := flag.NewFlagSet("factory-worker browser", flag.ContinueOnError)
+	output := flags.String("output", "stand.png", "PNG screenshot output path")
+	timeout := flags.Duration("timeout", 45*time.Second, "capture timeout")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: factory-worker browser [-output stand.png] URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	capture, err := (serverbrowser.Runner{}).Capture(ctx, flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFile(*output, capture.PNG); err != nil {
+		return err
+	}
+	fmt.Printf("Captured %s to %s\n", capture.URL, *output)
+	return nil
+}
+
+// writePrivateFile atomically replaces output so an existing permissive file
+// cannot retain its mode while it contains a browser capture.
+func writePrivateFile(output string, contents []byte) (err error) {
+	directory := filepath.Dir(output)
+	temporary, err := os.CreateTemp(directory, ".factory-browser-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(temporaryName)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, output)
 }
 
 func run() error {
