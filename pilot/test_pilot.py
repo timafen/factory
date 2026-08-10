@@ -169,7 +169,7 @@ class DeliveryAreaTests(unittest.TestCase):
             {"Счётчик": ["repo::pilot/pilot.py", "repo::web/src/Overview.tsx"]},
         )
 
-    def test_review_gate_removes_only_other_area_and_service_noise(self):
+    def test_review_gate_keeps_finished_other_area_and_removes_service_noise(self):
         known = {
             "Счётчик": ["repo::pilot/pilot.py", "repo::web/src/Overview.tsx"],
             "Другая работа": ["repo::docs/foreign.md"],
@@ -181,14 +181,103 @@ class DeliveryAreaTests(unittest.TestCase):
                 mock.patch.object(pilot, "load", return_value=known), \
                 mock.patch.object(pilot, "rebuild_clean_branch",
                                   return_value="task-clean") as rebuild:
-            result = pilot.review_gate({}, "Счётчик", "task", "repo")
+            result = pilot.review_gate({}, "Счётчик", "task", "repo", active_tasks=[])
 
         self.assertEqual(result["branch"], "task-clean")
         rebuild.assert_called_once_with(
             "repo", "task",
-            ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md"],
+            ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md",
+             "docs/foreign.md"],
             "Счётчик",
         )
+
+    def test_browser_wait_epic_rebuild_keeps_code_despite_finished_claim(self):
+        """Regression: a completed epic's old claim must not strip browser code.
+
+        This is the observed AREA WAIT -> automatic rebuild path: only a live
+        overlap waits; a finished neighbour cannot leave a knowledge card as
+        the sole survivor of a rebuild.
+        """
+        known = {
+            "Браузер после ожидания": ["repo::web/src/Browser.tsx",
+                                        "repo::old/obsolete.ts"],
+            "Завершённая подзадача эпика": ["repo::web/src/Browser.tsx"],
+        }
+        files = ["web/src/Browser.tsx", "knowledge/cards/CARD-browser.md",
+                 "node_modules/cache.js"]
+
+        def loader(path, default=None):
+            if path == pilot.AREAS_PATH:
+                return known
+            return {}
+
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "rebuild_clean_branch",
+                                  return_value="browser-clean") as rebuild:
+            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "repo",
+                                       active_tasks=[])
+
+        self.assertEqual(result["branch"], "browser-clean")
+        rebuild.assert_called_once_with(
+            "repo", "browser",
+            ["web/src/Browser.tsx", "knowledge/cards/CARD-browser.md"],
+            "Браузер после ожидания",
+        )
+
+    def test_browser_wait_holds_real_live_overlap(self):
+        known = {
+            "Браузер после ожидания": ["repo::web/src/Browser.tsx"],
+            "Соседняя подзадача эпика": ["repo::web/src/Browser.tsx"],
+        }
+        live = [{"state": "running",
+                 "title": "[auto] [2/5 Implement + Test] Соседняя подзадача эпика"}]
+
+        def loader(path, default=None):
+            return known if path == pilot.AREAS_PATH else {}
+
+        with mock.patch.object(pilot, "branch_report",
+                               return_value=("есть", ["web/src/Browser.tsx"])), \
+                mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
+            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "repo",
+                                       active_tasks=live)
+
+        self.assertTrue(result["wait"])
+        rebuild.assert_not_called()
+
+    def test_area_replace_clears_stale_paths_after_rebuild(self):
+        known = {"Браузер": ["repo::old/obsolete.ts", "repo::web/src/Browser.tsx"]}
+
+        with mock.patch.object(pilot, "load", return_value=known), \
+                mock.patch.object(pilot, "save") as save:
+            pilot.area_replace("Браузер", ["web/src/Browser.tsx",
+                                            "knowledge/cards/CARD-browser.md"], "repo")
+
+        save.assert_called_once_with(
+            pilot.AREAS_PATH,
+            {"Браузер": ["repo::knowledge/cards/CARD-browser.md",
+                          "repo::web/src/Browser.tsx"]},
+        )
+
+    def test_knowledge_card_cannot_replace_promised_browser_code(self):
+        areas = {"Браузер": ["repo::web/src/Browser.tsx"]}
+        promises = {"Браузер": {"files": ["web/src/Browser.tsx"]}}
+
+        def loader(path, default=None):
+            if path == pilot.PROMISES_PATH:
+                return promises
+            if path == pilot.AREAS_PATH:
+                return areas
+            return default
+
+        with mock.patch.object(pilot, "branch_report", return_value=(
+                "есть", ["knowledge/cards/CARD-browser.md"])), \
+                mock.patch.object(pilot, "load", side_effect=loader):
+            result = pilot.review_gate({}, "Браузер", "browser", "repo")
+
+        self.assertTrue(result["back"])
+        self.assertIn("документация не заменяет", result["alert_msg"])
 
 
 class CodexUsageTests(unittest.TestCase):
