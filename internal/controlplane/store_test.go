@@ -1460,6 +1460,12 @@ func TestClearRetainedWorktreesRemovesOnlyConfirmedSnapshots(t *testing.T) {
 	if len(cleared.RetainedWorktrees) != 1 || cleared.RetainedWorktrees[0] != second {
 		t.Fatalf("retained worktrees after targeted cleanup = %#v", cleared.RetainedWorktrees)
 	}
+	if cleared.Name != worker.Name || cleared.Runtime != worker.Runtime ||
+		cleared.RuntimeVersion != worker.RuntimeVersion || cleared.Health != worker.Health ||
+		cleared.Capacity != worker.Capacity || cleared.ActiveCount != worker.ActiveCount ||
+		!cleared.RegisteredAt.Equal(worker.RegisteredAt) || !cleared.LastHeartbeat.Equal(worker.LastHeartbeat) {
+		t.Fatalf("worker registration fields changed: before=%#v after=%#v", worker, cleared)
+	}
 	cleared, err = store.ClearRetainedWorktrees(context.Background(), worker.ID, []protocol.RetainedWorktree{first})
 	if err != nil {
 		t.Fatalf("repeated cleanup: %v", err)
@@ -1469,6 +1475,41 @@ func TestClearRetainedWorktreesRemovesOnlyConfirmedSnapshots(t *testing.T) {
 	}
 	if _, err := store.ClearRetainedWorktrees(context.Background(), "missing-worker", []protocol.RetainedWorktree{first}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing worker cleanup = %v", err)
+	}
+}
+
+func TestClearRetainedWorktreesUnblocksTerminalTaskDeletion(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/owainlewis/factory",
+	})
+	target := createTestTask(t, store, "clear-retained-delete", workerA, worker.Repositories[0].ID)
+	claim := claimTestTask(t, store, workerA, "clear-retained-claim", tokenA)
+	if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{
+		LeaseToken: tokenA, State: "failed", Error: "retain for inspection",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retained := protocol.RetainedWorktree{
+		AttemptID: claim.Attempt.ID, RepositoryID: worker.Repositories[0].ID,
+		Path: "/tmp/factory-retained", Reason: "failed", CleanupCommand: "cleanup retained",
+	}
+	if _, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: "worker-a", WorkerVersion: "test", RuntimeVersion: "codex-test",
+		Capacity: 1, Health: "healthy",
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "factory", RemoteIdentity: "github.com/owainlewis/factory", RetainedCount: 1,
+		}},
+		RetainedWorktrees: []protocol.RetainedWorktree{retained},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertErrorCode(t, store.DeleteTask(context.Background(), target.Task.ID), "retained_worktree")
+	if _, err := store.ClearRetainedWorktrees(context.Background(), workerA, []protocol.RetainedWorktree{retained}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteTask(context.Background(), target.Task.ID); err != nil {
+		t.Fatalf("delete after retained cleanup: %v", err)
 	}
 }
 

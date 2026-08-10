@@ -61,4 +61,18 @@ test ! -e "$TMP/worker/worktrees/retained"
 test -e "$TMP/quarantine/worker-retained."* 2>/dev/null
 grep -q 'подтверждена очистка retained worktree: claude-haiku' "$TMP/janitor.log"
 
+mkdir -p "$TMP/worker/worktrees/missing"
+printf '#!/usr/bin/env bash\necho "confirmation unavailable" >&2\nexit 22\n' >"$TMP/bin/curl"
+chmod +x "$TMP/bin/curl"
+PATH="$TMP/bin:$PATH" \
+FACTORY_JANITOR_LOG="$TMP/janitor.log" \
+FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
+FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+bash "$ROOT/ops/factory-janitor.sh"
+
+test ! -e "$TMP/worker/worktrees/missing"
+test -e "$TMP/quarantine/worker-missing."* 2>/dev/null
+grep -q 'не удалось подтвердить очистку retained worktree: claude-haiku' "$TMP/janitor.log"
+
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
