@@ -94,6 +94,10 @@ def _promote(rec):
     worker = workers.get(pilot.stage_worker(conf, stage_name, "medium"))
     if not worker:
         raise HTTPException(500, "нет свободного исполнителя для первого этапа")
+    generation_rec = pilot.plan_idea(rec["id"])
+    if not generation_rec:
+        raise HTTPException(404, "карточка не найдена")
+    generation = generation_rec.get("run_generation") or str(uuid.uuid4())
     title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
     why = rec.get("why") or ""
     src = rec.get("source") or ""
@@ -110,7 +114,8 @@ def _promote(rec):
                            "workflow_revision_id": nw["revision_id"]})
     tid = r.get("task", {}).get("id")
     pilot.note_work(rec["title"], pilot.ORIGIN_OWNER, stage_name)
-    pilot.set_idea(rec["id"], state="in_work", task_id=tid or "")
+    pilot.set_idea(rec["id"], state="in_work", task_id=tid or "",
+                   run_generation=generation)
     return tid
 
 
@@ -125,10 +130,13 @@ def idea_action(idea_id: str, action: str = Form(...), reason: str = Form(""),
     elif action == "new":
         pilot.set_idea(idea_id, state="new", reason="")
     elif action == "done":
-        pilot.set_idea(idea_id, state="done")
+        close_reason = reason or "Владелец явно закрыл карточку Плана."
+        pilot.set_idea(idea_id, state="done", reason=close_reason)
+        pilot.close_work(rec.get("title", ""), close_reason)
     elif action == "reject":
-        pilot.set_idea(idea_id, state="rejected",
-                       reason=reason or "без причины не отклоняем — причина не указана")
+        close_reason = reason or "Владелец отклонил карточку; причина не указана."
+        pilot.set_idea(idea_id, state="rejected", reason=close_reason)
+        pilot.close_work(rec.get("title", ""), close_reason)
     elif action == "up":
         _move(idea_id, -1)
     elif action == "down":
