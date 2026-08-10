@@ -4710,6 +4710,15 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
 DEPLOY_STATE_KEY = "post_merge_deploys"
 DEPLOY_DIR = f"{HOME}/pilot/releases"
 FACTORY_DEPLOY_RETRY_DELAY = 60
+RELEASE_OUTPUT_LIMIT = 12000
+RELEASE_SECRET_VALUE = re.compile(
+    r"(?i)\b(token|password|passwd|secret|authorization|api[_-]?key)"
+    r"(\s*[:=]\s*)([^\s]+)")
+RELEASE_BEARER = re.compile(r"(?i)\b(Bearer\s+)[^\s]+")
+RELEASE_URL_CREDENTIALS = re.compile(r"(https?://)[^/@\s:]+:[^/@\s]+@")
+RELEASE_KNOWN_TOKEN = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _release_running(pid):
@@ -4728,9 +4737,17 @@ def _release_running(pid):
 def _release_output(release):
     try:
         with open(release["output"], encoding="utf-8", errors="replace") as out:
-            return out.read().strip()[:200]
+            value = out.read()
     except (OSError, KeyError):
         return ""
+    # Failures are normally at the end of a long build log. Keep enough tail to
+    # include Chromium/apt diagnostics, but never copy credential-shaped values
+    # from a release subprocess into the Pilot log.
+    value = ANSI_ESCAPE.sub("", value[-RELEASE_OUTPUT_LIMIT:])
+    value = RELEASE_URL_CREDENTIALS.sub(r"\1[REDACTED]@", value)
+    value = RELEASE_BEARER.sub(r"\1[REDACTED]", value)
+    value = RELEASE_SECRET_VALUE.sub(r"\1\2[REDACTED]", value)
+    return RELEASE_KNOWN_TOKEN.sub("[REDACTED]", value).strip()
 
 
 def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):

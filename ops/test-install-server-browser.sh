@@ -27,12 +27,16 @@ printf 'bpf-probe=pass\n' >>"$TEST_BROWSER_EVENTS"
 SH
 printf '{"name":"factory-browser-install-test"}\n' >"$share/web/package.json"
 printf '{"lockfileVersion":3}\n' >"$share/web/package-lock.json"
-mkdir -p "$share/web/node_modules/playwright" "$factory_home/.cache/ms-playwright/chromium"
+mkdir -p "$share/web/node_modules/playwright" \
+  "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64"
 cat >"$share/web/node_modules/playwright/index.js" <<'JS'
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 
 exports.chromium = {
+  executablePath() {
+    return `${process.env.TEST_BROWSER_HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
+  },
   async launch(options) {
     fs.appendFileSync(process.env.TEST_BROWSER_EVENTS,
       `playwright-launcher=${options.executablePath} sandbox=${options.chromiumSandbox}\n`);
@@ -59,12 +63,12 @@ exports.chromium = {
   },
 };
 JS
-cat >"$factory_home/.cache/ms-playwright/chromium/chrome" <<'SH'
+cat >"$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome" <<'SH'
 #!/bin/bash
 printf 'chromium-args=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 SH
 chmod 755 "$share/ops/"*
-chmod 755 "$factory_home/.cache/ms-playwright/chromium/chrome"
+chmod 755 "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"
 : >"$temporary/events"
 
 cat >"$test_bin/id" <<'SH'
@@ -97,7 +101,16 @@ printf 'npm-cwd=%s args=%s\n' "$PWD" "$*" >>"$TEST_BROWSER_EVENTS"
 SH
 cat >"$test_bin/npx" <<'SH'
 #!/bin/bash
-printf 'npx-cwd=%s args=%s\n' "$PWD" "$*" >>"$TEST_BROWSER_EVENTS"
+printf 'npx-cwd=%s args=%s needrestart=%s frontend=%s\n' \
+  "$PWD" "$*" "${NEEDRESTART_MODE:-}" "${DEBIAN_FRONTEND:-}" \
+  >>"$TEST_BROWSER_EVENTS"
+if [ "$*" = "playwright install-deps chromium" ] && [ "${NEEDRESTART_MODE:-}" != l ]; then
+  systemctl restart factory-worker.service
+fi
+SH
+cat >"$test_bin/systemctl" <<'SH'
+#!/bin/bash
+printf 'systemctl=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 SH
 cat >"$test_bin/sudo" <<'SH'
 #!/bin/bash
@@ -179,6 +192,11 @@ cat >"$test_bin/chown" <<'SH'
 #!/bin/bash
 exit 0
 SH
+cat >"$test_bin/apparmor_parser" <<'SH'
+#!/bin/bash
+printf 'apparmor-parser=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
+[ "${TEST_APPARMOR_FAIL:-0}" != 1 ]
+SH
 chmod 755 "$test_bin/"*
 
 cat >"$test_bin/ip" <<'SH'
@@ -200,6 +218,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   TEST_PROBE_FAIL=1 PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$libexec" \
   FACTORY_BROWSER_SUDOERS="$temporary/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$temporary/apparmor.d/factory-browser" \
   bash "$linked_installer" >"$temporary/probe-failure-output" 2>&1
 probe_status=$?
 set -e
@@ -212,6 +231,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$libexec" \
   FACTORY_BROWSER_SUDOERS="$temporary/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$temporary/apparmor.d/factory-browser" \
   FACTORY_BROWSER_SCREENSHOT="$temporary/screenshot.png" \
   bash "$linked_installer" >"$temporary/output" 2>&1 \
   || { sed -n '1,80p' "$temporary/output" >&2; fail "установленная копия install-server-browser.sh завершилась ошибкой"; }
@@ -220,7 +240,14 @@ grep -Fx "npm-cwd=$share/web args=ci --no-audit --no-fund --silent" "$temporary/
   || fail "npm ci запущен не из установленного browser payload"
 grep -F "sudo-args=-H -u $(id -un) bash -c " "$temporary/events" >/dev/null \
   || fail "установка Chromium не была запущена через factory user"
-grep -Fx "npx-cwd=$share/web args=playwright install chromium" "$temporary/events" >/dev/null \
+grep -Fx "npx-cwd=$share/web args=playwright install-deps chromium needrestart=l frontend=noninteractive" \
+  "$temporary/events" >/dev/null \
+  || fail "install-deps не зафиксировал needrestart в неинтерактивном list-only режиме"
+if grep -F 'systemctl=restart ' "$temporary/events" >/dev/null; then
+  fail "install-deps перезапустил службу"
+fi
+grep -Fx "npx-cwd=$share/web args=playwright install chromium needrestart= frontend=" \
+  "$temporary/events" >/dev/null \
   || fail "installer не выполнил обязательную установку Playwright Chromium"
 grep -Fx "playwright-launcher=$libexec/factory-browser-sandbox sandbox=true" \
   "$temporary/events" >/dev/null \
@@ -245,6 +272,17 @@ grep -F 'MAP factory.timafen.com 192.0.2.10, MAP staging-automation.tarser.net 1
   || fail "Chromium resolver не запретил DNS для всех неразрешённых FQDN"
 grep -F -- '--no-proxy-server' "$temporary/events" >/dev/null \
   || fail "Chromium не запущен с принудительно отключённым proxy"
+grep -Fx "apparmor-parser=-Q $temporary/apparmor.d/factory-browser.new" \
+  "$temporary/events" >/dev/null \
+  || fail "AppArmor profile не прошёл проверку до установки"
+grep -Fx "apparmor-parser=-r $temporary/apparmor.d/factory-browser" \
+  "$temporary/events" >/dev/null \
+  || fail "AppArmor profile не был загружен перед живым smoke"
+grep -F "profile factory-browser-chromium \"$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome\"" \
+  "$temporary/apparmor.d/factory-browser" >/dev/null \
+  || fail "AppArmor profile не привязан к установленному full Chromium"
+grep -Fx '  userns,' "$temporary/apparmor.d/factory-browser" >/dev/null \
+  || fail "AppArmor profile не разрешил Chromium user namespace sandbox"
 grep -F 'setpriv=' "$temporary/events" | grep -F -- '--no-new-privs' >/dev/null \
   || fail "Chromium не получил NoNewPrivileges через setpriv"
 grep -Fx 'goto=https://factory.timafen.com' "$temporary/events" >/dev/null \
@@ -257,6 +295,21 @@ grep -Fx 'goto=https://example.com' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку внешнего интернета"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
+
+apparmor_failure="$temporary/apparmor-failure"
+status=0
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  TEST_APPARMOR_FAIL=1 PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$apparmor_failure/libexec" \
+  FACTORY_BROWSER_SUDOERS="$apparmor_failure/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$apparmor_failure/apparmor.d/factory-browser" \
+  FACTORY_BROWSER_SCREENSHOT="$apparmor_failure/screenshot.png" \
+  bash "$linked_installer" >"$apparmor_failure-output" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "installer продолжил работу без Chromium AppArmor profile"
+[ ! -e "$apparmor_failure/libexec/factory-browser-sandbox" ] \
+  || fail "ошибка AppArmor оставила launcher"
+[ ! -e "$apparmor_failure/sudoers/factory-browser" ] \
+  || fail "ошибка AppArmor оставила sudoers"
 
 TERM='--host-resolver-rules=MAP * 127.0.0.1' \
   TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
@@ -329,6 +382,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$rollback/libexec" \
   FACTORY_BROWSER_SUDOERS="$rollback/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$rollback/apparmor.d/factory-browser" \
   FACTORY_BROWSER_SCREENSHOT="$rollback/screenshot.png" \
   bash "$linked_installer" >"$rollback/output" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "ошибка browser checker не прервала установку"
@@ -336,5 +390,13 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   || fail "безопасный откат не вернул предыдущий symlink launcher"
 grep -Fx 'previous launcher' "$rollback/libexec/factory-browser-sandbox" >/dev/null \
   || fail "безопасный откат не сохранил прежний launcher"
+[ ! -e "$rollback/libexec/factory-browser-isolated" ] \
+  || fail "ошибка smoke оставила новый root helper"
+[ ! -e "$rollback/libexec/factory-browser.conf" ] \
+  || fail "ошибка smoke оставила новую browser config"
+[ ! -e "$rollback/sudoers/factory-browser" ] \
+  || fail "ошибка smoke оставила новый sudoers"
+[ ! -e "$rollback/apparmor.d/factory-browser" ] \
+  || fail "ошибка smoke оставила новый AppArmor profile"
 
-echo "PASS: installer ставит сетевую изоляцию, проверяет allowlist и откатывает комплект"
+echo "PASS: installer не рестартует службы, чинит sandbox, проверяет allowlist и откатывает комплект"

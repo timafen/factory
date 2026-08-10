@@ -2073,6 +2073,29 @@ class PostMergeDeployTest(unittest.TestCase):
         self.assertIn("completed generation=3 rc=7 :: health check failed",
                       log.call_args.args[0])
 
+    @mock.patch.object(pilot, "log")
+    def test_completed_release_keeps_diagnostic_tail_and_redacts_secrets(self, log):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        status = os.path.join(temporary.name, "failed.status")
+        output = os.path.join(temporary.name, "failed.log")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("7\n")
+        with open(output, "w", encoding="utf-8") as f:
+            f.write("build output " + ("x" * 400) + "\n")
+            f.write("Authorization: Bearer super-secret-value\n")
+            f.write("Chromium sandboxing failed: No usable sandbox!\n")
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 4, "status": status, "output": output, "queued": False}}}
+
+        pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+
+        message = log.call_args.args[0]
+        self.assertIn("Chromium sandboxing failed: No usable sandbox!", message)
+        self.assertGreater(len(message), 200)
+        self.assertNotIn("super-secret-value", message)
+        self.assertIn("Authorization: [REDACTED]", message)
+
     @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
     def test_external_release_lock_is_saved_then_retried_after_delay(self, _log, popen):
