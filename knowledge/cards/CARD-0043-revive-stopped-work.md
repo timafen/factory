@@ -4,12 +4,12 @@
 
 - Stage: Implement + Test
 - Status: implemented and ready for Review
-- Branch: `factory/a0fcacd2-789-cfe85c15-bb4`
-- Head commit: `57ecafb` (implementation)
-- What changed: revive создаёт raw-title задачу с явным auto-маркером в `request_key`; он защищает следующий цикл, capacity, money_guard и AGENT_RULES.
-- What changed: `canRevive` вычисляется в данных карточки и запрещён для закрытых и архивных работ.
-- Evidence: `just test-revive-stopped-work` → PASS (Go API, 17 pilot, 8 UI); typecheck, UI build и `just build` → PASS.
-- Next action: Review повторно проверяет три устранённых блокирующих замечания.
+- Branch: `factory/0c51b45d-f18-ffcce535-2b5`
+- Head commit: `0cc4d6b` (implementation)
+- What changed: completion flow, лимиты, подсчёт попыток и защита от дублей используют единый metadata-aware разбор raw-title задач.
+- What changed: текущий `give_up` создаёт новый revive-сигнал независимо от старой `.done`-квитанции.
+- Evidence: `just test-revive-stopped-work` → PASS (Go API, 21 pilot, 8 UI); весь `pilot.test_pilot` (88), typecheck, web build и `just build` → PASS.
+- Next action: Review проверяет три закрытых замечания на коммите реализации `0cc4d6b`.
 
 ## LOG
 
@@ -118,3 +118,7 @@
 ### 2026-08-09 — Implement
 
 Работа перенесена патчем на свежий `origin/main`, чтобы не затереть новые изменения API. В `request_key` добавлен единый явный маркер оживлённой автоматической задачи: raw-title теперь участвует в защите от дублей, лимите работ, `money_guard` и доставке `AGENT_RULES`, а следующий цикл распознаёт завершённый raw-title этап. UI получает вычисленный `canRevive`, который выключен для закрытых и архивных карточек. `just test-revive-stopped-work`, TypeScript, UI production build и сборка Go-бинарников прошли.
+
+### 2026-08-09 — Implement
+
+После решения владельца работа заново собрана от свежего `origin/main`. Основной completion flow, runtime-лимиты, подсчёт попыток, история расходов и защита от дублей переведены на общий разбор заголовка и `request_key`; Review REQUEST CHANGES теперь возвращает raw-title работу на доработку, а Verify PASS доходит до auto-merge. Control plane проверяет свежий `give_up` даже при старой `.done`-квитанции и создаёт новый сигнал. `just test-revive-stopped-work` прошёл (Go API, 21 pilot, 8 UI), весь `pilot.test_pilot` — 88 тестов; typecheck, web build и `just build` также прошли.
