@@ -1600,7 +1600,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(create.call_args.args[0]["request_key"],
                          "plan-autostart:top:second-run")
 
-    def test_cycle_does_not_run_legacy_pipeline_patrol(self):
+    def test_cycle_runs_pipeline_watch_with_current_snapshot(self):
         tasks = [
             {"id": "a", "title": "[auto] [1/2 Triage] A", "state": "running"},
             {"id": "b", "title": "[auto] [1/2 Triage] B", "state": "running"},
@@ -1640,7 +1640,11 @@ class PlanAutostartTest(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
             pilot.cycle(self.conf, state)
 
-        watch.assert_not_called()
+        watch.assert_called_once()
+        self.assertIs(watch.call_args.args[0], self.conf)
+        self.assertEqual(watch.call_args.args[1], tasks)
+        self.assertEqual(watch.call_args.args[2]["Triage"]["revision_id"], "wf-triage")
+        self.assertIs(watch.call_args.args[3], self.workers)
         self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
@@ -1988,7 +1992,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_not_called()
+        watch.assert_called_once_with(conf, [], {}, {})
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)
