@@ -1,0 +1,10 @@
+#!/bin/bash
+# Runs Chromium in its own session. Chromium's own Linux sandbox remains enabled:
+# this launcher deliberately never adds --no-sandbox or related bypass flags.
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Factory browser must not run as root" >&2
+  exit 1
+fi
+exec setsid --wait "$@"

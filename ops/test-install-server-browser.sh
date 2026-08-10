@@ -70,10 +70,12 @@ for command in ip iptables ip6tables setsid; do
 done
 chmod 755 "$test_bin/"*
 
+linked_installer="$temporary/linked-install-server-browser.sh"
+ln -s "$share/ops/install-server-browser.sh" "$linked_installer"
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$libexec" \
-  bash "$share/ops/install-server-browser.sh" >"$temporary/output" 2>&1 \
+  bash "$linked_installer" >"$temporary/output" 2>&1 \
   || fail "установленная копия install-server-browser.sh завершилась ошибкой"
 
 grep -Fx "npm-cwd=$share/web args=ci --no-audit --no-fund --silent" "$temporary/events" >/dev/null \
@@ -85,4 +87,24 @@ cmp -s "$share/ops/factory-browser-sandbox" "$libexec/factory-browser-sandbox" \
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
 
-echo "PASS: установленный browser installer повторно использует payload без копирования поверх себя"
+rollback="$temporary/rollback"
+mkdir -p "$rollback/libexec" "$rollback/release"
+printf 'previous launcher\n' >"$rollback/release/factory-browser-sandbox"
+ln -s "$rollback/release/factory-browser-sandbox" "$rollback/libexec/factory-browser-sandbox"
+cat >"$share/ops/test-browser-sandbox.sh" <<'SH'
+#!/bin/bash
+exit 1
+SH
+chmod 755 "$share/ops/test-browser-sandbox.sh"
+status=0
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$rollback/libexec" \
+  bash "$linked_installer" >"$rollback/output" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "ошибка browser checker не прервала установку"
+[ -L "$rollback/libexec/factory-browser-sandbox" ] \
+  || fail "безопасный откат не вернул предыдущий symlink launcher"
+grep -Fx 'previous launcher' "$rollback/libexec/factory-browser-sandbox" >/dev/null \
+  || fail "безопасный откат не сохранил прежний launcher"
+
+echo "PASS: installer находит payload через symlink и безопасно откатывает launcher"
