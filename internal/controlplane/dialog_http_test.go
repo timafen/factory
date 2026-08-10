@@ -134,6 +134,13 @@ func TestClaudeDialogAllowsOnlyIsolatedScreenshotDirectory(t *testing.T) {
 	}
 }
 
+func TestDialogPromptUsesInstalledWorkerPathForBrowser(t *testing.T) {
+	prompt := serializeDialog([]protocol.DialogMessage{{Role: "user", Content: "Покажи стенд"}})
+	if !strings.Contains(prompt, "/opt/factory-data/bin/factory-worker browser") {
+		t.Fatalf("dialog browser command is not executable from the managed environment: %q", prompt)
+	}
+}
+
 func TestDialogRejectsInvalidScreenshotBeforeRunner(t *testing.T) {
 	for name, screenshot := range map[string]string{
 		"unknown content type": `{"name":"x.gif","content_type":"image/gif","data":"R0lG"}`,
