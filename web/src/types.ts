@@ -70,6 +70,7 @@ export interface PilotSettings {
   max_parallel_works: number;
   day_cap_usd: number;
   deploy_staging_cmd: string;
+  deploy_factory_cmd: string;
   owner_chat_url: string;
   owner_ui_url: string;
   stages: PilotStageRoute[];

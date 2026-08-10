@@ -16,11 +16,16 @@ WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
+LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
+
+mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
+exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
+flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 
 mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \

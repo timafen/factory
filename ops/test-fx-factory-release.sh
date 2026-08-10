@@ -127,6 +127,7 @@ run_release() {
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
@@ -190,5 +191,18 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
   ! grep -F 'go build ' "$gate_failed/gates" >/dev/null \
     || fail "binaries were built after $mode"
 done
+
+locked="$temporary/locked"
+make_fixture "$locked" locked
+exec 8>"$locked/release.lock"
+flock -n 8 || fail "could not acquire fixture release lock"
+set +e
+run_release "$locked" locked
+status=$?
+set -e
+flock -u 8
+[ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
+[ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
+[ ! -s "$locked/events" ] || fail "concurrent release touched services"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"

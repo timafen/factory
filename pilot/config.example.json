@@ -78,6 +78,7 @@
  },
  "day_cap_usd": 150,
  "deploy_staging_cmd": "sudo -n /usr/local/bin/fx staging release",
+ "deploy_factory_cmd": "sudo -n /usr/local/bin/fx factory release main",
  "enabled": true,
  "respect_host_load": true,
  "max_parallel_subtasks": 3,
