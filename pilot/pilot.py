@@ -4709,6 +4709,7 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
 
 DEPLOY_STATE_KEY = "post_merge_deploys"
 DEPLOY_DIR = f"{HOME}/pilot/releases"
+FACTORY_DEPLOY_RETRY_DELAY = 60
 
 
 def _release_running(pid):
@@ -4730,6 +4731,26 @@ def _release_output(release):
             return out.read().strip()[:200]
     except (OSError, KeyError):
         return ""
+
+
+def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):
+    """Persist one delayed retry after the external Factory release lock wins."""
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    generation = int(releases.get("generation", 0)) + 1
+    releases["generation"] = generation
+    os.makedirs(DEPLOY_DIR, exist_ok=True)
+    stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
+    releases[command_key] = {
+        "command": command,
+        "label": label,
+        "generation": generation,
+        "output": stem + ".log",
+        "status": stem + ".status",
+        "queued": True,
+        "due": (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY,
+    }
+    save(STATE_PATH, state)
+    log(f"{label} busy: queued delayed retry generation={generation}")
 
 
 def _start_post_merge_deploy(command_key, label, command, state):
@@ -4761,7 +4782,7 @@ def _start_post_merge_deploy(command_key, label, command, state):
     log(f"{label} started generation={generation} pid={child.pid}")
 
 
-def poll_post_merge_deploys(conf, state):
+def poll_post_merge_deploys(conf, state, now=None):
     """Collect finished releases and start one coalesced successor per target."""
     releases = state.setdefault(DEPLOY_STATE_KEY, {})
     # Compatibility with the short-lived retry marker used by older Pilots.
@@ -4785,7 +4806,12 @@ def poll_post_merge_deploys(conf, state):
             log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
                 f"{_release_output(release)}")
             releases.pop(command_key, None)
-            if queued and conf.get(command_key):
+            if rc == 8 and command_key == "deploy_factory_cmd" and conf.get(command_key):
+                # An independently started release owns the lock.  This must
+                # survive even when no later merge had set queued=True.
+                _queue_post_merge_deploy_retry(
+                    command_key, label, conf[command_key], state, now)
+            elif queued and conf.get(command_key):
                 _start_post_merge_deploy(command_key, label, conf[command_key], state)
         elif release.get("pid") and not _release_running(release["pid"]):
             # The runner disappeared before it could write a result. Retrying
@@ -4795,12 +4821,15 @@ def poll_post_merge_deploys(conf, state):
             if conf.get(command_key):
                 _start_post_merge_deploy(command_key, label, conf[command_key], state)
         elif release.get("queued") and not release.get("pid") and conf.get(command_key):
-            _start_post_merge_deploy(command_key, label, conf[command_key], state)
+            due = release.get("due")
+            current = time.time() if now is None else now
+            if due is None or current >= float(due):
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
 
 
 def retry_pending_factory_deploy(conf, state, now=None):
     """Compatibility name for the cycle hook; releases are now all polled."""
-    poll_post_merge_deploys(conf, state)
+    poll_post_merge_deploys(conf, state, now)
 
 
 def deploy_after_merge(conf, repo_identity, state=None, now=None):

@@ -2073,6 +2073,38 @@ class PostMergeDeployTest(unittest.TestCase):
         self.assertIn("completed generation=3 rc=7 :: health check failed",
                       log.call_args.args[0])
 
+    @mock.patch.object(pilot.subprocess, "Popen")
+    @mock.patch.object(pilot, "log")
+    def test_external_release_lock_is_saved_then_retried_after_delay(self, _log, popen):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        status = os.path.join(temporary.name, "external-lock.status")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("8\n")
+        popen.return_value.pid = 789
+        state = {pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {
+            "generation": 1, "status": status, "output": "/missing", "queued": False}}}
+        conf = {"deploy_factory_cmd": "fx factory release"}
+
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path):
+            pilot.poll_post_merge_deploys(conf, state, now=100)
+            deferred = state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+            self.assertTrue(deferred["queued"])
+            self.assertEqual(deferred["due"], 160)
+            self.assertNotIn("pid", deferred)
+            self.assertEqual(pilot.load(state_path, {}), state)
+
+            pilot.poll_post_merge_deploys(conf, state, now=159)
+            popen.assert_not_called()
+            pilot.poll_post_merge_deploys(conf, state, now=160)
+
+        release = state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+        self.assertEqual(release["pid"], 789)
+        self.assertFalse(release["queued"])
+        popen.assert_called_once()
+
     @mock.patch.object(pilot, "_start_post_merge_deploy")
     @mock.patch.object(pilot, "log")
     def test_trading_repository_releases_only_trading_staging(self, log, start):
