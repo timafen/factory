@@ -2,17 +2,24 @@
 
 ## HEAD
 
-- Status: Implemented — обязательная проверка типов закрыта; готово к Review.
-- Branch: `factory/3804eb0b-065-879e7b6a-153`.
-- Head commit: `0443a7a` (`Убрать устаревшие файлы экрана просмотра стенда`).
+- Status: Implemented + Tested — замечания Review устранены; готово к повторному Review.
+- Branch: `factory/e9f499b4-598-4fd35a12-a2a`.
+- Head commit: `664444d` (`Изолировать браузер и снимки Диалога при параллельных действиях`).
 - Specification: `knowledge/specs/server-browser-for-agents-and-dialog.md`.
-- What changed: Chromium принудительно запрещает непроксируемый WebRTC/UDP;
-  CLI атомарно заменяет снимок файлом с правами 0600, даже после прежнего 0644.
-- Evidence: `npx tsc -p tsconfig.app.json --noEmit` — PASS; трёхточечный
-  diff содержит только 22 файла задачи.
-- One next action: передать реализацию на Review.
+- What changed: каждый Chromium запускается с отдельным временным профилем;
+  «Диалог» блокирует send во время capture и не принимает устаревший FileReader.
+- Evidence: Go browser/controlplane — PASS; `Dialog.test.tsx` — 8/8 PASS;
+  TypeScript и production build — PASS; diff содержит только 22 файла задачи.
+- One next action: повторить Review целевого diff.
 
 ## LOG
+
+### 2026-08-09 — Implement
+
+После целевого возврата из Review Chromium получил уникальный `--user-data-dir`
+в очищаемом временном каталоге. В «Диалоге» capture согласован с send и чтением
+локального файла через общий номер операции; два теста воспроизводят одновременные
+действия. Целевые Go/UI-тесты, проверка типов и production-сборка прошли.
 
 ### 2026-08-09 — Implement
 
