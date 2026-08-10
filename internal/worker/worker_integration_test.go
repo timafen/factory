@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,8 +93,12 @@ case "$prompt" in
     exit 17
     ;;
   *FAKE_MODE=barrier*)
+		release="$FACTORY_TEST_CODEX_LOG/$attempt.release"
+		rm -f "$release"
+		mkfifo "$release"
     : > "$FACTORY_TEST_CODEX_LOG/$attempt.ready"
-    while [ ! -f "$FACTORY_TEST_CODEX_LOG/$attempt.release" ]; do sleep 0.02; done
+		read -r _ < "$release"
+		rm -f "$release"
     printf 'completed after barrier' > "$result"
     echo '{"type":"item.completed","item":{"type":"agent_message","text":"completed after barrier"}}'
     ;;
@@ -210,8 +215,9 @@ func TestWorkerSupervisorHelperProcess(t *testing.T) {
 }
 
 type serverFixture struct {
-	store  *controlplane.Store
-	server *httptest.Server
+	store        *controlplane.Store
+	server       *httptest.Server
+	databasePath string
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -222,7 +228,8 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func newServerFixture(t *testing.T, wrap func(http.Handler) http.Handler) *serverFixture {
 	t.Helper()
-	store, err := controlplane.Open(context.Background(), filepath.Join(t.TempDir(), "factory.sqlite3"))
+	databasePath := filepath.Join(t.TempDir(), "factory.sqlite3")
+	store, err := controlplane.Open(context.Background(), databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +238,7 @@ func newServerFixture(t *testing.T, wrap func(http.Handler) http.Handler) *serve
 		handler = wrap(handler)
 	}
 	server := httptest.NewServer(handler)
-	fixture := &serverFixture{store: store, server: server}
+	fixture := &serverFixture{store: store, server: server, databasePath: databasePath}
 	t.Cleanup(func() {
 		server.Close()
 		if err := store.Close(); err != nil {
@@ -246,23 +253,135 @@ type repositoryFixture struct {
 	origin string
 }
 
+var repositoryTemplate struct {
+	sync.Once
+	root   string
+	origin string
+	path   string
+}
+
+func TestMain(main *testing.M) {
+	code := main.Run()
+	if repositoryTemplate.root != "" {
+		_ = os.RemoveAll(repositoryTemplate.root)
+	}
+	os.Exit(code)
+}
+
+func testRepositoryTemplate(t *testing.T) repositoryFixture {
+	t.Helper()
+	repositoryTemplate.Do(func() {
+		root, err := os.MkdirTemp("", "factory-worker-repository-template-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repositoryTemplate.root = root
+		source := filepath.Join(root, "source")
+		repositoryTemplate.origin = filepath.Join(root, "origin.git")
+		repositoryTemplate.path = filepath.Join(root, "checkout")
+		runGitTest(t, "", "init", "--initial-branch=main", source)
+		runGitTest(t, source, "config", "user.name", "Factory Test")
+		runGitTest(t, source, "config", "user.email", "factory@example.invalid")
+		if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGitTest(t, source, "add", "README.md")
+		runGitTest(t, source, "commit", "-m", "initial")
+		runGitTest(t, "", "clone", "--bare", source, repositoryTemplate.origin)
+		runGitTest(t, "", "clone", repositoryTemplate.origin, repositoryTemplate.path)
+		runGitTest(t, repositoryTemplate.path, "config", "user.name", "Factory Test")
+		runGitTest(t, repositoryTemplate.path, "config", "user.email", "factory@example.invalid")
+	})
+	return repositoryFixture{path: repositoryTemplate.path, origin: repositoryTemplate.origin}
+}
+
 func createRepository(t *testing.T, name string) repositoryFixture {
 	t.Helper()
 	root := t.TempDir()
 	origin := filepath.Join(root, name+"-origin.git")
 	path := filepath.Join(root, name)
-	runGitTest(t, "", "init", "--bare", "--initial-branch=main", origin)
-	runGitTest(t, "", "init", "--initial-branch=main", path)
-	runGitTest(t, path, "config", "user.name", "Factory Test")
-	runGitTest(t, path, "config", "user.email", "factory@example.invalid")
-	if err := os.WriteFile(filepath.Join(path, "README.md"), []byte(name+"\n"), 0o600); err != nil {
+	template := testRepositoryTemplate(t)
+	copyDirectory(t, template.origin, origin)
+	copyDirectory(t, template.path, path)
+	configPath := filepath.Join(path, ".git", "config")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	runGitTest(t, path, "add", "README.md")
-	runGitTest(t, path, "commit", "-m", "initial")
-	runGitTest(t, path, "remote", "add", "origin", origin)
-	runGitTest(t, path, "push", "-u", "origin", "main")
+	updated := strings.Replace(string(config), template.origin, origin, 1)
+	if updated == string(config) {
+		t.Fatal("repository template origin was not replaced")
+	}
+	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return repositoryFixture{path: path, origin: origin}
+}
+
+func copyDirectory(t *testing.T, source, destination string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(output, input); err != nil {
+			_ = output.Close()
+			return err
+		}
+		return output.Close()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryFixturesFromTemplateAreIsolated(t *testing.T) {
+	first := createRepository(t, "template-first")
+	second := createRepository(t, "template-second")
+	if first.origin == second.origin || repositoryIdentity(t, first.path) == repositoryIdentity(t, second.path) {
+		t.Fatalf("repository fixtures share remote identity: %q", first.origin)
+	}
+	base := runGitTest(t, second.path, "rev-parse", "refs/remotes/origin/main")
+	if firstBase := runGitTest(t, first.path, "rev-parse", "refs/remotes/origin/main"); firstBase != base {
+		t.Fatalf("fixture base commits differ: %q != %q", firstBase, base)
+	}
+	if err := os.WriteFile(filepath.Join(first.path, "first-only.txt"), []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, first.path, "add", "first-only.txt")
+	runGitTest(t, first.path, "commit", "-m", "first fixture change")
+	runGitTest(t, first.path, "push", "origin", "main")
+	firstHead := runGitTest(t, first.path, "rev-parse", "HEAD")
+	if firstHead == base {
+		t.Fatal("first fixture did not advance")
+	}
+	if secondHead := strings.Fields(runGitTest(t, "", "ls-remote", second.origin, "refs/heads/main"))[0]; secondHead != base {
+		t.Fatalf("second fixture remote advanced to %q; want %q", secondHead, base)
+	}
+	if _, err := os.Stat(filepath.Join(second.path, "first-only.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("first fixture contents leaked into second: %v", err)
+	}
 }
 
 func TestWorktreeUsesRemoteDefaultBranchWithoutChangingCheckout(t *testing.T) {
@@ -1453,6 +1572,7 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 		repositories, 10)
 	pinTestRepositoryBases(t, manager)
 	usePoolTestIntervals(manager)
+	manager.options.LeaseRenewInterval = 100 * time.Millisecond
 	managerContext, _, _ := startManagerWithContext(t, manager)
 	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool {
 		return worker.Health == "healthy" && worker.Capacity == 10
@@ -1572,6 +1692,10 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	}
 	waitForTaskState(t, fixture.store, running[0].Task.ID, "cancelled")
 	queuedRunning := waitForTaskState(t, fixture.store, queued.Task.ID, "running")
+	waitFor(t, 10*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(logDirectory, queuedRunning.Attempts[0].ID+".ready"))
+		return err == nil
+	})
 	for _, task := range running[1:] {
 		detail, err := fixture.store.Task(context.Background(), task.Task.ID)
 		if err != nil {
@@ -2068,11 +2192,10 @@ func TestTimeoutStopsIgnoringProcessGroup(t *testing.T) {
 		map[string]repositoryFixture{"timeout": repository}, 1)
 	startManager(t, manager)
 	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" })
-	// The task timeout intentionally includes repository preparation. Give this
-	// process-group test enough budget to be admitted on a loaded CI/release
-	// host; TestTimeoutIncludesWorktreePreparation covers the one-second
-	// pre-start timeout boundary separately.
-	task := createTask(t, fixture.store, worker, "timeout", "fork", 10)
+	// The task timeout intentionally includes repository preparation. The shared
+	// repository template leaves enough budget for the real runtime timer while
+	// TestTimeoutIncludesWorktreePreparation covers the pre-start boundary.
+	task := createTask(t, fixture.store, worker, "timeout", "fork", 1)
 	running := waitForTaskState(t, fixture.store, task.Task.ID, "running")
 	childPath := filepath.Join(os.Getenv("FACTORY_TEST_CODEX_LOG"), running.Attempts[0].ID+".child")
 	waitFor(t, 5*time.Second, func() bool {
@@ -2174,6 +2297,23 @@ func TestServerLossStopsCodexBeforeLeaseExpiry(t *testing.T) {
 	writeFakeCodex(t, codexPath)
 	manager := newTestManager(t, fixture, codexPath, filepath.Join(t.TempDir(), "worker"),
 		map[string]repositoryFixture{"server-loss": repository}, 1)
+	manager.options.LeaseRenewInterval = time.Hour
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(transport.CloseIdleConnections)
+	var serverLost atomic.Bool
+	manager.client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if !serverLost.Load() {
+			return transport.RoundTrip(request)
+		}
+		return &http.Response{
+			StatusCode: http.StatusConflict,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"code":"server_unavailable","message":"server unavailable"}}`,
+			)),
+			Request: request,
+		}, nil
+	})
 	startManager(t, manager)
 	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" })
 	task := createTask(t, fixture.store, worker, "server-loss", "fork", 60)
@@ -2184,10 +2324,30 @@ func TestServerLossStopsCodexBeforeLeaseExpiry(t *testing.T) {
 		return err == nil
 	})
 	childPID := readPID(t, childPath)
+	manager.stateMutex.Lock()
+	handle := manager.active[running.Attempts[0].ID]
+	manager.stateMutex.Unlock()
+	if handle == nil {
+		t.Fatal("running attempt has no active handle")
+	}
+	handle.mutex.Lock()
+	process := handle.supervisor
+	handle.mutex.Unlock()
+	if process == nil {
+		t.Fatal("running attempt has no supervisor process")
+	}
+	leaseDeadline := time.Now().Add(5250 * time.Millisecond)
+	handle.updateExpiry(leaseDeadline)
+	shortenAttemptLease(t, fixture, running.Attempts[0].ID, leaseDeadline)
 	started := time.Now()
+	serverLost.Store(true)
 	fixture.server.Close()
-	waitForProcessGone(t, childPID, 32*time.Second)
-	if elapsed := time.Since(started); elapsed > protocol.LeaseDuration+2*time.Second {
+	time.Sleep(100 * time.Millisecond)
+	if err := unix.Kill(childPID, 0); err != nil {
+		t.Fatalf("server loss stopped child before the last lease deadline: %v", err)
+	}
+	waitForProcessGone(t, childPID, 8*time.Second)
+	if elapsed := time.Since(started); elapsed > 7*time.Second {
 		t.Fatalf("server-loss stop took %s", elapsed)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -2197,6 +2357,25 @@ func TestServerLossStopsCodexBeforeLeaseExpiry(t *testing.T) {
 	detail := waitForTaskState(t, fixture.store, task.Task.ID, "failed")
 	if detail.Attempts[0].State != "lost" {
 		t.Fatalf("server-loss attempt state = %s", detail.Attempts[0].State)
+	}
+}
+
+func shortenAttemptLease(t *testing.T, fixture *serverFixture, attemptID string, deadline time.Time) {
+	t.Helper()
+	database, err := sql.Open("sqlite", "file:"+fixture.databasePath+"?_pragma=busy_timeout%285000%29")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	result, err := database.ExecContext(context.Background(), `
+		UPDATE attempts SET lease_expires_at = ?
+		WHERE id = ? AND state IN ('preparing', 'running')
+	`, deadline.UnixMilli(), attemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("shorten attempt lease changed %d rows: %v", changed, err)
 	}
 }
 
