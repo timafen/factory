@@ -2752,6 +2752,87 @@ def subtask_state(tasks, open_q, last_stage, base, since=""):
     return "stuck"
 
 
+def merge_receipt(base, since=""):
+    """Return one canonical successful-merge receipt for this subtask run.
+
+    The task API deliberately forgets terminal history.  ``merges.jsonl`` is
+    the durable record written only after ``gh_merge`` succeeds, so it is the
+    only fallback allowed to restore a running epic subtask.  A title match is
+    exact and the merge must belong to this generation (not predate its start).
+    """
+    base = (base or "").strip()
+    try:
+        with open(MERGES_PATH, encoding="utf-8") as merges:
+            records = list(merges)
+    except OSError:
+        return None
+    for line in reversed(records):
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        at = str(record.get("at") or "")
+        if record.get("base") != base or not at:
+            continue
+        if since and not receipt_after(at, since):
+            continue
+        return {key: record[key] for key in ("task_id", "base", "at")
+                if key in record}
+    return None
+
+
+def receipt_after(receipt_at, started_at):
+    """Whether a merge receipt is no older than the subtask generation."""
+    receipt_time = receipt_epoch(receipt_at)
+    started_time = receipt_epoch(started_at)
+    return receipt_time is not None and started_time is not None and receipt_time >= started_time
+
+
+def receipt_epoch(value):
+    """Parse both legacy local merge dates and new UTC receipt dates."""
+    value = str(value or "").strip()
+    if not value:
+        return None
+    utc = value.endswith("Z")
+    value = value.rstrip("Z").replace("T", " ").split(".", 1)[0]
+    try:
+        parsed = time.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return calendar.timegm(parsed) if utc else time.mktime(parsed)
+
+
+def complete_subtask(sub, source, receipt, completed_at=""):
+    """Persist a completion proof so a history cleanup cannot reopen it."""
+    sub.update({
+        "status": "done",
+        "completed_at": completed_at or receipt.get("at") or
+                        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "completion_source": source,
+        "completion_receipt": receipt,
+    })
+
+
+def task_completion_receipt(tasks, last_stage, base, since=""):
+    """Return the final successful task that proved this subtask complete."""
+    for task in reversed(tasks):
+        match = STAGE_TITLE_RE.match(task.get("title", ""))
+        if not match or match.group(1).strip() != last_stage:
+            continue
+        if match.group(2).strip() != (base or "").strip():
+            continue
+        if since and (task.get("created_at") or "") < since:
+            continue
+        if task.get("state") == "succeeded" and final_ok(task["id"], strict=True):
+            return {"task_id": task["id"], "stage": last_stage,
+                    "created_at": task.get("created_at", "")}
+    return {"task_id": "", "stage": last_stage}
+
+
+def subtask_is_held(sub):
+    return sub.get("status") == "hold" or bool(str(sub.get("hold_reason") or "").strip())
+
+
 def advance_epics(conf, tasks, workflows, workers):
     """Подзадачи идут по очереди: следующая стартует, когда предыдущая прошла
     всю цепочку. Исключение — подзадачи, помеченные `parallel_ok`: они ни от
@@ -2789,29 +2870,51 @@ def advance_epics(conf, tasks, workflows, workers):
         # 1. Закрываем всё, что дошло до конца — сразу по всем идущим,
         #    а не только по первой: иначе параллельные висят до её финиша.
         finished = []
-        undone = False
+        restarted = False
         for i, sub in enumerate(subs):
-            # Смотрим и на идущие, и на уже помеченные готовыми: отметка о
-            # провале приходит соседним циклом, и раньше «готово» защёлкивалось
-            # навсегда — эпик убегал дальше по недоделанной подзадаче.
+            # Смотрим и на идущие, и на уже помеченные готовыми.  У готовой
+            # подзадачи receipt остаётся истиной после очистки истории; снять
+            # её можно только по живому новому поколению, не по отсутствию API.
             if sub.get("status") not in ("running", "done"):
                 continue
             since = sub.get("started_at") or epic.get("started_at") or epic.get("created_at") or ""
             state_now = subtask_state(tasks, open_q, last_stage, sub["title"], since)
             if state_now == "done":
                 if sub.get("status") != "done":
-                    sub["status"] = "done"
+                    receipt = task_completion_receipt(tasks, last_stage, sub["title"], since)
+                    complete_subtask(sub, "task_history", receipt)
                     finished.append(i)
-            elif sub.get("status") == "done":
-                # «Готово» больше не соответствует правде — разжимаем.
+            elif state_now == "none" and sub.get("status") == "running":
+                receipt = merge_receipt(sub["title"], since)
+                if receipt:
+                    complete_subtask(sub, "merge_journal", receipt, receipt["at"])
+                    finished.append(i)
+            elif sub.get("status") == "done" and state_now in ("working", "waiting", "stuck"):
+                new_generation = state_now in ("working", "waiting") or any(
+                    STAGE_TITLE_RE.match(task.get("title", ""))
+                    and STAGE_TITLE_RE.match(task["title"]).group(2).strip() == sub["title"].strip()
+                    and sub.get("completed_at")
+                    and receipt_after(task.get("created_at", ""), sub["completed_at"])
+                    for task in tasks)
+                if not new_generation:
+                    continue
+                # Новое живое/перезапущенное поколение всегда важнее старого
+                # receipt; его ``started_at`` отсечёт прежние merge-записи.
                 sub["status"] = "running"
-                undone = True
-                log("EPIC UNDONE подзадача " + repr(sub["title"][:50])
-                    + ": состояние стало " + state_now + ", снимаю «готово»")
-        if finished or undone:
-            # Снятое «готово» обязано доехать до диска: раньше оно жило только
-            # в памяти цикла, и каждые полминуты флаг щёлкал заново — вечный
-            # лог и вечно «готовый» на диске эпик, который готов не был.
+                matching = [t for t in tasks
+                            if (STAGE_TITLE_RE.match(t.get("title", ""))
+                                and STAGE_TITLE_RE.match(t["title"]).group(2).strip() == sub["title"].strip())]
+                if matching:
+                    # Failed and stuck tasks also start a generation.  Once the
+                    # API removes them, this boundary must still reject an old
+                    # merge receipt with the same title.
+                    newest = max(matching, key=lambda t: t.get("created_at") or "")
+                    sub.update({"task_id": newest.get("id", ""),
+                                "started_at": newest.get("created_at", "")})
+                restarted = True
+                log("EPIC RESTARTED подзадача " + repr(sub["title"][:50])
+                    + ": состояние стало " + state_now + ", старый receipt не применяю")
+        if finished or restarted:
             save(path, epic)
             for i in finished:
                 log(f"epic '{epic['name']}': подзадача {i+1}/{len(subs)} готова")
@@ -2833,7 +2936,7 @@ def advance_epics(conf, tasks, workflows, workers):
         for i in pending:
             if len(running) + len(started) >= cap:
                 break
-            if not subs[i].get("parallel_ok"):
+            if not subs[i].get("parallel_ok") or subtask_is_held(subs[i]):
                 continue
             tid, err = launch_subtask(conf, epic, i, workflows, workers)
             if tid:
@@ -2850,9 +2953,10 @@ def advance_epics(conf, tasks, workflows, workers):
         #    И перед ней нет отложенной: отложенная держит хвост очереди, иначе
         #    запустится то, что как раз и зависит от отложенного.
         if not running_seq:
-            nxt = next((i for i in pending if i not in started and not subs[i].get("parallel_ok")), None)
-            if nxt is not None and any(s.get("status") == "hold" for s in subs[:nxt]):
-                held = next(i for i, s in enumerate(subs[:nxt]) if s.get("status") == "hold")
+            nxt = next((i for i in pending if i not in started and not subs[i].get("parallel_ok")
+                        and not subtask_is_held(subs[i])), None)
+            if nxt is not None and any(subtask_is_held(s) for s in subs[:nxt]):
+                held = next(i for i, s in enumerate(subs[:nxt]) if subtask_is_held(s))
                 log(f"epic '{epic['name']}': подзадача {nxt+1} ждёт — впереди отложенная {held+1}")
                 nxt = None
             if nxt is not None:
@@ -4285,9 +4389,9 @@ def pipeline_health(tasks):
         starts = sorted(t.get("created_at") or "" for t in impl + rev if t.get("created_at"))
         try:
             if starts:
-                t0 = time.mktime(time.strptime(starts[0][:19], "%Y-%m-%dT%H:%M:%S"))
-                t1 = time.mktime(time.strptime(str(m.get("at"))[:19], "%Y-%m-%d %H:%M:%S"))
-                if 0 < t1 - t0 < 86400:
+                t0 = receipt_epoch(starts[0])
+                t1 = receipt_epoch(m.get("at"))
+                if t0 is not None and t1 is not None and 0 < t1 - t0 < 86400:
                     minutes.append(int((t1 - t0) / 60))
         except Exception:
             pass
@@ -5179,7 +5283,7 @@ def cycle(conf, state):
                             with open(MERGES_PATH, "a", encoding="utf-8") as mf:
                                 mf.write(json.dumps({"task_id": tid,
                                     "base": base_title(title),
-                                    "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                                     ensure_ascii=False) + chr(10))
                         except Exception as e:
                             log("merge_journal_error", repr(e))
