@@ -25,10 +25,17 @@ FACTORY_USER=${FACTORY_USER:-factory}
 LAUNCHER=$LIBEXEC/factory-browser-sandbox
 HELPER=$LIBEXEC/factory-browser-isolated
 CONFIG=$LIBEXEC/factory-browser.conf
+STATE=$LIBEXEC/factory-browser-install.state
 SUDOERS=${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}
 APPARMOR=${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}
 backup=
 changed=0
+
+sha256() { sha256sum "$1" | awk '{print $1}'; }
+state_value() {
+  [ -f "$STATE" ] || return 0
+  sed -n "s/^$1=//p" "$STATE" | head -n 1
+}
 
 step() { printf '== %s\n' "$*"; }
 
@@ -79,12 +86,12 @@ step "проверяю сетевую изоляцию browser scope"
 "$PAYLOAD/ops/test-systemd-browser-firewall.sh"
 
 cd "$PAYLOAD/web"
-step "ставлю системные зависимости Chromium без перезапуска служб"
+step "проверяю закреплённую поставку Chromium"
 npm ci --no-audit --no-fund --silent
-DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
-  npx playwright install-deps chromium
-step "ставлю закреплённую версию Chromium для пользователя Factory"
-sudo -H -u "$FACTORY_USER" bash -c 'cd "$1" && npx playwright install chromium' bash "$PAYLOAD/web"
+lock_sha=$(sha256 package-lock.json)
+deps_plan=$(DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+  npx playwright install-deps chromium --dry-run)
+deps_sha=$(printf '%s' "$deps_plan" | sha256sum | awk '{print $1}')
 
 browser=$(sudo -H -u "$FACTORY_USER" bash -c \
   'cd "$1" && node -e '\''process.stdout.write(require("playwright").chromium.executablePath())'\''' \
@@ -100,11 +107,36 @@ esac
 [[ "$browser" =~ ^/[A-Za-z0-9._/-]+$ ]] \
   || { echo "Chromium path cannot be represented safely in AppArmor" >&2; exit 1; }
 
+browser_sha=''
+if [ -x "$browser" ]; then browser_sha=$(sha256 "$browser"); fi
+cached_lock=$(state_value lock_sha)
+cached_deps=$(state_value deps_sha)
+cached_browser=$(state_value browser)
+cached_browser_sha=$(state_value browser_sha)
+install_browser=0
+if [ "$cached_lock" != "$lock_sha" ] || [ "$cached_deps" != "$deps_sha" ] \
+  || [ "$cached_browser" != "$browser" ] || [ -z "$browser_sha" ] \
+  || [ "$cached_browser_sha" != "$browser_sha" ]; then
+  install_browser=1
+fi
+
+if [ "$install_browser" = 1 ]; then
+  step "ставлю системные зависимости Chromium без перезапуска служб"
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+    npx playwright install-deps chromium
+  step "ставлю закреплённую версию Chromium для пользователя Factory"
+  sudo -H -u "$FACTORY_USER" bash -c 'cd "$1" && npx playwright install chromium' bash "$PAYLOAD/web"
+  [ -x "$browser" ] || { echo "Playwright Chromium was not installed" >&2; exit 1; }
+  browser_sha=$(sha256 "$browser")
+else
+  step "Chromium не изменился — переустановку пропускаю"
+fi
+
 install -d -o root -g root -m 755 "$LIBEXEC"
 install -d -o root -g root -m 755 "$(dirname "$SUDOERS")"
 install -d -o root -g root -m 755 "$(dirname "$APPARMOR")"
 backup=$(mktemp -d "$LIBEXEC/.factory-browser-backup.XXXXXX")
-for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$SUDOERS" "$APPARMOR"; do
+for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR"; do
   if [ -e "$target" ] || [ -L "$target" ]; then
     name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
     cp -a -- "$target" "$backup/$name"
@@ -168,6 +200,18 @@ then
   cat "$smoke_output"
   rm -f -- "$smoke_output"
 else
+  # A transient Factory outage must not discard a known-good browser cache.
+  # Retry the same smoke once; only its explicit sandbox diagnosis means that
+  # Chromium itself failed to start rather than an endpoint being unavailable.
+  if [ "$install_browser" = 0 ]; then
+    step "повторяю smoke и отдельно проверяю доступность Factory"
+    sudo -H -u "$FACTORY_USER" "${smoke_preserve_environment[@]}" env \
+      "${smoke_environment[@]}" \
+      "$PAYLOAD/ops/test-browser-sandbox.sh" >"$smoke_output.retry" 2>&1 || true
+    curl -fsS --max-time 10 "${FACTORY_BROWSER_FACTORY_CHECK_URL:-http://127.0.0.1:7337/api/v1/dashboard}" \
+      >/dev/null 2>&1 || true
+    rm -f -- "$smoke_output.retry"
+  fi
   if grep -Fq -- 'No usable sandbox' "$smoke_output"; then
     echo "Chromium sandbox smoke failed: No usable sandbox" >&2
   else
@@ -175,6 +219,15 @@ else
   fi
   false
 fi
+{
+  printf 'lock_sha=%s\n' "$lock_sha"
+  printf 'deps_sha=%s\n' "$deps_sha"
+  printf 'browser=%s\n' "$browser"
+  printf 'browser_sha=%s\n' "$browser_sha"
+} >"$STATE.new"
+chown root:root "$STATE.new"
+chmod 600 "$STATE.new"
+mv -f -- "$STATE.new" "$STATE"
 changed=0
 rm -rf -- "$backup"
 backup=
