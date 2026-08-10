@@ -46,6 +46,7 @@ MAX_RETAINED_PER_REPOSITORY = 10
 FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
+MAX_PARALLEL_WORKS = 4
 
 
 def api(path, body=None):
@@ -1924,7 +1925,8 @@ def active_auto_works(tasks):
 
 def autostart_plan(conf, tasks, workflows, workers):
     """Start at most one top planned card when the pipeline has a free slot."""
-    if len(active_auto_works(tasks)) >= int(conf.get("max_parallel_works", 4)):
+    if len(active_auto_works(tasks)) >= int(
+            conf.get("max_parallel_works", MAX_PARALLEL_WORKS)):
         return None
     planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
                      key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
