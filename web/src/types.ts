@@ -82,6 +82,7 @@ export interface PilotSettings {
   ntfy_server: string;
   ntfy_owner_topic: string;
   notify_groups?: Partial<Record<PilotNotificationGroup, boolean>>;
+  project_providers?: Array<{ remote_identity: string; type: "trade" | "factory" }>;
   brain_chain: Array<{ cli: string; model: string; provider: string; note?: string }>;
 }
 
@@ -127,6 +128,17 @@ export interface ManagedRepositoryWorkerReadiness {
 export interface ManagedRepositoryReadiness {
   routing_ready: boolean;
   workers: ManagedRepositoryWorkerReadiness[];
+}
+
+export interface WorkerRepositoryOption {
+  id: string;
+  key?: string;
+  remote_identity: string;
+  enabled: boolean;
+  cached: boolean;
+  advertised: boolean;
+  ready: boolean;
+  reason: string;
 }
 
 export interface Task {
@@ -450,7 +462,11 @@ interface CreateTaskBaseInput {
   request_key: string;
   title: string;
   worker_id: string;
-  repository_id: string;
+  repository_id?: string;
+  route?: {
+    repository_remote_identity: string;
+    source_access: { provider: string; hostname: string };
+  };
   timeout_seconds: number;
 	attachment_ids?: string[];
 }

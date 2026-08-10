@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { cpuLoadExplanation, fetchAllTasks, Overview, overviewWork } from "./Overview";
+import { cpuLoadExplanation, fetchAllTasks, Overview, overviewWork, productState } from "./Overview";
 
 describe("cpuLoadExplanation", () => {
   it("uses actual running work and slot values", () => {
@@ -60,6 +60,27 @@ describe("Overview active work", () => {
     fireEvent.click(within(section).getByText("Новый обзор"));
     expect(onNav).toHaveBeenCalledWith("work");
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/tasks?limit=200"));
+  });
+});
+
+describe("Overview products", () => {
+  it("renders projects in snapshot order with honest provider states", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path=String(input); const body=path==="/api/v1/dashboard"?{projects:[
+        {id:"a",name:"shop",remote_identity:"github.com/acme/shop",main_subject:"Продажа без ошибок",provider_status:"configured",environments:[{name:"Стейдж",status:"available",release_label:"Летний выпуск",health:"healthy"}]},
+        {id:"b",name:"factory",remote_identity:"github.com/acme/factory",provider_status:"not_configured",environments:[]},
+      ]}:path.startsWith("/api/v1/tasks")?{tasks:[],next_cursor:null}:{};
+      return {ok:true,json:async()=>body} as Response;
+    }));
+    render(createElement(Overview,{}));
+    const blocks=await screen.findAllByRole("region",{name:/Продукт —/});
+    expect(blocks.map((block)=>within(block).getByText(/Продукт —/).textContent)).toEqual(["Продукт — shop","Продукт — factory"]);
+    expect(within(blocks[0]).getByText("Продажа без ошибок",{exact:false})).toBeVisible();
+    expect(within(blocks[1]).getByText("Стенд не настроен")).toBeVisible();
+  });
+
+  it("classifies unavailable release without claiming an outage", () => {
+    expect(productState({id:"a",name:"a",remote_identity:"a",provider_status:"configured",environments:[{name:"Прод",status:"unavailable"}]})).toBe("Сведения о выпуске недоступны");
   });
 });
 
