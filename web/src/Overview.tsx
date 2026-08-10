@@ -41,10 +41,11 @@ type Dash = {
 
 type EfficiencyDistribution = { sample: number; median: number | null; p90: number | null };
 type EfficiencyRate = { count: number; total: number; rate: number | null };
-type EfficiencyTimeShare = { key: string; seconds: number; denominator_seconds: number; share: number | null };
+type EfficiencyTimeShare = { key: string; definition: string; sample: number; seconds: number; denominator_seconds: number; share: number | null };
 type EfficiencyPeriod = {
   started_at: string; ended_at: string; completed_works: number; product_stage_tasks: number;
   lead_time_seconds: EfficiencyDistribution; time_shares: EfficiencyTimeShare[];
+  unclassified_too_high: boolean; unclassified_threshold: number;
   review_first_pass: EfficiencyRate; verify_first_pass: EfficiencyRate;
   rounds: EfficiencyDistribution; final_dead_ends: EfficiencyRate;
   automatic_recoveries: number; release_failures: number; rollbacks: number;
@@ -150,7 +151,10 @@ function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "bad" | "mut
 const SHARE_RU: Record<string, string> = {
   queue: "В очереди", Triage: "Разбор", Specification: "Спецификация",
   "Implement + Test": "Разработка", Review: "Ревью", Verify: "Проверка",
-  other: "Передача между этапами и слияние",
+  stage_handoff_wait: "Ожидание между стадиями",
+  owner_decision_wait: "Ожидание решения владельца",
+  merge_release_wait: "Ожидание слияния/выпуска",
+  unclassified: "Unclassified",
 };
 
 function formatDuration(seconds: number | null) {
@@ -160,6 +164,10 @@ function formatDuration(seconds: number | null) {
   const hours = seconds / 3600;
   if (hours < 48) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} ч`;
   return `${(hours / 24).toFixed(1)} д`;
+}
+
+function formatSeconds(seconds: number) {
+  return Math.round(seconds).toLocaleString("ru-RU");
 }
 
 function formatRate(rate: EfficiencyRate) {
@@ -181,6 +189,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
   const current = comparison.current;
   const previous = comparison.previous;
   const previousShares = new Map(previous.time_shares.map((share) => [share.key, share]));
+  const unclassified = current.time_shares.find((share) => share.key === "unclassified");
   const assessment = assessmentView(comparison.assessment);
   const previousDates = `${new Date(previous.started_at).toLocaleDateString("ru-RU")}–${new Date(previous.ended_at).toLocaleDateString("ru-RU")}`;
   return (
@@ -200,6 +209,10 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
         <Pill text={assessment.text} tone={assessment.tone} />
         <span>выборка: {current.completed_works} влитых работ · минимум для оценки {summary.minimum_sample}</span>
       </div>
+
+      {current.unclassified_too_high && <div className="efficiency-alert" role="alert">
+        Красный сигнал: unclassified {Math.round((unclassified?.share ?? 0) * 100)}% превышает порог {Math.round(current.unclassified_threshold * 100)}%. Временных меток недостаточно для честной диагностики.
+      </div>}
 
       <div className="efficiency-primary">
         <div><strong>{current.completed_works}</strong><span>влито</span><small>предыдущий период: {previous.completed_works}</small></div>
@@ -224,16 +237,16 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
             <h3>Куда ушло время до слияния</h3>
             <div className="efficiency-shares">
               {current.time_shares.map((share) => <div key={share.key}>
-                <span>{SHARE_RU[share.key] ?? share.key}</span>
+                <span><b>{SHARE_RU[share.key] ?? share.key}</b><small>{share.definition}</small></span>
                 <div><i style={{ width: `${Math.round((share.share ?? 0) * 100)}%` }} /></div>
-                <strong title="сейчас / предыдущий период">{share.share == null ? "—" : `${Math.round(share.share * 100)}%`} / {previousShares.get(share.key)?.share == null ? "—" : `${Math.round((previousShares.get(share.key)?.share ?? 0) * 100)}%`}</strong>
+                <strong>{formatSeconds(share.seconds)} сек · {share.share == null ? "—" : `${Math.round(share.share * 100)}%`}<small>n={share.sample} интервалов<br />ранее {formatSeconds(previousShares.get(share.key)?.seconds ?? 0)} сек · {previousShares.get(share.key)?.share == null ? "—" : `${Math.round((previousShares.get(share.key)?.share ?? 0) * 100)}%`} · n={previousShares.get(share.key)?.sample ?? 0}</small></strong>
               </div>)}
             </div>
           </div>
         </div>
         <div className="efficiency-sources">
           <strong>Что вошло:</strong> {current.product_stage_tasks} завершённых продуктовых этапов (ранее {previous.product_stage_tasks}). Служебные отдельно: патруль {current.excluded.patrol}, по расписанию {current.excluded.scheduled}, helper {current.excluded.helper}, прочие {current.excluded.other} (всего {current.excluded.total}; ранее {previous.excluded.total}).
-          <br />Throughput считается по записям успешного слияния, не по состоянию «агент закончил». Доли времени имеют один знаменатель: всё время от создания первой стадии до слияния; «передача» включает паузы между стадиями и до merge. Предыдущий сопоставимый период: {previousDates}.
+          <br />Throughput считается по записям успешного слияния, не по состоянию «агент закончил». Доли времени имеют один знаменатель: {formatSeconds(current.time_shares[0]?.denominator_seconds ?? 0)} секунд от создания первой стадии до слияния по {current.completed_works} работам. Категории получают время только при наличии указанных временных меток; остаток остаётся unclassified. Порог красного сигнала — строго больше {Math.round(current.unclassified_threshold * 100)}%. Предыдущий сопоставимый период: {previousDates}.
           <br />First-pass считается только среди влитых работ, которые дошли до соответствующей проверки. Круг — наибольшее число повторов Разработки, Ревью или Проверки; автовосстановление — повтор того же этапа после ошибки или отмены. Окончательный тупик — работа без слияния и живого продолжения, которая не менялась хотя бы 10 минут.{summary.release_observation_started_at ? ` Журнал неуспешных выпусков ведётся с ${new Date(summary.release_observation_started_at).toLocaleString("ru-RU")}; более ранние инциденты в число не входят.` : " Период наблюдения выпусков неизвестен — нули по выпускам нельзя считать подтверждённым отсутствием инцидентов."}
         </div>
       </details>
