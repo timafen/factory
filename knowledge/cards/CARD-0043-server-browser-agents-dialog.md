@@ -4,12 +4,13 @@
 
 - Status: Implemented + targeted tests PASS; root environment check pending.
 - Branch: `factory/1dbc478d-e98-f2c5e7fb-232`.
-- Head commit: will name the implementation commit after the verified commit is created.
+- Implementation commit: `f8267a9` (`Изолировать серверный браузер от прямого доступа к сети`).
 - Specification: `knowledge/specs/server-browser-for-agents-and-dialog.md`.
 - What changed: Chromium теперь запускается только в отдельном network namespace:
   veth/firewall разрешает ему один TCP endpoint allowlist-прокси; PNG ≤ 4 МБ.
-- Evidence: целевые Go-тесты и shell syntax — PASS; root self-check добавлен,
-  но живая версия `fx` ещё не содержит `browser-sandbox`.
+- Evidence: `go test ./...` — PASS; UI 123/123, TypeScript, ESLint и build —
+  PASS; `test-fx-browser-sandbox.sh` и release test — PASS. Root self-check
+  добавлен, но живая версия `fx` ещё не содержит `browser-sandbox`.
 - One next action: установить новый `fx`, затем выполнить
   `sudo -n fx factory browser-sandbox install` и `check` до Review.
 
