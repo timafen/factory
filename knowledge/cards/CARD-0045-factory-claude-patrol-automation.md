@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Ready for Review — ветка пересобрана от свежего `origin/main`, замечание о проверенном слепке исправлено.
+- Status: Verified PASS — ожидает human merge.
 - Branch: `factory/0d54e9ac-9f8-4834260e-58b`.
 - Head commit: `8168bf9` — проверенный кодовый коммит с атомарной защитой конфигурации патруля.
 - What changed: первое provision добавляет инструкции и увеличивает версию Automation через CAS; повторный вызов не меняет версию. Контекст свыше 8 KiB отклоняется до записи.
-- Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)'` → PASS; `go vet ./internal/controlplane` и `go build ./...` → PASS; UI typecheck/build и 63 компонентных теста → PASS; 87 тестов пилота → PASS.
-- One next action: повторно проверить ветку на Review.
+- Evidence: полный uncached `go test -timeout 5m -count=1 ./...` → PASS; 87 Python-тестов и UI lint/typecheck/build → PASS. Критерии патруля подтверждены `Test.*(Schedule|Patrol)` и UI-сценарием подтверждения provision.
+- One next action: выполнить human merge в `main`.
 
 ## LOG
 
@@ -51,3 +51,14 @@ CARD-0045. Повторно требуется только Review; разраб
 реализации и отдельная CARD-0045. Кодовый коммит `8168bf9` подтверждён как
 предок текущего HEAD. Целевые Go-тесты, 87 тестов пилота, 63 UI-теста, Go vet,
 Go/UI-сборка и UI lint завершились успешно; следующий шаг — повторный Review.
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Provision использует существующую schedule Automation, не меняет cron/timezone и не дублирует инструкции | `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol)' -count=1` | PASS; проверены включение, версия и повторный provision |
+| Запуск сохраняется durable Occurrence с Task | тот же интеграционный HTTP-тест | PASS; due schedule прошёл через Occurrence до Task |
+| Нельзя создать расписание неявно, потерять инструкции устаревшим редактированием или переполнить context | тот же набор Patrol-тестов | PASS; ошибки и отсутствие частичной записи проверены |
+| В панели есть явное подтверждение provision | `npx vitest run src/App.test.tsx --reporter=dot` | PASS; 34 проверки UI, включая Enable/Confirm pipeline patrol |
+
+Полный uncached `go test -timeout 5m -count=1 ./...` завершился PASS; `python3 -m unittest -v pilot.test_pilot` — 87 PASS; UI lint, typecheck и production build — PASS. `just check` останавливается на уже существующих `staticcheck` в `cards_http.go` и `pilot_config.go`, вне diff. Browser suite остановился в неизменённом диалоге Delegate task: repository option остаётся disabled; до патруля дошёл один PASS, остальные 16 не запускались. Рабочее дерево чисто, `git diff --check` пуст, diff от `origin/main` содержит 15 заявленных файлов.
