@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — продуктовый обзор и on-demand делегирование готовы.
+- Status: VERIFIED PASS — ожидает решения человека о слиянии.
 - Branch: `factory/6c52b1f3-699-70c2965c-0ef`.
-- Head commit: `941ed1d`.
+- Verified implementation commit: `3371888`.
 - Specification: `knowledge/specs/overview-project-products.md`.
 - What changed: каждый включённый проект получает свой блок продукта;
   выбранный worker видит и берёт готовый managed-репозиторий по требованию.
-- Evidence: 76 Python, 81 UI, Go `PilotConfig`, обе сборки и два e2e → PASS.
-- One next action: Review чистого diff и слияние в `main`.
+- Evidence: 76 Python, 18 целевых UI, Go `PilotConfig`, полный Go/UI/browser наборы,
+  сборка, tooling и launcher → PASS; два staticcheck-нарушения воспроизводятся в `origin/main`.
+- One next action: Слить проверенную ветку в `main`.
 
 ## LOG
 
@@ -68,3 +69,18 @@ basename сборки, показывает тему найденного ком
 читает worker-specific варианты и маршрутизует on-demand репозиторий на
 выбранного worker. Прошли 76 Python-, 81 UI-тест, Go `PilotConfig`,
 сборки frontend и `factory-server`, продуктовый и маршрутизационный e2e.
+
+### 2026-08-09 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Только включённые проекты в порядке API | `pilot.test_pilot`, `Overview.test.ts`, browser E2E | PASS: A, B показаны по порядку; выключенный C исключён. |
+| Последняя тема коммита и честная недоступность | `pilot.test_pilot`, `Overview.test.ts` | PASS: тема берётся из своего checkout, отсутствие обозначается отдельно. |
+| Раздельные среды trade и Factory | `pilot.test_pilot` | PASS: trade — «Стейдж» и «Прод», Factory — одна «Прод». |
+| Проект без провайдера остаётся видимым | `Overview.test.ts` | PASS: показано «Стенд не настроен», команды не угадываются. |
+| Ошибка release/health не выдаётся за здоровье стенда | `pilot.test_pilot`, `Overview.test.ts` | PASS: показано «Сведения о выпуске недоступны». |
+| Строгая схема и сохранение провайдера | `PilotConfig`, `Settings.test.tsx` | PASS: неизвестный тип отклоняется, допустимый сохраняется без потери полей. |
+
+Полные `just test`, `just ui-check`, `just test-browser`, сборка, tooling и launcher
+прошли. `just staticcheck` остаётся красным на двух строках из `origin/main`
+(`cards_http.go:37`, `pilot_config.go:136`), не затронутых этой поставкой.
