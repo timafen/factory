@@ -2,19 +2,27 @@
 
 ## HEAD
 
-- Status: READY — навигации live smoke изолированы друг от друга.
-- Branch: `factory/3e614817-151-f7df191e-4df`.
-- What changed: loopback, публичный Factory, staging, production automation и
-  произвольный internet проверяются в пяти отдельных Playwright pages. Каждая
-  page закрывается в `finally`, поэтому поздний `chrome-error://chromewebdata/`
-  после точного `ERR_INVALID_AUTH_CREDENTIALS` не перебивает staging.
-- Evidence: installer/release suites PASS; Pilot 122/122; Go tests и UI 123/123;
-  Node-free build, воспроизводимый release и `just build` PASS. UI E2E открыл
-  loopback после исключения устаревшего установленного launcher, затем упёрся в
-  прежний disabled repository option второго сценария; UI-код вне diff.
+- Status: READY — installer и standalone одинаково понимают Basic Auth.
+- Branch: `factory/6c5f6c0c-cfc-be50b0d0-361`.
+- Implementation commit: 085842d42dfc1b1f596d6e04e711f4f2715045fc — общий browser smoke для installer и standalone.
+- What changed: единый сценарий требует DOM на loopback/staging, принимает у
+  public Factory только DOM с credentials либо точный auth challenge без них,
+  а production automation и произвольный internet оставляет заблокированными.
+- Evidence: `bash ops/test-install-server-browser.sh` — PASS; `bash -n` для трёх
+  изменённых shell-скриптов и `git diff --check` — PASS.
 - One next action: проверить diff и слить ветку в `main`.
 
 ## LOG
+
+### 2026-08-10 — Implement
+
+Installer переведён с дублированного встроенного JavaScript на тот же
+`test-browser-sandbox.sh`, который запускают отдельно. Basic Auth credentials
+читаются только из environment и не выводятся; DNS, TLS и timeout не могут
+маскироваться под ожидаемый challenge. Регрессия проверяет оба entry point,
+DOM/изоляцию, отсутствие секретов в выводе и прежний отказ launcher от root.
+
+`bash ops/test-install-server-browser.sh`, shell syntax и `git diff --check` — PASS.
 
 ### 2026-08-10 — Verify
 
