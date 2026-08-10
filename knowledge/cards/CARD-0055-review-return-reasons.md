@@ -2,18 +2,23 @@
 
 ## HEAD
 
-Status: Implemented — ожидает Review.
-Branch: `factory/38bc9eef-27e-896afde8-71f`.
-Implementation commit: d2e9dcc5329b4472a45bf7e26b6b82df7a84e2ec — сохранение и показ причин возврата Review.
-What changed: Pilot строго принимает семь причин и пишет идемпотентный журнал;
-метрика и «Главное» показывают счётчики, доли и исторические возвраты как
-«не классифицировано».
-Evidence: `python3 -m unittest pilot.test_pilot` → 156 OK; `go test
-./internal/controlplane -run 'Efficiency'` → OK; `npm --prefix web test --
---run src/Overview.test.ts` → 14 passed.
-Next action: Review проверить маршрутизацию возврата и экран «Главное».
+Status: Implemented — ожидает повторный Review.
+Branch: `factory/75cfdf11-18e-b4e7cf2b-d43`.
+Implementation commit: 0c5ec49ac12dbd37761bf21237e6258305edd3da — надёжная повторная маршрутизация возврата Review.
+What changed: причина фиксируется только после успешной постановки доработки;
+при временном сбое исходный Review повторяется в следующем цикле с тем же ключом
+запроса. Отчёт с числом строк «ПРИЧИНА ВОЗВРАТА», отличным от одной, повторяет Review.
+Evidence: `python3 -m unittest pilot.test_pilot` → 157 OK.
+Next action: Review повторно проверить две регрессии маршрутизации и формата отчёта.
 
 ## LOG
+
+### 2026-08-10 — Implement
+
+Исправлены два замечания Review: задача на доработку создаётся до записи в
+журнал, а конфликтующие или пустые повторные строки причины не принимаются.
+Регрессии воспроизводят временный сбой постановки и две строки категории;
+`python3 -m unittest pilot.test_pilot` завершился с 157 OK.
 
 ### 2026-08-10 — Implement
 
