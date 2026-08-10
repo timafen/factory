@@ -48,9 +48,10 @@ exports.chromium = {
     let nextPageId = 0;
     let authErrorPageId = null;
     return {
-      async newPage() {
+      async newPage(options) {
         const pageId = ++nextPageId;
-        fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `page-new=${pageId}\n`);
+        fs.appendFileSync(process.env.TEST_BROWSER_EVENTS,
+          `page-new=${pageId} auth=${options && options.httpCredentials ? "yes" : "no"}\n`);
         return {
           async goto(url) {
             fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `goto-page=${pageId} url=${url}\n`);
@@ -343,6 +344,59 @@ grep -Fx "page-close=$auth_page" "$temporary/events" >/dev/null \
   || fail "page с Basic Auth error не была закрыта до продолжения smoke"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
+
+status=0
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
+  "$libexec/factory-browser-sandbox" >"$temporary/root-launcher-output" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "живой launcher разрешил запуск от root"
+grep -Fx 'Factory browser must not run as root' "$temporary/root-launcher-output" >/dev/null \
+  || fail "launcher не объяснил отказ запуска от root"
+
+# The installed script is the single live scenario used by the installer and
+# by operators. Exercise its standalone entry point with and without secrets.
+: >"$temporary/events"
+standalone_screenshot="$temporary/standalone.png"
+TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  PATH="$test_bin:$PATH" FACTORY_BROWSER_LAUNCHER="$libexec/factory-browser-sandbox" \
+  FACTORY_BROWSER_WEB="$share/web" FACTORY_BROWSER_SCREENSHOT="$standalone_screenshot" \
+  "$share/ops/test-browser-sandbox.sh" >"$temporary/standalone-output" 2>&1 \
+  || fail "standalone smoke не принял ожидаемый Basic Auth challenge"
+[ -s "$standalone_screenshot" ] || fail "standalone smoke не сохранил staging screenshot"
+grep -F 'auth=no' "$temporary/events" >/dev/null \
+  || fail "standalone smoke неожиданно передал Basic Auth credentials"
+
+: >"$temporary/events"
+secret_user='browser-smoke-secret-user'
+secret_password='browser-smoke-secret-password'
+TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  TEST_FACTORY_GOTO_ERROR=success PATH="$test_bin:$PATH" \
+  FACTORY_BROWSER_BASIC_AUTH_USERNAME="$secret_user" \
+  FACTORY_BROWSER_BASIC_AUTH_PASSWORD="$secret_password" \
+  FACTORY_BROWSER_LAUNCHER="$libexec/factory-browser-sandbox" FACTORY_BROWSER_WEB="$share/web" \
+  FACTORY_BROWSER_SCREENSHOT="$temporary/standalone-auth.png" \
+  "$share/ops/test-browser-sandbox.sh" >"$temporary/standalone-auth-output" 2>&1 \
+  || fail "standalone smoke не открыл Factory DOM с Basic Auth credentials"
+grep -F 'auth=yes' "$temporary/events" >/dev/null \
+  || fail "standalone smoke не передал Basic Auth credentials в browser context"
+if grep -F "$secret_user" "$temporary/standalone-auth-output" >/dev/null \
+  || grep -F "$secret_password" "$temporary/standalone-auth-output" >/dev/null \
+  || grep -F "$secret_user" "$temporary/events" >/dev/null \
+  || grep -F "$secret_password" "$temporary/events" >/dev/null; then
+  fail "standalone smoke напечатал Basic Auth secret"
+fi
+
+for network_error in ERR_NAME_NOT_RESOLVED ERR_CERT_AUTHORITY_INVALID ERR_CONNECTION_TIMED_OUT; do
+  status=0
+  TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+    TEST_FACTORY_GOTO_ERROR="$network_error" PATH="$test_bin:$PATH" \
+    FACTORY_BROWSER_LAUNCHER="$libexec/factory-browser-sandbox" FACTORY_BROWSER_WEB="$share/web" \
+    FACTORY_BROWSER_SCREENSHOT="$temporary/rejected-$network_error.png" \
+    "$share/ops/test-browser-sandbox.sh" >"$temporary/rejected-$network_error-output" 2>&1 \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "standalone smoke принял $network_error как Basic Auth challenge"
+  grep -Fx 'Factory browser smoke failed' "$temporary/rejected-$network_error-output" >/dev/null \
+    || fail "standalone smoke опубликовал небезопасную сетевую диагностику"
+done
 
 auth_failure="$temporary/auth-failure"
 status=0
