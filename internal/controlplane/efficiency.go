@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	efficiencyMinimumSample = 5
-	efficiencyDeadEndGrace  = 10 * time.Minute
-	efficiencyLegacyTime    = "2006-01-02 15:04:05"
+	efficiencyMinimumSample         = 5
+	efficiencyDeadEndGrace          = 10 * time.Minute
+	efficiencyLegacyTime            = "2006-01-02 15:04:05"
+	efficiencyUnclassifiedThreshold = 0.20
 )
 
 var efficiencyStageTitle = regexp.MustCompile(`^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.+)$`)
@@ -39,20 +40,22 @@ type EfficiencyPeriodComparison struct {
 }
 
 type EfficiencyPeriod struct {
-	StartedAt           time.Time                   `json:"started_at"`
-	EndedAt             time.Time                   `json:"ended_at"`
-	CompletedWorks      int                         `json:"completed_works"`
-	ProductStageTasks   int                         `json:"product_stage_tasks"`
-	LeadTimeSeconds     EfficiencyDistribution      `json:"lead_time_seconds"`
-	TimeShares          []EfficiencyTimeShare       `json:"time_shares"`
-	ReviewFirstPass     EfficiencyRate              `json:"review_first_pass"`
-	VerifyFirstPass     EfficiencyRate              `json:"verify_first_pass"`
-	Rounds              EfficiencyDistribution      `json:"rounds"`
-	FinalDeadEnds       EfficiencyRate              `json:"final_dead_ends"`
-	AutomaticRecoveries int                         `json:"automatic_recoveries"`
-	ReleaseFailures     int                         `json:"release_failures"`
-	Rollbacks           int                         `json:"rollbacks"`
-	Excluded            EfficiencyExcludedBreakdown `json:"excluded"`
+	StartedAt             time.Time                   `json:"started_at"`
+	EndedAt               time.Time                   `json:"ended_at"`
+	CompletedWorks        int                         `json:"completed_works"`
+	ProductStageTasks     int                         `json:"product_stage_tasks"`
+	LeadTimeSeconds       EfficiencyDistribution      `json:"lead_time_seconds"`
+	TimeShares            []EfficiencyTimeShare       `json:"time_shares"`
+	UnclassifiedTooHigh   bool                        `json:"unclassified_too_high"`
+	UnclassifiedThreshold float64                     `json:"unclassified_threshold"`
+	ReviewFirstPass       EfficiencyRate              `json:"review_first_pass"`
+	VerifyFirstPass       EfficiencyRate              `json:"verify_first_pass"`
+	Rounds                EfficiencyDistribution      `json:"rounds"`
+	FinalDeadEnds         EfficiencyRate              `json:"final_dead_ends"`
+	AutomaticRecoveries   int                         `json:"automatic_recoveries"`
+	ReleaseFailures       int                         `json:"release_failures"`
+	Rollbacks             int                         `json:"rollbacks"`
+	Excluded              EfficiencyExcludedBreakdown `json:"excluded"`
 }
 
 type EfficiencyDistribution struct {
@@ -69,6 +72,8 @@ type EfficiencyRate struct {
 
 type EfficiencyTimeShare struct {
 	Key                string   `json:"key"`
+	Definition         string   `json:"definition"`
+	Sample             int      `json:"sample"`
 	Seconds            float64  `json:"seconds"`
 	DenominatorSeconds float64  `json:"denominator_seconds"`
 	Share              *float64 `json:"share"`
@@ -115,15 +120,40 @@ type efficiencyReleaseEvent struct {
 	Rollback bool   `json:"rollback"`
 }
 
+type efficiencyQuestion struct {
+	taskID     string
+	askedAt    time.Time
+	answeredAt time.Time
+}
+
 type efficiencyWork struct {
-	mergeAt time.Time
-	tasks   []*efficiencyTask
+	mergeAt      time.Time
+	mergedTaskID string
+	tasks        []*efficiencyTask
 }
 
 type efficiencyInterval struct {
 	start time.Time
 	end   time.Time
 	key   string
+}
+
+type efficiencyShareFacts struct {
+	seconds map[string]float64
+	samples map[string]int
+}
+
+var efficiencyTimeDefinitions = map[string]string{
+	"queue":               "От создания задачи или completed_at прошлой попытки до started_at следующей попытки.",
+	"Triage":              "Выполнение Разбора: от started_at до completed_at попытки.",
+	"Specification":       "Выполнение Спецификации: от started_at до completed_at попытки.",
+	"Implement + Test":    "Выполнение Разработки: от started_at до completed_at попытки.",
+	"Review":              "Выполнение Ревью: от started_at до completed_at попытки.",
+	"Verify":              "Выполнение Проверки: от started_at до completed_at попытки.",
+	"stage_handoff_wait":  "Между completed_at одной стадии и created_at следующей стадии той же работы.",
+	"owner_decision_wait": "От asked_at до answered_at вопроса, явно отвеченного владельцем.",
+	"merge_release_wait":  "От completed_at задачи из receipt до зафиксированного успешного слияния; выпуск без отдельной метки сюда не приписывается.",
+	"unclassified":        "Остаток lead time без достаточной пары доказуемых событий; он не распределяется по другим категориям.",
 }
 
 func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
@@ -149,6 +179,10 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	if err != nil {
 		return EfficiencySummary{}, unavailable(err)
 	}
+	questions, err := loadEfficiencyQuestions()
+	if err != nil {
+		return EfficiencySummary{}, unavailable(err)
+	}
 	works, tails := buildEfficiencyWorks(tasks, merges)
 	periods := make(map[string]EfficiencyPeriodComparison, 2)
 	for key, duration := range map[string]time.Duration{
@@ -157,8 +191,8 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	} {
 		start := now.Add(-duration)
 		previousStart := start.Add(-duration)
-		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases)
-		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases)
+		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions)
+		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions)
 		periods[key] = EfficiencyPeriodComparison{
 			Assessment: compareEfficiencyPeriods(current, previous),
 			Current:    current, Previous: previous,
@@ -336,6 +370,46 @@ func loadEfficiencyReleaseEvents() ([]efficiencyReleaseEvent, error) {
 	return events, scanner.Err()
 }
 
+func loadEfficiencyQuestions() ([]efficiencyQuestion, error) {
+	directory := filepath.Join(efficiencyDataHome(), "pilot", "questions")
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return []efficiencyQuestion{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	questions := make([]efficiencyQuestion, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var raw struct {
+			TaskID     string `json:"task_id"`
+			AnsweredBy string `json:"answered_by"`
+			AskedAt    string `json:"asked_at"`
+			AnsweredAt string `json:"answered_at"`
+		}
+		if json.Unmarshal(data, &raw) != nil || raw.TaskID == "" || raw.AnsweredBy != "owner" {
+			continue
+		}
+		askedAt, askedErr := time.Parse(time.RFC3339, raw.AskedAt)
+		answeredAt, answeredErr := time.Parse(time.RFC3339, raw.AnsweredAt)
+		if askedErr != nil || answeredErr != nil || !answeredAt.After(askedAt) {
+			continue
+		}
+		questions = append(questions, efficiencyQuestion{
+			taskID:  raw.TaskID,
+			askedAt: askedAt.UTC(), answeredAt: answeredAt.UTC(),
+		})
+	}
+	return questions, nil
+}
+
 func isProductEfficiencyTask(task *efficiencyTask) bool {
 	if task.base == "" || task.stage == "" || task.automationLinked {
 		return false
@@ -384,7 +458,7 @@ func buildEfficiencyWorks(tasks []*efficiencyTask, merges []efficiencyMerge) ([]
 		if len(workTasks) == 0 {
 			continue
 		}
-		works = append(works, efficiencyWork{mergeAt: merge.at, tasks: workTasks})
+		works = append(works, efficiencyWork{mergeAt: merge.at, mergedTaskID: merge.taskID, tasks: workTasks})
 		boundaries[key] = merge.at
 	}
 	tails := make(map[string][]*efficiencyTask)
@@ -399,8 +473,11 @@ func buildEfficiencyWorks(tasks []*efficiencyTask, merges []efficiencyMerge) ([]
 	return works, tails
 }
 
-func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent) EfficiencyPeriod {
-	period := EfficiencyPeriod{StartedAt: start, EndedAt: end}
+func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent, questions []efficiencyQuestion) EfficiencyPeriod {
+	period := EfficiencyPeriod{
+		StartedAt: start, EndedAt: end,
+		UnclassifiedThreshold: efficiencyUnclassifiedThreshold,
+	}
 	selected := make([]efficiencyWork, 0)
 	for _, work := range works {
 		if inEfficiencyWindow(work.mergeAt, start, end) {
@@ -411,6 +488,7 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	leadValues := make([]float64, 0, len(selected))
 	roundValues := make([]float64, 0, len(selected))
 	shareSeconds := make(map[string]float64)
+	shareSamples := make(map[string]int)
 	var shareDenominator float64
 	for _, work := range selected {
 		first := work.tasks[0].createdAt
@@ -422,8 +500,12 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 		lead := math.Max(0, work.mergeAt.Sub(first).Seconds())
 		leadValues = append(leadValues, lead)
 		shareDenominator += lead
-		for key, seconds := range efficiencyWorkShares(work, first) {
+		facts := efficiencyWorkShares(work, first, questions)
+		for key, seconds := range facts.seconds {
 			shareSeconds[key] += seconds
+		}
+		for key, sample := range facts.samples {
+			shareSamples[key] += sample
 		}
 
 		stages := make(map[string][]*efficiencyTask)
@@ -459,7 +541,10 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	period.Rounds = efficiencyDistribution(roundValues)
 	period.ReviewFirstPass = efficiencyRate(period.ReviewFirstPass.Count, period.ReviewFirstPass.Total)
 	period.VerifyFirstPass = efficiencyRate(period.VerifyFirstPass.Count, period.VerifyFirstPass.Total)
-	period.TimeShares = efficiencyTimeShares(shareSeconds, shareDenominator)
+	period.TimeShares = efficiencyTimeShares(shareSeconds, shareSamples, shareDenominator)
+	if shareDenominator > 0 {
+		period.UnclassifiedTooHigh = shareSeconds["unclassified"]/shareDenominator > efficiencyUnclassifiedThreshold
+	}
 
 	deadEnds := 0
 	for _, tail := range tails {
@@ -507,37 +592,32 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	return period
 }
 
-func efficiencyWorkShares(work efficiencyWork, workStart time.Time) map[string]float64 {
+func efficiencyWorkShares(work efficiencyWork, workStart time.Time, questions []efficiencyQuestion) efficiencyShareFacts {
 	intervals := make([]efficiencyInterval, 0)
-	for _, task := range work.tasks {
-		end := task.updatedAt
-		if end.After(work.mergeAt) {
-			end = work.mergeAt
+	tasks := append([]*efficiencyTask(nil), work.tasks...)
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].createdAt.Equal(tasks[j].createdAt) {
+			return tasks[i].id < tasks[j].id
 		}
-		if !end.After(task.createdAt) {
-			continue
-		}
+		return tasks[i].createdAt.Before(tasks[j].createdAt)
+	})
+	for _, task := range tasks {
 		cursor := task.createdAt
-		if len(task.attempts) == 0 {
-			intervals = append(intervals, efficiencyInterval{start: cursor, end: end, key: "queue"})
-			continue
-		}
-		startedAny := false
 		for _, attempt := range task.attempts {
-			if attempt.startedAt == nil {
+			if attempt.startedAt == nil || attempt.completedAt == nil ||
+				!attempt.completedAt.After(*attempt.startedAt) {
 				continue
 			}
-			startedAny = true
 			started := maxEfficiencyTime(*attempt.startedAt, task.createdAt)
-			if started.After(end) {
+			completed := *attempt.completedAt
+			if started.After(work.mergeAt) || !completed.After(workStart) {
 				break
 			}
 			if started.After(cursor) {
 				intervals = append(intervals, efficiencyInterval{start: cursor, end: started, key: "queue"})
 			}
-			completed := end
-			if attempt.completedAt != nil && attempt.completedAt.Before(completed) {
-				completed = *attempt.completedAt
+			if completed.After(work.mergeAt) {
+				completed = work.mergeAt
 			}
 			if completed.After(started) {
 				intervals = append(intervals, efficiencyInterval{start: started, end: completed, key: task.stage})
@@ -546,8 +626,32 @@ func efficiencyWorkShares(work efficiencyWork, workStart time.Time) map[string]f
 				cursor = completed
 			}
 		}
-		if !startedAny {
-			intervals = append(intervals, efficiencyInterval{start: cursor, end: end, key: "queue"})
+	}
+	for index := 1; index < len(tasks); index++ {
+		previous, next := tasks[index-1], tasks[index]
+		completed, ok := efficiencyTaskCompletedAt(previous)
+		if ok && previous.stage != next.stage && next.createdAt.After(completed) {
+			intervals = append(intervals, efficiencyInterval{start: completed, end: next.createdAt, key: "stage_handoff_wait"})
+		}
+	}
+	for _, task := range tasks {
+		if task.id != work.mergedTaskID {
+			continue
+		}
+		if completed, ok := efficiencyTaskCompletedAt(task); ok && work.mergeAt.After(completed) {
+			intervals = append(intervals, efficiencyInterval{start: completed, end: work.mergeAt, key: "merge_release_wait"})
+		}
+		break
+	}
+	taskIDs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		taskIDs[task.id] = struct{}{}
+	}
+	for _, question := range questions {
+		if _, belongs := taskIDs[question.taskID]; belongs {
+			intervals = append(intervals, efficiencyInterval{
+				start: question.askedAt, end: question.answeredAt, key: "owner_decision_wait",
+			})
 		}
 	}
 	boundaries := []time.Time{workStart, work.mergeAt}
@@ -555,30 +659,58 @@ func efficiencyWorkShares(work efficiencyWork, workStart time.Time) map[string]f
 		boundaries = append(boundaries, interval.start, interval.end)
 	}
 	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
-	seconds := make(map[string]float64)
+	facts := efficiencyShareFacts{seconds: make(map[string]float64), samples: make(map[string]int)}
+	priorities := map[string]int{
+		"owner_decision_wait": 5,
+		"Triage":              4, "Specification": 4, "Implement + Test": 4, "Review": 4, "Verify": 4,
+		"queue": 3, "merge_release_wait": 2, "stage_handoff_wait": 1,
+	}
+	previousKey := ""
 	for index := 1; index < len(boundaries); index++ {
 		left, right := boundaries[index-1], boundaries[index]
 		if !right.After(left) || left.Before(workStart) || right.After(work.mergeAt) {
 			continue
 		}
-		key := "other"
+		key := "unclassified"
+		priority := 0
 		for _, interval := range intervals {
 			if !interval.start.After(left) && !interval.end.Before(right) {
-				if interval.key != "queue" || key == "other" {
+				if priorities[interval.key] > priority {
 					key = interval.key
+					priority = priorities[interval.key]
 				}
 			}
 		}
-		seconds[key] += right.Sub(left).Seconds()
+		facts.seconds[key] += right.Sub(left).Seconds()
+		if key != previousKey {
+			facts.samples[key]++
+			previousKey = key
+		}
 	}
-	return seconds
+	return facts
 }
 
-func efficiencyTimeShares(seconds map[string]float64, denominator float64) []EfficiencyTimeShare {
-	keys := []string{"queue", "Triage", "Specification", "Implement + Test", "Review", "Verify", "other"}
+func efficiencyTaskCompletedAt(task *efficiencyTask) (time.Time, bool) {
+	var latest time.Time
+	for _, attempt := range task.attempts {
+		if attempt.completedAt != nil && attempt.completedAt.After(latest) {
+			latest = *attempt.completedAt
+		}
+	}
+	return latest, !latest.IsZero()
+}
+
+func efficiencyTimeShares(seconds map[string]float64, samples map[string]int, denominator float64) []EfficiencyTimeShare {
+	keys := []string{
+		"queue", "Triage", "Specification", "Implement + Test", "Review", "Verify",
+		"stage_handoff_wait", "owner_decision_wait", "merge_release_wait", "unclassified",
+	}
 	shares := make([]EfficiencyTimeShare, 0, len(keys))
 	for _, key := range keys {
-		entry := EfficiencyTimeShare{Key: key, Seconds: seconds[key], DenominatorSeconds: denominator}
+		entry := EfficiencyTimeShare{
+			Key: key, Definition: efficiencyTimeDefinitions[key], Sample: samples[key],
+			Seconds: seconds[key], DenominatorSeconds: denominator,
+		}
 		if denominator > 0 {
 			value := seconds[key] / denominator
 			entry.Share = &value

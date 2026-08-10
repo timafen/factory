@@ -65,19 +65,22 @@ describe("Overview active work", () => {
 
 describe("Overview Factory efficiency", () => {
   it("marks a small sample, shows exact denominators, and compares both periods", async () => {
+    const share = (key: string, seconds: number, ratio: number, sample = 1) => ({
+      key, seconds, sample, denominator_seconds: 7200, share: ratio,
+      definition: `Определение ${key}`,
+    });
     const period = (overrides: Record<string, unknown> = {}) => ({
       started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z",
       completed_works: 2, product_stage_tasks: 14,
       lead_time_seconds: { sample: 2, median: 3600, p90: 7200 },
       time_shares: [
-        { key: "queue", seconds: 720, denominator_seconds: 7200, share: 0.1 },
-        { key: "Triage", seconds: 720, denominator_seconds: 7200, share: 0.1 },
-        { key: "Specification", seconds: 720, denominator_seconds: 7200, share: 0.1 },
-        { key: "Implement + Test", seconds: 2160, denominator_seconds: 7200, share: 0.3 },
-        { key: "Review", seconds: 720, denominator_seconds: 7200, share: 0.1 },
-        { key: "Verify", seconds: 720, denominator_seconds: 7200, share: 0.1 },
-        { key: "other", seconds: 1440, denominator_seconds: 7200, share: 0.2 },
+        share("queue", 720, 0.1, 2), share("Triage", 720, 0.1),
+        share("Specification", 720, 0.1), share("Implement + Test", 720, 0.1),
+        share("Review", 720, 0.1), share("Verify", 720, 0.1),
+        share("stage_handoff_wait", 360, 0.05, 2), share("owner_decision_wait", 360, 0.05),
+        share("merge_release_wait", 360, 0.05), share("unclassified", 1800, 0.25, 3),
       ],
+      unclassified_too_high: true, unclassified_threshold: 0.2,
       review_first_pass: { count: 1, total: 2, rate: 0.5 },
       verify_first_pass: { count: 2, total: 2, rate: 1 },
       rounds: { sample: 2, median: 1.5, p90: 2 },
@@ -105,9 +108,14 @@ describe("Overview Factory efficiency", () => {
     const section = await screen.findByRole("region", { name: "Эффективность Factory" });
     expect(within(section).getByText("данных мало")).toBeVisible();
     expect(within(section).getByText("выборка: 2 влитых работ · минимум для оценки 5")).toBeVisible();
+    expect(within(section).getByRole("alert")).toHaveTextContent("unclassified 25% превышает порог 20%");
     expect(within(section).queryByText("есть улучшение")).not.toBeInTheDocument();
     fireEvent.click(within(section).getByText("Показать детали и знаменатели"));
     expect(within(section).getByText("1 из 2 (50%)")).toBeVisible();
+    expect(within(section).getByText("Ожидание решения владельца")).toBeVisible();
+    expect(within(section).getByText("Определение owner_decision_wait")).toBeVisible();
+    expect(within(section).getAllByText("360 сек · 5%")).toHaveLength(3);
+    expect(within(section).getByText(/n=3 интервалов/)).toBeVisible();
     expect(within(section).getByText(/Служебные отдельно: патруль 3, по расписанию 2, helper 1, прочие 4/)).toBeVisible();
 
     fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));

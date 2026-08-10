@@ -3152,6 +3152,7 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
         "options": options or [],
         "branch": branch or "",
         "prior_result": squeeze(prior_result, 12000),
+        "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         # Сразу нужный статус: раньше ответ оркестратора сперва сохранялся
         # как «открыт» и успевал мигнуть у владельца во вкладке «Нужен ответ».
         "status": status,          # open -> answered -> resolved
