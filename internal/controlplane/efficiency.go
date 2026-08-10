@@ -20,6 +20,7 @@ const (
 	efficiencyDeadEndGrace          = 10 * time.Minute
 	efficiencyLegacyTime            = "2006-01-02 15:04:05"
 	efficiencyUnclassifiedThreshold = 0.20
+	efficiencyStageHandoffTarget    = 0.10
 )
 
 var efficiencyStageTitle = regexp.MustCompile(`^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.+)$`)
@@ -34,9 +35,17 @@ type EfficiencySummary struct {
 }
 
 type EfficiencyPeriodComparison struct {
-	Assessment string           `json:"assessment"`
-	Current    EfficiencyPeriod `json:"current"`
-	Previous   EfficiencyPeriod `json:"previous"`
+	Assessment             string           `json:"assessment"`
+	StageHandoffWaitTarget EfficiencyTarget `json:"stage_handoff_wait_target"`
+	Current                EfficiencyPeriod `json:"current"`
+	Previous               EfficiencyPeriod `json:"previous"`
+}
+
+type EfficiencyTarget struct {
+	MaximumShare  float64  `json:"maximum_share"`
+	CurrentShare  *float64 `json:"current_share"`
+	PreviousShare *float64 `json:"previous_share"`
+	Met           *bool    `json:"met"`
 }
 
 type EfficiencyPeriod struct {
@@ -194,14 +203,37 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions)
 		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions)
 		periods[key] = EfficiencyPeriodComparison{
-			Assessment: compareEfficiencyPeriods(current, previous),
-			Current:    current, Previous: previous,
+			Assessment:             compareEfficiencyPeriods(current, previous),
+			StageHandoffWaitTarget: efficiencyStageHandoffWaitTarget(current, previous),
+			Current:                current, Previous: previous,
 		}
 	}
 	return EfficiencySummary{
 		GeneratedAt: now, MinimumSample: efficiencyMinimumSample,
 		ReleaseObservationStartedAt: releaseObservationStartedAt, Periods: periods,
 	}, nil
+}
+
+func efficiencyStageHandoffWaitTarget(current, previous EfficiencyPeriod) EfficiencyTarget {
+	target := EfficiencyTarget{
+		MaximumShare:  efficiencyStageHandoffTarget,
+		CurrentShare:  efficiencyShare(current, "stage_handoff_wait"),
+		PreviousShare: efficiencyShare(previous, "stage_handoff_wait"),
+	}
+	if target.CurrentShare != nil {
+		met := *target.CurrentShare <= target.MaximumShare
+		target.Met = &met
+	}
+	return target
+}
+
+func efficiencyShare(period EfficiencyPeriod, key string) *float64 {
+	for _, share := range period.TimeShares {
+		if share.Key == key {
+			return share.Share
+		}
+	}
+	return nil
 }
 
 func (s *Store) loadEfficiencyTasks(ctx context.Context) ([]*efficiencyTask, error) {

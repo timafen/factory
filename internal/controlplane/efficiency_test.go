@@ -124,6 +124,30 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 	}
 }
 
+func TestEfficiencyTargetComparesCurrentAndPreviousStageHandoffShares(t *testing.T) {
+	share := func(value float64) EfficiencyPeriod {
+		return EfficiencyPeriod{TimeShares: []EfficiencyTimeShare{{
+			Key: "stage_handoff_wait", Share: &value,
+		}}}
+	}
+
+	met := efficiencyStageHandoffWaitTarget(share(0.10), share(0.25))
+	if met.MaximumShare != 0.10 || met.CurrentShare == nil || *met.CurrentShare != 0.10 ||
+		met.PreviousShare == nil || *met.PreviousShare != 0.25 || met.Met == nil || !*met.Met {
+		t.Fatalf("met target = %#v", met)
+	}
+
+	missed := efficiencyStageHandoffWaitTarget(share(0.11), EfficiencyPeriod{})
+	if missed.Met == nil || *missed.Met || missed.PreviousShare != nil {
+		t.Fatalf("missed target = %#v", missed)
+	}
+
+	unknown := efficiencyStageHandoffWaitTarget(EfficiencyPeriod{}, share(0.25))
+	if unknown.CurrentShare != nil || unknown.Met != nil {
+		t.Fatalf("unknown target must not claim success = %#v", unknown)
+	}
+}
+
 func TestEfficiencyWorkSharesClassifiesOnlyProvenIntervals(t *testing.T) {
 	start := time.Date(2026, time.August, 10, 8, 0, 0, 0, time.UTC)
 	at := func(minutes int) *time.Time {
