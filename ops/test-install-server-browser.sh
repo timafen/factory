@@ -14,22 +14,41 @@ test_bin="$temporary/bin"
 factory_home="$temporary/factory-home"
 mkdir -p "$share/ops" "$share/web" "$test_bin" "$factory_home"
 cp "$INSTALLER" "$share/ops/install-server-browser.sh"
-cat >"$share/ops/factory-browser-sandbox" <<'SH'
-#!/bin/bash
-exit 0
-SH
-cat >"$share/ops/test-browser-sandbox.sh" <<'SH'
-#!/bin/bash
-echo checked >>"$TEST_BROWSER_EVENTS"
-SH
+cp "$SCRIPT_DIR/factory-browser-sandbox" "$share/ops/factory-browser-sandbox"
+cp "$SCRIPT_DIR/test-browser-sandbox.sh" "$share/ops/test-browser-sandbox.sh"
 printf '{"name":"factory-browser-install-test"}\n' >"$share/web/package.json"
 printf '{"lockfileVersion":3}\n' >"$share/web/package-lock.json"
+mkdir -p "$share/web/node_modules/playwright" "$factory_home/.cache/ms-playwright/chromium"
+cat >"$share/web/node_modules/playwright/index.js" <<'JS'
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+
+exports.chromium = {
+  async launch(options) {
+    fs.appendFileSync(process.env.TEST_BROWSER_EVENTS,
+      `playwright-launcher=${options.executablePath} sandbox=${options.chromiumSandbox}\n`);
+    const launched = spawnSync(options.executablePath, ["--from-playwright"], {
+      env: process.env,
+      stdio: "inherit",
+    });
+    if (launched.status !== 0) throw new Error(`launcher exited ${launched.status}`);
+    return { async close() {} };
+  },
+};
+JS
+cat >"$factory_home/.cache/ms-playwright/chromium/chrome" <<'SH'
+#!/bin/bash
+printf 'chromium-args=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
+SH
 chmod 755 "$share/ops/"*
+chmod 755 "$factory_home/.cache/ms-playwright/chromium/chrome"
 : >"$temporary/events"
 
 cat >"$test_bin/id" <<'SH'
 #!/bin/bash
-if [ "${1:-}" = -u ]; then echo 0; fi
+if [ "${1:-}" = -u ]; then
+  if [ "${TEST_BROWSER_AS_USER:-0}" = 1 ]; then echo 1000; else echo 0; fi
+fi
 exit 0
 SH
 cat >"$test_bin/getent" <<'SH'
@@ -63,9 +82,22 @@ for argument in "$@"; do
     exit 0
   fi
 done
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -H) shift ;;
+    -u) shift 2 ;;
+    env) shift; TEST_BROWSER_AS_USER=1 HOME="$TEST_BROWSER_HOME" exec env "$@" ;;
+    *) exit 0 ;;
+  esac
+done
 exit 0
 SH
-for command in ip iptables ip6tables setsid; do
+cat >"$test_bin/setsid" <<'SH'
+#!/bin/bash
+[ "${1:-}" != --wait ] || shift
+exec "$@"
+SH
+for command in ip iptables ip6tables; do
   printf '#!/bin/bash\nexit 0\n' >"$test_bin/$command"
 done
 chmod 755 "$test_bin/"*
@@ -80,8 +112,11 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
 
 grep -Fx "npm-cwd=$share/web args=ci --no-audit --no-fund --silent" "$temporary/events" >/dev/null \
   || fail "npm ci запущен не из установленного browser payload"
-grep -Fx checked "$temporary/events" >/dev/null \
-  || fail "установленный browser checker не был запущен"
+grep -Fx "playwright-launcher=$libexec/factory-browser-sandbox sandbox=true" \
+  "$temporary/events" >/dev/null \
+  || fail "Playwright не получил установленный launcher с включённым Chromium sandbox"
+grep -Fx 'chromium-args=--from-playwright' "$temporary/events" >/dev/null \
+  || fail "Playwright не запустил Chromium через установленный launcher"
 cmp -s "$share/ops/factory-browser-sandbox" "$libexec/factory-browser-sandbox" \
   || fail "browser launcher не установлен"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
@@ -107,4 +142,4 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
 grep -Fx 'previous launcher' "$rollback/libexec/factory-browser-sandbox" >/dev/null \
   || fail "безопасный откат не сохранил прежний launcher"
 
-echo "PASS: installer находит payload через symlink и безопасно откатывает launcher"
+echo "PASS: installer связывает Playwright с launcher и безопасно откатывает его"

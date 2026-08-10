@@ -73,7 +73,10 @@ fi
 mv -- "$temporary" "$LAUNCHER"
 installed=1
 
-FACTORY_BROWSER_LAUNCHER="$LAUNCHER" "$PAYLOAD/ops/test-browser-sandbox.sh"
+sudo -H -u "$FACTORY_USER" env \
+  FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
+  FACTORY_BROWSER_WEB="$PAYLOAD/web" \
+  "$PAYLOAD/ops/test-browser-sandbox.sh"
 installed=0
 rm -f -- "$previous"
 trap - ERR

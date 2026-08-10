@@ -1,10 +1,21 @@
 #!/bin/bash
-# Runs Chromium in its own session. Chromium's own Linux sandbox remains enabled:
-# this launcher deliberately never adds sandbox-bypass flags.
+# Playwright-compatible Chromium executable wrapper. Chromium's own Linux
+# sandbox remains enabled: this launcher deliberately never adds bypass flags.
 set -euo pipefail
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Factory browser must not run as root" >&2
   exit 1
 fi
-exec setsid --wait "$@"
+
+browser=${FACTORY_BROWSER_EXECUTABLE:-}
+if [ -z "$browser" ]; then
+  browser=$(find "${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}" -type f \
+    \( -name chrome -o -name chrome-headless-shell \) -perm /111 -print -quit)
+fi
+if [ -z "$browser" ] || [ ! -x "$browser" ]; then
+  echo "Factory Playwright Chromium executable was not found" >&2
+  exit 1
+fi
+
+exec setsid --wait "$browser" "$@"
