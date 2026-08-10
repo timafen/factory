@@ -118,12 +118,17 @@ fx — разрешённые операции:
   fx factory health               отвечает ли интерфейс Фабрики
   fx factory logs [строк]         последние логи Фабрики
   fx factory restart              перезапустить Фабрику
+  fx factory install-release-helper <полный commit origin/main>
+                                  однократно поставить доверенный release-helper
+                                  и browser-sandbox перед первым новым выпуском
   fx factory release [точка]      собрать Фабрику из main (или из указанной
                                   точки) и выкатить: проверка типов, сборка интерфейса
                                   и сервера, установка, перезапуск, проверка здоровья,
                                   автоматический откат при неудаче
   fx factory rollback             вернуть предыдущую версию Фабрики
   fx factory release-info         какая версия Фабрики сейчас выкачена
+  fx factory browser-sandbox install  установить Chromium и сетевую песочницу
+  fx factory browser-sandbox check    проверить отказ TCP, UDP и DNS вне прокси
 
   fx repo status                  есть ли доступ к GitHub и от чьего имени
   fx repo head <ветка>            вершина ветки на origin (только чтение)
@@ -527,6 +532,43 @@ case "$scope" in
     FBIN=/opt/factory-data/bin/factory-server
     FINFO=/opt/factory-data/releases/factory-current.json
     case "$verb" in
+      install-release-helper)
+        expected_sha="${arg:-}"
+        case "$expected_sha" in
+          *[!0-9a-f]*|'') die "укажите полный 40-значный commit текущего origin/main" ;;
+        esac
+        [ "${#expected_sha}" -eq 40 ] \
+          || die "укажите полный 40-значный commit текущего origin/main"
+        bootstrap=/usr/local/lib/fx-factory-release-bootstrap
+        [ -x "$bootstrap" ] \
+          || die "доверенный bootstrap ещё не установлен владельцем сервера"
+        say factory install-release-helper "origin/main commit=$expected_sha"
+        "$bootstrap" "$expected_sha"
+        ;;
+      browser-sandbox)
+        action="${arg:-check}"
+        case "$action" in
+          install)
+            installer=/usr/local/share/factory/browser-sandbox/ops/install-server-browser.sh
+            [ -x "$installer" ] || die "установщик browser-sandbox отсутствует; сначала обновите системные файлы Factory"
+            say factory browser-sandbox-install OK
+            "$installer"
+            ;;
+          check)
+            checker=/usr/local/libexec/factory-browser-sandbox-check
+            [ -x "$checker" ] || die "browser-sandbox не установлен; выполните fx factory browser-sandbox install"
+            say factory browser-sandbox-check OK
+            "$checker"
+            ;;
+          run)
+            launcher=/usr/local/libexec/factory-browser-sandbox
+            [ -x "$launcher" ] || die "browser-sandbox не установлен"
+            shift 3
+            exec "$launcher" run "$@"
+            ;;
+          *) die "browser-sandbox: можно install | check" ;;
+        esac
+        ;;
       status)
         say factory status OK
         systemctl --no-pager --plain status factory-server.service 2>&1 \

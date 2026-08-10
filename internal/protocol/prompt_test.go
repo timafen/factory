@@ -17,6 +17,7 @@ func TestFormatAgentPromptPreservesSafetyAndBranchContract(t *testing.T) {
 		"Repository: github.com/owainlewis/factory\n" +
 		"Working branch: factory/123456789abc-abcdef123456\n" +
 		"Target base branch: main\n\n" +
+		"Server browser: use `factory-worker browser -output <file.png> https://staging-automation.tarser.net/<path>` when visual verification of the approved stand is useful. Other origins are blocked.\n\n" +
 		"Keep the change focused."
 
 	if got := FormatAgentPrompt(
