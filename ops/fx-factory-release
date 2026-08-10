@@ -35,6 +35,117 @@ work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 cleanup() { rm -rf "$work"; }
 
+# UI-проверки и Go-ворота независимы, но установка может начаться только после
+# их общего успеха. Каждая группа живёт в отдельной сессии: при остановке
+# выпуска завершается вся её группа процессов, включая возможных помощников
+# тестового раннера.
+gate_pids=()
+gate_pid_files=()
+gate_logs=()
+gate_names=()
+
+start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
+  local name=$1 log=$2 pid_file=$3
+  shift 3
+  as_user setsid bash -c '
+    printf "%s\\n" "$$" > "$1"
+    shift
+    exec "$@"
+  ' bash "$pid_file" "$@" >"$log" 2>&1 &
+  gate_pids+=("$!")
+  gate_pid_files+=("$pid_file")
+  gate_logs+=("$log")
+  gate_names+=("$name")
+}
+
+stop_test_gates() {
+  local pid pid_file group_pid
+  for pid_file in "${gate_pid_files[@]}"; do
+    if [ -r "$pid_file" ]; then
+      read -r group_pid <"$pid_file" || true
+      case "$group_pid" in
+        ''|*[!0-9]*) ;;
+        *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
+      esac
+    fi
+  done
+  for pid in "${gate_pids[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+}
+
+wait_for_test_gates() {
+  local pid
+  for pid in "${gate_pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+print_test_gate_logs() {
+  local i
+  for i in "${!gate_logs[@]}"; do
+    step "полный вывод: ${gate_names[$i]}"
+    cat "${gate_logs[$i]}"
+  done
+}
+
+on_test_gate_signal() {
+  local signal=$1
+  trap - HUP INT TERM
+  stop_test_gates
+  wait_for_test_gates
+  print_test_gate_logs
+  cleanup
+  exit 130
+}
+
+run_parallel_test_gates() {
+  local completed status failed_name
+  gate_pids=()
+  gate_pid_files=()
+  gate_logs=()
+  gate_names=()
+
+  trap 'on_test_gate_signal HUP' HUP
+  trap 'on_test_gate_signal INT' INT
+  trap 'on_test_gate_signal TERM' TERM
+
+  start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.pid" \
+    bash -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
+    bash "$work/src/web"
+  start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.pid" \
+    bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
+    bash "$work/src"
+
+  wait -n -p completed "${gate_pids[@]}"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    failed_name="параллельная группа проверок"
+    if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
+    if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    fail "$failed_name завершилась с кодом $status"
+    return 1
+  fi
+
+  if [ "$completed" = "${gate_pids[0]}" ]; then
+    wait "${gate_pids[1]}"
+  else
+    wait "${gate_pids[0]}"
+  fi
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    stop_test_gates
+    wait_for_test_gates
+  fi
+  trap - HUP INT TERM
+  print_test_gate_logs
+  [ "$status" -eq 0 ]
+}
+
 step "беру исходники: $ref"
 as_user git clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
@@ -57,18 +168,9 @@ step "собираю изменение: $subject"
 step "ставлю зависимости интерфейса"
 as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
   || { fail "npm ci не прошёл"; cleanup; exit 4; }
-step "проверяю типы интерфейса"
-as_user bash -c "cd '$work/src/web' && npx tsc -p tsconfig.app.json --noEmit" \
-  || { fail "в интерфейсе есть ошибки типов — релиз не поеду"; cleanup; exit 5; }
-step "гоняю тесты интерфейса"
-as_user bash -c "cd '$work/src/web' && npm test" \
-  || { fail "тесты интерфейса не прошли — релиз не поеду"; cleanup; exit 5; }
-step "гоняю тесты Go"
-as_user bash -c "umask 077; cd '$work/src' && go test ./..." \
-  || { fail "тесты Go не прошли — релиз не поеду"; cleanup; exit 5; }
-step "проверяю сценарий выката и отката"
-as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release.sh" \
-  || { fail "проверка выката и отката не прошла — релиз не поеду"; cleanup; exit 5; }
+step "параллельно проверяю интерфейс, Go и сценарий выката"
+run_parallel_test_gates \
+  || { fail "одна из обязательных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
