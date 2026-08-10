@@ -47,3 +47,6 @@ go test ./internal/controlplane -run 'Test(Automation|PullRequestAutomation|HTTP
 ## Карточка
 
 `knowledge/cards/CARD-0045-fable-automation-migration-audit.md`
+
+ГОТОВО-КОГДА: файл knowledge/specs/fable-automation-migration-audit.md
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.PipelineWatchTests
