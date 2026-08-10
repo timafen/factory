@@ -13,6 +13,7 @@ OWNER="${FACTORY_RELEASE_OWNER-factory:factory}"
 SERVER_SERVICE="${FACTORY_SERVER_SERVICE:-factory-server.service}"
 WORKER_SERVICE="${FACTORY_WORKER_SERVICE:-factory-worker.service}"
 WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
+PILOT_SERVICE="${FACTORY_PILOT_SERVICE:-factory-pilot.service}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
@@ -155,9 +156,14 @@ step "обновляю штатные команды управления Фаб
 bash "$work/src/ops/install-factory-control.sh" "$work/src" \
   || rollback "не смог обновить fx и драйвер выпуска" 7
 
+deferred_pilot_restart=0
+brain_restart_marker="$work/restart-pilot"
 if [ -x "$work/src/ops/install-brain.sh" ]; then
-  bash "$work/src/ops/install-brain.sh" "$work/src" \
-    || fail "мозг не встал — сервер и воркер уже обновлены"
+    FACTORY_BRAIN_DEFER_PILOT_RESTART=1 \
+    FACTORY_BRAIN_RESTART_MARKER="$brain_restart_marker" \
+    bash "$work/src/ops/install-brain.sh" "$work/src" \
+    || rollback "мозг не встал" 7
+  [ ! -f "$brain_restart_marker" ] || deferred_pilot_restart=1
 fi
 if [ -f "$work/src/ops/factory-janitor.sh" ]; then
   janitor_bin="${FACTORY_JANITOR_BIN:-/usr/local/bin/factory-janitor.sh}"
@@ -165,7 +171,14 @@ if [ -f "$work/src/ops/factory-janitor.sh" ]; then
     || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
 fi
 
-python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
+if [ "$deferred_pilot_restart" = 1 ]; then
+  step "ставлю безопасный отложенный перезапуск Пилота"
+  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+    /bin/systemctl restart "$PILOT_SERVICE" \
+    || rollback "не смог отложить перезапуск Пилота" 7
+fi
+
+if ! python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
 import json, sys, datetime
 p, sha, subj, ref, iso = sys.argv[1:6]
 M = ["января","февраля","марта","апреля","мая","июня",
@@ -178,6 +191,9 @@ json.dump({"name": "релиз от %s, из %s: %s" % (when, ref, subj),
           open(p, "w"), ensure_ascii=False, indent=2)
 print("== выкачено: релиз от %s, из %s: %s" % (when, ref, subj))
 PY
+then
+  rollback "не смог записать сведения о выпуске" 7
+fi
 set_owner "$INFO" 2>/dev/null || true
 
 rollback_armed=0

@@ -9,6 +9,8 @@ LIVE="${FACTORY_BRAIN_LIVE:-/opt/factory-data}"
 INTAKE_URL="${FACTORY_BRAIN_INTAKE_URL:-http://127.0.0.1:7338}"
 INSTALL_OWNER="${FACTORY_BRAIN_OWNER:-factory}"
 INSTALL_GROUP="${FACTORY_BRAIN_GROUP:-factory}"
+DEFER_PILOT_RESTART="${FACTORY_BRAIN_DEFER_PILOT_RESTART:-0}"
+RESTART_MARKER="${FACTORY_BRAIN_RESTART_MARKER:-}"
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 
@@ -40,14 +42,21 @@ case "$changed" in
   *"/pilot/"*) restart="$restart factory-pilot factory-intake";;
   *"/intake/"*) restart="$restart factory-intake";;
 esac
-step "перезапускаю:$restart"
+active_restart="$restart"
+if [ "$DEFER_PILOT_RESTART" = 1 ]; then
+  active_restart=""
+  for unit in $restart; do
+    [ "$unit" = factory-pilot ] || active_restart="$active_restart $unit"
+  done
+fi
+step "перезапускаю сейчас:$active_restart"
 # shellcheck disable=SC2086
-systemctl restart $restart
+systemctl restart $active_restart
 sleep 6
 
 ok=1
-for u in $restart; do systemctl -q is-active "$u" || ok=0; done
-if [ "$ok" = 1 ] && echo "$restart" | grep -q intake; then
+for u in $active_restart; do systemctl -q is-active "$u" || ok=0; done
+if [ "$ok" = 1 ] && echo "$active_restart" | grep -q intake; then
   code=000
   for _ in 1 2 3 4 5 6 7 8; do
     code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:7338/health || echo 000)
@@ -85,8 +94,14 @@ if [ "$ok" != 1 ]; then
   fail "мозг после обновления не ответил правильно — возвращаю прежние файлы"
   for d in $changed; do [ -f "$d.prev" ] && cp -f "$d.prev" "$d"; done
   # shellcheck disable=SC2086
-  systemctl restart $restart
+  systemctl restart $active_restart
   exit 7
+fi
+if [ "$DEFER_PILOT_RESTART" = 1 ] && echo "$restart" | grep -q factory-pilot; then
+  [ -n "$RESTART_MARKER" ] \
+    || { fail "для отложенного перезапуска Пилота не указан marker"; exit 7; }
+  : >"$RESTART_MARKER" \
+    || { fail "не смог записать marker отложенного перезапуска Пилота"; exit 7; }
 fi
 echo "   мозг обновлён и жив"
 exit 0

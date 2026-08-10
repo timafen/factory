@@ -55,10 +55,12 @@ EOF
 }
 
 run_case() {
-  case_dir=$1 mode=$2
+  case_dir=$1 mode=$2 defer=${3:-0}
   TEST_EVENTS="$case_dir/events" TEST_MODE="$mode" PATH="$case_dir/bin:$PATH" \
     FACTORY_BRAIN_LIVE="$case_dir/live" FACTORY_BRAIN_INTAKE_URL=http://intake \
     FACTORY_BRAIN_OWNER="$(id -un)" FACTORY_BRAIN_GROUP="$(id -gn)" \
+    FACTORY_BRAIN_DEFER_PILOT_RESTART="$defer" \
+    FACTORY_BRAIN_RESTART_MARKER="$case_dir/restart-pilot" \
     bash "$INSTALLER" "$case_dir/src" >"$case_dir/output" 2>&1
 }
 
@@ -105,6 +107,35 @@ expected_events=$(printf '%s\n' \
   || fail "pilot-only не перезапустил intake до smoke и после отката"
 grep -Fx 'old = True' "$pilot_only/live/pilot/pilot.py" >/dev/null \
   || fail "pilot-only не вернул прежний pilot.py"
+
+deferred="$temporary/deferred"
+make_fixture "$deferred" success
+run_case "$deferred" success 1 || fail "отложенный перезапуск отклонён"
+expected_deferred=$(printf '%s\n' \
+  'restart factory-intake' \
+  '-q is-active factory-intake' \
+  'smoke')
+[ "$(cat "$deferred/events")" = "$expected_deferred" ] \
+  || fail "отложенный режим перезапустил Пилот до завершения выпуска"
+[ -f "$deferred/restart-pilot" ] \
+  || fail "отложенный режим не оставил marker перезапуска Пилота"
+
+deferred_failed="$temporary/deferred-failed"
+make_fixture "$deferred_failed" invalid-json
+status=0
+run_case "$deferred_failed" invalid-json 1 || status=$?
+[ "$status" = 7 ] || fail "ошибка отложенного smoke вернула $status вместо 7"
+expected_deferred_failed=$(printf '%s\n' \
+  'restart factory-intake' \
+  '-q is-active factory-intake' \
+  'smoke' \
+  'restart factory-intake')
+[ "$(cat "$deferred_failed/events")" = "$expected_deferred_failed" ] \
+  || fail "отложенный откат тронул Пилот или не вернул Intake"
+[ ! -e "$deferred_failed/restart-pilot" ] \
+  || fail "неуспешный smoke оставил marker перезапуска Пилота"
+grep -Fx 'old = True' "$deferred_failed/live/pilot/pilot.py" >/dev/null \
+  || fail "отложенный smoke не вернул прежний pilot.py"
 
 unchanged="$temporary/unchanged"
 make_fixture "$unchanged" success

@@ -21,7 +21,18 @@ make_fixture() {
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
 case "$*" in
-  *'clone --quiet'*) destination=${@: -1}; mkdir -p "$destination/web" "$destination/ops" ;;
+  *'clone --quiet'*)
+    destination=${@: -1}
+    mkdir -p "$destination/web" "$destination/ops"
+    cat >"$destination/ops/install-brain.sh" <<'BRAIN'
+#!/bin/bash
+echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_RESTART_MARKER:-}" >>"$TEST_GATES"
+[ "$TEST_MODE" != brain-install-fail ] || exit 7
+[ "${FACTORY_BRAIN_DEFER_PILOT_RESTART:-}" = 1 ] || exit 9
+: >"$FACTORY_BRAIN_RESTART_MARKER"
+BRAIN
+    chmod +x "$destination/ops/install-brain.sh"
+    ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1'*) echo 'Проверочный релиз' ;;
 esac
@@ -83,6 +94,11 @@ EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
 echo "$1 $2" >>"$TEST_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/bin/systemd-run" <<'EOF'
+#!/bin/bash
+echo "systemd-run $*" >>"$TEST_EVENTS"
 exit 0
 EOF
   cat >"$case_dir/bin/mv" <<'EOF'
@@ -150,7 +166,8 @@ run_release() {
 
 success="$temporary/success"
 make_fixture "$success" success
-run_release "$success" success || fail "successful release failed"
+run_release "$success" success \
+  || { cat "$success/output" >&2; fail "successful release failed"; }
 diff -u <(printf '%s\n' \
   'npm ci --no-audit --no-fund --silent' \
   'npx tsc -p tsconfig.app.json --noEmit' \
@@ -161,9 +178,11 @@ diff -u <(printf '%s\n' \
   'go build -o PLACEHOLDER ./cmd/factory-server' \
   'go build -o PLACEHOLDER ./cmd/factory-worker' \
   'bash ops/provision-codex-auth.sh' \
-  'bash ops/install-factory-control.sh') \
+  'bash ops/install-factory-control.sh' \
+  'brain defer=1 marker=PLACEHOLDER') \
   <(sed -e 's|-o [^ ]*/factory-server|-o PLACEHOLDER|' \
-    -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' "$success/gates") >/dev/null \
+    -e 's|-o [^ ]*/factory-worker|-o PLACEHOLDER|' \
+    -e 's|marker=[^ ]*/restart-pilot|marker=PLACEHOLDER|' "$success/gates") >/dev/null \
   || fail "release gates ran in the wrong order"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
@@ -173,6 +192,9 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
   || fail "worker was not stopped before taking the heartbeat baseline"
 [ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
+grep -E '^systemd-run .*--on-active=30s /bin/systemctl restart factory-pilot.service$' \
+  "$success/events" >/dev/null \
+  || fail "Pilot restart was not detached until after release metadata"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release did not explain the deployed change"
@@ -189,6 +211,17 @@ for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop w
     'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
     || fail "$mode rollback restart order is wrong"
 done
+
+brain_failed="$temporary/brain-install-fail"
+make_fixture "$brain_failed" brain-install-fail
+if run_release "$brain_failed" brain-install-fail; then fail "brain-install-fail unexpectedly succeeded"; fi
+assert_file "$brain_failed/install/factory-server" old-server
+assert_file "$brain_failed/install/factory-worker" old-worker
+tail -n 2 "$brain_failed/events" | diff -u - <(printf '%s\n' \
+  'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
+  || fail "brain-install-fail did not roll back the binary pair"
+! grep -F 'systemd-run ' "$brain_failed/events" >/dev/null \
+  || fail "failed brain install scheduled a Pilot restart"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
