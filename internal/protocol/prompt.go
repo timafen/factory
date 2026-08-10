@@ -142,6 +142,7 @@ func FormatAgentPrompt(title, repository, workingBranch, targetBaseBranch, resol
 		"Repository: " + repository + "\n" +
 		"Working branch: " + workingBranch + "\n" +
 		"Target base branch: " + targetBaseBranch + "\n\n" +
+		"Server browser: use `factory-worker browser -output <file.png> https://staging-automation.tarser.net/<path>` when visual verification of the approved stand is useful. Other origins are blocked.\n\n" +
 		resolvedPrompt
 }
 

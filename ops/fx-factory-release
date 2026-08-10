@@ -16,18 +16,63 @@ WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
+FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
+RELEASE_HELPER="${FACTORY_RELEASE_HELPER:-/usr/local/lib/fx-factory-release}"
+BROWSER_SHARE="${FACTORY_BROWSER_SHARE:-/usr/local/share/factory/browser-sandbox}"
+BROWSER_LIBEXEC="${FACTORY_BROWSER_LIBEXEC:-/usr/local/libexec}"
+SYSTEM_INSTALL="${FACTORY_RELEASE_SYSTEM_INSTALL:-auto}"
+BOOTSTRAP_HELPER="${FACTORY_RELEASE_BOOTSTRAP_HELPER:-/usr/local/lib/fx-factory-release-bootstrap}"
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 
+# The installed helper is deliberately only the trusted entry point. Resolve the
+# requested candidate in a fresh checkout, syntax-check its helper, then pin the
+# real release to that exact commit. This lets the very first release use new
+# release logic instead of continuing inside the previously installed helper.
+if [ "${FACTORY_RELEASE_CANDIDATE:-0}" != 1 ]; then
+  mkdir -p "$REL" && set_owner "$REL" \
+    || { fail "не смог подготовить папку релизов"; exit 4; }
+  bootstrap=$(as_user mktemp -d "$REL/bootstrap-XXXXXX") \
+    || { fail "не смог создать папку bootstrap"; exit 4; }
+  as_user git clone --quiet "$REPO" "$bootstrap/src" \
+    && { as_user git -C "$bootstrap/src" checkout --quiet -B fx-candidate "origin/$ref" 2>/dev/null \
+      || as_user git -C "$bootstrap/src" checkout --quiet "$ref" 2>/dev/null; } \
+    || { fail "нет такой точки выпуска: $ref"; rm -rf -- "$bootstrap"; exit 4; }
+  candidate_sha=$(as_user git -C "$bootstrap/src" rev-parse HEAD) \
+    || { fail "не смог определить ревизию кандидата"; rm -rf -- "$bootstrap"; exit 4; }
+  candidate_helper="$bootstrap/src/ops/fx-factory-release"
+  [ -f "$candidate_helper" ] && as_user bash -n "$candidate_helper" \
+    || { fail "release-helper кандидата отсутствует или повреждён"; rm -rf -- "$bootstrap"; exit 5; }
+  trusted=$(mktemp -d "${FACTORY_RELEASE_TRUSTED_TMP:-/tmp}/factory-release-helper-XXXXXX") \
+    || { fail "не смог создать root-owned копию helper"; rm -rf -- "$bootstrap"; exit 4; }
+  install -m 700 "$candidate_helper" "$trusted/fx-factory-release" \
+    && bash -n "$trusted/fx-factory-release" \
+    || { fail "не смог зафиксировать проверенный helper кандидата"; rm -rf -- "$bootstrap" "$trusted"; exit 5; }
+  step "передаю выпуск проверенному helper кандидата ${candidate_sha:0:7}"
+  FACTORY_RELEASE_CANDIDATE=1 FACTORY_RELEASE_BOOTSTRAP_DIR="$bootstrap" \
+    FACTORY_RELEASE_TRUSTED_DIR="$trusted" \
+    FACTORY_RELEASE_REQUESTED_REF="$ref" \
+    "$trusted/fx-factory-release" "$candidate_sha"
+  status=$?
+  rm -rf -- "$bootstrap" "$trusted"
+  exit "$status"
+fi
+
+requested_ref="${FACTORY_RELEASE_REQUESTED_REF:-$ref}"
+
 mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
-cleanup() { rm -rf "$work"; }
+cleanup() {
+  rm -rf "$work"
+  [ -z "${FACTORY_RELEASE_BOOTSTRAP_DIR:-}" ] || rm -rf -- "$FACTORY_RELEASE_BOOTSTRAP_DIR"
+  [ -z "${FACTORY_RELEASE_TRUSTED_DIR:-}" ] || rm -rf -- "$FACTORY_RELEASE_TRUSTED_DIR"
+}
 
 step "беру исходники: $ref"
 as_user git clone --quiet "$REPO" "$work/src" \
@@ -52,7 +97,9 @@ step "гоняю тесты Go"
 as_user bash -c "cd '$work/src' && go test ./..." \
   || { fail "тесты Go не прошли — релиз не поеду"; cleanup; exit 5; }
 step "проверяю сценарий выката и отката"
-as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release.sh" \
+as_user bash -c "cd '$work/src' && bash ops/test-fx-factory-release-dispatch.sh \
+  && bash ops/test-bootstrap-factory-release.sh \
+  && bash ops/test-fx-factory-release.sh" \
   || { fail "проверка выката и отката не прошла — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
@@ -62,26 +109,80 @@ as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/fact
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
 
+# Save every release-owned target before the first mutation. From this point
+# through health confirmation, system commands, browser payload and the two
+# application binaries form one rollback unit.
+if [ "$SYSTEM_INSTALL" = auto ]; then
+  if [ "$(id -u)" -eq 0 ]; then SYSTEM_INSTALL=1; else SYSTEM_INSTALL=0; fi
+fi
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \
   && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
   || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
+backup_path() {
+  local target=$1 name=$2
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    cp -a -- "$target" "$work/system-prev/$name" || return
+    : >"$work/system-prev/$name.present"
+  fi
+  return 0
+}
+
+restore_path() {
+  local target=$1 name=$2
+  rm -rf -- "$target" || return
+  if [ -e "$work/system-prev/$name.present" ]; then
+    mkdir -p "$(dirname "$target")" \
+      && cp -a -- "$work/system-prev/$name" "$target" \
+      || return
+  fi
+  return 0
+}
+
+system_transaction=0
+if [ "$SYSTEM_INSTALL" = 1 ]; then
+  step "сохраняю системный комплект текущего выпуска"
+  mkdir -p "$work/system-prev" \
+    && backup_path "$FX_BIN" fx \
+    && backup_path "$RELEASE_HELPER" release-helper \
+    && backup_path "$BOOTSTRAP_HELPER" release-bootstrap \
+    && backup_path "$BROWSER_SHARE" browser-share \
+    && backup_path "$BROWSER_LIBEXEC/factory-browser-sandbox" browser-launcher \
+    && backup_path "$BROWSER_LIBEXEC/factory-browser-sandbox-check" browser-check \
+    || { fail "не смог сохранить текущий системный комплект"; cleanup; exit 4; }
+  system_transaction=1
+fi
+
+restore_system() {
+  [ "$system_transaction" = 1 ] || return 0
+  restore_path "$FX_BIN" fx \
+    && restore_path "$RELEASE_HELPER" release-helper \
+    && restore_path "$BOOTSTRAP_HELPER" release-bootstrap \
+    && restore_path "$BROWSER_SHARE" browser-share \
+    && restore_path "$BROWSER_LIBEXEC/factory-browser-sandbox" browser-launcher \
+    && restore_path "$BROWSER_LIBEXEC/factory-browser-sandbox-check" browser-check
+}
+
 rollback() {
   trap - EXIT HUP INT TERM
   rollback_armed=0
-  fail "$1 — возвращаю предыдущие сервер и воркер"
+  fail "$1 — возвращаю весь предыдущий комплект выпуска"
+  restore_system || fail "не смог полностью восстановить системный комплект"
   cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
     && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
   cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
     && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
-  systemctl restart "$SERVER_SERVICE" || true
-  systemctl restart "$WORKER_SERVICE" || true
+  if [ "$application_touched" = 1 ]; then
+    systemctl restart "$SERVER_SERVICE" || true
+    systemctl restart "$WORKER_SERVICE" || true
+  fi
   cleanup
   exit "$2"
 }
 
 rollback_armed=1
+application_touched=0
 on_exit() {
   status=$?
   [ "$rollback_armed" = 1 ] || return
@@ -94,6 +195,27 @@ trap 'on_signal HUP' HUP
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 
+if [ "$SYSTEM_INSTALL" = 1 ]; then
+  step "устанавливаю системные команды и browser-sandbox единым комплектом"
+  install -d -m 755 "$(dirname "$FX_BIN")" "$(dirname "$RELEASE_HELPER")" \
+    && install -m 755 "$work/src/ops/fx" "$FX_BIN" \
+    && install -m 755 "$work/src/ops/fx-factory-release" "$RELEASE_HELPER" \
+    && install -m 755 "$work/src/ops/bootstrap-factory-release.sh" "$BOOTSTRAP_HELPER" \
+    && install -d -m 755 "$BROWSER_SHARE/ops" "$BROWSER_SHARE/web" "$BROWSER_LIBEXEC" \
+    && install -m 755 \
+      "$work/src/ops/install-server-browser.sh" "$work/src/ops/factory-browser-sandbox" \
+      "$work/src/ops/test-browser-sandbox.sh" "$BROWSER_SHARE/ops/" \
+    && install -m 644 \
+      "$work/src/web/package.json" "$work/src/web/package-lock.json" "$BROWSER_SHARE/web/" \
+    || rollback "не смог установить системный комплект" 4
+
+  FACTORY_BROWSER_SHARE="$BROWSER_SHARE" FACTORY_BROWSER_LIBEXEC="$BROWSER_LIBEXEC" \
+    "$FX_BIN" factory browser-sandbox install \
+    && FACTORY_BROWSER_SHARE="$BROWSER_SHARE" FACTORY_BROWSER_LIBEXEC="$BROWSER_LIBEXEC" \
+      "$FX_BIN" factory browser-sandbox check \
+    || rollback "browser-sandbox не установился или не прошёл проверку" 4
+fi
+
 install_binary() {
   source=$1 target=$2
   cp -f "$source" "$target.new" && set_owner "$target.new" \
@@ -101,6 +223,7 @@ install_binary() {
 }
 
 step "ставлю новую пару и перезапускаю сервер"
+application_touched=1
 install_binary "$work/factory-server" "$SERVER_BIN" || rollback "не смог поставить сервер" 4
 install_binary "$work/factory-worker" "$WORKER_BIN" || rollback "не смог поставить воркер" 4
 systemctl restart "$SERVER_SERVICE" || rollback "сервер не перезапустился" 6
@@ -147,7 +270,7 @@ if [ -x "$work/src/ops/install-brain.sh" ]; then
     || fail "мозг не встал — сервер и воркер уже обновлены"
 fi
 
-python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
+python3 - "$INFO" "$sha" "$subject" "$requested_ref" "$(date -Is)" <<'PY'
 import json, sys, datetime
 p, sha, subj, ref, iso = sys.argv[1:6]
 M = ["января","февраля","марта","апреля","мая","июня",

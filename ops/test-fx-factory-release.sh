@@ -8,20 +8,65 @@ trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -Fx "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
+assert_old_system() {
+  case_dir=$1
+  assert_file "$case_dir/system/fx" old-fx
+  assert_file "$case_dir/system/fx-factory-release" old-release-helper
+  assert_file "$case_dir/system/fx-factory-release-bootstrap" old-release-bootstrap
+  assert_file "$case_dir/system/browser-sandbox/old-payload" old-browser-payload
+  assert_file "$case_dir/system/libexec/factory-browser-sandbox" old-browser-launcher
+  assert_file "$case_dir/system/libexec/factory-browser-sandbox-check" old-browser-check
+}
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web"
+  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
+    "$case_dir/system/browser-sandbox" "$case_dir/system/libexec"
   printf 'old-server\n' >"$case_dir/install/factory-server"
   printf 'old-worker\n' >"$case_dir/install/factory-worker"
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
+  printf 'old-fx\n' >"$case_dir/system/fx"
+  printf 'old-release-helper\n' >"$case_dir/system/fx-factory-release"
+  printf 'old-release-bootstrap\n' >"$case_dir/system/fx-factory-release-bootstrap"
+  printf 'old-browser-payload\n' >"$case_dir/system/browser-sandbox/old-payload"
+  printf 'old-browser-launcher\n' >"$case_dir/system/libexec/factory-browser-sandbox"
+  printf 'old-browser-check\n' >"$case_dir/system/libexec/factory-browser-sandbox-check"
+  chmod +x "$case_dir/system/fx" "$case_dir/system/fx-factory-release" \
+    "$case_dir/system/fx-factory-release-bootstrap" "$case_dir/system/libexec/"*
 
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
 case "$*" in
-  *'clone --quiet'*) destination=${@: -1}; mkdir -p "$destination/web" "$destination/ops" ;;
+  *'clone --quiet'*)
+    destination=${@: -1}
+    mkdir -p "$destination/web" "$destination/ops"
+    printf '{}\n' >"$destination/web/package.json"
+    printf '{}\n' >"$destination/web/package-lock.json"
+    for file in fx-factory-release bootstrap-factory-release.sh install-server-browser.sh factory-browser-sandbox test-browser-sandbox.sh; do
+      printf '#!/bin/sh\nprintf "system %%s\\n" "$*" >>"$TEST_SYSTEM_EVENTS"\n' >"$destination/ops/$file"
+      chmod 755 "$destination/ops/$file"
+    done
+    cat >"$destination/ops/fx" <<'FX'
+#!/bin/bash
+printf 'system %s\n' "$*" >>"$TEST_SYSTEM_EVENTS"
+case "$*" in
+  *'browser-sandbox install'*)
+    mkdir -p "$TEST_BROWSER_LIBEXEC"
+    printf 'new-browser-launcher\n' >"$TEST_BROWSER_LIBEXEC/factory-browser-sandbox"
+    printf 'new-browser-check\n' >"$TEST_BROWSER_LIBEXEC/factory-browser-sandbox-check"
+    if [ "$TEST_MODE" = interrupt-system-install ]; then
+      kill -TERM "$PPID"
+      exit 143
+    fi
+    [ "$TEST_MODE" != sandbox-install-fail ]
+    ;;
+  *'browser-sandbox check'*) [ "$TEST_MODE" != sandbox-check-fail ] ;;
+esac
+FX
+    chmod 755 "$destination/ops/fx"
+    ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1'*) echo 'Проверочный релиз' ;;
 esac
@@ -59,11 +104,13 @@ chmod +x "$output"
 EOF
   cat >"$case_dir/bin/bash" <<'EOF'
 #!/bin/bash
-if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
-  echo "bash $1" >>"$TEST_GATES"
-  [ "$TEST_MODE" != release-test-fail ]
-  exit
-fi
+case "${1:-}" in
+  ops/test-fx-factory-release-dispatch.sh|ops/test-bootstrap-factory-release.sh|ops/test-fx-factory-release.sh)
+    echo "bash $1" >>"$TEST_GATES"
+    [ "$TEST_MODE" != release-test-fail ] || [ "$1" != ops/test-fx-factory-release.sh ]
+    exit
+    ;;
+esac
 exec /bin/bash "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
@@ -120,13 +167,21 @@ EOF
 run_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_SYSTEM_EVENTS="$case_dir/system-events" \
+    TEST_BROWSER_LIBEXEC="$case_dir/system/libexec" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
+    FACTORY_RELEASE_CANDIDATE=1 FACTORY_RELEASE_REQUESTED_REF=main \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_SYSTEM_INSTALL=1 FACTORY_FX_BIN="$case_dir/system/fx" \
+    FACTORY_RELEASE_HELPER="$case_dir/system/fx-factory-release" \
+    FACTORY_RELEASE_BOOTSTRAP_HELPER="$case_dir/system/fx-factory-release-bootstrap" \
+    FACTORY_BROWSER_SHARE="$case_dir/system/browser-sandbox" \
+    FACTORY_BROWSER_LIBEXEC="$case_dir/system/libexec" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
@@ -141,6 +196,8 @@ diff -u <(printf '%s\n' \
   'npx tsc -p tsconfig.app.json --noEmit' \
   'npm test' \
   'go test ./...' \
+  'bash ops/test-fx-factory-release-dispatch.sh' \
+  'bash ops/test-bootstrap-factory-release.sh' \
   'bash ops/test-fx-factory-release.sh' \
   'npx vite build' \
   'go build -o PLACEHOLDER ./cmd/factory-server' \
@@ -157,6 +214,15 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
 [ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
+[ -x "$success/system/fx" ] || fail "system fx was not installed"
+[ -x "$success/system/fx-factory-release" ] || fail "release helper was not installed"
+[ -x "$success/system/fx-factory-release-bootstrap" ] || fail "release bootstrap was not installed"
+[ "$(sed -n '1p' "$success/system/libexec/factory-browser-sandbox")" = new-browser-launcher ] \
+  || fail "browser launcher was not installed"
+diff -u <(printf '%s\n' \
+  'system factory browser-sandbox install' \
+  'system factory browser-sandbox check') "$success/system-events" >/dev/null \
+  || fail "browser sandbox was not installed and checked during release"
 
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install; do
   failed="$temporary/$mode"
@@ -164,9 +230,33 @@ for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop w
   if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
+  assert_old_system "$failed"
   tail -n 2 "$failed/events" | diff -u - <(printf '%s\n' \
     'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
     || fail "$mode rollback restart order is wrong"
+done
+
+for mode in sandbox-install-fail sandbox-check-fail interrupt-system-install; do
+  failed="$temporary/$mode"
+  make_fixture "$failed" "$mode"
+  if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi
+  assert_file "$failed/install/factory-server" old-server
+  assert_file "$failed/install/factory-worker" old-worker
+  assert_old_system "$failed"
+  [ ! -s "$failed/events" ] || fail "services restarted after $mode before application install"
+done
+
+missing_system="$temporary/sandbox-check-fail-empty-system"
+make_fixture "$missing_system" sandbox-check-fail
+rm -rf "$missing_system/system/fx" "$missing_system/system/fx-factory-release" \
+  "$missing_system/system/fx-factory-release-bootstrap" \
+  "$missing_system/system/browser-sandbox" "$missing_system/system/libexec"
+if run_release "$missing_system" sandbox-check-fail; then
+  fail "sandbox-check-fail with empty previous system unexpectedly succeeded"
+fi
+for path in fx fx-factory-release fx-factory-release-bootstrap browser-sandbox libexec/factory-browser-sandbox libexec/factory-browser-sandbox-check; do
+  [ ! -e "$missing_system/system/$path" ] \
+    || fail "$path was left behind although it did not exist before release"
 done
 
 build_failed="$temporary/worker-build-fail"
