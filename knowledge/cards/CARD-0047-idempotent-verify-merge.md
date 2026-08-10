@@ -2,16 +2,27 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает решения человека о мёрже.
-- Branch: `factory/6c75a321-d8f-63bda207-a1b`.
-- Head commit: `7bb0686` (`Зафиксировать защиту финала Verify в карточке`).
-- What changed: журнал мёржей хранит ID финальной Verify-задачи; повторная
-  обработка этого PASS пропускает финализацию, мёрж и новую запись в журнале.
-- Evidence: полный набор `python3 -m unittest pilot.test_pilot -v` — 88/88 OK;
-  сценарий повторной обработки Verify PASS подтверждает ровно один мёрж и одну запись.
-- One next action: человеку проверить и влить доставленную ветку.
+- Status: Implemented — ожидает проверки и слияния.
+- Branch: `factory/3537760b-0da-4ef48574-8b9`.
+- Implementation commit: e749e7b2ccfe04b721600a3603c0a6d9e5e10326 — обзор показывает реальные работы.
+- What changed: «Сделано недавно» строится из задач конвейера и журнала merge;
+  служебные smoke/helper/debug/idempotency финалы не вытесняют работы владельца.
+  Verify без подтверждённого merge не названа влитой, а реальный провал виден явно.
+- Evidence: `python3 -m unittest pilot.test_pilot` — 154 OK; `npm test -- --run src/Overview.test.ts` — 13 OK; build/lint/typecheck — OK.
+- One next action: открыть обзор и проверить блок «Сделано недавно» на живых данных.
 
 ## LOG
+
+### 2026-08-10 — Implement
+
+Экран недавних работ получил источник из фактической истории pipeline с
+пагинацией, понятным доказательством и временем. Пять разновидностей
+служебных финалов исключаются; две реальные работы, включая несостоявшийся
+финал, остаются видимыми. Слияние подтверждается только записью merge-журнала.
+
+Проверки: `python3 -m unittest pilot.test_pilot` — 154 OK; `cd web && npm test
+-- --run src/Overview.test.ts` — 13 OK; `npm run typecheck`, `npm run lint` и
+`npm run build` — OK.
 
 ### 2026-08-10 — Implement
 
