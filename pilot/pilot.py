@@ -536,6 +536,8 @@ def first_stage(conf):
 
 
 WORKS_PATH = f"{HOME}/pilot/works.json"
+WORK_ARCHIVE_DAYS = 90
+WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 
 # Кто поставил работу. Владельцу важно отличать своё от чужого.
 ORIGIN_OWNER = "owner"              # завёл человек: голосом или кнопкой
@@ -560,6 +562,156 @@ def note_work(base, origin, start_stage="", skipped=None, reason=""):
         save(WORKS_PATH, rec)
     except Exception as e:
         log("note_work_error", repr(e))
+
+
+def _archive_dates(now=None):
+    now = time.time() if now is None else now
+    return (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                      time.gmtime(now + WORK_ARCHIVE_DAYS * 86400)),
+    )
+
+
+def _technical_cancel(task):
+    """Cancelled helper/debug/patrol runs are service history, not work."""
+    if task.get("state") != "cancelled":
+        return False
+    marker = " ".join((str(task.get("request_key") or ""),
+                       str(task.get("title") or ""))).lower()
+    return bool(re.search(r"(^|[^a-z])(helper|debug|patrol)([^a-z]|$)", marker))
+
+
+def _work_stage(task):
+    match = STAGE_TITLE_RE.match(str(task.get("title") or ""))
+    return match.group(1).strip() if match else ""
+
+
+def _merged_work():
+    merged_at = {}
+    try:
+        with open(MERGES_PATH, encoding="utf-8") as merges:
+            for line in merges:
+                try:
+                    rec = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                base = str(rec.get("base") or "").strip()
+                at = str(rec.get("at") or "")
+                if base and at > merged_at.get(base, ""):
+                    merged_at[base] = at
+    except OSError:
+        pass
+    return merged_at
+
+
+def cleanup_work_archive(conf, tasks):
+    """Close server-known service/finished work without deleting task history.
+
+    ``works.json`` is the durable archive receipt consumed by the Work screen;
+    ``work_status.json`` carries the same human reason.  Existing receipts are
+    never refreshed, so retries cannot silently extend retention.
+    """
+    works = load(WORKS_PATH, {}) or {}
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    questions = load_questions()
+    open_question_tasks = {q.get("task_id") for q in questions
+                           if q.get("status") == "open"}
+    stopped = set(conf.get("stopped_pipelines") or [])
+    merged = _merged_work()
+    grouped = {}
+    for task in tasks or []:
+        base = base_title(task.get("title", ""))
+        if base:
+            grouped.setdefault(base, []).append(task)
+
+    closed_at, retention_until = _archive_dates()
+    works_changed = False
+    statuses_changed = False
+    for base, group in grouped.items():
+        group.sort(key=lambda task: (task.get("created_at") or "", task.get("id") or ""))
+        new_meta = base not in works
+        meta = works.setdefault(base, {
+            "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
+            "reason": "", "at": group[0].get("created_at") or closed_at,
+        })
+        if new_meta:
+            works_changed = True
+
+        # Every terminal row replaced by a later row remains addressable in
+        # task history, but is no longer an unfinished attempt of the work.
+        archived_ids = {item.get("task_id") for item in meta.get("archived_attempts", [])}
+        attempts = list(meta.get("archived_attempts", []))
+        for index, task in enumerate(group):
+            task_id = task.get("id")
+            technical = _technical_cancel(task)
+            replaced = (index < len(group) - 1
+                        and task.get("state") in WORK_TERMINAL_STATES)
+            if not task_id or task_id in archived_ids or not (technical or replaced):
+                continue
+            attempt_reason = (
+                "Отменённая служебная попытка helper/debug/patrol сохранена в истории."
+                if technical else
+                "Попытку заменила более новая попытка этой работы."
+            )
+            attempts.append({
+                "task_id": task_id,
+                "closed": closed_at,
+                "closed_reason": attempt_reason,
+                "retention_until": retention_until,
+            })
+            archived_ids.add(task_id)
+            works_changed = True
+        if attempts:
+            meta["archived_attempts"] = attempts
+
+        if meta.get("closed"):
+            continue
+        live = any(task.get("state") in PIPELINE_LIVE_STATES for task in group)
+        open_question = any(task.get("id") in open_question_tasks for task in group)
+        status_state = (statuses.get(base) or {}).get("state")
+        protected = live or open_question or base in stopped or status_state == "stopped_owner"
+        # A genuine dead end stays visible.  A newer live generation already
+        # wins above and clears stale stuck state through pipeline_watch.
+        if status_state == "stuck" and not live:
+            protected = True
+        if protected:
+            continue
+
+        reason = ""
+        if group and all(_technical_cancel(task) for task in group):
+            reason = "Отменённая служебная попытка helper/debug/patrol сохранена в истории."
+        elif (base in merged
+              and merged[base] >= (group[-1].get("created_at") or "")):
+            reason = "Работа уже влита; её терминальные стадии сохранены в истории."
+        else:
+            stages = {_work_stage(task) for task in group}
+            stages.discard("")
+            manual_check = (
+                meta.get("origin") == ORIGIN_OWNER
+                and meta.get("start_stage") in ("Review", "Verify")
+                and bool(meta.get("skipped"))
+                and stages
+                and stages.issubset({"Review", "Verify"})
+                and all(task.get("state") in WORK_TERMINAL_STATES for task in group)
+            )
+            if manual_check:
+                reason = "Независимая ручная проверка завершена и сохранена в истории."
+        if not reason:
+            continue
+
+        meta.update({"closed": closed_at, "closed_reason": reason,
+                     "retention_until": retention_until})
+        statuses[base] = {"state": "archived", "text": reason,
+                          "retention_until": retention_until}
+        works_changed = True
+        statuses_changed = True
+        log(f"WORK ARCHIVE base={base!r}: {reason}")
+
+    if works_changed:
+        save(WORKS_PATH, works)
+    if statuses_changed:
+        save(f"{HOME}/pilot/work_status.json", statuses)
 
 
 def launch_subtask(conf, epic, index, workflows, workers):
@@ -5292,6 +5444,11 @@ def cycle(conf, state):
         pipeline_watch(conf, tasks, workflows, workers)
     except Exception as e:
         log("pipeline_watch_error", repr(e))
+
+    try:
+        cleanup_work_archive(conf, tasks)
+    except Exception as e:
+        log("work_archive_cleanup_error", repr(e))
 
     for t in tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")

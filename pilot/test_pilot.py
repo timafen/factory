@@ -1075,6 +1075,130 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
 
+
+class WorkArchiveCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1_786_320_000
+        self.works = {
+            "Ручной Review": {
+                "origin": "owner", "start_stage": "Review",
+                "skipped": ["Triage", "Specification", "Implement + Test"],
+            },
+            "Ручной Verify": {
+                "origin": "owner", "start_stage": "Verify",
+                "skipped": ["Triage", "Specification", "Implement + Test", "Review"],
+            },
+            "Обязательная проверка": {
+                "origin": "owner", "start_stage": "Triage", "skipped": [],
+            },
+        }
+        self.statuses = {
+            "Настоящая пауза": {"state": "stopped_owner", "text": "пауза владельца"},
+            "Настоящий тупик": {"state": "stuck", "text": "не сдвигается"},
+        }
+        self.saved = []
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.merges = os.path.join(self.temporary.name, "merges.jsonl")
+        with open(self.merges, "w", encoding="utf-8") as journal:
+            journal.write(json.dumps({"task_id": "merged", "base": "Уже влито",
+                                      "at": "2026-08-09T13:00:00Z"}) + "\n")
+
+    @staticmethod
+    def task(task_id, base, state, minute, stage="Review", request_key=""):
+        return {
+            "id": task_id, "title": f"[auto] [4/5 {stage}] {base}",
+            "state": state, "request_key": request_key,
+            "created_at": f"2026-08-09T12:{minute:02d}:00Z",
+        }
+
+    def load(self, path, default=None):
+        if path == pilot.WORKS_PATH:
+            return self.works
+        if path.endswith("/pilot/work_status.json"):
+            return self.statuses
+        return default
+
+    def save(self, path, value):
+        self.saved.append(path)
+        if path == pilot.WORKS_PATH:
+            self.works = value
+        elif path.endswith("/pilot/work_status.json"):
+            self.statuses = value
+
+    def run_cleanup(self, tasks, questions=None, stopped=None):
+        conf = {"stopped_pipelines": stopped or []}
+        with mock.patch.object(pilot, "load", side_effect=self.load), \
+                mock.patch.object(pilot, "save", side_effect=self.save), \
+                mock.patch.object(pilot, "load_questions", return_value=questions or []), \
+                mock.patch.object(pilot, "MERGES_PATH", self.merges), \
+                mock.patch.object(pilot.time, "time", return_value=self.now):
+            pilot.cleanup_work_archive(conf, tasks)
+
+    def test_archives_seven_service_rows_and_keeps_two_real_stops(self):
+        tasks = [
+            self.task("helper", "Helper checkout", "cancelled", 1,
+                      request_key="service:helper:checkout"),
+            self.task("debug", "Debug browser", "cancelled", 2,
+                      request_key="service:debug:browser"),
+            self.task("patrol", "Patrol probe", "cancelled", 3,
+                      request_key="automation:patrol:probe"),
+            self.task("merged", "Уже влито", "succeeded", 4, stage="Verify"),
+            self.task("manual-review", "Ручной Review", "succeeded", 5),
+            self.task("manual-verify", "Ручной Verify", "failed", 6, stage="Verify"),
+            self.task("replaced-old", "Новое поколение", "failed", 7),
+            self.task("replaced-new", "Новое поколение", "running", 8),
+            self.task("paused", "Настоящая пауза", "failed", 9),
+            self.task("stuck", "Настоящий тупик", "failed", 10),
+        ]
+
+        self.run_cleanup(tasks, stopped=["Настоящая пауза"])
+
+        closed = {base for base, meta in self.works.items() if meta.get("closed")}
+        self.assertEqual(closed, {
+            "Helper checkout", "Debug browser", "Patrol probe", "Уже влито",
+            "Ручной Review", "Ручной Verify",
+        })
+        replaced = self.works["Новое поколение"]
+        self.assertNotIn("closed", replaced)
+        self.assertEqual([item["task_id"] for item in replaced["archived_attempts"]],
+                         ["replaced-old"])
+        self.assertIn("более новая попытка", replaced["archived_attempts"][0]["closed_reason"])
+        self.assertNotIn("closed", self.works["Настоящая пауза"])
+        self.assertNotIn("closed", self.works["Настоящий тупик"])
+        for base in closed:
+            self.assertIn("closed_reason", self.works[base])
+            self.assertEqual(self.works[base]["retention_until"], "2026-11-08T00:00:00Z")
+            self.assertEqual(self.statuses[base]["state"], "archived")
+
+        writes_after_first_run = len(self.saved)
+        self.run_cleanup(tasks, stopped=["Настоящая пауза"])
+        self.assertEqual(len(self.saved), writes_after_first_run)
+
+    def test_protects_owner_question_live_pause_stuck_and_required_verification(self):
+        tasks = [
+            self.task("question", "Открытый вопрос", "failed", 1),
+            self.task("live", "Активная очередь", "queued", 2),
+            self.task("paused", "Настоящая пауза", "failed", 3),
+            self.task("stuck", "Настоящий тупик", "failed", 4),
+            self.task("required-review", "Обязательная проверка", "succeeded", 5),
+        ]
+        self.run_cleanup(tasks, questions=[{"task_id": "question", "status": "open"}],
+                         stopped=["Настоящая пауза"])
+
+        for base in ("Открытый вопрос", "Активная очередь", "Настоящая пауза",
+                     "Настоящий тупик", "Обязательная проверка"):
+            self.assertNotIn("closed", self.works[base])
+
+
+class PipelineWatchMergeTests(unittest.TestCase):
+    def setUp(self):
+        self.conf = {
+            "stages": [{"workflow": "Specification"}, {"workflow": "Implement"},
+                       {"workflow": "Review"}],
+            "timeout_seconds": 900,
+        }
+
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
         self.conf["stages"] = [{"workflow": "Verify"}]
@@ -1114,7 +1238,7 @@ class PipelineWatchTests(unittest.TestCase):
                  "provider_limits_tick", "detect_limits", "record_new_works",
                  "budget_guard", "handle_epics", "rescue_queued",
                  "supersede_stale_questions", "handle_answers", "advance_epics",
-                 "autostart_plan")
+                 "autostart_plan", "cleanup_work_archive")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
