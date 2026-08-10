@@ -165,6 +165,10 @@ if [ -f "$work/src/ops/factory-janitor.sh" ]; then
     || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
 fi
 
+step "ставлю и проверяю изолированный серверный браузер"
+bash "$work/src/ops/install-server-browser.sh" \
+  || rollback "серверный браузер не прошёл сетевую проверку" 7
+
 python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
 import json, sys, datetime
 p, sha, subj, ref, iso = sys.argv[1:6]

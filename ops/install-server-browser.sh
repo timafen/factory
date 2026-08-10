@@ -23,15 +23,23 @@ PAYLOAD=${FACTORY_BROWSER_SHARE:-$ROOT}
 LIBEXEC=${FACTORY_BROWSER_LIBEXEC:-/usr/local/libexec/factory}
 FACTORY_USER=${FACTORY_USER:-factory}
 LAUNCHER=$LIBEXEC/factory-browser-sandbox
-previous=
-installed=0
+HELPER=$LIBEXEC/factory-browser-isolated
+CONFIG=$LIBEXEC/factory-browser.conf
+SUDOERS=${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}
+backup=
+changed=0
 
 rollback() {
   status=$?
-  if [ "$installed" = 1 ]; then
-    rm -f -- "$LAUNCHER"
-    if [ -n "$previous" ]; then mv -- "$previous" "$LAUNCHER"; fi
+  if [ "$changed" = 1 ]; then
+    for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$SUDOERS"; do
+      name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
+      rm -f -- "$target"
+      rm -f -- "$target.new"
+      [ ! -e "$backup/$name" ] && [ ! -L "$backup/$name" ] || cp -a -- "$backup/$name" "$target"
+    done
   fi
+  [ -z "$backup" ] || rm -rf -- "$backup"
   exit "$status"
 }
 trap rollback ERR
@@ -41,13 +49,21 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 id "$FACTORY_USER" >/dev/null
+[[ "$FACTORY_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] \
+  || { echo "unsafe Factory account name" >&2; exit 1; }
 FACTORY_HOME=$(getent passwd "$FACTORY_USER" | cut -d: -f6)
 [ -n "$FACTORY_HOME" ]
 
 [ -f "$PAYLOAD/web/package.json" ]
 [ -f "$PAYLOAD/web/package-lock.json" ]
 [ -x "$PAYLOAD/ops/factory-browser-sandbox" ]
+[ -x "$PAYLOAD/ops/factory-browser-isolated" ]
 [ -x "$PAYLOAD/ops/test-browser-sandbox.sh" ]
+[ -x "$PAYLOAD/ops/test-systemd-browser-firewall.sh" ]
+
+# Do not install a launcher unless the live kernel demonstrably enforces the
+# same deny-by-default primitive used for every browser process.
+"$PAYLOAD/ops/test-systemd-browser-firewall.sh"
 
 cd "$PAYLOAD/web"
 npm ci --no-audit --no-fund --silent
@@ -61,24 +77,45 @@ if [ -z "$browser" ]; then
   exit 1
 fi
 
-install -d -o "$FACTORY_USER" -g "$FACTORY_USER" -m 755 "$LIBEXEC"
-temporary=$(mktemp "$LIBEXEC/.factory-browser-sandbox.XXXXXX")
-install -o "$FACTORY_USER" -g "$FACTORY_USER" -m 755 \
-  "$PAYLOAD/ops/factory-browser-sandbox" "$temporary"
-if [ -e "$LAUNCHER" ] || [ -L "$LAUNCHER" ]; then
-  previous=$(mktemp "$LIBEXEC/.factory-browser-sandbox.previous.XXXXXX")
-  rm -f -- "$previous"
-  mv -- "$LAUNCHER" "$previous"
-fi
-mv -- "$temporary" "$LAUNCHER"
-installed=1
+install -d -o root -g root -m 755 "$LIBEXEC"
+install -d -o root -g root -m 755 "$(dirname "$SUDOERS")"
+backup=$(mktemp -d "$LIBEXEC/.factory-browser-backup.XXXXXX")
+for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$SUDOERS"; do
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
+    cp -a -- "$target" "$backup/$name"
+  fi
+done
+changed=1
+
+install -o root -g root -m 755 "$PAYLOAD/ops/factory-browser-sandbox" "$LAUNCHER.new"
+install -o root -g root -m 755 "$PAYLOAD/ops/factory-browser-isolated" "$HELPER.new"
+{
+  printf 'FACTORY_BROWSER_EXECUTABLE=%q\n' "$browser"
+  printf 'FACTORY_BROWSER_USER=%q\n' "$FACTORY_USER"
+  printf 'FACTORY_BROWSER_GROUP=%q\n' "$(id -gn "$FACTORY_USER")"
+  printf 'FACTORY_BROWSER_HOME=%q\n' "$FACTORY_HOME"
+} >"$CONFIG.new"
+chown root:root "$CONFIG.new"
+chmod 600 "$CONFIG.new"
+{
+  printf 'Defaults!%s closefrom_override\n' "$HELPER"
+  printf '%s ALL=(root) NOPASSWD: %s *\n' "$FACTORY_USER" "$HELPER"
+} >"$SUDOERS.new"
+chmod 440 "$SUDOERS.new"
+visudo -cf "$SUDOERS.new" >/dev/null
+mv -f -- "$LAUNCHER.new" "$LAUNCHER"
+mv -f -- "$HELPER.new" "$HELPER"
+mv -f -- "$CONFIG.new" "$CONFIG"
+mv -f -- "$SUDOERS.new" "$SUDOERS"
 
 sudo -H -u "$FACTORY_USER" env \
   FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
   FACTORY_BROWSER_WEB="$PAYLOAD/web" \
   "$PAYLOAD/ops/test-browser-sandbox.sh"
-installed=0
-rm -f -- "$previous"
+changed=0
+rm -rf -- "$backup"
+backup=
 trap - ERR
 
 printf 'Factory server browser installed: %s\n' "$browser"
