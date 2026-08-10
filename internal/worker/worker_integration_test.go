@@ -107,6 +107,20 @@ case "$prompt" in
     git commit -m "fake unpublished result" >/dev/null
     printf 'unpublished success' > "$result"
     ;;
+  *FAKE_MODE=cyrillic*)
+    [ "${LANG:-}" = "C.UTF-8" ] && [ "${LC_ALL:-}" = "C.UTF-8" ] || {
+      echo "runtime locale is not UTF-8: LANG=${LANG:-} LC_ALL=${LC_ALL:-}" >&2
+      exit 92
+    }
+    [ "${FACTORY_TEST_RUNTIME_SENTINEL:-}" = "preserved" ] || {
+      echo "runtime environment was not preserved" >&2
+      exit 93
+    }
+    echo "кириллица" > worker-output.txt
+    git add worker-output.txt
+    git commit -m "Исполнитель сохранил русский заголовок" >/dev/null
+    printf 'Результат runtime на русском' > "$result"
+    ;;
   *FAKE_MODE=hang*)
     trap '' TERM
     while :; do sleep 1; done
@@ -541,6 +555,64 @@ func TestClaudeCodeHealthAndSupervisorContract(t *testing.T) {
 			t.Fatalf("decode Claude Code supervisor output: %v", err)
 		case <-timeout.C:
 			t.Fatal("Claude Code supervisor did not exit")
+		}
+	}
+}
+
+func TestSupervisorPreservesCyrillicWithUTF8RuntimeLocale(t *testing.T) {
+	t.Setenv("FACTORY_TEST_SUPERVISOR", "1")
+	t.Setenv("FACTORY_TEST_CODEX_LOG", t.TempDir())
+	t.Setenv("FACTORY_TEST_RUNTIME_SENTINEL", "preserved")
+	t.Setenv("LANG", "C")
+	t.Setenv("LC_ALL", "C")
+
+	repository := createRepository(t, "cyrillic-runtime")
+	codexPath := filepath.Join(t.TempDir(), "codex")
+	writeFakeCodex(t, codexPath)
+	prompt := "Название задачи: Проверить кириллицу\nИнструкция: сохранить русский текст\nFAKE_MODE=cyrillic"
+	process, err := startSupervisor(
+		[]string{os.Args[0], "-test.run=TestWorkerSupervisorHelperProcess", "--"},
+		supervisorInit{
+			RuntimeExecutable: codexPath,
+			Worktree:          repository.path,
+			ResultPath:        filepath.Join(t.TempDir(), "result"),
+			Prompt:            prompt,
+			TimeoutSeconds:    60,
+		}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.awaitReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.send("start"); err != nil {
+		t.Fatal(err)
+	}
+
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case message := <-process.messages:
+			if message.Type != "exit" {
+				continue
+			}
+			if message.ExitCode != 0 || message.Reason != "exited" || message.Result != "Результат runtime на русском" {
+				t.Fatalf("Cyrillic runtime exit = %#v", message)
+			}
+			attempt := filepath.Base(repository.path)
+			storedPrompt, err := os.ReadFile(filepath.Join(os.Getenv("FACTORY_TEST_CODEX_LOG"), attempt+".prompt"))
+			if err != nil || string(storedPrompt) != prompt {
+				t.Fatalf("stored Cyrillic prompt = %q, %v", storedPrompt, err)
+			}
+			if subject := runGitTest(t, repository.path, "log", "-1", "--format=%s"); subject != "Исполнитель сохранил русский заголовок" {
+				t.Fatalf("Cyrillic commit subject = %q", subject)
+			}
+			return
+		case err := <-process.decodeErrors:
+			t.Fatalf("decode Cyrillic supervisor output: %v", err)
+		case <-timeout.C:
+			t.Fatal("Cyrillic runtime supervisor did not exit")
 		}
 	}
 }

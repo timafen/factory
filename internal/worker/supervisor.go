@@ -25,6 +25,7 @@ const (
 	terminationGrace        = 5 * time.Second
 	maxSupervisorLineBytes  = 1 << 20
 	maxSupervisorErrorBytes = 64 << 10
+	runtimeUTF8Locale       = "C.UTF-8"
 )
 
 type supervisorInit struct {
@@ -221,6 +222,7 @@ func superviseRuntime(
 	displayName := runtimeDisplayName(init.Runtime)
 	command := exec.Command(init.RuntimeExecutable, arguments...)
 	command.Dir = init.Worktree
+	command.Env = runtimeEnvironment()
 	configureExistingProcessGroup(command, groupID)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -397,6 +399,18 @@ func superviseRuntime(
 		}
 	}
 	return writer.send(message)
+}
+
+func runtimeEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if name == "LANG" || name == "LC_ALL" {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, "LANG="+runtimeUTF8Locale, "LC_ALL="+runtimeUTF8Locale)
 }
 
 func finishSupervisorStartFailure(anchor *exec.Cmd, identity string, writer *synchronizedEncoder, cause error) error {
