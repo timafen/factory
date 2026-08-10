@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/owainlewis/factory/internal/serverbrowser"
 )
 
 func TestIdentityCommandUsesDerivedDataDirectory(t *testing.T) {
@@ -102,5 +104,58 @@ func TestConfigArgumentDetection(t *testing.T) {
 	}
 	if cleanupConfigExplicit([]string{"attempt-id"}) {
 		t.Fatal("cleanup config reported explicit without an argument")
+	}
+}
+
+func TestBrowserCommandWritesPrivatePNG(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "chromium")
+	script := `#!/bin/sh
+set -eu
+for argument do
+  case "$argument" in --screenshot=*) output=${argument#--screenshot=};; esac
+done
+printf '\211PNG\r\n\032\nproof' >"$output"
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := filepath.Join(directory, "sandbox")
+	sandboxScript := `#!/bin/sh
+set -eu
+shift
+test "$1" = --
+shift
+exec "$@"
+`
+	if err := os.WriteFile(sandbox, []byte(sandboxScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousRunner := browserRunner
+	browserRunner = serverbrowser.Runner{Executable: executable, SandboxExecutable: sandbox}
+	t.Cleanup(func() { browserRunner = previousRunner })
+	output := filepath.Join(directory, "stand.png")
+	if err := os.WriteFile(output, []byte("previous public capture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(output, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runBrowser([]string{"-output", output, "https://staging-automation.tarser.net/orders"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("browser output permissions = %o, want 600", info.Mode().Perm())
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(body), "\x89PNG\r\n\x1a\n") {
+		t.Fatalf("browser output is not PNG: %q", body)
 	}
 }

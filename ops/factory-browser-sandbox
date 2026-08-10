@@ -1,0 +1,65 @@
+#!/bin/bash
+# Root-only launcher for Chromium. The browser gets a fresh network namespace
+# whose only egress rule is one TCP connection to Factory's allowlist proxy.
+set -euo pipefail
+
+fail() { echo "factory-browser-sandbox: $*" >&2; exit 3; }
+
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+[ "${1:-}" = run ] || fail "usage: run --proxy-port=PORT -- EXECUTABLE [ARG...]"
+shift
+case "${1:-}" in
+  --proxy-port=*) proxy_port=${1#--proxy-port=} ;;
+  *) fail "proxy port is required" ;;
+esac
+case "$proxy_port" in ''|*[!0-9]*) fail "invalid proxy port" ;; esac
+[ "$proxy_port" -ge 1 ] && [ "$proxy_port" -le 65535 ] || fail "invalid proxy port"
+shift
+[ "${1:-}" = -- ] || fail "missing argument separator"
+shift
+[ "$#" -gt 0 ] || fail "browser executable is required"
+case "$1" in /*) ;; *) fail "browser executable must be an absolute path" ;; esac
+[ -x "$1" ] || fail "browser executable is not executable"
+
+browser_user=${FACTORY_BROWSER_USER:-factory}
+id "$browser_user" >/dev/null 2>&1 || fail "browser user does not exist"
+suffix=$$
+namespace="factory-browser-$suffix"
+host_interface="fbh${suffix: -10}"
+peer_interface="fbp${suffix: -10}"
+third=$((suffix % 250 + 1))
+base=$(((suffix / 250 % 63) * 4))
+host_address="169.254.$third.$((base + 1))"
+browser_address="169.254.$third.$((base + 2))"
+
+cleanup() {
+  ip netns delete "$namespace" >/dev/null 2>&1 || true
+  ip link delete "$host_interface" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT HUP INT TERM
+
+ip netns add "$namespace"
+ip link add "$host_interface" type veth peer name "$peer_interface"
+ip address add "$host_address/30" dev "$host_interface"
+ip link set "$host_interface" up
+ip link set "$peer_interface" netns "$namespace"
+ip -n "$namespace" link set "$peer_interface" name eth0
+ip -n "$namespace" address add "$browser_address/30" dev eth0
+ip -n "$namespace" link set eth0 up
+
+# No default route is installed. Firewall rules additionally make TCP, UDP and
+# DNS fail closed even if a route is accidentally added later.
+ip netns exec "$namespace" iptables -P INPUT DROP
+ip netns exec "$namespace" iptables -P OUTPUT DROP
+ip netns exec "$namespace" iptables -P FORWARD DROP
+ip netns exec "$namespace" iptables -A INPUT -p tcp -s "$host_address" --sport "$proxy_port" \
+  -m conntrack --ctstate ESTABLISHED -j ACCEPT
+ip netns exec "$namespace" iptables -A OUTPUT -p tcp -d "$host_address" --dport "$proxy_port" \
+  -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT
+ip netns exec "$namespace" ip6tables -P INPUT DROP
+ip netns exec "$namespace" ip6tables -P OUTPUT DROP
+ip netns exec "$namespace" ip6tables -P FORWARD DROP
+
+export FACTORY_BROWSER_PROXY_HOST=$host_address
+ip netns exec "$namespace" runuser -u "$browser_user" -- \
+  "$1" "--proxy-server=http://$host_address:$proxy_port" "--proxy-bypass-list=<-loopback>" "${@:2}"

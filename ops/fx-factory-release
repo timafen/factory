@@ -62,6 +62,21 @@ as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/fact
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
   || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
 
+# fx is installed separately from the application binaries. Publish the
+# root-owned browser-sandbox payload so `fx factory browser-sandbox install`
+# can install/check it without retaining the release checkout.
+if [ "$(id -u)" -eq 0 ]; then
+  step "готовлю установщик сетевой песочницы браузера"
+  browser_share=/usr/local/share/factory/browser-sandbox
+  install -d -m 755 "$browser_share/ops" "$browser_share/web" \
+    && install -o root -g root -m 755 \
+      "$work/src/ops/install-server-browser.sh" "$work/src/ops/factory-browser-sandbox" \
+      "$work/src/ops/test-browser-sandbox.sh" "$browser_share/ops/" \
+    && install -o root -g root -m 644 \
+      "$work/src/web/package.json" "$work/src/web/package-lock.json" "$browser_share/web/" \
+    || { fail "не смог подготовить browser-sandbox"; cleanup; exit 4; }
+fi
+
 step "сохраняю работающую пару бинарей"
 cp -f "$SERVER_BIN" "$work/factory-server.prev" \
   && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
