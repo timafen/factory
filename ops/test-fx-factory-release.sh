@@ -89,8 +89,11 @@ if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
 fi
 if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
   echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
-  [ "$TEST_MODE" != browser-install-fail ]
-  exit
+  if [ "$TEST_MODE" = browser-install-fail ]; then
+    echo "Chromium sandbox smoke failed: No usable sandbox" >&2
+    exit 1
+  fi
+  exit 0
 fi
 if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
   echo "bash ops/provision-codex-auth.sh" >>"$TEST_GATES"
@@ -217,7 +220,16 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install control-install-fail browser-install-fail; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
-  if run_release "$failed" "$mode"; then fail "$mode unexpectedly succeeded"; fi
+  set +e
+  run_release "$failed" "$mode"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "$mode unexpectedly succeeded"
+  if [ "$mode" = browser-install-fail ]; then
+    [ "$status" -eq 7 ] || fail "browser-install-fail returned $status instead of release error 7"
+    grep -F 'Chromium sandbox smoke failed: No usable sandbox' "$failed/output" >/dev/null \
+      || fail "release hid the browser installer diagnostic"
+  fi
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
   tail -n 2 "$failed/events" | diff -u - <(printf '%s\n' \
