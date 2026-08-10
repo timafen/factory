@@ -38,8 +38,11 @@ func TestPipelinePatrolProvisionUsesExistingScheduleAndPreservesRuns(t *testing.
 	if !stringsContain(provisioned.Automation.Context, PipelinePatrolInstruction) {
 		t.Fatalf("patrol context = %q", provisioned.Automation.Context)
 	}
+	if provisioned.Automation.Version != detail.Automation.Version+1 {
+		t.Fatalf("provisioned version = %d, want %d", provisioned.Automation.Version, detail.Automation.Version+1)
+	}
 	replayed, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
-	if err != nil || replayed.Automation.Context != provisioned.Automation.Context {
+	if err != nil || replayed.Automation.Context != provisioned.Automation.Context || replayed.Automation.Version != provisioned.Automation.Version {
 		t.Fatalf("replayed provision = %#v, error %v", replayed.Automation, err)
 	}
 
@@ -73,4 +76,78 @@ func TestPipelinePatrolProvisionDoesNotInventSchedule(t *testing.T) {
 	store := newTestStore(t)
 	_, err := store.ProvisionPipelinePatrol(context.Background(), "")
 	assertErrorCode(t, err, "pipeline_patrol_automation_required")
+}
+
+func TestPipelinePatrolProvisionMakesPriorVersionStale(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, false)
+	provisioned, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetAutomationEnabled(context.Background(), detail.Automation.ID, false, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.UpdateAutomation(context.Background(), detail.Automation.ID, protocol.UpdateAutomationRequest{
+		ExpectedVersion: detail.Automation.Version,
+		Title:           detail.Automation.Title,
+		WorkflowID:      detail.Automation.WorkflowID,
+		Context:         detail.Automation.Context,
+		TimeoutSeconds:  detail.Automation.TimeoutSeconds,
+		Trigger:         detail.Automation.Trigger,
+	})
+	assertErrorCode(t, err, "automation_version_conflict")
+	current, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Automation.Version != provisioned.Automation.Version || !stringsContain(current.Automation.Context, PipelinePatrolInstruction) {
+		t.Fatalf("Automation after stale update = %#v", current.Automation)
+	}
+}
+
+func TestPipelinePatrolProvisionEnforcesContextByteLimit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		finalSize int
+		wantError bool
+	}{
+		{name: "exact limit", finalSize: protocol.MaxAutomationContextBytes},
+		{name: "one byte over", finalSize: protocol.MaxAutomationContextBytes + 1, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+			store, detail := createScheduleAutomationFixture(t, &now, false)
+			prefixSize := test.finalSize - len([]byte(PipelinePatrolInstruction)) - len("\n\n")
+			updated, err := store.UpdateAutomation(context.Background(), detail.Automation.ID, protocol.UpdateAutomationRequest{
+				ExpectedVersion: detail.Automation.Version,
+				Title:           detail.Automation.Title,
+				WorkflowID:      detail.Automation.WorkflowID,
+				Context:         string(bytes.Repeat([]byte("x"), prefixSize)),
+				TimeoutSeconds:  detail.Automation.TimeoutSeconds,
+				Trigger:         detail.Automation.Trigger,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			provisioned, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
+			if test.wantError {
+				assertErrorCode(t, err, "invalid_automation_context")
+				current, loadErr := store.Automation(context.Background(), detail.Automation.ID)
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if current.Automation.Version != updated.Automation.Version || current.Automation.Enabled {
+					t.Fatalf("rejected provision mutated Automation = %#v", current.Automation)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len([]byte(provisioned.Automation.Context)) != protocol.MaxAutomationContextBytes {
+				t.Fatalf("provisioned context size = %d", len([]byte(provisioned.Automation.Context)))
+			}
+		})
+	}
 }

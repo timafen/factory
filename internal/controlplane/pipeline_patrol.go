@@ -45,11 +45,15 @@ func (s *Store) ProvisionPipelinePatrol(ctx context.Context, automationID string
 	}
 
 	contextValue := snapshot.context
-	if !strings.Contains(contextValue, PipelinePatrolInstruction) {
+	addingInstruction := !strings.Contains(contextValue, PipelinePatrolInstruction)
+	if addingInstruction {
 		if strings.TrimSpace(contextValue) != "" {
 			contextValue += "\n\n"
 		}
 		contextValue += PipelinePatrolInstruction
+	}
+	if len([]byte(contextValue)) > protocol.MaxAutomationContextBytes {
+		return protocol.AutomationDetail{}, invalid("invalid_automation_context", "context is limited to 8 KiB")
 	}
 	now := s.now()
 	nextDue := snapshot.nextDueAt
@@ -64,13 +68,25 @@ func (s *Store) ProvisionPipelinePatrol(ctx context.Context, automationID string
 		}
 		nextDue = sql.NullInt64{Int64: next.UnixMilli(), Valid: true}
 	}
-	if _, err := tx.ExecContext(ctx, `
+	versionIncrement := 0
+	if addingInstruction {
+		versionIncrement = 1
+	}
+	result, err := tx.ExecContext(ctx, `
 		UPDATE automations
-		SET context = ?, enabled = 1, health_status = 'healthy', health_code = '',
+		SET context = ?, version = version + ?, enabled = 1, health_status = 'healthy', health_code = '',
 		    health_message = 'Pipeline patrol provisioned from the existing schedule.', updated_at = ?
-		WHERE id = ?
-	`, contextValue, now.UnixMilli(), automationID); err != nil {
+		WHERE id = ? AND version = ?
+	`, contextValue, versionIncrement, now.UnixMilli(), automationID, snapshot.automationVersion)
+	if err != nil {
 		return protocol.AutomationDetail{}, unavailable(err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return protocol.AutomationDetail{}, unavailable(err)
+	}
+	if changed != 1 {
+		return protocol.AutomationDetail{}, conflict("automation_version_conflict", "the Automation changed while the pipeline patrol was being provisioned")
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE automation_schedule_triggers SET next_due_at = ? WHERE automation_id = ? AND next_due_at IS NULL
