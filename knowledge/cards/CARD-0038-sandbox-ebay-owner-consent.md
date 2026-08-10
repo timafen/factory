@@ -2,18 +2,27 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; staging OAuth/callback по-прежнему
-  заблокирован зависимостью [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
-- Branch: `factory/690fc9a4-327-84449332-328`.
-- Head commit: verification commit containing this card.
-- Evidence: Go-набор, 70 целевых UI-проверок, allowlist `fx`, tooling и launcher
-  успешно; общий UI-набор красный только в несвязанном `Dialog.test.tsx`, а e2e
-  останавливается на устаревшем заголовке главной страницы. Staging `fx` ещё не
-  содержит интерактивный флаг.
+- Status: Verified PASS — Factory-часть уже есть в `main`; staging OAuth/callback
+  по-прежнему заблокирован зависимостью [`tarser-operations#24`](https://github.com/timafen/tarser-operations/issues/24).
+- Branch: `factory/14e18bad-9dd-d47e5880-15a`.
+- Head commit: `3888b55` (проверенная исходная вершина `origin/main`).
+- What changed: повторных изменений кода не требуется: `ops/fx` допускает только
+  staging seller consent, а controlplane не выдаёт секреты в ответах start/status.
+- Evidence: `bash -n ops/fx`, `bash ops/test-fx-sandbox-consent.sh` и
+  `go test ./internal/controlplane` завершились успешно 2026-08-10.
 - One next action: завершить `tarser-operations#24`, установить bridge на staging
   и повторить живой seller consent smoke.
 
 ## LOG
+
+### 2026-08-10 — Implement
+
+На свежем `origin/main` повторно проверена уже поставленная Factory-реализация:
+`ops/fx` принимает только точный интерактивный seller consent на staging, а
+controlplane сохраняет узкий безопасный контракт start/status. Повторных правок
+кода не вносилось. Успешно прошли `bash -n ops/fx`,
+`bash ops/test-fx-sandbox-consent.sh` и `go test ./internal/controlplane`.
+Живой smoke остаётся зависимым от `tarser-operations#24` и установки bridge на staging.
 
 ### 2026-08-09 — Verify
 
