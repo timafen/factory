@@ -1050,9 +1050,14 @@ class PipelineWatchTests(unittest.TestCase):
         )
 
     def test_waits_before_resuming_lost_transition(self):
+        self.assertEqual(pilot.STALL_WAIT, 450)
         self.watch()
         self.assertEqual(self.created, [])
         self.assertEqual(self.memory["Встроенный патруль"]["since"], self.now)
+
+        self.now += pilot.STALL_WAIT - 1
+        self.watch()
+        self.assertEqual(self.created, [])
 
     def test_resumes_once_after_wait_with_same_repository_and_revision(self):
         self.memory = {
