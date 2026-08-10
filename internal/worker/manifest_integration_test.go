@@ -255,6 +255,9 @@ func TestManifestWritesAreAtomicAndDurable(t *testing.T) {
 }
 
 func TestStartupReconciliationClassifiesManifestAndFilesystemState(t *testing.T) {
+	fixture := newServerFixture(t, nil)
+	repository := createRepository(t, "reconcile")
+	repositoryBase := runGitTest(t, repository.path, "rev-parse", "HEAD")
 	cases := []struct {
 		name          string
 		initial       string
@@ -300,11 +303,12 @@ func TestStartupReconciliationClassifiesManifestAndFilesystemState(t *testing.T)
 	}
 	for index, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			fixture := newServerFixture(t, nil)
-			repository := createRepository(t, "reconcile")
 			dataDirectory := filepath.Join(t.TempDir(), "worker")
 			manager := newTestManager(t, fixture, filepath.Join(t.TempDir(), "codex"), dataDirectory,
 				map[string]repositoryFixture{"factory": repository}, 1)
+			manager.repositories[0].BaseBranch = "main"
+			manager.repositories[0].BaseCommit = repositoryBase
+			manager.repositoriesByKey["factory"] = manager.repositories[0]
 			t.Cleanup(func() { _ = manager.Close() })
 			workerValue, err := fixture.store.RegisterWorker(context.Background(), manager.ID(), protocol.WorkerRegistration{
 				Name: "test-worker", WorkerVersion: "test", RuntimeVersion: "test", Capacity: 1,
