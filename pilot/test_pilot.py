@@ -1889,7 +1889,7 @@ class PostMergeDeployTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         run_shell.assert_called_once_with("fx staging release")
-        self.assertIn("TRADING-STAGING-DEPLOY", log.call_args.args[0])
+        self.assertIn("AUTOMATION-STAGING-DEPLOY", log.call_args.args[0])
 
     @mock.patch.object(pilot, "log")
     @mock.patch.object(pilot, "run_shell", return_value=(0, "ok"))
@@ -1914,6 +1914,60 @@ class PostMergeDeployTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         run_shell.assert_called_once_with("fx factory release")
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(8, "another release is running"))
+    def test_busy_factory_release_is_coalesced_for_retry(self, run_shell, _log):
+        state = {}
+        conf = {"deploy_factory_cmd": "fx factory release"}
+
+        result = pilot.deploy_after_merge(
+            conf, "github.com/timafen/factory", state, now=100)
+        pilot.deploy_after_merge(
+            conf, "github.com/timafen/factory", state, now=110)
+
+        self.assertEqual(result, 8)
+        self.assertEqual(state["pending_factory_deploy"], {
+            "due": 170, "attempts": 0,
+        })
+        self.assertEqual(run_shell.call_count, 2)
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(0, "released latest main"))
+    def test_pending_factory_release_waits_then_clears_on_success(self, run_shell, _log):
+        state = {"pending_factory_deploy": {"due": 160, "attempts": 2}}
+        conf = {"deploy_factory_cmd": "fx factory release"}
+
+        self.assertIsNone(pilot.retry_pending_factory_deploy(conf, state, now=159))
+        self.assertEqual(
+            pilot.retry_pending_factory_deploy(conf, state, now=160), 0)
+
+        run_shell.assert_called_once_with("fx factory release")
+        self.assertNotIn("pending_factory_deploy", state)
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(8, "still running"))
+    def test_pending_factory_release_backs_off_while_lock_is_busy(self, _run_shell, _log):
+        state = {"pending_factory_deploy": {"due": 100, "attempts": 0}}
+
+        result = pilot.retry_pending_factory_deploy(
+            {"deploy_factory_cmd": "fx factory release"}, state, now=100)
+
+        self.assertEqual(result, 8)
+        self.assertEqual(state["pending_factory_deploy"], {
+            "due": 160, "attempts": 1,
+        })
+
+    @mock.patch.object(pilot, "log")
+    @mock.patch.object(pilot, "run_shell", return_value=(5, "tests failed"))
+    def test_real_release_failure_is_not_retried_forever(self, _run_shell, _log):
+        state = {"pending_factory_deploy": {"due": 100, "attempts": 1}}
+
+        result = pilot.retry_pending_factory_deploy(
+            {"deploy_factory_cmd": "fx factory release"}, state, now=100)
+
+        self.assertEqual(result, 5)
+        self.assertNotIn("pending_factory_deploy", state)
 
 
 class DashboardProjectsTest(unittest.TestCase):

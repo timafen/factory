@@ -4657,14 +4657,17 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
                     make_epic_from(tid, title, detail)
 
 
-def deploy_after_merge(conf, repo_identity):
+FACTORY_DEPLOY_RETRY_DELAY = 60
+
+
+def deploy_after_merge(conf, repo_identity, state=None, now=None):
     """Release only the environment owned by the repository that was merged."""
     identity = (repo_identity or "").lower()
     if identity.endswith(".git"):
         identity = identity[:-4]
     if identity.endswith("timafen/tarser-operations"):
         command_key = "deploy_staging_cmd"
-        label = "TRADING-STAGING-DEPLOY"
+        label = "AUTOMATION-STAGING-DEPLOY"
     elif identity.endswith("timafen/factory"):
         command_key = "deploy_factory_cmd"
         label = "FACTORY-DEPLOY"
@@ -4678,6 +4681,43 @@ def deploy_after_merge(conf, repo_identity):
         return None
     rc, output = run_shell(command)
     log(f"{label} rc={rc} :: {output[:200]}")
+    if command_key == "deploy_factory_cmd" and state is not None:
+        if rc == 8:
+            due = (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY
+            pending = state.get("pending_factory_deploy") or {}
+            state["pending_factory_deploy"] = {
+                "due": due,
+                "attempts": int(pending.get("attempts") or 0),
+            }
+            log("FACTORY-DEPLOY занят: свежий main поставлен на повторный выпуск")
+        elif rc == 0:
+            state.pop("pending_factory_deploy", None)
+    return rc
+
+
+def retry_pending_factory_deploy(conf, state, now=None):
+    """Retry one coalesced Factory release after a concurrent release ends."""
+    pending = state.get("pending_factory_deploy")
+    if not pending:
+        return None
+    current = time.time() if now is None else now
+    if current < float(pending.get("due") or 0):
+        return None
+    command = conf.get("deploy_factory_cmd")
+    if not command:
+        log("FACTORY-DEPLOY repeat skipped: deploy_factory_cmd is not configured")
+        state.pop("pending_factory_deploy", None)
+        return None
+    rc, output = run_shell(command)
+    log(f"FACTORY-DEPLOY-RETRY rc={rc} :: {output[:200]}")
+    if rc == 0:
+        state.pop("pending_factory_deploy", None)
+    elif rc == 8:
+        pending["attempts"] = int(pending.get("attempts") or 0) + 1
+        pending["due"] = current + FACTORY_DEPLOY_RETRY_DELAY
+    else:
+        # A real build or health failure needs diagnosis, not an endless loop.
+        state.pop("pending_factory_deploy", None)
     return rc
 
 
@@ -5008,7 +5048,7 @@ def cycle(conf, state):
                             notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     if ok:
-                        deploy_after_merge(conf, repo_identity)
+                        deploy_after_merge(conf, repo_identity, state)
                 else:
                     log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
             else:
@@ -5191,6 +5231,10 @@ def cycle(conf, state):
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
+
+    # A merge that lost the release lock must not be forgotten. Several such
+    # merges collapse into one release of the latest main.
+    retry_pending_factory_deploy(conf, state)
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
