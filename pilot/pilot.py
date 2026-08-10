@@ -587,6 +587,108 @@ def _archive_dates(now=None):
     )
 
 
+def _same_work(left, right):
+    return base_title(str(left or "")).strip().casefold() == base_title(
+        str(right or "")
+    ).strip().casefold()
+
+
+def close_work(base, reason):
+    """Persist an explicit terminal boundary without disguising it as a pause."""
+    closed_at, retention_until = _archive_dates()
+    works = load(WORKS_PATH, {}) or {}
+    meta = works.setdefault(base, {
+        "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
+        "reason": "", "at": closed_at,
+    })
+    if not meta.get("closed"):
+        meta.update({"closed": closed_at, "closed_reason": reason,
+                     "retention_until": retention_until})
+        save(WORKS_PATH, works)
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    statuses[base] = {"state": "archived", "text": reason,
+                      "retention_until": meta.get("retention_until", retention_until)}
+    save(f"{HOME}/pilot/work_status.json", statuses)
+
+
+def reopen_work(base, generation, reason="Владелец явно запустил новое поколение работы."):
+    """Open a new generation while retaining the previous close receipt."""
+    works = load(WORKS_PATH, {}) or {}
+    meta = works.get(base)
+    if meta:
+        if meta.get("closed"):
+            history = list(meta.get("closed_generations") or [])
+            history.append({key: meta[key] for key in (
+                "closed", "closed_reason", "retention_until"
+            ) if meta.get(key)})
+            meta["closed_generations"] = history
+        for key in ("closed", "closed_reason", "retention_until"):
+            meta.pop(key, None)
+        meta.update({"run_generation": generation, "reopened_reason": reason})
+        save(WORKS_PATH, works)
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    if (statuses.get(base) or {}).get("state") == "archived":
+        statuses.pop(base, None)
+        save(f"{HOME}/pilot/work_status.json", statuses)
+    conf = load(CONF_PATH, None)
+    if isinstance(conf, dict):
+        stopped = list(conf.get("stopped_pipelines") or [])
+        kept = [name for name in stopped if not _same_work(name, base)]
+        if kept != stopped:
+            conf["stopped_pipelines"] = kept
+            save(CONF_PATH, conf)
+
+
+def work_lifecycle_block(base, task=None, tasks=None):
+    """Return the durable reason why an old task may not create more work.
+
+    An active Plan card is a generation boundary: while it is merely planned,
+    none of the old tasks belongs to the new run; once linked, only that task
+    and tasks created after it do.  Terminal Plan cards and archive receipts
+    close the preceding generation across Pilot restarts.
+    """
+    matching = [idea for idea in ideas_all() if _same_work(idea.get("title"), base)]
+    active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
+    if active:
+        current = active[-1]
+        linked_id = current.get("task_id") or ""
+        if not linked_id:
+            return "новое поколение запланировано, но ещё не начато"
+        if task and task.get("id") == linked_id:
+            return ""
+        linked = next((item for item in (tasks or []) if item.get("id") == linked_id), None)
+        boundary = (linked or {}).get("created_at") or ""
+        if task and boundary and (task.get("created_at") or "") >= boundary:
+            return ""
+        return "задача относится к поколению до явного повторного запуска"
+    terminal = [idea for idea in matching if idea.get("state") in ("done", "rejected")]
+    if terminal:
+        rec = terminal[-1]
+        return (rec.get("reason") or
+                ("карточка Плана завершена" if rec.get("state") == "done"
+                 else "карточка Плана отклонена"))
+
+    works = load(WORKS_PATH, {}) or {}
+    meta = next((value for name, value in works.items() if _same_work(name, base)), {})
+    if task and any(item.get("task_id") == task.get("id")
+                    for item in meta.get("archived_attempts", [])):
+        return "эту попытку заменила более новая попытка работы"
+    if meta.get("closed"):
+        return meta.get("closed_reason") or "работа закрыта и сохранена в истории"
+
+    if task:
+        number = stage_no_of(task.get("title"))
+        created = task.get("created_at") or ""
+        newer = [item for item in (tasks or [])
+                 if item.get("id") != task.get("id")
+                 and _same_work(item.get("title"), base)
+                 and (item.get("created_at") or "") > created
+                 and stage_no_of(item.get("title")) <= number]
+        if number and created and newer:
+            return "эту попытку заменила более новая попытка работы"
+    return ""
+
+
 def _technical_cancel(task):
     """Recognise only known cancelled service runs, not every Automation."""
     if task.get("state") != "cancelled":
@@ -759,6 +861,10 @@ def cleanup_work_archive(conf, tasks):
                      "retention_until": retention_until})
         statuses[base] = {"state": "archived", "text": reason,
                           "retention_until": retention_until}
+        for idea in ideas_all():
+            if (_same_work(idea.get("title"), base)
+                    and idea.get("state") in ("new", "planned", "in_work")):
+                set_idea(idea["id"], state="done", reason=reason)
         works_changed = True
         statuses_changed = True
         log(f"WORK ARCHIVE base={base!r}: {reason}")
@@ -1612,8 +1718,16 @@ def set_idea(idea_id, **fields):
 
 def plan_idea(idea_id):
     """Schedule a fresh run while keeping retries of that run idempotent."""
-    return set_idea(idea_id, state="planned", task_id="", reason="",
-                    run_generation=str(uuid.uuid4()))
+    idea = next((item for item in ideas_all() if item.get("id") == idea_id), None)
+    generation = str(uuid.uuid4())
+    updated = set_idea(idea_id, state="planned", task_id="", reason="",
+                       run_generation=generation)
+    if idea:
+        reopen_work(idea.get("title", ""), generation)
+    if isinstance(updated, dict):
+        return updated
+    return dict(idea or {}, state="planned", task_id="", reason="",
+                run_generation=generation)
 
 
 def cleanup_completed_plan_cards(tasks, final_stage_no):
@@ -1904,7 +2018,10 @@ def stage_names(conf):
 
 def work_status_write(mem):
     """Пишем словами, почему работа стоит: экран не должен врать."""
-    out = {}
+    out = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    transient = {"stopped_owner", "stuck", "nudged", "idle"}
+    out = {base: rec for base, rec in out.items()
+           if rec.get("state") not in transient or base in (mem or {})}
     for base, rec in (mem or {}).items():
         why = rec.get("why")
         if why == "owner":
@@ -1917,6 +2034,9 @@ def work_status_write(mem):
         elif why == "nudged":
             out[base] = {"state": "nudged",
                          "text": "конвейер встал, я запустил следующий этап сам"}
+        elif why == "closed":
+            out[base] = {"state": "archived",
+                         "text": rec.get("reason") or "работа закрыта"}
         else:
             out[base] = {"state": "idle",
                          "text": "ничего не бежит, жду следующий этап"}
@@ -1936,6 +2056,23 @@ def pipeline_watch(conf, tasks, workflows, workers):
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     for base, lst in groups.items():
+        allowed = []
+        blocked = []
+        for stage, task in lst:
+            reason = work_lifecycle_block(base, task, tasks)
+            if reason:
+                blocked.append(reason)
+            else:
+                allowed.append((stage, task))
+        if not allowed:
+            if any("закрыт" in reason or "завершена" in reason
+                   or "отклонена" in reason for reason in blocked):
+                mem[base] = {"why": "closed", "reason": blocked[-1],
+                             "since": now}
+            else:
+                mem.pop(base, None)
+            continue
+        lst = allowed
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
             continue
@@ -2705,6 +2842,16 @@ def reconcile_diag_repairs(conf, tasks):
     by_id = {t.get("id"): t for t in tasks}
     for base, repair in list(repairs.items()):
         status = repair.get("status")
+        source = by_id.get(repair.get("task_id")) or {
+            "id": repair.get("task_id"), "title": repair.get("title", "")
+        }
+        closed_reason = work_lifecycle_block(base, source, tasks)
+        if closed_reason:
+            repair["status"] = "closed"
+            repair["closed_reason"] = closed_reason
+            _save_diag_repair(base, repair)
+            log(f"DIAG REPAIR CLOSED base={base!r}: {closed_reason}")
+            continue
         if status == "cancel_pending":
             # A restart may happen after the control plane accepted the cancel
             # but before we persisted its result. Cancelling the same task is
@@ -3434,6 +3581,36 @@ def record_new_works(conf, tasks, max_age_min=180):
     known = load(WORKS_PATH, {})
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            time.gmtime(time.time() - max_age_min * 60))
+    # Явно созданная владельцем новая live-задача после durable close — это
+    # новое поколение. Старый terminal-снимок условию live/created-after-close
+    # не соответствует и потому никогда не снимает архивную границу.
+    reopened = set()
+    for task in tasks:
+        title = task.get("title") or ""
+        base = base_title(title)
+        meta = known.get(base) or {}
+        if (not title.startswith(PREFIX) or base in reopened or not meta.get("closed")
+                or task.get("state") not in PIPELINE_LIVE_STATES):
+            continue
+        created = _work_time(task.get("created_at"))
+        closed = _work_time(meta.get("closed"))
+        if not created or not closed or created <= closed:
+            continue
+        generation = str(uuid.uuid4())
+        reopen_work(base, generation)
+        conf["stopped_pipelines"] = [name for name in
+                                     (conf.get("stopped_pipelines") or [])
+                                     if not _same_work(name, base)]
+        for idea in ideas_all():
+            if (_same_work(idea.get("title"), base)
+                    and idea.get("state") in ("done", "rejected")):
+                set_idea(idea["id"], state="in_work", task_id=task.get("id") or "",
+                         reason="", run_generation=generation)
+        reopened.add(base)
+        log(f"WORK REOPEN base={base!r}: owner-created task={task.get('id', '')}")
+    if reopened:
+        known = load(WORKS_PATH, {})
+
     # самая ранняя стадия каждой работы среди свежих задач
     first = {}
     for t in tasks:
@@ -3472,6 +3649,14 @@ def handle_answers(conf, workflows, workers, tasks):
                 or fresh.get("resumed_task_id")):
             continue
         q = fresh
+        src_task = next((t for t in tasks if t.get("id") == q.get("task_id")), None)
+        closed_reason = work_lifecycle_block(q.get("title", ""), src_task, tasks)
+        if closed_reason:
+            q["status"] = "resolved"
+            q["escalation_reason"] = "не возобновлена: " + closed_reason
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer: '{q.get('title','')[:40]}' закрыта — {closed_reason}")
+            continue
         stage = q.get("resume_stage")
         if stage not in stages:
             log(f"answer: unknown resume stage {stage!r} for {q['id']}")
@@ -3539,7 +3724,6 @@ def handle_answers(conf, workflows, workers, tasks):
             log(f"answer: '{q.get('title','')[:40]}' остановлена владельцем — не возобновляю")
             continue
 
-        src_task = next((t for t in tasks if t["id"] == q.get("task_id")), None)
         dup = live_or_done_at(tasks, q["title"], idx + 1,
                               since=(src_task or {}).get("created_at"))
         if dup:
@@ -5685,6 +5869,12 @@ def cycle(conf, state):
         if tid in state["processed"]:
             continue
         if tstate not in ("succeeded", "failed", "cancelled"):
+            continue
+
+        closed_reason = work_lifecycle_block(base_title(title), t, tasks)
+        if closed_reason:
+            state["processed"].append(tid)
+            log(f"stage_ended task={tid} — не продолжаю: {closed_reason}")
             continue
 
         detail = api(f"/tasks/{tid}")

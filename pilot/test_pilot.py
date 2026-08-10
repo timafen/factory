@@ -1122,6 +1122,211 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertIn("после двух попыток", self.notifications[0][1])
 
 
+class ClosedWorkLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = self.temporary.name
+        os.makedirs(os.path.join(self.root, "pilot", "questions"))
+        self.paths = {
+            "HOME": self.root,
+            "WORKS_PATH": os.path.join(self.root, "pilot", "works.json"),
+            "IDEAS_PATH": os.path.join(self.root, "pilot", "ideas.json"),
+            "CONF_PATH": os.path.join(self.root, "pilot", "config.json"),
+            "STALL_PATH": os.path.join(self.root, "pilot", "stalled.json"),
+            "DIAG_REPAIR_PATH": os.path.join(self.root, "pilot", "diag_repairs.json"),
+            "QUESTION_DIR": os.path.join(self.root, "pilot", "questions"),
+        }
+        self.patches = [mock.patch.object(pilot, name, value)
+                        for name, value in self.paths.items()]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        pilot.save(pilot.CONF_PATH, {"stopped_pipelines": []})
+        pilot.save(pilot.IDEAS_PATH, [])
+        self.conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "timeout_seconds": 900,
+        }
+        self.workflows = {
+            "Triage": {"enabled": True, "revision_id": "triage-rev"},
+            "Specification": {"enabled": True, "revision_id": "spec-rev"},
+        }
+        self.workers = {"worker": {"id": "worker-id"}}
+        self.old = {
+            "id": "old-triage", "title": "[auto] [1/2 Triage] Закрытая работа",
+            "state": "succeeded", "repository_id": "repo-id",
+            "created_at": "2026-08-10T10:00:00Z",
+        }
+
+    def watch(self, tasks, created):
+        with mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "create_task",
+                                  side_effect=lambda body, _conf: created.append(body) or
+                                  {"task": {"id": "spec"}}), \
+                mock.patch.object(pilot, "notify"):
+            pilot.pipeline_watch(self.conf, tasks, self.workflows, self.workers)
+
+    def test_closed_triage_stays_closed_across_two_cycles_and_restart(self):
+        reason = "Владелец закрыл работу как заменённую новой карточкой."
+        pilot.close_work("Закрытая работа", reason)
+        created = []
+
+        with mock.patch.object(pilot.time, "time", return_value=20_000):
+            self.watch([self.old], created)
+            self.watch([self.old], created)
+            os.remove(pilot.STALL_PATH)
+            self.watch([self.old], created)
+
+        self.assertEqual(created, [])
+        self.assertEqual(pilot.load(pilot.CONF_PATH, {})["stopped_pipelines"], [])
+        status = pilot.load(os.path.join(self.root, "pilot", "work_status.json"), {})
+        self.assertEqual(status["Закрытая работа"]["state"], "archived")
+        self.assertEqual(status["Закрытая работа"]["text"], reason)
+
+    def test_done_plan_card_blocks_old_success_and_answer(self):
+        pilot.save(pilot.IDEAS_PATH, [{
+            "id": "card", "title": "Закрытая работа", "state": "done",
+            "reason": "Карточка закрыта после замены.",
+        }])
+        question = {
+            "id": "question", "task_id": "old-triage", "title": "Закрытая работа",
+            "stage": "Triage", "resume_stage": "Specification", "status": "answered",
+            "answer": "Продолжай", "repository_id": "repo-id",
+        }
+        pilot.save(os.path.join(pilot.QUESTION_DIR, "question.json"), question)
+        created = []
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "create_task",
+                                  side_effect=lambda body, _conf: created.append(body)):
+            self.assertEqual(pilot.handle_answers(
+                self.conf, self.workflows, self.workers, [self.old]), 0)
+
+        self.watch([self.old], created)
+        self.assertEqual(created, [])
+        resolved = pilot.load(os.path.join(pilot.QUESTION_DIR, "question.json"), {})
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertIn("Карточка закрыта после замены", resolved["escalation_reason"])
+
+    def test_completed_stage_handler_cannot_advance_old_triage_after_restart(self):
+        pilot.save(pilot.IDEAS_PATH, [{
+            "id": "card", "title": "Закрытая работа", "state": "done",
+            "reason": "Карточка уже завершена.",
+        }])
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [self.old]}
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {"id": "spec-rev", "title": "Specification"},
+                }]}
+            if path == "/tasks" and body is not None:
+                created.append(body)
+                return {"task": {"id": "unexpected"}}
+            raise AssertionError("old terminal task detail must not be read: " + path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "cleanup_work_archive",
+            "retry_pending_factory_deploy", "autostart_plan",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day, _week: {day: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, {"processed": []})
+            pilot.cycle(self.conf, {"processed": []})
+
+        self.assertEqual(created, [])
+
+    def test_restart_repair_is_retired_instead_of_recreating_closed_work(self):
+        pilot.close_work("Закрытая работа", "Работа архивирована владельцем.")
+        pilot.save(pilot.DIAG_REPAIR_PATH, {"Закрытая работа": {
+            "status": "resume_pending", "task_id": "old-triage",
+            "title": self.old["title"], "request_key": "stable-repair",
+        }})
+        with mock.patch.object(pilot, "create_task") as create:
+            pilot.reconcile_diag_repairs(self.conf, [self.old])
+
+        create.assert_not_called()
+        repair = pilot.load(pilot.DIAG_REPAIR_PATH, {})["Закрытая работа"]
+        self.assertEqual(repair["status"], "closed")
+        self.assertEqual(repair["closed_reason"], "Работа архивирована владельцем.")
+
+    def test_explicit_reopen_creates_new_generation_and_allows_it_only(self):
+        pilot.save(pilot.IDEAS_PATH, [{
+            "id": "card", "title": "Закрытая работа", "state": "done",
+            "reason": "Старое поколение завершено.",
+        }])
+        pilot.close_work("Закрытая работа", "Старое поколение завершено.")
+        reopened = pilot.plan_idea("card")
+        created = []
+        with mock.patch.object(pilot.time, "time", return_value=20_000):
+            self.watch([self.old], created)
+        self.assertEqual(created, [])
+
+        current = dict(self.old, id="new-triage", created_at="2026-08-10T12:00:00Z")
+        pilot.set_idea("card", state="in_work", task_id="new-triage",
+                       run_generation=reopened["run_generation"])
+        pilot.save(pilot.STALL_PATH, {
+            "Закрытая работа": {"since": 1, "nudges": 0},
+        })
+        with mock.patch.object(pilot.time, "time", return_value=20_000):
+            self.watch([self.old, current], created)
+
+        self.assertEqual([body["title"] for body in created], [
+            "[auto] [2/2 Specification] Закрытая работа",
+        ])
+        work = pilot.load(pilot.WORKS_PATH, {})["Закрытая работа"]
+        self.assertNotIn("closed", work)
+        self.assertEqual(work["closed_generations"][0]["closed_reason"],
+                         "Старое поколение завершено.")
+
+    def test_owner_created_live_task_after_close_is_a_new_generation(self):
+        pilot.save(pilot.IDEAS_PATH, [{
+            "id": "card", "title": "Закрытая работа", "state": "done",
+            "reason": "Старое поколение завершено.",
+        }])
+        with mock.patch.object(pilot.time, "time", return_value=1_786_359_600):
+            pilot.close_work("Закрытая работа", "Старое поколение завершено.")
+        current = dict(
+            self.old, id="owner-restart", state="queued",
+            created_at="2026-08-10T12:00:00Z",
+        )
+
+        with mock.patch.object(pilot.time, "time", return_value=1_786_366_800):
+            pilot.record_new_works(self.conf, [self.old, current], max_age_min=10_000)
+
+        card = pilot.ideas_all()[0]
+        self.assertEqual((card["state"], card["task_id"]),
+                         ("in_work", "owner-restart"))
+        self.assertTrue(pilot.work_lifecycle_block(
+            "Закрытая работа", self.old, [self.old, current]))
+        self.assertEqual(pilot.work_lifecycle_block(
+            "Закрытая работа", current, [self.old, current]), "")
+
+
 class WorkArchiveCleanupTests(unittest.TestCase):
     def setUp(self):
         self.now = 1_786_320_000
@@ -2098,8 +2303,13 @@ class PlanManualTaskTest(unittest.TestCase):
         self.assertEqual(body["repository_id"], "repo-1")
         uuid.UUID(body["request_key"])
         note_work.assert_called_once()
-        set_idea.assert_called_once_with(
-            "manual-card", state="in_work", task_id="manual-task")
+        self.assertEqual(set_idea.call_count, 2)
+        generation = set_idea.call_args_list[0].kwargs["run_generation"]
+        self.assertEqual(set_idea.call_args_list[0].args, ("manual-card",))
+        self.assertEqual(set_idea.call_args_list[0].kwargs["state"], "planned")
+        set_idea.assert_called_with(
+            "manual-card", state="in_work", task_id="manual-task",
+            run_generation=generation)
 
 
 class StageWorkerCapacityTests(unittest.TestCase):
@@ -2587,6 +2797,8 @@ class AdaptivePollingTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "stage_worker",
                                                   return_value="worker"))
             stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block",
+                                                  return_value=""))
             stack.enter_context(mock.patch.object(pilot, "decide", return_value={
                 "action": "advance", "next_complexity": "medium", "handoff": "",
             }))
