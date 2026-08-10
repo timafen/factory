@@ -40,6 +40,7 @@ EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
 HOST_LOAD_ACTIVE_STATES = {"running", "queued", "pending", "created", "starting"}
 HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
 HOST_LOAD_MINIMUM_ACTIVE = 1
+MAX_RETAINED_PER_REPOSITORY = 10
 
 
 def api(path, body=None):
@@ -96,7 +97,7 @@ UI_BASE = "https://factory.timafen.com"
 # телефона. Событие, чья группа выключена, всё равно пишется в журнал и видно
 # в интерфейсе — молчит только push, чтобы в потоке было видно настоящую тревогу.
 NOTIFY_GROUPS = {
-    "questions": ("Нужен твой ответ", "План эпика готов"),
+    "questions": ("Нужен твой ответ", "План эпика готов", "Кодекс закончил — твой ход"),
     "stuck": ("Кручусь по кругу", "Зациклилось", "Не могу продолжить",
               "Проверка не прошла", "Verify PASS, но мёрж", "Эпик НЕ запустился"),
     "money": ("Не влезло в деньги", "Остановил работу", "Дневной потолок",
@@ -4408,7 +4409,10 @@ def rescue_queued(conf, tasks, workflows, workers):
         if t.get("state") != "queued" or _age_min(t.get("created_at")) < wait:
             continue
         sick = by_id.get(t.get("worker_id"))
-        if sick and sick.get("online") and sick.get("health") == "healthy":
+        repository_id = t.get("repository_id")
+        retention_full = worker_retention_full(sick, repository_id)
+        if (sick and sick.get("online") and sick.get("health") == "healthy"
+                and not retention_full):
             continue                      # просто ждёт очереди — это не беда
         try:
             detail = api(f"/tasks/{t['id']}")
@@ -4421,7 +4425,18 @@ def rescue_queued(conf, tasks, workflows, workers):
                     conf.get("respect_host_load", True)):
                 continue
             cx = complexity_of(conf, stage, (sick or {}).get("name", "")) or "medium"
-            name = stage_worker(conf, stage, cx, workers)
+            # A worker at the retained-worktree safety limit still reports
+            # healthy and online, but the control plane will reject every
+            # claim for this repository. Hide all such routes from selection
+            # so queue rescue cannot select the same blocked worker again.
+            routing_workers = {}
+            if isinstance(workers, dict):
+                for worker_name, worker in workers.items():
+                    candidate = dict(worker)
+                    if worker_retention_full(candidate, repository_id):
+                        candidate["health"] = "retention_full"
+                    routing_workers[worker_name] = candidate
+            name = stage_worker(conf, stage, cx, routing_workers or workers)
             fresh = workers.get(name) if isinstance(workers, dict) else None
             if not fresh or fresh.get("id") == t.get("worker_id"):
                 continue
@@ -4437,10 +4452,33 @@ def rescue_queued(conf, tasks, workflows, workers):
             }
             created = create_task(body, conf)
             log(f"QUEUE RESCUE task={t['id'][:8]} {stage} "
-                f"{(sick or {}).get('name', '?')} (нездоров) -> {name} "
+                f"{(sick or {}).get('name', '?')} "
+                f"({'нет места для сохранённых работ' if retention_full else 'нездоров'}) -> {name} "
                 f"new={created.get('task', {}).get('id', '?')[:8]}")
         except Exception as e:
             log("queue_rescue_error", repr(e))
+
+
+def worker_retention_full(worker, repository_id=None):
+    """Whether retained worktrees make a worker unable to claim more work.
+
+    The Go control plane deliberately stops claims at ten retained worktrees
+    per repository. Heartbeats remain healthy in that state, so the pilot must
+    include repository headroom in its own routing health check.
+    """
+    if not isinstance(worker, dict):
+        return False
+    repositories = worker.get("repositories") or []
+    if repository_id:
+        repositories = [repository for repository in repositories
+                        if repository.get("id") == repository_id]
+    for repository in repositories:
+        try:
+            if int(repository.get("retained_count") or 0) >= MAX_RETAINED_PER_REPOSITORY:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
@@ -4458,7 +4496,8 @@ def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
         if not workers:
             return True
         w = workers.get(name)
-        return bool(w and w.get("online") and w.get("health") == "healthy")
+        return bool(w and w.get("online") and w.get("health") == "healthy"
+                    and not worker_retention_full(w))
 
     def available(name):
         """Prefer a worker with a free execution slot instead of queueing on a busy one."""

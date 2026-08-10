@@ -1505,6 +1505,26 @@ class StageWorkerCapacityTests(unittest.TestCase):
         self.assertEqual(selected, "preferred")
 
     @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_retention_full_preferred_worker_uses_spare(self, _limits):
+        workers = {
+            "preferred": {
+                "online": True, "health": "healthy", "capacity": 2,
+                "active_count": 0,
+                "repositories": [{"id": "factory", "retained_count": 10}],
+            },
+            "spare": {
+                "online": True, "health": "healthy", "capacity": 2,
+                "active_count": 0,
+                "repositories": [{"id": "factory", "retained_count": 0}],
+            },
+        }
+
+        selected = pilot.stage_worker(
+            self.conf, "Implement + Test", "medium", workers)
+
+        self.assertEqual(selected, "spare")
+
+    @mock.patch.object(pilot, "load_limits", return_value={})
     def test_exact_escalation_queues_on_high_tier_instead_of_falling_back(self, _limits):
         workers = {
             "preferred": {"online": True, "health": "healthy", "capacity": 2, "active_count": 0},
@@ -1719,6 +1739,53 @@ class HostLoadAdmissionTests(unittest.TestCase):
         api.assert_called_once_with("/tasks/queued-task")
         stage_worker.assert_not_called()
         create.assert_not_called()
+
+    @mock.patch.object(pilot, "_age_min", return_value=10)
+    @mock.patch.object(pilot, "complexity_of", return_value="low")
+    @mock.patch.object(pilot, "stage_worker", return_value="spare-worker")
+    @mock.patch.object(
+        pilot, "create_task", return_value={"task": {"id": "replacement-task"}})
+    def test_retention_full_worker_is_rescued_while_still_healthy(
+            self, create, stage_worker, _complexity, _age):
+        task = {
+            "id": "queued-task", "state": "queued", "worker_id": "full-id",
+            "repository_id": "repo-id", "created_at": "2026-08-09T00:00:00",
+            "title": "Pipeline task",
+        }
+        detail = {
+            "workflow": {"title": "Specification"}, "context": "preserve me",
+            "task": {"repository_id": "repo-id"},
+        }
+        workflows = {
+            "Specification": {"enabled": True, "revision_id": "revision-id"}
+        }
+        workers = {
+            "full-worker": {
+                "id": "full-id", "name": "full-worker", "online": True,
+                "health": "healthy", "capacity": 2, "active_count": 0,
+                "repositories": [{"id": "repo-id", "retained_count": 10}],
+            },
+            "spare-worker": {
+                "id": "spare-id", "name": "spare-worker", "online": True,
+                "health": "healthy", "capacity": 2, "active_count": 0,
+                "repositories": [{"id": "repo-id", "retained_count": 0}],
+            },
+        }
+
+        def fake_api(path, body=None):
+            if path == "/tasks/queued-task":
+                return detail
+            if path == "/tasks/queued-task/cancel" and body == {}:
+                return {}
+            raise AssertionError((path, body))
+
+        with mock.patch.object(pilot, "api", side_effect=fake_api):
+            pilot.rescue_queued({}, [task], workflows, workers)
+
+        routed_workers = stage_worker.call_args.args[3]
+        self.assertEqual(routed_workers["full-worker"]["health"], "retention_full")
+        self.assertEqual(routed_workers["spare-worker"]["health"], "healthy")
+        self.assertEqual(create.call_args.args[0]["worker_id"], "spare-id")
 
 
 class DashboardSnapshotTest(unittest.TestCase):

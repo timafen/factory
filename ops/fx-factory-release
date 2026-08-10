@@ -151,6 +151,11 @@ if [ -x "$work/src/ops/install-brain.sh" ]; then
   bash "$work/src/ops/install-brain.sh" "$work/src" \
     || fail "мозг не встал — сервер и воркер уже обновлены"
 fi
+if [ -f "$work/src/ops/factory-janitor.sh" ]; then
+  janitor_bin="${FACTORY_JANITOR_BIN:-/usr/local/bin/factory-janitor.sh}"
+  install -o root -g root -m 755 "$work/src/ops/factory-janitor.sh" "$janitor_bin" \
+    || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
+fi
 
 python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
 import json, sys, datetime
