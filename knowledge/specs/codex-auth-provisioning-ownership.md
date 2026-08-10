@@ -80,5 +80,5 @@ provisioner; Go, Python, web-клиент, API и схема данных не �
 
 `knowledge/cards/CARD-0047-codex-auth-provisioning-ownership.md`
 
-ГОТОВО-КОГДА: файл отсутствует в этом репозитории — внешний provisioner
-ГОТОВО-КОГДА: команда stat -Lc '%F %a %U %G' /opt/factory-data/.codex/auth.json | grep -Fx 'regular file 600 factory factory'
+ГОТОВО-КОГДА: файл /opt/factory-data/.codex-*/auth.json
+ГОТОВО-КОГДА: команда test -n "$(find /opt/factory-data -maxdepth 2 -path '/opt/factory-data/.codex-*/auth.json' -type l -print -quit)" && test -z "$(find /opt/factory-data -maxdepth 2 -path '/opt/factory-data/.codex-*/auth.json' -type l \( ! -user factory -o ! -group factory \) -print -quit)" && stat -Lc '%F %a %U %G' /opt/factory-data/.codex/auth.json | grep -Fx 'regular file 600 factory factory'
