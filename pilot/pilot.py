@@ -1476,6 +1476,7 @@ def autostart_plan(conf, tasks, workflows, workers):
 # Так уже случалось: этап закончился, следующий не создали (замок по области,
 # перегрузка, пауза), и повод создать его больше никогда не появлялся.
 STALL_PATH = f"{HOME}/pilot/stalled.json"
+REVIVE_DIR = f"{HOME}/pilot/revive"
 STALL_WAIT = 600      # сколько ждём, прежде чем толкать: вдруг просто пауза
 STALL_NUDGES = 2      # сколько раз толкаем сами, дальше — к хозяину
 PIPELINE_LIVE_STATES = frozenset(
@@ -1511,6 +1512,33 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
+def revive_signal_path(work):
+    return os.path.join(REVIVE_DIR, work.encode().hex())
+
+
+def revive_signals():
+    """Return the signals present at scan time; acknowledgement is separate."""
+    try:
+        names = os.listdir(REVIVE_DIR)
+    except FileNotFoundError:
+        return []
+    result = []
+    for name in names:
+        try:
+            work = bytes.fromhex(name).decode()
+        except (TypeError, ValueError, UnicodeDecodeError):
+            continue
+        result.append(work)
+    return result
+
+
+def acknowledge_revive_signal(work):
+    try:
+        os.unlink(revive_signal_path(work))
+    except FileNotFoundError:
+        pass
+
+
 def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
@@ -1523,9 +1551,19 @@ def pipeline_watch(conf, tasks, workflows, workers):
             groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    revive = set(revive_signals())
+    free_work_slots = max(0, int(conf.get("max_parallel_works", 4)) -
+                          len(active_auto_works(tasks)))
+    # Control plane records intent only. Consuming it here keeps stage, branch,
+    # workflow and worker selection in the single existing pipeline authority.
+    for base in revive:
+        if base not in stopped:
+            mem[base] = {"since": now - STALL_WAIT, "nudges": 0}
     for base, lst in groups.items():
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(base, None)
+            if base in revive and base not in stopped:
+                acknowledge_revive_signal(base)
             continue
         if base in stopped:
             rec = mem.get(base) or {}
@@ -1540,6 +1578,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
         far = max(idx)
         if far >= len(stages) - 1:
             mem.pop(base, None)          # дошли до конца конвейера
+            if base in revive:
+                acknowledge_revive_signal(base)
             continue
         rec = mem.get(base) or {}
         rec.setdefault("since", now)
@@ -1555,6 +1595,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
                        "а следующий не запускается даже после двух попыток.",
                        priority="high", tags="warning")
             continue
+        if free_work_slots <= 0:
+            continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
         wname = stage_worker(conf, nxt, "medium", workers)
@@ -1564,6 +1606,9 @@ def pipeline_watch(conf, tasks, workflows, workers):
         src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        # Reserve before create_task so several signals in one scan cannot all
+        # observe the same final slot. A failed request releases the slot.
+        free_work_slots -= 1
         try:
             create_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
@@ -1577,11 +1622,14 @@ def pipeline_watch(conf, tasks, workflows, workers):
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
+            if base in revive:
+                acknowledge_revive_signal(base)
             log("WATCH сдвинул застрявшую работу " + repr(base[:60]) +
                 ": " + stages[far] + " -> " + nxt)
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" + stages[far] + " → " + nxt, tags="wrench")
         except Exception as e:
+            free_work_slots += 1
             log("watch_create_error", repr(e))
     save(STALL_PATH, mem)
     try:
