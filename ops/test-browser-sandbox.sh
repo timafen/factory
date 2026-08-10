@@ -17,9 +17,16 @@ cd "$web"
 node - "$launcher" "$screenshot" <<'NODE'
 const { chromium } = require("playwright");
 
-async function requireDOM(page, url) {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+async function requireHealthyDOM(page, url, requireFactoryTitle = false) {
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  if (!response || !response.ok()) {
+    const status = response ? response.status() : "no response";
+    throw new Error(`unexpected HTTP response for ${url}: ${status}`);
+  }
   await page.locator("body").waitFor({ state: "attached", timeout: 5000 });
+  if (requireFactoryTitle && !/\bFactory\b/i.test(await page.title())) {
+    throw new Error("public Factory response has no recognizable Factory title");
+  }
 }
 
 async function withPage(browser, options, check) {
@@ -44,17 +51,26 @@ async function withPage(browser, options, check) {
     headless: true,
   });
   try {
-    await withPage(browser, undefined, (page) => requireDOM(page, "http://127.0.0.1:7337"));
+    await withPage(browser, undefined, (page) =>
+      requireHealthyDOM(page, "http://127.0.0.1:7337"));
     await withPage(browser, auth, async (page) => {
-      try {
-        await requireDOM(page, "https://factory.timafen.com");
-      } catch (error) {
-        const code = String(error && error.message).match(/net::(ERR_[A-Z0-9_]+)/)?.[1];
-        if (auth || code !== "ERR_INVALID_AUTH_CREDENTIALS") throw error;
+      if (auth) {
+        await requireHealthyDOM(page, "https://factory.timafen.com", true);
+      } else {
+        try {
+          await page.goto("https://factory.timafen.com", {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          });
+          throw new Error("public Factory did not return ERR_INVALID_AUTH_CREDENTIALS");
+        } catch (error) {
+          const code = String(error && error.message).match(/net::(ERR_[A-Z0-9_]+)/)?.[1];
+          if (code !== "ERR_INVALID_AUTH_CREDENTIALS") throw error;
+        }
       }
     });
     await withPage(browser, undefined, async (page) => {
-      await requireDOM(page, "https://staging-automation.tarser.net");
+      await requireHealthyDOM(page, "https://staging-automation.tarser.net");
       await page.screenshot({ path: process.argv[3], fullPage: true });
     });
     for (const url of ["https://automation.tarser.net", "https://example.com"]) {

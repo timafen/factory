@@ -67,6 +67,15 @@ exports.chromium = {
             }
             if (url.includes("automation.tarser.net") && !url.includes("staging-")) throw new Error("blocked");
             if (url.includes("example.com")) throw new Error("blocked");
+            const status = Number(url.includes("127.0.0.1")
+              ? process.env.TEST_LOOPBACK_STATUS || "200"
+              : url.includes("staging-automation.tarser.net")
+                ? process.env.TEST_STAGING_STATUS || "200"
+                : process.env.TEST_FACTORY_STATUS || "200");
+            return {
+              ok() { return status >= 200 && status < 300; },
+              status() { return status; },
+            };
           },
           locator(selector) {
             return {
@@ -75,6 +84,9 @@ exports.chromium = {
                   `dom=${selector} state=${options.state}\n`);
               },
             };
+          },
+          async title() {
+            return urlTitle(pageId);
           },
           async screenshot(options) {
             fs.writeFileSync(options.path, "screenshot");
@@ -88,6 +100,10 @@ exports.chromium = {
     };
   },
 };
+
+function urlTitle() {
+  return process.env.TEST_FACTORY_TITLE || "Factory";
+}
 JS
 cat >"$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome" <<'SH'
 #!/bin/bash
@@ -148,7 +164,7 @@ printf 'sudo-args=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 run_user=
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -H|-n) shift ;;
+    -H|-n|--preserve-env=*) shift ;;
     -C) shift 2 ;;
     -u) run_user=$2; shift 2 ;;
     *)
@@ -383,6 +399,61 @@ if grep -F "$secret_user" "$temporary/standalone-auth-output" >/dev/null \
   || grep -F "$secret_user" "$temporary/events" >/dev/null \
   || grep -F "$secret_password" "$temporary/events" >/dev/null; then
   fail "standalone smoke напечатал Basic Auth secret"
+fi
+
+# Responses with an HTML body are not enough: each allowed endpoint must be a
+# successful HTTP response, and an authenticated public response must identify
+# itself as Factory. The fake implements Playwright Response.ok/status/title.
+expect_standalone_smoke_failure() {
+  local name=$1
+  shift
+  local status=0
+  env TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+    PATH="$test_bin:$PATH" FACTORY_BROWSER_LAUNCHER="$libexec/factory-browser-sandbox" \
+    FACTORY_BROWSER_WEB="$share/web" FACTORY_BROWSER_SCREENSHOT="$temporary/rejected-$name.png" \
+    "$@" "$share/ops/test-browser-sandbox.sh" >"$temporary/rejected-$name-output" 2>&1 \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "standalone smoke принял $name"
+  grep -Fx 'Factory browser smoke failed' "$temporary/rejected-$name-output" >/dev/null \
+    || fail "standalone smoke опубликовал небезопасную диагностику: $name"
+}
+
+expect_standalone_smoke_failure 'public HTML 401 without credentials' \
+  TEST_FACTORY_GOTO_ERROR=success TEST_FACTORY_STATUS=401
+for factory_status in 401 403 500; do
+  expect_standalone_smoke_failure "public HTML $factory_status with credentials" \
+    TEST_FACTORY_GOTO_ERROR=success TEST_FACTORY_STATUS="$factory_status" \
+    FACTORY_BROWSER_BASIC_AUTH_USERNAME="$secret_user" \
+    FACTORY_BROWSER_BASIC_AUTH_PASSWORD="$secret_password"
+done
+expect_standalone_smoke_failure 'public non-Factory title with credentials' \
+  TEST_FACTORY_GOTO_ERROR=success TEST_FACTORY_STATUS=200 TEST_FACTORY_TITLE='Access denied' \
+  FACTORY_BROWSER_BASIC_AUTH_USERNAME="$secret_user" \
+  FACTORY_BROWSER_BASIC_AUTH_PASSWORD="$secret_password"
+expect_standalone_smoke_failure 'loopback HTML 500' TEST_LOOPBACK_STATUS=500
+expect_standalone_smoke_failure 'staging HTML 403' TEST_STAGING_STATUS=403
+
+# The installer invokes the same standalone scenario and passes auth only via
+# sudo's preserved environment, never as a value in its logged arguments.
+: >"$temporary/events"
+installer_auth="$temporary/installer-auth"
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  TEST_FACTORY_GOTO_ERROR=success PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_BASIC_AUTH_USERNAME="$secret_user" \
+  FACTORY_BROWSER_BASIC_AUTH_PASSWORD="$secret_password" \
+  FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$installer_auth/libexec" \
+  FACTORY_BROWSER_SUDOERS="$installer_auth/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$installer_auth/apparmor.d/factory-browser" \
+  FACTORY_BROWSER_SCREENSHOT="$installer_auth/screenshot.png" \
+  bash "$linked_installer" >"$installer_auth-output" 2>&1 \
+  || fail "installer smoke не открыл Factory с Basic Auth credentials"
+grep -F 'auth=yes' "$temporary/events" >/dev/null \
+  || fail "installer не передал Basic Auth credentials в browser context"
+if grep -F "$secret_user" "$installer_auth-output" >/dev/null \
+  || grep -F "$secret_password" "$installer_auth-output" >/dev/null \
+  || grep -F "$secret_user" "$temporary/events" >/dev/null \
+  || grep -F "$secret_password" "$temporary/events" >/dev/null; then
+  fail "installer smoke напечатал Basic Auth secret"
 fi
 
 for network_error in ERR_NAME_NOT_RESOLVED ERR_CERT_AUTHORITY_INVALID ERR_CONNECTION_TIMED_OUT; do

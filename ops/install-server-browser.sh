@@ -151,10 +151,18 @@ apparmor_parser -r "$APPARMOR" >/dev/null
 
 step "запускаю живую проверку Chromium sandbox и сетевого allowlist"
 smoke_output=$backup/browser-smoke.log
-if sudo -H -u "$FACTORY_USER" env \
-    FACTORY_BROWSER_LAUNCHER="$LAUNCHER" \
-    FACTORY_BROWSER_WEB="$PAYLOAD/web" \
-    FACTORY_BROWSER_SCREENSHOT="${FACTORY_BROWSER_SCREENSHOT:-/tmp/factory-browser-smoke.png}" \
+smoke_environment=(
+  "FACTORY_BROWSER_LAUNCHER=$LAUNCHER"
+  "FACTORY_BROWSER_WEB=$PAYLOAD/web"
+  "FACTORY_BROWSER_SCREENSHOT=${FACTORY_BROWSER_SCREENSHOT:-/tmp/factory-browser-smoke.png}"
+)
+smoke_preserve_environment=()
+if [ "${FACTORY_BROWSER_BASIC_AUTH_USERNAME+x}" = x ] \
+  || [ "${FACTORY_BROWSER_BASIC_AUTH_PASSWORD+x}" = x ]; then
+  smoke_preserve_environment=(--preserve-env=FACTORY_BROWSER_BASIC_AUTH_USERNAME,FACTORY_BROWSER_BASIC_AUTH_PASSWORD)
+fi
+if sudo -H -u "$FACTORY_USER" "${smoke_preserve_environment[@]}" env \
+    "${smoke_environment[@]}" \
     "$PAYLOAD/ops/test-browser-sandbox.sh" >"$smoke_output" 2>&1
 then
   cat "$smoke_output"
