@@ -10,7 +10,7 @@ cat >"$temporary/bin/systemctl" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$FACTORY_BROKER_SYSTEMCTL_LOG"
-if [ "$1" = is-active ]; then exit 3; fi
+if [ "$1" = is-active ]; then exit "${FACTORY_BROKER_IS_ACTIVE_STATUS:-3}"; fi
 EOF
 chmod +x "$temporary/bin/systemctl"
 cat >"$temporary/bin/getent" <<'EOF'
@@ -49,3 +49,23 @@ grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-serve
 grep -qx -- '--system factory-release' "$temporary/groupadd.log"
 grep -qx 'daemon-reload' "$temporary/systemctl.log"
 grep -qx 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
+
+: >"$temporary/systemctl.log"
+FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
+FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
+FACTORY_RELEASE_BROKER_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
+FACTORY_RELEASE_BROKER_OWNER= \
+FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
+FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
+FACTORY_RELEASE_BROKER_GROUPADD="$temporary/bin/groupadd" \
+FACTORY_BROKER_SYSTEMCTL_LOG="$temporary/systemctl.log" \
+FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
+FACTORY_BROKER_IS_ACTIVE_STATUS=0 \
+  "$root/ops/install-project-release-broker.sh" \
+    "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
+
+grep -qx 'daemon-reload' "$temporary/systemctl.log"
+grep -qx 'is-active --quiet factory-release-broker.service' "$temporary/systemctl.log"
+grep -qx 'restart factory-release-broker.service' "$temporary/systemctl.log"
+test "$(grep -c '^restart factory-release-broker.service$' "$temporary/systemctl.log")" -eq 1
+! grep -q 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
