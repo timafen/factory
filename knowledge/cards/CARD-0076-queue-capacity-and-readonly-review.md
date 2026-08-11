@@ -4,15 +4,15 @@ Implementation commit: d5c1b0419c8540b07a8be071d0b9e035d336b88d — перена
 
 ## HEAD
 
-- Status: Implemented and tested — awaiting Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/07ad4173-33f-c7c279e1-e50`.
 - Implementation commit: `d5c1b0419c8540b07a8be071d0b9e035d336b88d` — события
   переназначения считаются по времени, а `NOT READY` повторно ставит Review в очередь.
 - What changed: `025` хранит фактические события переназначения; worker передаёт
   read-only `NOT READY` структурированно, а control plane атомарно возвращает execution в `queued`.
-- Evidence: `go test ./...` → PASS; `npm --prefix web run lint/typecheck/test/build` → PASS;
-  `git rebase origin/main` → up to date.
-- One next action: выполнить Review реализации и миграций `024`/`025`.
+- Evidence: `just check` (после `npm ci` продолжены только не выполненные UI/tooling/launcher
+  части) → PASS: Go, анализаторы, 155 UI-тестов, три бинарника и launcher; production UI build → PASS.
+- One next action: выполнить human merge ветки в `main`.
 
 ## LOG
 
@@ -43,3 +43,17 @@ typecheck, UI build и сборка трёх бинарников заверши
 переносит старое событие в новое окно. `NOT READY` read-only Review теперь
 передаётся worker как `disposition:not_ready`; control plane завершает попытку и
 повторно ставит execution в очередь одной транзакцией. Go- и UI-проверки прошли.
+
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Upgrade `023→024→025` | `just check` / `TestSpecificationPublishesDocumentsMigrationInstallsExactRevision` и store-тесты | PASS: база через `023` открылась с применёнными `024` и `025`; новые поля и журнал используются тестами |
+| Старые события не повторяются в `reassigned_at` | `TestMetricsCountQueueReassignmentsByEventTime` | PASS: старое событие осталось вне окна 24h после нового `updated_at` execution |
+| Structured `NOT READY` ставит тот же execution в очередь ровно один раз | `TestReadOnlyNotReadyIsRequeuedWithoutDuplicateAttempt` | PASS: тот же task завершился после двух attempts — один failed `NOT READY`, один succeeded |
+| Свободный совместимый worker без дубля | `TestCompatibleIdleWorkerClaimsQueuedAssignment`, `TestCompatibleWorkersClaimOnceWhileWriterContinues` | PASS: единственный claim/attempt, writer продолжил работу |
+| UI и сборка | `just ui-check`, `just test-tooling` | PASS: lint, typecheck, 155 тестов, production UI и три Go-бинарника |
+
+Трёхточечный `git diff origin/main...HEAD` непустой и проходит `git diff --check`.
+Implementation commit `d5c1b0419c8540b07a8be071d0b9e035d336b88d` существует, является предком
+ветки, не совпадает с карточным tip и меняет код и миграцию вне `knowledge/cards/`.
