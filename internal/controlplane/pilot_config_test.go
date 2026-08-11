@@ -102,6 +102,25 @@ func TestPilotConfigProjectProvidersAreStrictAndPreserved(t *testing.T) {
 	if _, err := validatePilotSettings(settings); err == nil {
 		t.Fatal("unknown executable provider type was accepted")
 	}
+	settings.ProjectProviders[0].Type = " trade "
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("provider type with ambiguous whitespace was accepted")
+	}
+
+	settings = validPilotSettings()
+	settings.ProjectProviders = []protocol.ProjectProvider{{RemoteIdentity: "github.com/acme/shop", Type: "trade"}}
+	store, path := writePilotFixture(t, settings)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = bytes.Replace(body, []byte(`"type":"trade"`), []byte(`"type":"trade","health_command":"curl production"`), 1)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(); err == nil {
+		t.Fatal("provider-owned shell command was accepted by strict config schema")
+	}
 }
 
 func TestPilotConfigRejectsReasoningDowngradeInHigherTier(t *testing.T) {

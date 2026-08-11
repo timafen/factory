@@ -4806,6 +4806,31 @@ def detect_limits(conf, tasks, workers_by_id):
 DASH_PATH = f"{HOME}/pilot/dashboard.json"
 _dash_slow = {"at": 0, "data": {}}
 
+PROJECT_READINESS_CHECKS = (
+    ("repository", "Репозиторий"),
+    ("workers", "Исполнители"),
+    ("safe_environment", "Безопасный стенд"),
+    ("access", "Доступы"),
+    ("tests", "Тесты"),
+    ("release", "Выпуск"),
+    ("rollback", "Откат"),
+    ("secrets", "Секреты"),
+    ("browser", "Браузерный доступ"),
+)
+PROJECT_PROVIDER_CATALOG = {
+    "trade": {
+        "safe_scope": "staging",
+        "release_environment": "Стейдж",
+        "rollback_argv": ("sudo", "-n", "/usr/local/bin/fx", "staging", "rollback"),
+    },
+    "factory": {
+        "safe_scope": "",
+        "release_environment": "Прод",
+        "rollback_argv": ("sudo", "-n", "/usr/local/bin/fx", "factory", "rollback"),
+    },
+}
+BROWSER_READINESS_MAX_AGE_SECONDS = 24 * 60 * 60
+
 
 def _sh(cmd, timeout=25):
     try:
@@ -4900,12 +4925,193 @@ def _environment_snapshot(label, scope, repository_id):
     }
 
 
+def _readiness_check(key, state, reason):
+    title = dict(PROJECT_READINESS_CHECKS)[key]
+    return {"key": key, "title": title, "state": state, "reason": reason}
+
+
+def _readiness_verdict(checks):
+    states = [check.get("state") for check in checks]
+    if "blocked" in states:
+        return "blocked"
+    if len(states) == len(PROJECT_READINESS_CHECKS) and all(state == "ready" for state in states):
+        return "ready"
+    return "needs_configuration"
+
+
+def _browser_readiness(now=None, path=None):
+    now = time.time() if now is None else now
+    path = path or f"{HOME}/pilot/browser-readiness.json"
+    if not os.path.exists(path):
+        return _readiness_check("browser", "unknown", "Нет подтверждения sandbox smoke браузера.")
+    try:
+        marker = load(path, None)
+        passed_at = marker.get("passed_at", "") if isinstance(marker, dict) else ""
+        fingerprint = marker.get("browser_fingerprint", "") if isinstance(marker, dict) else ""
+        passed = datetime.datetime.fromisoformat(passed_at.replace("Z", "+00:00")).timestamp()
+        if not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+            raise ValueError("invalid browser fingerprint")
+    except Exception:
+        return _readiness_check("browser", "blocked", "Маркер browser smoke повреждён.")
+    age = now - passed
+    if age < -300 or age > BROWSER_READINESS_MAX_AGE_SECONDS:
+        return _readiness_check("browser", "unknown", "Подтверждение browser smoke просрочено.")
+    return _readiness_check("browser", "ready", "Свежий sandbox smoke браузера прошёл.")
+
+
+def _access_readiness(scopes, safe_scope):
+    if not safe_scope:
+        return _readiness_check(
+            "access", "unknown", "Безопасный стенд не выбран; production-write не требуется.")
+    matching = next((scope for scope in scopes if isinstance(scope, dict)
+                     and scope.get("key") == safe_scope), None)
+    if matching is None:
+        return _readiness_check("access", "unknown", f"Нет данных о доступе {safe_scope}.")
+    if not matching.get("enabled"):
+        return _readiness_check("access", "blocked", f"Доступ {safe_scope} выключен.")
+    return _readiness_check(
+        "access", "ready", f"Доступ {safe_scope} разрешён; production-write не требуется.")
+
+
+def _verify_readiness(tasks, repository_id):
+    candidates = [task for task in tasks
+                  if task.get("repository_id") == repository_id
+                  and (match := STAGE_TITLE_RE.match(task.get("title", "")))
+                  and match.group(1) == "Verify"
+                  and task.get("state") in ("succeeded", "failed", "cancelled")]
+    candidates.sort(key=lambda task: (task.get("created_at", ""), task.get("id", "")), reverse=True)
+    if not candidates:
+        return _readiness_check("tests", "unknown", "Нет завершённой проверки Verify для проекта.")
+    try:
+        detail = api(f"/tasks/{candidates[0]['id']}")
+    except Exception:
+        return _readiness_check("tests", "unknown", "Итог последней Verify недоступен.")
+    attempts = detail.get("attempts") or []
+    completed = next((attempt for attempt in reversed(attempts)
+                      if attempt.get("state") in ("succeeded", "failed", "cancelled")), None)
+    result = str((completed or {}).get("result") or "")
+    if result.startswith("PASS"):
+        checked = str((completed or {}).get("completed_at") or "")[:16]
+        suffix = f" ({checked})" if checked else ""
+        return _readiness_check("tests", "ready", "Последняя Verify завершилась PASS" + suffix + ".")
+    if candidates[0].get("state") == "failed" or (completed or {}).get("state") == "failed":
+        return _readiness_check("tests", "blocked", "Последняя Verify завершилась неуспешно.")
+    return _readiness_check("tests", "unknown", "У последней Verify нет подтверждения PASS.")
+
+
+def _rollback_event_reason(provider_type):
+    latest = ""
+    try:
+        with open(RELEASE_EVENTS_PATH, encoding="utf-8", errors="replace") as event_file:
+            for line in event_file:
+                event = json.loads(line)
+                command_key = str(event.get("command_key") or event.get("id") or "")
+                expected = "factory" if provider_type == "factory" else "staging"
+                if event.get("rollback") is True and expected in command_key:
+                    latest = str(event.get("at") or event.get("created_at") or "")[:16]
+    except Exception:
+        pass
+    return (f" Последний зафиксированный откат: {latest}." if latest
+            else " Зафиксированных событий отката нет.")
+
+
+def _project_readiness(repository, provider_type, environments, tasks, access_scopes,
+                       browser_check, now=None):
+    repository_id = str(repository.get("id", ""))
+    checks = []
+    if _project_repo_dirs(repository_id):
+        checks.append(_readiness_check("repository", "ready", "Точный checkout репозитория доступен."))
+    else:
+        checks.append(_readiness_check("repository", "blocked", "Точный checkout репозитория недоступен."))
+
+    try:
+        routing = api(f"/repositories/{repository_id}/readiness")
+        if routing.get("routing_ready") is True:
+            checks.append(_readiness_check("workers", "ready", "Маршрутизация на готового исполнителя подтверждена."))
+        elif "routing_ready" in routing:
+            reasons = sorted(str(worker.get("reason", ""))[:120]
+                             for worker in routing.get("workers") or []
+                             if isinstance(worker, dict) and worker.get("reason"))
+            reason = "Нет готового исполнителя." + ((" " + "; ".join(reasons[:2])) if reasons else "")
+            checks.append(_readiness_check("workers", "blocked", reason))
+        else:
+            checks.append(_readiness_check("workers", "unknown", "Данные маршрутизации недоступны."))
+    except Exception:
+        checks.append(_readiness_check("workers", "unknown", "Данные маршрутизации недоступны."))
+
+    provider = PROJECT_PROVIDER_CATALOG.get(provider_type)
+    safe_scope = provider.get("safe_scope", "") if provider else ""
+    if not provider:
+        checks.append(_readiness_check("safe_environment", "unknown", "Провайдер безопасного стенда не настроен."))
+    elif not safe_scope:
+        checks.append(_readiness_check("safe_environment", "unknown", "Для Factory отдельный безопасный стенд не выбран."))
+    else:
+        ok, output = _fixed_command(["sudo", "-n", "/usr/local/bin/fx", safe_scope, "health"])
+        codes = re.findall(r"HTTP\s+([1-5]\d\d)", output) if ok else []
+        if not ok:
+            checks.append(_readiness_check("safe_environment", "blocked", "Health безопасного стенда завершился ошибкой."))
+        elif not codes:
+            checks.append(_readiness_check("safe_environment", "unknown", "Health безопасного стенда не дал проверяемого статуса."))
+        elif all(code.startswith(("2", "3")) for code in codes):
+            checks.append(_readiness_check("safe_environment", "ready", "Безопасный staging отвечает."))
+        else:
+            checks.append(_readiness_check("safe_environment", "blocked", "Безопасный staging отвечает с ошибкой."))
+
+    checks.append(_access_readiness(access_scopes, safe_scope))
+    checks.append(_verify_readiness(tasks, repository_id))
+
+    if not provider:
+        checks.append(_readiness_check("release", "unknown", "Провайдер сведений о выпуске не настроен."))
+        checks.append(_readiness_check("rollback", "unknown", "Процедура отката не описана."))
+    else:
+        release_environment = next((item for item in environments
+                                    if item.get("name") == provider["release_environment"]), None)
+        if release_environment and release_environment.get("status") == "available":
+            checks.append(_readiness_check("release", "ready", "Метка текущего выпуска распознана."))
+        else:
+            checks.append(_readiness_check("release", "unknown", "Метка текущего выпуска недоступна."))
+        # Presence in this immutable catalog is the proof. The argv is never executed here.
+        checks.append(_readiness_check(
+            "rollback", "ready", "Процедура отката описана." + _rollback_event_reason(provider_type)))
+
+    if not safe_scope:
+        checks.append(_readiness_check("secrets", "unknown", "Безопасный scope для проверки имён секретов не выбран."))
+    else:
+        ok, output = _fixed_command(
+            ["sudo", "-n", "/usr/local/bin/fx", safe_scope, "env-names"])
+        names = sorted({line.strip() for line in output.splitlines()
+                        if re.fullmatch(r"[A-Z][A-Z0-9_]*", line.strip())}) if ok else []
+        if not ok:
+            checks.append(_readiness_check("secrets", "unknown", "Имена секретов недоступны."))
+        elif not names:
+            checks.append(_readiness_check("secrets", "unknown", "Проверяемых имён секретов нет."))
+        else:
+            checks.append(_readiness_check("secrets", "ready", f"Доступны имена секретов: {len(names)}."))
+
+    checks.append(dict(browser_check))
+    ordered = {check["key"]: check for check in checks}
+    checks = [ordered[key] for key, _title in PROJECT_READINESS_CHECKS]
+    checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(
+        time.time() if now is None else now))
+    return {"verdict": _readiness_verdict(checks), "checked_at": checked_at, "checks": checks}
+
+
 def dashboard_slow(conf):
     """Тяжёлая часть: проекты, выпуски и здоровье сред. Раз в пять минут."""
     if time.time() - _dash_slow["at"] < 300:
         return _dash_slow["data"]
     configured = {str(item.get("remote_identity", "")).strip().lower(): item.get("type", "")
                   for item in conf.get("project_providers", []) if isinstance(item, dict)}
+    try:
+        tasks = all_tasks()
+    except Exception:
+        tasks = []
+    try:
+        access_scopes = api("/access").get("scopes") or []
+    except Exception:
+        access_scopes = []
+    now = time.time()
+    browser_check = _browser_readiness(now)
     projects = []
     for repository in api("/repositories").get("repositories") or []:
         if not repository.get("enabled"):
@@ -4926,6 +5132,9 @@ def dashboard_slow(conf):
             project["provider_status"] = "configured"
             project["environments"] = [_environment_snapshot(label, scope, repository.get("id", ""))
                                        for label, scope in environments]
+        project["readiness"] = _project_readiness(
+            repository, provider_type, project["environments"], tasks, access_scopes,
+            browser_check, now)
         projects.append(project)
     _dash_slow.update({"at": time.time(), "data": projects})
     return projects

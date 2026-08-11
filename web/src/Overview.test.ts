@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { cpuLoadExplanation, fetchAllTasks, Overview, overviewWork, productState } from "./Overview";
+import { cpuLoadExplanation, fetchAllTasks, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
 import { stageHandoffTargetStatus } from "./efficiency";
 
 describe("cpuLoadExplanation", () => {
@@ -240,10 +240,17 @@ describe("Overview product capacity", () => {
 });
 
 describe("Overview products", () => {
-  it("renders projects in snapshot order with honest provider states", async () => {
+  const readinessChecks = [
+    ["repository", "Репозиторий"], ["workers", "Исполнители"],
+    ["safe_environment", "Безопасный стенд"], ["access", "Доступы"],
+    ["tests", "Тесты"], ["release", "Выпуск"], ["rollback", "Откат"],
+    ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
+  ].map(([key, title]) => ({key, title, state:"ready" as const, reason:`${title} подтверждено`}));
+
+  it("renders the nine-check readiness card and honest unknown reasons", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path=String(input); const body=path==="/api/v1/dashboard"?{projects:[
-        {id:"a",name:"shop",remote_identity:"github.com/acme/shop",main_subject:"Продажа без ошибок",provider_status:"configured",environments:[{name:"Стейдж",status:"available",release_label:"Летний выпуск",health:"healthy"}]},
+        {id:"a",name:"shop",remote_identity:"github.com/acme/shop",main_subject:"Продажа без ошибок",provider_status:"configured",environments:[{name:"Стейдж",status:"available",release_label:"Летний выпуск",health:"healthy"}],readiness:{checked_at:"2026-08-10T12:00:00Z",checks:readinessChecks}},
         {id:"b",name:"factory",remote_identity:"github.com/acme/factory",provider_status:"not_configured",environments:[]},
       ]}:path.startsWith("/api/v1/tasks")?{tasks:[],next_cursor:null}:{};
       return {ok:true,json:async()=>body} as Response;
@@ -252,11 +259,25 @@ describe("Overview products", () => {
     const blocks=await screen.findAllByRole("region",{name:/Продукт —/});
     expect(blocks.map((block)=>within(block).getByText(/Продукт —/).textContent)).toEqual(["Продукт — shop","Продукт — factory"]);
     expect(within(blocks[0]).getByText("Продажа без ошибок",{exact:false})).toBeVisible();
+    expect(within(blocks[0]).getByText("Готов", {exact:true})).toBeVisible();
+    expect(within(blocks[0]).getAllByText("Готово")).toHaveLength(9);
     expect(within(blocks[1]).getByText("Стенд не настроен")).toBeVisible();
+    expect(within(blocks[1]).getByText("Требует настройки")).toBeVisible();
+    expect(within(blocks[1]).getAllByText("Неизвестно")).toHaveLength(9);
+    expect(within(blocks[1]).getAllByText("Нет проверяемых данных.")).toHaveLength(9);
   });
 
   it("classifies unavailable release without claiming an outage", () => {
     expect(productState({id:"a",name:"a",remote_identity:"a",provider_status:"configured",environments:[{name:"Прод",status:"unavailable"}]})).toBe("Сведения о выпуске недоступны");
+  });
+
+  it("derives deterministic verdicts from fixed key order", () => {
+    const ready = normalizeProjectReadiness({checks:[...readinessChecks].reverse()});
+    expect(ready.verdict).toBe("ready");
+    expect(ready.checks.map((check) => check.key)).toEqual(readinessChecks.map((check) => check.key));
+    expect(normalizeProjectReadiness({checks:readinessChecks.map((check) =>
+      check.key === "browser" ? {...check,state:"blocked" as const,reason:"Smoke не прошёл"} : check)}).verdict).toBe("blocked");
+    expect(normalizeProjectReadiness({checks:readinessChecks.slice(0,8)}).verdict).toBe("needs_configuration");
   });
 });
 

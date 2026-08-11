@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,52 @@ type httpFixture struct {
 	store  *Store
 	server *httptest.Server
 	logs   *bytes.Buffer
+}
+
+func TestDashboardSerializesManagedRepositoryReadiness(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "pilot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"repository", "workers", "safe_environment", "access", "tests", "release", "rollback", "secrets", "browser"}
+	checks := make([]protocol.ProjectReadinessCheck, 0, len(keys))
+	for _, key := range keys {
+		checks = append(checks, protocol.ProjectReadinessCheck{Key: key, Title: key, State: "ready", Reason: "confirmed"})
+	}
+	project := protocol.ProductProject{
+		ID: "repository-id", Name: "shop", RemoteIdentity: "github.com/acme/shop",
+		ProviderStatus: "configured", Environments: []protocol.ProductEnvironment{},
+		Readiness: protocol.ProjectReadiness{
+			Verdict: "ready", CheckedAt: "2026-08-10T12:00:00Z", Checks: checks,
+		},
+	}
+	body, err := json.Marshal(map[string]any{"projects": []protocol.ProductProject{project}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "pilot", "dashboard.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := newHTTPFixture(t)
+	response := fixture.request(http.MethodGet, "/api/v1/dashboard", "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	dashboard := decodeResponse[struct {
+		Projects []protocol.ProductProject `json:"projects"`
+	}](t, response)
+	if len(dashboard.Projects) != 1 || dashboard.Projects[0].Readiness.Verdict != "ready" {
+		t.Fatalf("dashboard projects = %#v", dashboard.Projects)
+	}
+	got := dashboard.Projects[0].Readiness.Checks
+	if len(got) != len(keys) {
+		t.Fatalf("readiness checks = %#v", got)
+	}
+	for i, key := range keys {
+		if got[i].Key != key || got[i].State != "ready" || got[i].Reason == "" {
+			t.Fatalf("readiness check %d = %#v", i, got[i])
+		}
+	}
 }
 
 func newHTTPFixture(t *testing.T) *httpFixture {
