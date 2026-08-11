@@ -27,7 +27,7 @@ var projectProviderTypes = map[string]struct{}{"trade": {}, "factory": {}}
 type PilotConfigStore struct {
 	path      string
 	mu        sync.Mutex
-	writeFile func([]byte) error
+	writeTemp func(*os.File, []byte) (int, error)
 }
 
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
@@ -127,36 +127,46 @@ func decodePilotSettings(body []byte) (protocol.PilotSettings, map[string]bool, 
 }
 
 func (s *PilotConfigStore) atomicWrite(body []byte) error {
-	if s.writeFile != nil {
-		return s.writeFile(body)
-	}
 	dir := filepath.Dir(s.path)
 	tmp, err := os.CreateTemp(dir, ".pilot-config-*")
 	if err != nil {
 		return unavailable(err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err == nil {
-		_, _ = tmp.Write(body)
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return unavailable(err)
 	}
-	if err == nil {
-		err = tmp.Sync()
+	var written int
+	if s.writeTemp == nil {
+		written, err = tmp.Write(body)
+	} else {
+		written, err = s.writeTemp(tmp, body)
 	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
+	if err != nil {
+		return unavailable(err)
 	}
-	if err == nil {
-		err = os.Rename(tmpName, s.path)
+	if written != len(body) {
+		return unavailable(io.ErrShortWrite)
 	}
-	if err == nil {
-		if d, openErr := os.Open(dir); openErr == nil {
-			err = d.Sync()
-			_ = d.Close()
-		} else {
-			err = openErr
-		}
+	if err := tmp.Sync(); err != nil {
+		return unavailable(err)
 	}
+	if err := tmp.Close(); err != nil {
+		return unavailable(err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return unavailable(err)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return unavailable(err)
+	}
+	err = d.Sync()
+	_ = d.Close()
 	if err != nil {
 		return unavailable(err)
 	}
