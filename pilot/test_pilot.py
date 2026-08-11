@@ -2838,6 +2838,125 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(log.call_count, 2)
         self.assertEqual(state["next_poll"]["chosen_at"], 3)
 
+    def _assert_overlap_wait_reuses_decision(self, next_stage, result,
+                                             area_busy_results,
+                                             review_gate_results=None):
+        conf = {
+            "stages": [
+                {"workflow": "Triage"},
+                {"workflow": next_stage},
+            ],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        completed = {
+            "id": "triage-done",
+            "title": "[auto] [1/2 Triage] Пересекающаяся работа",
+            "state": "succeeded",
+            "created_at": "2026-08-10T10:00:00Z",
+            "repository_id": "repo-id",
+        }
+        tasks = [completed]
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path == "/tasks/triage-done":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "attempts": [{"result": result}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "next", "enabled": True,
+                    "current_revision": {"id": "rev-next", "title": next_stage},
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas", "all_tasks",
+        )
+        verdict = {
+            "action": "advance", "reason": "готово",
+            "next_complexity": "medium", "handoff": "",
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker",
+                                                  return_value="worker"))
+            area_busy = stack.enter_context(mock.patch.object(
+                pilot, "area_busy", side_effect=area_busy_results))
+            review_gate = None
+            if review_gate_results is not None:
+                review_gate = stack.enter_context(mock.patch.object(
+                    pilot, "review_gate", side_effect=review_gate_results))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block",
+                                                  return_value=""))
+            decide = stack.enter_context(mock.patch.object(
+                pilot, "decide", return_value=verdict))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {
+                    "id": "spec-created", "title": body["title"], "state": "created",
+                    "repository_id": "repo-id",
+                }}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+            pilot.cycle(conf, state)
+            self.assertEqual(state["overlap_wait_decisions"], {
+                "triage-done": verdict,
+            })
+            pilot.cycle(conf, state)
+
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(area_busy.call_count, 3)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["title"],
+                         f"[auto] [2/2 {next_stage}] Пересекающаяся работа")
+        self.assertEqual(state["overlap_wait_decisions"], {})
+        if review_gate is not None:
+            self.assertEqual(review_gate.call_count, 3)
+
+    def test_area_wait_reuses_decision_until_next_stage_can_start(self):
+        self._assert_overlap_wait_reuses_decision(
+            "Specification", "READY",
+            ["Соседняя работа", "Соседняя работа", ""],
+        )
+
+    def test_review_gate_wait_reuses_decision_until_overlap_clears(self):
+        self._assert_overlap_wait_reuses_decision(
+            "Review", "BRANCH: factory/task",
+            ["", "", ""],
+            [{"wait": True}, {"wait": True}, None],
+        )
+
     def test_duplicate_terminal_attempts_start_one_heavy_next_stage(self):
         conf = {
             "stages": [
