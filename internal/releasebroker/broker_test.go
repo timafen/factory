@@ -19,6 +19,7 @@ type recordingExecutor struct {
 	mu      sync.Mutex
 	adapter string
 	sha     string
+	calls   int
 	done    chan struct{}
 }
 
@@ -52,11 +53,18 @@ func (executor *sequenceExecutor) snapshot() (int, []string, []string) {
 func (executor *recordingExecutor) Execute(_ context.Context, adapter, sha string) string {
 	executor.mu.Lock()
 	executor.adapter, executor.sha = adapter, sha
+	executor.calls++
 	executor.mu.Unlock()
 	if executor.done != nil {
 		<-executor.done
 	}
 	return "succeeded"
+}
+
+func (executor *recordingExecutor) callCount() int {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	return executor.calls
 }
 
 func postStatus(t *testing.T, server *httptest.Server, body string) int {
@@ -108,6 +116,23 @@ func operationSnapshot(broker *Broker, id string) (operation, bool) {
 		return operation{}, false
 	}
 	return *item, true
+}
+
+func waitForBrokerIdle(t *testing.T, broker *Broker) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		broker.mu.Lock()
+		idle := broker.active == ""
+		broker.mu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("broker did not become idle")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
@@ -214,6 +239,65 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	}
 	close(blocked)
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
+}
+
+func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "state")
+	blocked := make(chan struct{})
+	executor := &recordingExecutor{done: blocked}
+	broker, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"delivery-write-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForOperationStatus(t, server, "delivery-write-failure", "running")
+
+	// Move the real durable directory aside and replace its path with a file.
+	// The executor has already started, so its terminal atomic write now fails
+	// in the filesystem rather than through a mocked persistence hook.
+	saved := filepath.Join(parent, "saved-state")
+	if err := os.Rename(dir, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(blocked)
+	waitForBrokerIdle(t, broker)
+	if got := operationStatus(t, server, "delivery-write-failure").Status; got != "running" {
+		t.Fatalf("unpersisted terminal status became visible as %q", got)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("physical executions=%d, want 1", executor.callCount())
+	}
+
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, dir); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedServer := httptest.NewServer(restarted.Handler())
+	defer restartedServer.Close()
+	if got := operationStatus(t, restartedServer, "delivery-write-failure").Status; got != "failed" {
+		t.Fatalf("fresh restart status=%q, want failed", got)
+	}
+	if got := postStatus(t, restartedServer, body); got != http.StatusOK {
+		t.Fatalf("duplicate POST status=%d", got)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor repeated after ambiguous durability: calls=%d", executor.callCount())
+	}
 }
 
 func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {

@@ -4606,6 +4606,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
+        self.broker_processes = {}
         self.state_path = os.path.join(self.temporary.name, "state.json")
         self.receipts = os.path.join(self.temporary.name, "receipts.jsonl")
         self.outbox = os.path.join(self.temporary.name, "outbox.jsonl")
@@ -4654,16 +4655,34 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
                                    "-state-dir", state_dir, "-fx-executable", fx],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.broker_processes[socket_path] = broker
         self.addCleanup(self._stop_process, broker)
         for _ in range(100):
             if os.path.exists(socket_path):
                 return {"socket": socket_path, "broker_state": state_dir,
+                        "fx": fx,
                         "attempts": attempts, "success": success, "fx_started": started,
                         "fx_pid": pid, "release_gate": release_gate}
             if broker.poll() is not None:
                 self.fail("built release broker stopped before opening its Unix socket")
             time.sleep(.02)
         self.fail("built release broker did not open its Unix socket")
+
+    def _restart_process_broker(self, paths):
+        """Replace a stopped broker while retaining its durable state and FX."""
+        process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
+                                    "-state-dir", paths["broker_state"],
+                                    "-fx-executable", paths["fx"]],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.broker_processes[paths["socket"]] = process
+        self.addCleanup(self._stop_process, process)
+        for _ in range(100):
+            if os.path.exists(paths["socket"]):
+                return process
+            if process.poll() is not None:
+                self.fail("restarted release broker stopped before opening its Unix socket")
+            time.sleep(.02)
+        self.fail("restarted release broker did not open its Unix socket")
 
     def _pilot_process(self, action, paths, boundary="", now=0, sha=""):
         """Run or abruptly stop an independent real Pilot interpreter."""
@@ -4718,6 +4737,10 @@ if d["action"] == "join":
     pilot.deploy_after_merge(conf, "github.com/timafen/factory", state, d["sha"], wait("verify-2", d["sha"]))
     raise SystemExit(0)
 pilot.recover_merge_intents(conf, state)
+if d["action"] == "poll_once":
+    pilot.poll_delivery_state(conf, state, now=d["now"])
+    pilot.save(pilot.STATE_PATH, state)
+    raise SystemExit(0)
 if d["action"] == "recover":
     with open(d["release_gate"], "w", encoding="utf-8"):
         pass
@@ -4826,6 +4849,67 @@ pilot.save(pilot.STATE_PATH, state)
         broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
         self.assertEqual(broker_state["status"], "rollback_failed")
         self.assertEqual(generation["phase"], "failed")
+        self.assertFalse(os.path.exists(paths["receipts"]))
+        self.assertFalse(os.path.exists(paths["outbox"]))
+        self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+
+    def test_terminal_write_failure_survives_real_broker_restart_without_false_done(self):
+        paths = self._process_paths(self._start_process_broker())
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("poll_once", paths, sha=self.sha)
+        for _ in range(250):
+            if os.path.exists(paths["fx_started"]):
+                break
+            time.sleep(.02)
+        else:
+            self.fail("physical FX did not start")
+
+        saved_state = paths["broker_state"] + ".saved"
+        os.rename(paths["broker_state"], saved_state)
+        with open(paths["broker_state"], "w", encoding="utf-8") as stream:
+            stream.write("injected terminal write failure\n")
+        with open(paths["release_gate"], "w", encoding="utf-8"):
+            pass
+        for _ in range(250):
+            if os.path.exists(paths["success"]):
+                break
+            time.sleep(.02)
+        else:
+            self.fail("physical delivery did not finish")
+
+        # The live broker must retain its last durable, non-terminal view.  A
+        # Pilot process therefore cannot create completion artifacts.
+        self._pilot_process("poll_once", paths, sha=self.sha)
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        self.assertEqual(generation["phase"], "running")
+        self.assertFalse(os.path.exists(paths["receipts"]))
+        self.assertFalse(os.path.exists(paths["outbox"]))
+        self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+
+        old_broker = self.broker_processes[paths["socket"]]
+        self._stop_process(old_broker)
+        os.remove(paths["broker_state"])
+        os.rename(saved_state, paths["broker_state"])
+        self._restart_process_broker(paths)
+        self._pilot_process("recover", paths, sha=self.sha)
+
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        broker_state = self._read_json(os.path.join(
+            paths["broker_state"], generation["id"] + ".json"))
+        with open(paths["attempts"], encoding="utf-8") as stream:
+            attempts = [line.strip() for line in stream if line.strip()]
+        with open(paths["success"], encoding="utf-8") as stream:
+            successful = [line.strip() for line in stream if line.strip()]
+        self.assertEqual(generation["phase"], "failed")
+        self.assertEqual(broker_state["status"], "failed")
+        self.assertEqual(attempts, [generation["id"]])
+        self.assertEqual(successful, [generation["id"]])
         self.assertFalse(os.path.exists(paths["receipts"]))
         self.assertFalse(os.path.exists(paths["outbox"]))
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
