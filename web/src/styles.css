@@ -1052,6 +1052,16 @@ button { color: inherit; }
   .efficiency-primary, .efficiency-detail-grid { grid-template-columns: 1fr; }
   .efficiency-primary > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .efficiency-primary > div:last-child { border-bottom: 0; }
+  .efficiency-detail-grid > div { min-width: 0; }
+  .efficiency-facts > div { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .efficiency-facts dd { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+  .efficiency-shares > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .efficiency-shares strong { overflow-wrap: anywhere; text-align: left; }
+  [aria-label="Готовность проекта"] > div:first-child { flex-wrap: wrap; }
+  [aria-label="Готовность проекта"] > div:last-child > div {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 2px !important;
+  }
 }
 
 .metrics-toolbar {
@@ -1237,7 +1247,7 @@ button { color: inherit; }
 .brain-actions { display: flex; align-items: end; gap: 3px; padding-bottom: 4px; }
 .brain-actions button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-2); }
 .brain-actions button:hover:not(:disabled) { background: var(--panel-2); color: var(--fg); }
-.settings-save { position: sticky; bottom: 12px; display: flex; justify-content: flex-end; margin-top: 18px; }
+.settings-save { display: flex; justify-content: flex-end; margin-top: 18px; }
 
 .nav-scrim { display: none; position: fixed; z-index: 15; }
 
@@ -1277,6 +1287,7 @@ button { color: inherit; }
 
 @media (max-width: 760px) {
   .sidebar {
+    top: 52px;
     width: min(260px, calc(100vw - 48px));
     transform: translateX(-100%);
     transition: transform .15s ease;
@@ -1284,7 +1295,7 @@ button { color: inherit; }
   .sidebar.sidebar-open { transform: translateX(0); }
   .nav-scrim { display: block; }
   .main-shell { margin-left: 0; }
-  .topbar { padding: 0 12px; }
+  .topbar { z-index: 25; padding: 0 12px; }
   .mobile-menu { display: inline-grid !important; }
   .page { padding: 20px 12px 48px; }
   .view-header { align-items: center; gap: 12px; }
@@ -1326,9 +1337,11 @@ button { color: inherit; }
   .occurrence-row .button { grid-column: 2; justify-self: start; }
   .migration-grid, .migration-title-grid, .migration-summary { grid-template-columns: 1fr; }
   .migration-paths > div { grid-template-columns: 1fr; gap: 2px; }
-	.settings-grid { grid-template-columns: 1fr; }
+	.settings-grid { grid-template-columns: minmax(0, 1fr); }
 	.settings-full { grid-column: 1; }
-	.brain-row { grid-template-columns: 1fr 1fr; }
+	.settings-grid > *, .settings-check > span { min-width: 0; }
+	.settings-stage-table { width: 100%; max-width: 100%; }
+	.brain-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.brain-actions { align-items: center; }
   .migration-actions { align-items: stretch; flex-direction: column; }
   .migration-actions .button { width: 100%; }
