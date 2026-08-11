@@ -653,7 +653,8 @@ def reopen_work(base, generation, reason="Владелец явно запуст
                 "closed", "closed_reason", "retention_until"
             ) if meta.get(key)})
             meta["closed_generations"] = history
-        for key in ("closed", "closed_reason", "retention_until"):
+        for key in ("closed", "closed_reason", "retention_until",
+                    "implementation_artifact"):
             meta.pop(key, None)
         meta.update({"run_generation": generation, "reopened_reason": reason})
         save(WORKS_PATH, works)
@@ -2198,16 +2199,28 @@ def pipeline_watch(conf, tasks, workflows, workers):
         src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        fallback_branch = branch_from_history(tasks, base)
+        identity_lines = implementation_context_lines(base, fallback_branch)
         try:
-            create_task({"request_key": str(uuid.uuid4()), "title": title,
+            created = create_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
                                      "заново.\n\nРабота: " + base +
-                                     "\nПредыдущий этап: " + stages[far])[:60000],
+                                     "\nПредыдущий этап: " + stages[far] + "\n" +
+                                     identity_lines)[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
                          "workflow_revision_id": nw["revision_id"]}, conf)
+            created_task = created.get("task") if isinstance(created, dict) else None
+            created_task = dict(created_task) if isinstance(created_task, dict) else {}
+            created_task.setdefault("title", title)
+            created_task.setdefault("repository_id", rid)
+            created_task.setdefault("state", "created")
+            created_task.setdefault(
+                "created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            if created_task.get("id"):
+                tasks.append(created_task)
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
@@ -3380,6 +3393,7 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
     """Record a pipeline stop that needs the owner. The UI shows these and the
     answer resumes the pipeline."""
     os.makedirs(QUESTION_DIR, exist_ok=True)
+    branch, implementation_head = canonical_implementation(base, branch)
     rec = {
         "id": task_id,
         "task_id": task_id,
@@ -3391,6 +3405,7 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
         "question": question or "",
         "options": options or [],
         "branch": branch or "",
+        "implementation_head": implementation_head,
         "prior_result": squeeze(prior_result, 12000),
         "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         # Сразу нужный статус: раньше ответ оркестратора сперва сохранялся
@@ -3789,13 +3804,17 @@ def handle_answers(conf, workflows, workers, tasks):
         if not nw or not nw.get("enabled") or not worker:
             log(f"answer: no workflow/worker for {stage}")
             continue
+        base = base_title(q.get("title", ""))
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
-              or branch_from_history(tasks, base_title(q.get("title", ""))))
-        branch_line = resume_branch_line(base_title(q.get("title", "")), br, rounds)
+              or branch_from_history(tasks, base))
+        br, implementation_head = canonical_implementation(base, br)
+        branch_line = resume_branch_line(base, br, rounds)
+        head_line = (f"Implementation head: {implementation_head}\n"
+                     if implementation_head else "")
         context = (
             f"Pipeline: {q['title']}\n"
             f"Previous stage: {q['stage']} (остановлена, владелец ответил на вопрос)\n"
-            f"{branch_line}"
+            f"{branch_line}{head_line}"
             f"ВОПРОС АГЕНТА: {q.get('question','')}\n"
             f"ОТВЕТ ВЛАДЕЛЬЦА (утверждено, действуй по нему): {q['answer']}\n\n"
             f"Отчёт остановленной стадии (сокращён):\n{squeeze(q.get('prior_result',''))}"
@@ -4042,6 +4061,71 @@ def pushed_branch(candidates, repo_identity):
                 log(f"BRANCH PICK: беру опубликованную {name} вместо {candidates[0]}")
             return name
     return candidates[0]
+
+
+FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def implementation_artifact(base):
+    """Return the durable, generation-scoped implementation branch and head."""
+    works = load(WORKS_PATH, {}) or {}
+    meta = works.get(base) or {}
+    artifact = meta.get("implementation_artifact") or {}
+    if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
+        return {}
+    if not artifact.get("branch") or not FULL_GIT_SHA.fullmatch(artifact.get("head") or ""):
+        return {}
+    return artifact
+
+
+def record_implementation_artifact(base, task_id, task_title, result, context,
+                                   repo_identity):
+    """Persist only a published implementation branch with a non-empty diff."""
+    if is_service_work(base) or is_service_work(task_title):
+        return {}
+    repo = (repo_identity or "").split("github.com/")[-1]
+    if not repo:
+        return {}
+    for branch in branch_candidates(result, context):
+        info = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
+        if not isinstance(info, dict) or info.get("name") != branch:
+            continue
+        head = ((info.get("commit") or {}).get("sha") or "").lower()
+        if not FULL_GIT_SHA.fullmatch(head):
+            continue
+        comparison = gh_json(
+            ["api", f"repos/{repo}/compare/main...{branch}"], strict=True)
+        if not isinstance(comparison, dict) or not comparison.get("files"):
+            continue
+        works = load(WORKS_PATH, {}) or {}
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta = works.setdefault(base, {
+            "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
+            "reason": "", "at": now,
+        })
+        artifact = {
+            "branch": branch,
+            "head": head,
+            "task_id": task_id,
+            "recorded_at": now,
+            "generation": meta.get("run_generation") or "",
+        }
+        meta["implementation_artifact"] = artifact
+        save(WORKS_PATH, works)
+        return artifact
+    return {}
+
+
+def canonical_implementation(base, branch=""):
+    """Prefer proven implementation identity over a later task's branch text."""
+    artifact = implementation_artifact(base)
+    return artifact.get("branch") or branch, artifact.get("head") or ""
+
+
+def implementation_context_lines(base, branch=""):
+    branch, head = canonical_implementation(base, branch)
+    return ((f"Branch: {branch}\n" if branch else "")
+            + (f"Implementation head: {head}\n" if head else ""))
 
 
 def extract_branch(result, prev_context):
@@ -6331,6 +6415,17 @@ def cycle(conf, state):
                 save_promises(base_title(title), result)
             except Exception as e:
                 log("promises_error", repr(e))
+        if wf == "Implement + Test":
+            try:
+                rid_i = detail["task"].get("repository_id") or ""
+                record_implementation_artifact(
+                    base_title(title), tid, title, result,
+                    detail.get("context") or detail["task"].get("context") or "",
+                    repo_identity_by_id.get(rid_i, ""))
+            except Exception as e:
+                # A transport failure must not erase the last proven artifact;
+                # the next cycle can safely retry this completed task.
+                log("implementation_artifact_error", repr(e))
         verdict = overlap_wait_decisions.pop(tid, None)
         reused_overlap_decision = isinstance(verdict, dict)
         if reused_overlap_decision:
@@ -6354,7 +6449,8 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
                     continue
                 mark_final(tid, wf, True)
-                branch = extract_branch(result, detail.get("context", ""))
+                branch, _implementation_head = canonical_implementation(
+                    base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity:
@@ -6451,7 +6547,8 @@ def cycle(conf, state):
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
                     squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
-                    branch=extract_branch(result, detail.get("context", "")))
+                    branch=canonical_implementation(
+                        base, extract_branch(result, detail.get("context", "")))[0])
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
                            f"{base_title(title)}\nПроверка не подтвердила результат, "
@@ -6469,7 +6566,8 @@ def cycle(conf, state):
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
                            attempts_so_far=stage_attempts(tasks, back, base),
-                           branch=extract_branch(result, detail.get("context", "")))
+                           branch=canonical_implementation(
+                               base, extract_branch(result, detail.get("context", "")))[0])
             continue
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
@@ -6520,7 +6618,10 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
+        branch, implementation_head = canonical_implementation(base, branch)
         branch_line = f"Branch: {branch}\n" if branch else ""
+        head_line = (f"Implementation head: {implementation_head}\n"
+                     if implementation_head else "")
 
         # Спецификация является артефактом поставки, а не только текстом в
         # сокращённом отчёте.  До разработки подтверждаем, что выбранная ветка
@@ -6656,7 +6757,7 @@ def cycle(conf, state):
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
-        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}"
+        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{head_line}"
                    f"Orchestrator handoff: {handoff}\n\n"
                    f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
                    + gate_note)[:20000]

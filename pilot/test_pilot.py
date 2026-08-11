@@ -1199,6 +1199,7 @@ class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
         self.memory = {}
+        self.works = {}
         self.work_status = {}
         self.created = []
         self.notifications = []
@@ -1233,11 +1234,15 @@ class PipelineWatchTests(unittest.TestCase):
     def _load(self, path, default=None):
         if path == pilot.STALL_PATH:
             return self.memory
+        if path == pilot.WORKS_PATH:
+            return self.works
         return default
 
     def _save(self, path, value):
         if path == pilot.STALL_PATH:
             self.memory = value
+        elif path == pilot.WORKS_PATH:
+            self.works = value
         elif path.endswith("/pilot/work_status.json"):
             self.work_status = value
 
@@ -1285,6 +1290,33 @@ class PipelineWatchTests(unittest.TestCase):
 
         self.watch()
         self.assertEqual(len(self.created), 1)
+
+    def test_watch_carries_canonical_implementation_and_updates_snapshot(self):
+        head = "a" * 40
+        self.works["Встроенный патруль"] = {
+            "implementation_artifact": {
+                "branch": "factory/real-implementation", "head": head,
+                "task_id": "implement-task", "recorded_at": "2026-08-11T12:00:00Z",
+                "generation": "",
+            }
+        }
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        tasks = [self.task()]
+
+        self.watch(tasks)
+
+        self.assertIn("Branch: factory/real-implementation", self.created[0]["context"])
+        self.assertIn(f"Implementation head: {head}", self.created[0]["context"])
+        self.assertEqual(tasks[-1]["state"], "created")
+        self.assertIn("[2/3 Implement]", tasks[-1]["title"])
+        self.assertEqual(tasks[-1]["repository_id"], "repo-id")
+        self.assertEqual(
+            pilot.live_or_done_at(
+                tasks, "Встроенный патруль", 1,
+                since="1970-01-01T00:00:00Z")["id"],
+            "new-task")
 
     def test_live_task_clears_stall_and_prevents_duplicate(self):
         self.memory = {
@@ -1337,6 +1369,103 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+
+class CanonicalImplementationBranchTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.works_path = os.path.join(self.temporary.name, "works.json")
+        self.questions_path = os.path.join(self.temporary.name, "questions")
+        os.makedirs(self.questions_path)
+        self.path_patches = [
+            mock.patch.object(pilot, "WORKS_PATH", self.works_path),
+            mock.patch.object(pilot, "QUESTION_DIR", self.questions_path),
+        ]
+        for patcher in self.path_patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        pilot.save(self.works_path, {
+            "Настоящая работа": {"run_generation": "generation-1"}
+        })
+
+    @staticmethod
+    def github(branch="factory/implementation", head=None, files=None):
+        head = head or "b" * 40
+        files = [{"filename": "pilot/pilot.py"}] if files is None else files
+
+        def response(args, strict=False):
+            path = args[-1]
+            if "/branches/" in path:
+                return {"name": branch, "commit": {"sha": head}}
+            if "/compare/" in path:
+                return {"files": files}
+            raise AssertionError(path)
+
+        return response
+
+    def test_successful_implementation_is_recorded_with_full_identity(self):
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github()):
+            artifact = pilot.record_implementation_artifact(
+                "Настоящая работа", "task-implement",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/implementation", "", "github.com/timafen/factory")
+
+        self.assertEqual(artifact["branch"], "factory/implementation")
+        self.assertEqual(artifact["head"], "b" * 40)
+        self.assertEqual(artifact["task_id"], "task-implement")
+        self.assertEqual(artifact["generation"], "generation-1")
+        self.assertRegex(artifact["recorded_at"], r"^\d{4}-\d\d-\d\dT")
+        self.assertEqual(pilot.implementation_artifact("Настоящая работа"), artifact)
+
+    def test_unproven_and_service_candidates_do_not_replace_artifact(self):
+        existing = {
+            "branch": "factory/real", "head": "c" * 40,
+            "task_id": "real-task", "recorded_at": "2026-08-11T10:00:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1", "implementation_artifact": existing,
+        }})
+        with mock.patch.object(
+                pilot, "gh_json", side_effect=self.github(
+                    branch="factory/empty-review", files=[])):
+            self.assertEqual(pilot.record_implementation_artifact(
+                "Настоящая работа", "empty-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/empty-review", "", "github.com/timafen/factory"), {})
+        with mock.patch.object(pilot, "gh_json") as github:
+            self.assertEqual(pilot.record_implementation_artifact(
+                "helper debug", "service-task",
+                "[auto] [3/5 Implement + Test] helper debug",
+                "BRANCH: factory/service", "", "github.com/timafen/factory"), {})
+            github.assert_not_called()
+        self.assertEqual(pilot.implementation_artifact("Настоящая работа"), existing)
+
+    def test_canonical_identity_overrides_review_text_and_is_cleared_on_reopen(self):
+        artifact = {
+            "branch": "factory/real", "head": "d" * 40,
+            "task_id": "real-task", "recorded_at": "2026-08-11T10:00:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1", "implementation_artifact": artifact,
+        }})
+
+        self.assertEqual(
+            pilot.canonical_implementation("Настоящая работа", "factory/empty-review"),
+            ("factory/real", "d" * 40))
+        question = pilot.write_question(
+            "review-task", "Review", "Implement + Test", "Настоящая работа",
+            "repo-id", "Нужна доработка", "Продолжить?", [], "",
+            branch="factory/empty-review")
+        self.assertEqual(question["branch"], "factory/real")
+        self.assertEqual(question["implementation_head"], "d" * 40)
+
+        with mock.patch.object(pilot, "CONF_PATH", os.path.join(self.temporary.name, "missing.json")), \
+                mock.patch.object(pilot, "HOME", self.temporary.name):
+            pilot.reopen_work("Настоящая работа", "generation-2")
+        self.assertEqual(pilot.implementation_artifact("Настоящая работа"), {})
 
 
 class ClosedWorkLifecycleTests(unittest.TestCase):
