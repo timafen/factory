@@ -2,17 +2,19 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and tested; BLOCKED from merge/release until
+  CARD-0085 migration 026 is in `main`; Pilot remains operationally disabled.
+- Branch: `factory/4f5b64d8-621-032b06b7-05a`.
+- Implementation commit: aa05c7eb3c01e665609bc847b0f493f35edd10f9 — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
+- What changed: 027 validates the exact 026 reconciliation schema before ALTER,
+  and the runner derives ledger versions from migration filenames.
+- What changed: Review/Verify corrections persist across a recreated Pilot
+  state and complete one `work_id` through Implement, Review, Verify and merge.
+- What changed: `pilot_duplicate_root_prevented` is a stable-ID durable outbox
+  event retained across crashes before/after journal and acknowledgement.
+- Evidence: focused migration test → PASS; full Pilot → PASS (204 tests);
+  `go test ./...` with exact pending 026 dependency → PASS; build/diff → PASS.
+- Next action: merge CARD-0085/026 to `main`, then rebase and rerun release gates.
 
 ## LOG
 
@@ -38,12 +40,15 @@ grouping. Review and Verify storm regressions survive a durable restart with
 one work/pipeline, no second Triage, and one prevented-root event. Full Go tests,
 all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 
-### 2026-08-12 — Verify
+### 2026-08-11 — Implement
 
-| Acceptance evidence | Command/check | Observed result |
-|---|---|---|
-| Legacy root/API compatibility; child validation; replay and SQLite migration | `go test ./internal/controlplane -run '^(TestTaskProvenanceValidationAndReplay\|TestTaskProvenancePersistsAcrossReopenAndParentDelete\|TestTaskProvenanceMigrationUpgradesLegacyDatabase\|TestTaskProvenanceHTTPCompatibilityAndLogging\|TestResumePausedWorkUsesVerdictActionForReviewAndVerify)$' -count=1` | PASS (five targeted tests after rebase) |
-| Review/Verify corrections retain one work and pipeline through restart; title cannot override provenance; prevented event is idempotent | `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` | PASS (5 tests) |
-| Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
-| Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
-| Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+Strict Review corrections landed in
+`aa05c7eb3c01e665609bc847b0f493f35edd10f9`. Migration 027 now fails before
+ALTER and without ledger advance on a 025 database, then upgrades/reopens after
+the exact 026 schema is present. Parameterized Review/Verify tests use the real
+answer-resume and cycle paths across persisted state recreation, ending in one
+root/work/pipeline, merge and owner completion. Crash-boundary tests prove one
+durable outbox event. Full Go tests passed with the exact pending 026 migration
+fixture; all 204 Pilot tests and the final-tree build passed. This branch is
+intentionally unmergeable/unreleasable until CARD-0085/026 reaches `main`, and
+Pilot remains disabled.
