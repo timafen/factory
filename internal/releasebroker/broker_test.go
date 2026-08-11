@@ -232,4 +232,7 @@ func TestLockedOperationRetriesOnceButTerminalOperationDoesNot(t *testing.T) {
 	if executor.calls != 2 {
 		t.Fatalf("physical executions=%d, want 2 (locked + retry)", executor.calls)
 	}
+	if got := broker.items["lock-retry-1"].Posts; got != 3 {
+		t.Fatalf("durable POST observations=%d, want 3", got)
+	}
 }
