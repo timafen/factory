@@ -57,8 +57,16 @@ requires a worker restart; an unexpected change fails before agent launch.
 ## Identity and registration
 
 The first start creates a protected `worker-id` file in the worker data
-directory. The worker reuses that ID on every restart. The local API does not
-authenticate workers, so the ID is identity, not a credential.
+directory. The worker reuses that ID on every restart, but the ID alone is not a
+credential. On startup the control plane creates a separate protected
+`server/worker-bootstrap-credential` below `FACTORY_DATA_HOME`. A new worker must
+read and present that `0600` file before registration can create its record or
+issue its per-worker credential. The worker then keeps the issued credential in
+its own protected `worker-credential` file for later registrations, project
+attestations, and claim requests. If the initial response was lost or its atomic credential write
+failed, the worker may present the bootstrap credential again for a recoverable
+replacement. A loopback request without either credential cannot register or
+rotate an existing worker.
 
 Registration advertises:
 
@@ -87,7 +95,10 @@ Print the configured identity without starting the worker:
 Workers poll the loopback API for compatible work. An idle worker makes at most
 one empty claim request per polling interval. Each successful claim immediately
 starts another claim while a slot remains, so queued work fills the pool without
-waiting one polling interval per slot. A claim succeeds only when:
+waiting one polling interval per slot. Every claim presents the server-issued
+credential bound to the worker ID in the endpoint; a missing credential or one
+issued to another worker is rejected before the request body is processed. A
+claim succeeds only when:
 
 - the task targets that worker;
 - the repository assignment is frozen to that worker;

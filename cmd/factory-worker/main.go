@@ -75,6 +75,26 @@ func run() error {
 		fmt.Fprintln(os.Stdout, id)
 		return nil
 	}
+	if len(os.Args) > 1 && os.Args[1] == "verify-project" {
+		flags := flag.NewFlagSet("factory-worker verify-project", flag.ContinueOnError)
+		configPath := flags.String("config", defaultConfig, "Factory worker TOML configuration path")
+		projectID := flags.String("project", "", "project ID")
+		repository := flags.String("repository", "", "configured repository key")
+		report := flags.String("report", "", "trusted JSON check report")
+		if err := flags.Parse(os.Args[2:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return fmt.Errorf("unexpected verify-project arguments: %v", flags.Args())
+		}
+		config, err := worker.LoadConfig(*configPath)
+		if err != nil {
+			return err
+		}
+		return worker.VerifyProject(context.Background(), config, worker.ProjectVerificationOptions{
+			ProjectID: *projectID, RepositoryKey: *repository, ReportPath: *report,
+		})
+	}
 	flags := flag.NewFlagSet("factory-worker", flag.ContinueOnError)
 	configPath := flags.String("config", defaultConfig, "Factory worker TOML configuration path")
 	if err := flags.Parse(os.Args[1:]); err != nil {

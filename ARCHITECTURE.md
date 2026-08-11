@@ -239,8 +239,10 @@ Node.js is a contributor dependency only when UI source changes.
    chooses an eligible worker by fair load, and freezes both IDs. It then
    snapshots the context, Workflow identity, revision, and resolved prompt while
    creating one task and one queued execution.
-4. The assigned worker polls its claim endpoint with a unique request ID and
-   lease token.
+4. The assigned worker polls its claim endpoint with its server-issued
+   per-worker credential, a unique request ID, and a lease token. The control
+   plane binds the credential to the worker ID in the endpoint before parsing
+   the claim.
 5. The control plane verifies worker health, recency, capacity, runtime,
    repository advertisement, and repository retention capacity.
 6. It selects the oldest eligible queued execution, creates a preparing
@@ -544,7 +546,10 @@ worker data directory.
 The current trust boundary is one trusted user on one host:
 
 - the server binds only to loopback and validates request host resolution;
-- there is no login, authorization, worker credential, TLS, or tenant boundary;
+- there is no general login, authorization, TLS, or tenant boundary; worker
+  registration requires either the protected host bootstrap credential or an
+  existing server-issued per-worker credential, and project verification
+  requires the latter;
 - worker IDs identify local state but are not secrets;
 - the agent process has the worker OS user's permissions and can access anything
   available to that user;
