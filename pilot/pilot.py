@@ -6344,7 +6344,14 @@ def poll_delivery_state(conf, state, now=None):
         for generation in list(target["generations"].values()):
             if generation.get("phase") not in DELIVERY_PHASES:
                 generation["phase"] = "failed"
-            if generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
+            if generation["phase"] == "completed":
+                # A process can die after the broker's terminal status was
+                # durably observed but before receipts/outbox were written.
+                # Completed is authoritative, so recovery must finish this
+                # local transaction without a new broker call.
+                _complete_generation(conf, state, generation)
+                response = None
+            elif generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
                 response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST", generation["id"],
                     {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
             elif generation["phase"] in ("launching", "running"):
