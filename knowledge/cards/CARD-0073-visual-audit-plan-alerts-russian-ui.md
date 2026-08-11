@@ -27,6 +27,18 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 на 1440/390, как и общий control-plane аудит. После ребейза intake fixture также
 получил отдельный свободный порт; полный browser suite остаётся этапу Verify.
 
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| План и Уведомления говорят по-русски на 1440/390 | `npm run test:browser` → `web/e2e/intake.spec.ts` | Оба intake-теста прошли; раскрытие причин, переход `?group=stuck`, ссылка `/work/stuck` и отсутствие горизонтального скролла подтверждены. |
+| Work, Automations, TaskDetail и DelegateModal доступны на 1440/390 | `npx playwright test e2e/control-plane.spec.ts -g 'audits every Factory screen'` | 1 passed; layout-аудит проверил отсутствие горизонтального overflow, клиппинга интерактивных элементов и перекрытия sticky actions; 12 PNG сохранены в `/opt/factory-data/visual-acceptance/CARD-0073/`. |
+| ID/SHA/диагностика сохраняются | `go test -timeout 5m ./...`; UI Vitest; browser assertions | Go и UI тесты прошли; browser suite дошёл до сценариев сохранения, но остановился на устаревшем тексте Worker Settings. |
+| Полный browser suite | `npm run test:browser` (ровно один запуск) | FAIL: 9 passed, 1 failed, 12 did not run. Тест ожидает английское `restart the worker`, UI показывает русское `Обнови файл и перезапусти исполнителя`. |
+| Go/UI gates | `go vet ./...`, gofmt-check, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` | Все PASS; после `npm ci` зависимости были установлены в ignored `web/node_modules`. |
+
+Скриншоты сохранены вне Git; бинарники в репозиторий не добавлялись. Код не изменялся.
+
 ### 2026-08-11 — Implement
 
 После review исправлен ослабленный locator около `control-plane.spec.ts:1502`:
