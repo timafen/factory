@@ -97,6 +97,21 @@ describe("browser fixture server address", () => {
     expect(webServer?.url).toBe(`http://127.0.0.1:${backendPort}/healthz`);
   });
 
+  it("keeps intercepted HTTPS requests in Chromium and captures sanitized proxy headers", () => {
+    const specification = readFileSync(
+      join(process.cwd(), "e2e/control-plane.spec.ts"),
+      "utf8",
+    );
+    const fixtureServer = readFileSync(join(process.cwd(), "e2e/server.mjs"), "utf8");
+
+    expect(specification).not.toContain("route.fetch(");
+    expect(specification).toContain("route.continue({");
+    expect(specification).toContain('"x-factory-e2e-backend-forwarded-host"');
+    expect(fixtureServer).toContain('responseHeaders["x-factory-e2e-client-origin"]');
+    expect(fixtureServer).toContain('responseHeaders["x-factory-e2e-backend-forwarded-host"]');
+    expect(fixtureServer).not.toContain("NODE_TLS_REJECT_UNAUTHORIZED");
+  });
+
   it.each(["", "0", "65536", "12.5", "not-a-port"]) (
     "rejects invalid FACTORY_E2E_PORT value %j",
     async (value) => {

@@ -390,7 +390,21 @@ const tlsProxy = createHTTPSServer({
     path: clientRequest.url,
     headers,
   }, (upstreamResponse) => {
-    clientResponse.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+    const responseHeaders = { ...upstreamResponse.headers };
+    if (clientRequest.method === "POST" && clientRequest.url === "/api/v1/works/resume") {
+      const capturedHeader = (value) => Array.isArray(value) ? value.join(", ") : value ?? "<absent>";
+      responseHeaders["x-factory-e2e-client-origin"] = capturedHeader(clientRequest.headers.origin);
+      responseHeaders["x-factory-e2e-client-forwarded"] = capturedHeader(clientRequest.headers.forwarded);
+      responseHeaders["x-factory-e2e-client-forwarded-host"] = capturedHeader(clientRequest.headers["x-forwarded-host"]);
+      responseHeaders["x-factory-e2e-client-forwarded-proto"] = capturedHeader(clientRequest.headers["x-forwarded-proto"]);
+      responseHeaders["x-factory-e2e-backend-origin"] = capturedHeader(headers.origin);
+      responseHeaders["x-factory-e2e-backend-forwarded"] = capturedHeader(headers.forwarded);
+      responseHeaders["x-factory-e2e-backend-forwarded-for"] = capturedHeader(headers["x-forwarded-for"]);
+      responseHeaders["x-factory-e2e-backend-real-ip"] = capturedHeader(headers["x-real-ip"]);
+      responseHeaders["x-factory-e2e-backend-forwarded-host"] = capturedHeader(headers["x-forwarded-host"]);
+      responseHeaders["x-factory-e2e-backend-forwarded-proto"] = capturedHeader(headers["x-forwarded-proto"]);
+    }
+    clientResponse.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
     upstreamResponse.pipe(clientResponse);
   });
   upstream.on("error", () => {

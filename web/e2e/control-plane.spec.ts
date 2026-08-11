@@ -646,9 +646,13 @@ test("shows project readiness card", async ({ page }) => {
     ["tests", "Тесты"], ["release", "Выпуск"], ["rollback", "Откат"],
     ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
   ].map(([key, title]) => ({ key, title, state: "ready", reason: `${title} подтверждено` }));
+  await page.goto("/");
+  const dashboard = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/dashboard");
+    if (!response.ok) throw new Error(`dashboard returned ${response.status}`);
+    return response.json();
+  }) as { projects: Array<{ readiness?: unknown }> };
   await page.route("**/api/v1/dashboard", async (route) => {
-    const response = await route.fetch();
-    const dashboard = await response.json();
     dashboard.projects[0].readiness = {
       verdict: "ready", checked_at: "2026-08-10T12:00:00Z", checks,
     };
@@ -658,10 +662,10 @@ test("shows project readiness card", async ({ page }) => {
         ? { ...check, state: "unknown", reason: "Для Factory отдельный безопасный стенд не выбран." }
         : check),
     };
-    await route.fulfill({ response, json: dashboard });
+    await route.fulfill({ json: dashboard });
   });
 
-  await page.goto("/");
+  await page.reload();
   const factory = page.getByRole("region", { name: "Продукт — factory-demo" });
   await expect(factory.getByLabel("Готовность проекта")).toContainText("Готов");
   await expect(factory.getByLabel("Готовность проекта").locator("strong")).toHaveCount(10);
@@ -840,21 +844,35 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
 test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin protected", async ({ page, baseURL }) => {
   expect(baseURL).toMatch(/^https:\/\/127\.0\.0\.1:/);
   const httpsOrigin = baseURL!;
-  const api = await request.newContext({ baseURL: httpsOrigin, ignoreHTTPSErrors: true });
 
-  // If proxy forwarding were client-controlled, this hostile origin/host pair
-  // would be accepted. The TLS proxy replaces both forwarded values instead.
-  const hostile = await api.post("/api/v1/works/resume", {
+  // Chromium preserves its own Origin even when route.continue() overrides
+  // headers. Use the suite's loopback-only fixture client for this one forged
+  // Origin request; its TLS bypass is scoped to the ephemeral local baseURL.
+  if (!fixtureAPI) throw new Error("fixture API is not initialized");
+  const hostileResponse = await fixtureAPI.post("/api/v1/works/resume", {
     headers: {
       Origin: "https://attacker.example",
+      Forwarded: "for=192.0.2.1;host=attacker.example;proto=https",
       "X-Forwarded-Host": "attacker.example",
-      "X-Forwarded-Proto": "https",
+      "X-Forwarded-Proto": "http",
     },
     data: { title: pausedHTTPSWork },
   });
-  expect(hostile.status()).toBe(403);
-  expect((await hostile.json()) as { error: { code: string } }).toMatchObject({
+  expect(hostileResponse.status()).toBe(403);
+  expect((await hostileResponse.json()) as { error: { code: string } }).toMatchObject({
     error: { code: "cross_origin_request" },
+  });
+  expect(hostileResponse.headers()).toMatchObject({
+    "x-factory-e2e-client-origin": "https://attacker.example",
+    "x-factory-e2e-client-forwarded": "for=192.0.2.1;host=attacker.example;proto=https",
+    "x-factory-e2e-client-forwarded-host": "attacker.example",
+    "x-factory-e2e-client-forwarded-proto": "http",
+    "x-factory-e2e-backend-origin": "https://attacker.example",
+    "x-factory-e2e-backend-forwarded": "<absent>",
+    "x-factory-e2e-backend-forwarded-for": "<absent>",
+    "x-factory-e2e-backend-real-ip": "<absent>",
+    "x-factory-e2e-backend-forwarded-host": new URL(httpsOrigin).host,
+    "x-factory-e2e-backend-forwarded-proto": "https",
   });
 
   await page.goto("/work");
@@ -875,27 +893,64 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
   await expect(resume).toBeVisible();
   await page.unroute("**/api/v1/works/resume");
 
+  // Continue the successful retry through Chromium so scoped SPKI trust owns
+  // the TLS request. Spoofed forwarding reaches the fixture proxy, but not its
+  // backend request.
+  await page.route("**/api/v1/works/resume", (route) => route.continue({
+    headers: {
+      ...route.request().headers(),
+      forwarded: "for=192.0.2.1;host=attacker.example;proto=https",
+      "x-forwarded-host": "attacker.example",
+      "x-forwarded-proto": "http",
+    },
+  }));
+  const resumedResponsePromise = page.waitForResponse((response) =>
+    response.url().endsWith("/api/v1/works/resume") && response.request().method() === "POST",
+  );
   await resume.click();
+  const resumedResponse = await resumedResponsePromise;
+  await page.unroute("**/api/v1/works/resume");
+  expect(resumedResponse.status()).toBe(200);
+  expect(await resumedResponse.allHeaders()).toMatchObject({
+    "x-factory-e2e-client-origin": httpsOrigin,
+    "x-factory-e2e-client-forwarded": "for=192.0.2.1;host=attacker.example;proto=https",
+    "x-factory-e2e-client-forwarded-host": "attacker.example",
+    "x-factory-e2e-client-forwarded-proto": "http",
+    "x-factory-e2e-backend-origin": httpsOrigin,
+    "x-factory-e2e-backend-forwarded": "<absent>",
+    "x-factory-e2e-backend-forwarded-for": "<absent>",
+    "x-factory-e2e-backend-real-ip": "<absent>",
+    "x-factory-e2e-backend-forwarded-host": new URL(httpsOrigin).host,
+    "x-factory-e2e-backend-forwarded-proto": "https",
+  });
   await expect(page.getByText("Поставлено на паузу")).toHaveCount(0);
   await expect(page.getByText("В очереди Factory").first()).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-desktop.png", fullPage: true });
 
-  const resumedSettings = await json<{ settings: { stopped_pipelines: string[] } }>(
-    await api.get("/api/v1/settings/pilot"),
-  );
+  const resumedSettings = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/settings/pilot");
+    if (!response.ok) throw new Error(`pilot settings returned ${response.status}`);
+    return response.json() as Promise<{ settings: { stopped_pipelines: string[] } }>;
+  });
   expect(resumedSettings.settings.stopped_pipelines).not.toContain(pausedHTTPSWork);
 
-  const completed = await api.post("/api/v1/works/resume", {
-    headers: { Origin: httpsOrigin },
-    data: { title: completedHTTPSWork },
-  });
-  expect(completed.status()).toBe(409);
-  expect((await completed.json()) as { error: { code: string } }).toMatchObject({
+  const completed = await page.evaluate(async (title) => {
+    const response = await fetch("/api/v1/works/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    return { status: response.status, body: await response.json() };
+  }, completedHTTPSWork);
+  expect(completed.status).toBe(409);
+  expect(completed.body as { error: { code: string } }).toMatchObject({
     error: { code: "pipeline_completed" },
   });
-  const completedSettings = await json<{ settings: { stopped_pipelines: string[] } }>(
-    await api.get("/api/v1/settings/pilot"),
-  );
+  const completedSettings = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/settings/pilot");
+    if (!response.ok) throw new Error(`pilot settings returned ${response.status}`);
+    return response.json() as Promise<{ settings: { stopped_pipelines: string[] } }>;
+  });
   expect(completedSettings.settings.stopped_pipelines).not.toContain(completedHTTPSWork);
 
   await page.goto("/work");
@@ -906,7 +961,6 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
   await expect(completedCard.getByText("работа завершена", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-phone.png", fullPage: true });
-  await api.dispose();
 });
 
 test("confirms and deletes terminal task history", async ({ page, baseURL }) => {
