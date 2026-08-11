@@ -24,6 +24,7 @@ STATE_RU = {"new": "новое", "planned": "в плане", "in_work": "в ра
 STATE_ORDER = {"in_work": 0, "planned": 1, "new": 2, "done": 3, "rejected": 4}
 ORIGIN_RU = {"owner": "хозяин", "assistant": "помощник", "agent": "агент",
              "orchestrator": "фабрика"}
+PUBLIC_PLAN_PATH = "/intake/plan"
 
 
 def repos_map():
@@ -40,6 +41,20 @@ def repo_name(rid, rmap):
     if not rid:
         return "без проекта"
     return rmap.get(rid) or ("проект " + rid[:8])
+
+
+def public_plan_back(back: str = "") -> str:
+    """Возвращает внешний путь Плана, даже когда router видит /plan.
+
+    Intake проксируется под /intake, тогда как FastAPI получает путь без этого
+    префикса. Не позволяем внутреннему адресу или произвольному back попасть в
+    Location после действия владельца.
+    """
+    if back.startswith(PUBLIC_PLAN_PATH + "?") or back == PUBLIC_PLAN_PATH:
+        return back
+    if back.startswith("/plan?") or back == "/plan":
+        return f"/intake{back}"
+    return PUBLIC_PLAN_PATH
 
 
 # ------------------------------------------------------------------ JSON ---
@@ -147,7 +162,7 @@ def idea_action(idea_id: str, action: str = Form(...), reason: str = Form(""),
     else:
         raise HTTPException(400, "неизвестное действие")
     if back:
-        return RedirectResponse(back, status_code=303)
+        return RedirectResponse(public_plan_back(back), status_code=303)
     return {"ok": True}
 
 
@@ -289,7 +304,7 @@ def card_html(it, back):
 def plan_page(repo: str = "", show: str = "open"):
     rmap = repos_map()
     all_items = pilot.ideas_all()
-    back = f"/plan?repo={repo}&show={show}"
+    back = f"{PUBLIC_PLAN_PATH}?repo={repo}&show={show}"
 
     items = [i for i in all_items if not repo or i.get("repo") == repo]
     if show == "open":
@@ -357,9 +372,9 @@ def plan_page(repo: str = "", show: str = "open"):
 
 @router.post("/plan/add")
 def plan_add(title: str = Form(...), why: str = Form(""), repo: str = Form(""),
-             kind: str = Form("idea"), back: str = Form("/plan")):
+             kind: str = Form("idea"), back: str = Form(PUBLIC_PLAN_PATH)):
     pilot.add_idea(kind, title, repo, why, origin="owner")
-    return RedirectResponse(back, status_code=303)
+    return RedirectResponse(public_plan_back(back), status_code=303)
 
 
 # ------------------------------------------------------------- уведомления ---

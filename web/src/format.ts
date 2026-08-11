@@ -8,8 +8,25 @@ export const taskStates: TaskState[] = [
   "cancelled",
 ];
 
+/** Единый словарь состояний: API остаётся английским, интерфейс — русским. */
+export const taskStateLabels: Record<TaskState, string> = {
+  queued: "В очереди",
+  running: "В работе",
+  succeeded: "Успешно",
+  failed: "Ошибка",
+  cancelled: "Отменено",
+};
+
+const eventLabels: Record<string, string> = {
+  progress: "Ход работы",
+  check: "Проверка",
+  output: "Вывод",
+  error: "Ошибка",
+  result: "Результат",
+};
+
 export function stateLabel(state: string): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+  return taskStateLabels[state as TaskState] ?? eventLabels[state] ?? humanize(state);
 }
 
 export function runtimeLabel(runtime: string): string {
@@ -18,23 +35,23 @@ export function runtimeLabel(runtime: string): string {
 
 export function timeAgo(value: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 10) return "только что";
+  if (seconds < 60) return `${seconds} с назад`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes} мин назад`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return `${hours} ч назад`;
+  return `${Math.floor(hours / 24)} дн. назад`;
 }
 
 export function duration(start: string, end?: string, now = Date.now()): string {
   const elapsed = Math.max(0, (end ? new Date(end).getTime() : now) - new Date(start).getTime());
   const seconds = Math.floor(elapsed / 1000);
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return `${seconds} с`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  if (minutes < 60) return `${minutes} мин ${seconds % 60} с`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  return `${hours} ч ${minutes % 60} мин`;
 }
 
 export interface EventSummary {
@@ -63,18 +80,18 @@ export function eventSummary(event: AttemptEvent): EventSummary | null {
   if (type === "result") {
     const result = stringValue(payload.result);
     if (payload.is_error === true) {
-      return { label: "Error", text: result ?? "Claude Code reported a terminal error" };
+      return { label: "Ошибка", text: result ?? "Claude Code сообщил о финальной ошибке" };
     }
-    return result ? { label: "Result", text: result } : null;
+    return result ? { label: "Результат", text: result } : null;
   }
   if (type === "item.started" || type === "item.completed") {
     return codexItemSummary(payload, type === "item.completed");
   }
   if (type === "error") {
-    return { label: "Error", text: errorText(payload) ?? "The runtime reported an error." };
+    return { label: "Ошибка", text: errorText(payload) ?? "Среда выполнения сообщила об ошибке." };
   }
   if (type === "turn.failed") {
-    return { label: "Error", text: errorText(payload) ?? "The Codex turn failed." };
+    return { label: "Ошибка", text: errorText(payload) ?? "Запуск Codex завершился ошибкой." };
   }
   if (type && hiddenEventTypes.has(type)) return null;
 
@@ -82,7 +99,7 @@ export function eventSummary(event: AttemptEvent): EventSummary | null {
   const streamText = stringValue(payload.text);
   if (stream && streamText) {
     return {
-      label: stream === "stderr" ? "Error output" : "Output",
+      label: stream === "stderr" ? "Вывод ошибки" : "Вывод",
       text: compactOutput(streamText, Boolean(payload.truncated)),
     };
   }
@@ -90,7 +107,7 @@ export function eventSummary(event: AttemptEvent): EventSummary | null {
   if (directText) {
     return { label: eventLabel(event.kind), text: directText };
   }
-  if (type) return { label: "Runtime", text: humanize(type) };
+  if (type) return { label: "Среда выполнения", text: humanize(type) };
   return fallbackSummary(event);
 }
 
@@ -110,7 +127,7 @@ function claudeAssistantSummary(payload: Record<string, unknown>): EventSummary 
       lines.push(toolAction(block, false));
     }
   }
-  return lines.length > 0 ? { label: "Assistant", text: lines.join("\n\n") } : null;
+  return lines.length > 0 ? { label: "Агент", text: lines.join("\n\n") } : null;
 }
 
 function claudeToolResultSummary(payload: Record<string, unknown>): EventSummary | null {
@@ -119,7 +136,10 @@ function claudeToolResultSummary(payload: Record<string, unknown>): EventSummary
   const blocks = message.content.map(record).filter((value) => value?.type === "tool_result");
   if (blocks.length === 0) return null;
   const failed = blocks.some((block) => block?.is_error === true);
-  return { label: failed ? "Tool error" : "Tool", text: failed ? "Tool call failed" : "Tool call completed" };
+  return {
+    label: failed ? "Ошибка инструмента" : "Инструмент",
+    text: failed ? "Вызов инструмента завершился ошибкой" : "Вызов инструмента завершён",
+  };
 }
 
 function codexItemSummary(payload: Record<string, unknown>, completed: boolean): EventSummary | null {
@@ -129,46 +149,49 @@ function codexItemSummary(payload: Record<string, unknown>, completed: boolean):
   const failed = completed && (item.status === "failed" || (item.error !== undefined && item.error !== null));
   if (type === "agent_message") {
     const text = stringValue(item.text);
-    return text ? { label: "Assistant", text } : null;
+    return text ? { label: "Агент", text } : null;
   }
   if (type === "reasoning") return null;
   if (type === "command_execution") {
-    const command = compactLine(stringValue(item.command) ?? "Command");
-    if (!completed) return { label: "Command", text: `Running ${command}` };
+    const command = compactLine(stringValue(item.command) ?? "команда");
+    if (!completed) return { label: "Команда", text: `Выполняется ${command}` };
     const exitCode = numberValue(item.exit_code);
-    if (!failed && exitCode === 0) return { label: "Command", text: `Succeeded: ${command}` };
-    if (exitCode !== null) return { label: "Command error", text: `Failed (${exitCode}): ${command}` };
-    if (failed) return { label: "Command error", text: `Failed: ${command}` };
-    return { label: "Command", text: `Finished: ${command}` };
+    if (!failed && exitCode === 0) return { label: "Команда", text: `Успешно: ${command}` };
+    if (exitCode !== null) return { label: "Ошибка команды", text: `Не удалось (${exitCode}): ${command}` };
+    if (failed) return { label: "Ошибка команды", text: `Не удалось: ${command}` };
+    return { label: "Команда", text: `Завершено: ${command}` };
   }
   if (type?.includes("tool_call")) {
-    return { label: failed ? "Tool error" : "Tool", text: toolAction(item, completed, failed) };
+    return { label: failed ? "Ошибка инструмента" : "Инструмент", text: toolAction(item, completed, failed) };
   }
   if (type === "file_change") {
     return {
-      label: failed ? "File error" : "Files",
-      text: failed ? "File changes failed" : completed ? "File changes completed" : "Changing files",
+      label: failed ? "Ошибка файлов" : "Файлы",
+      text: failed ? "Не удалось изменить файлы" : completed ? "Файлы изменены" : "Изменяет файлы",
     };
   }
-  if (type) return { label: "Runtime", text: `${humanize(type)} ${completed ? "completed" : "started"}` };
+  if (type) return {
+    label: "Среда выполнения",
+    text: `${humanize(type)} ${completed ? "завершено" : "запущено"}`,
+  };
   return null;
 }
 
 function toolAction(value: Record<string, unknown>, completed: boolean, failed = false): string {
-  const name = firstString(value, ["tool", "name"]) ?? "Tool call";
+  const name = firstString(value, ["tool", "name"]) ?? "вызов инструмента";
   const input = record(value.input);
   const command = input ? stringValue(input.command) : null;
   const subject = command ? `${name}: ${compactLine(command)}` : name;
-  if (failed) return `${subject} failed`;
-  return completed ? `${subject} completed` : `Using ${subject}`;
+  if (failed) return `${subject}: ошибка`;
+  return completed ? `${subject}: завершено` : `Использует ${subject}`;
 }
 
 function fallbackSummary(event: AttemptEvent): EventSummary {
-  return { label: eventLabel(event.kind), text: "Runtime update" };
+  return { label: eventLabel(event.kind), text: "Обновление среды выполнения" };
 }
 
 function eventLabel(kind: string): string {
-  if (kind === "claude-code" || kind === "codex") return "Runtime";
+  if (kind === "claude-code" || kind === "codex") return "Среда выполнения";
   return stateLabel(kind);
 }
 
@@ -182,7 +205,7 @@ function errorText(payload: Record<string, unknown>): string | null {
 function compactOutput(text: string, truncated: boolean): string {
   const trimmed = text.trim();
   if (truncated && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
-    return "Large structured runtime output omitted";
+    return "Крупный структурированный вывод среды выполнения скрыт";
   }
   const maximum = 500;
   return trimmed.length > maximum ? `${trimmed.slice(0, maximum)}…` : trimmed;
