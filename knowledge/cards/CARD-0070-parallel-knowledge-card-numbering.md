@@ -2,7 +2,11 @@
 
 ## HEAD
 
+Status: Verified PASS — awaiting human merge
+Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
+Evidence summary: `just check`, сборка, UI unit/browser и целевые 23 Python-теста прошли; мутация без production guard падает.
+One next action: human merge into main.
 
 - Status: Implemented and tested — уникальные номера и строгий HEAD-gate исправлены.
 - Branch: `factory/5b9cb945-2d5-c61f3f8a-cb6`.
@@ -22,6 +26,16 @@ Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после �
 Целевые `SpecificationBranchHandoffTests` и полный Python-набор прошли; `py_compile` и `git diff --check` чисты.
 
 ## LOG
+
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Параллельные ветки резервируют разные номера | `CardNumberReservationTests` | `CARD-0070`, `CARD-0071`; повтор сохраняет `CARD-0070` |
+| Второй невалидный Specification не создаёт Implement | `SpecificationBranchHandoffTests` | 23 теста, `OK`; один rescue, затем `SPEC HEAD STOP` |
+| Guard обязателен | Мутация без stop-ветки | целевой тест падает: `2 != 1` |
+| Сборка и UI | `just build`, `just ui-check`, `just test-browser` | успешно |
+| Upgrade текущего main | `go test ./internal/controlplane` на `origin/main` | успешно |
 
 ### 2026-08-11 — Implement
 
