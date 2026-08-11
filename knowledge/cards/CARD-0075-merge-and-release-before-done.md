@@ -2,16 +2,16 @@
 
 ## HEAD
 
-- Status: Specification ready — ожидает реализации.
-- Branch: `factory/99bcdebc-90b-936894ed-9cf`.
-- Specification: `knowledge/specs/merge-and-release-before-done.md`.
-- What changes: финальный PASS, переход эпика и уведомление владельцу будут
-  возникать после подтверждённого успешного выпуска, а не сразу после merge.
-- Evidence: спецификация сопоставлена с текущими `pipeline_watch`,
-  `deploy_after_merge`, `poll_post_merge_deploys`, восстановлением эпиков и
-  статусом terminal Verify в UI.
-- Next action: Implement выполняет план из спецификации и дописывает сюда
-  реализационный commit до финального коммита карточки.
+- Status: Implemented — ожидает review/verify.
+- Branch: `factory/145d1805-ea0-da91db87-ef2`.
+- Implementation commit: 54ee2f365c5c49f454e79c36fa37f86cc3bd2696 — финальный PASS и уведомление выдаются только после успешного выпуска.
+- What changed: ожидание выпуска сохраняется с задачей и поколением; `rc=0`
+  создаёт delivery receipt, а `rc=8`/коалесцирование сохраняют ожидание.
+- What changed: эпики и «Сделано недавно» признают готовность только по receipt
+  поставки; UI показывает «Ожидает слияния и выпуска».
+- Evidence: `python3 -m unittest -v pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests pilot.test_pilot.EpicCompletionReceiptTests pilot.test_pilot.RecentDoneTest` → 26 OK.
+- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 11 passed.
+- Next action: Review проверить обработку ошибки выпуска и восстановление состояния на реальном цикле Pilot.
 
 ## LOG
 
@@ -27,3 +27,11 @@
 переносить на retry. UI terminal Verify получает явное ожидание вместо
 ошибочного «работа завершена». Новый контракт не блокирует цикл Pilot и не
 изменяет команды штатного выпуска.
+
+### 2026-08-11 — Implement
+
+`pilot.py` сохраняет ожидание поставки до запуска release и привязывает его к
+нужному поколению. Успех создаёт durable receipt, единожды завершает Verify и
+уведомляет владельца; lock и ошибка не создают ложный PASS. Эпики, недавние
+результаты и Work UI используют подтверждённую поставку. Проверено 26 целевыми
+Python-тестами и 11 UI-тестами Work.
