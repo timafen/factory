@@ -2,16 +2,17 @@
 
 ## HEAD
 
-- Status: Specification ready — implementation pending.
-- Specification: `knowledge/specs/correction-provenance-single-pipeline.md`.
-- Scope: durable task/work provenance, correction-safe Pilot discovery,
-  compatibility migration, prevented-root event and storm regression.
-- Owner impact: Review/Verify correction continues and closes the original work
-  without launching or charging for another five-stage pipeline.
-- Rollout gate: Pilot remains disabled until this change and separate safe
-  release logic are deployed and smoke-tested.
-- Next action: implement the specification without reusing the conflicted old
-  CARD-0079 branch.
+- Status: Implemented and fully tested; Pilot remains operationally disabled.
+- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Implementation commit: 86a0ff83e39cc84c7a9e49e4ee061e675a5cf1cb — durable task provenance and correction-safe single-pipeline Pilot grouping.
+- What changed: migration 027 and the task API persist root/parent/correction
+  identity; every direct continuation path inherits the original `work_id`.
+- What changed: Pilot uses explicit provenance before legacy title fallback and
+  durably journals one `pilot_duplicate_root_prevented` event per correction.
+- Evidence: `go test ./...` → PASS; `python3 -m unittest -v pilot.test_pilot`
+  → PASS (204 tests); `go build ./...` → PASS.
+- Next action: deploy control plane then Pilot binary while Pilot stays disabled,
+  and smoke-test provenance before any separate enablement decision.
 
 ## LOG
 
@@ -28,3 +29,11 @@ exactly one pipeline.
 CARD-0086 was absent from fresh `origin/main` and every published `factory/*`
 branch when reserved. The prior reservation is owned by concurrent work and
 was not reused; old conflicted CARD-0079 remains untouched.
+
+### 2026-08-11 — Implement
+
+Implemented nullable provenance with forward migration 027, transactional API
+validation/replay, control-plane child lineage, and provenance-first Pilot
+grouping. Review and Verify storm regressions survive a durable restart with
+one work/pipeline, no second Triage, and one prevented-root event. Full Go tests,
+all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
