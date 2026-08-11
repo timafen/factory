@@ -4,18 +4,19 @@
 
 Implementation commit: e1d50162290f72b3156503a40b0476a36b94df15 — реализована полная карточка готовности проекта из девяти безопасных проверок.
 
-- Status: BLOCKED — встроенный UI-артефакт не соответствует исходникам, поэтому
-  сервер не доставит новую карточку без пересборки и фиксации `web/dist`.
+- Status: BLOCKED — встроенный UI-артефакт теперь соответствует исходникам, но
+  полный живой браузерный набор падает в смежном сценарии Work view.
 - Branch: `factory/e810f198-b10-8f930792-64b`.
 - Specification: `knowledge/specs/project-readiness-card.md`.
 - What changed: пилот публикует девять упорядоченных проверок, а «Обзор»
   показывает итог, причины и время снимка для каждого enabled-проекта.
-- Evidence: Python, целевые Go, Vitest и shell smoke — PASS; полный UI-набор
-  (140 тестов) — PASS. После чистого `npm ci` CI-проверка
-  `git diff --exit-code -- web/dist` — FAIL: новый bundle не зафиксирован.
+- Evidence: чистые `npm ci` и `just ui-build 0` не изменили `web/dist`; полный
+  `just check`, `just build` и `just test-release` — PASS. Карточка readiness
+  прошла в реальном Chromium, но `just test-browser` — FAIL: 5 passed, 1 failed.
 - Safe defaults: unknown не становится ready, production-write не требуется,
   rollback не запускается, значения секретов и сырой stderr не публикуются.
-- Next action: пересобрать и зафиксировать `web/dist`, затем повторить Verify.
+- Next action: исправить или стабилизировать Work-view browser-сценарий, затем
+  повторить Verify с полным реальным Chromium-набором.
 
 ## LOG
 
@@ -53,3 +54,18 @@ Playwright-карточка и установочный shell smoke; web build �
 `just test-tooling` и `just build` — PASS; `git diff --check origin/main...HEAD`
 — PASS. Полный CI-прогон остановлен в `just test-release`; блокирующий CI-шаг
 проверки актуальности `web/dist` уже воспроизведён выше.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Встроенный UI соответствует исходникам | `npm --prefix web ci && just ui-build 0 && git diff --exit-code -- web/dist` | PASS: чистая сборка не изменила `web/dist`. |
+| Девять строк, итог и причина показаны на «Обзоре» | `just check` | PASS: `Overview.test.ts`, 20 тестов; весь Vitest: 13 файлов, 140 тестов. |
+| Снимок из девяти ключей, unknown, безопасные scope/секреты/rollback и browser marker | `just check` | PASS: полный `go test -timeout 5m ./...`, lint, typecheck, tooling и launcher. |
+| Релизные артефакты воспроизводимы | `just test-release` | PASS: артефакты, SBOM, checksum и rollback-проверки. |
+| Живая карточка в Chromium | `just test-browser` | PASS: `shows project readiness card` (1.6s) на реальном Go server. |
+| Полный живой браузерный набор | `just test-browser` | FAIL: 5 passed, 1 failed, 13 did not run; Work view не нашёл `Prove the complete local workflow` в `e2e/control-plane.spec.ts:585`. |
+
+Смежные проверки: `just build` — PASS; `git diff --check origin/main...HEAD` —
+PASS; рабочее дерево чисто. Верификация заблокирована до зелёного полного
+браузерного набора.
