@@ -2,15 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented and targeted tests pass — awaiting Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/1793a475-d50-d94bf866-fa6`.
 - Implementation commit: 55fb2e163e4ad8686f97db1f863a62a860e72d31 — повторная обработка той же реализации сохраняет пересобранную delivery-ветку.
 - What changed: `delivery_artifact` сбрасывается только при новой identity
   реализации или поколении; повтор terminal-задачи после restart сохраняет
   ветку, выбранную `review_gate`, до Review → Verify → merge.
-- Evidence: 6/6 связанных тестов OK; `py_compile` и `git diff --check` — OK.
-- One next action: Review подтверждает повторную обработку Implement после
-  rebuild без возврата к canonical fallback.
+- Evidence: targeted pipeline 6/6 OK; full `pilot.test_pilot` 183/183 OK;
+  full `just check` OK; clean tree after verification.
+- One next action: Human merge implementation commit after this Verify handoff.
 
 ## LOG
 
@@ -55,3 +55,16 @@ fallback. Сквозной тест воспроизвёл rebuild → Review �
 rebuild без подмены `record_implementation_artifact`, затем подтверждает
 единую ветку в Review, Verify и merge; 6/6 тестов, `py_compile` и
 `git diff --check` прошли.
+
+### 2026-08-11 — Verify
+
+| Acceptance criterion | Check | Result |
+| --- | --- | --- |
+| `review_gate` строит clean delivery branch и цепочка продолжает её использовать | `python3 -m unittest pilot.test_pilot.RebuiltDeliveryBranchPipelineTests` | PASS: rebuild → Review → Verify → `gh_merge` используют `factory/original-implementation-clean`; canonical implementation сохранён как fallback |
+| Restart/reprocess той же успешной Implement-задачи не подменяет delivery artifact | тот же сквозной тест, `state["processed"] = []`, без mock `record_implementation_artifact` | PASS: новая Review не создаётся, delivery branch остаётся clean |
+| Новая implementation generation сбрасывает старый delivery artifact | `python3 -m unittest pilot.test_pilot.CanonicalImplementationBranchTests` | PASS: новая task identity очищает старую delivery branch; canonical branch/head остаются доступными |
+| Регрессии проекта отсутствуют | `just check` | PASS: Go tests, UI lint/typecheck/147 tests, tooling и launcher |
+| Полный pilot regression отсутствует | `python3 -m unittest pilot.test_pilot` | PASS: 183 tests |
+
+Проверка выполнена на implementation commit `55fb2e163e4ad8686f97db1f863a62a860e72d31`;
+последующий commit меняет только эту карточку.
