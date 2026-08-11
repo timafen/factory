@@ -58,6 +58,13 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 
 ### 2026-08-11 — Implement
 
+Исправлены соседние assertions сценария repository routing: «Точная идентичность»,
+«Добавить репозиторий», русское резюме готовности и действия маршрутизации. `web/dist`
+обновлён результатом `npm run build`; targeted repository Playwright, visual audit и
+157 UI-тестов прошли.
+
+### 2026-08-11 — Implement
+
 После review исправлен ослабленный locator около `control-plane.spec.ts:1502`:
 тест ограничен Settings-контейнером и использует `getByRole("button", { name: "Сохранить настройки", exact: true })`.
 Убран `.first()`, поэтому дубликат кнопки или неверная область теперь ломают сценарий.
