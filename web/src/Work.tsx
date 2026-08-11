@@ -176,6 +176,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     // её могли перезапустить и довести.
     const failed = g.items[g.items.length - 1]?.task.state === "failed";
     const allCancelled = g.items.every((i) => i.task.state === "cancelled");
+    const completed = g.items[g.items.length - 1]?.task.state === "succeeded";
 
     if (waiting) {
       g.status = {
@@ -224,12 +225,6 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         happened: "Ответ на вопрос уже есть, но исполнитель ещё не назначен.",
         next: "Factory ждёт свободного исполнителя.", owner: "Участие владельца не требуется.",
       };
-    } else if (passed) {
-      g.status = {
-        kind: "done", label: "работа принята", tone: "ok",
-        happened: "Проверка приняла результат.", next: "Работа завершена.",
-        owner: "Участие владельца не требуется.",
-      };
     } else if (rework) {
       g.status = {
         kind: "archive", label: "доработка в истории", tone: "muted",
@@ -242,6 +237,19 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         happened: "Все попытки этой работы отменены.", next: "Factory не выполняет новых шагов.",
         owner: "Участие владельца не требуется.",
       };
+    } else if (failed) {
+      g.status = {
+        kind: "archive", label: "сбой в истории", tone: "muted",
+        happened: "Последняя попытка завершилась сбоем.", next: "Новый активный шаг в API не найден.",
+        owner: "Участие владельца не требуется.",
+      };
+    } else if (passed || completed) {
+      g.status = {
+        kind: "done", label: passed ? "работа принята" : "работа завершена", tone: "ok",
+        happened: passed ? "Проверка приняла результат." : "Исполнитель успешно завершил задачу.",
+        next: "Работа завершена.",
+        owner: "Участие владельца не требуется.",
+      };
     } else {
       const newest = g.items[g.items.length - 1];
       const qs = newest ? qState.get(newest.task.id) : undefined;
@@ -249,12 +257,6 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         g.status = {
           kind: "active", label: "Ответ передан Factory", tone: "live",
           happened: "На вопрос уже дан ответ.", next: "Factory обрабатывает полученный ответ.",
-          owner: "Участие владельца не требуется.",
-        };
-      } else if (failed) {
-        g.status = {
-          kind: "archive", label: "сбой в истории", tone: "muted",
-          happened: "Последняя попытка завершилась сбоем.", next: "Новый активный шаг в API не найден.",
           owner: "Участие владельца не требуется.",
         };
       } else {
@@ -299,7 +301,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
  * активной задачи, открытый вопрос и состояние, которое записал пилот. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function sectionOf(g: Group): "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive" {
-  if (g.meta?.closed) return "archive";
+  if (g.meta?.closed && g.status.kind !== "done") return "archive";
   return g.status.kind;
 }
 
