@@ -3,13 +3,13 @@
 ## HEAD
 
 Status: Implemented — awaiting human merge.
-Branch: factory/7e7934c4-112-7ab1b699-725.
-Implementation commit: 0fdcbcc5148495bde3f579562e818b12efc362f7 — launcher исключён из решения о результате gate.
-What changed: gate запускается в требуемой identity только фиксированным root-owned `/usr/bin/sudo`; `$AS` не получает result path и не входит в цепочку доверия.
-What changed: одноразовый результат — kernel wait status цепочки `setsid --wait → sudo → gate`; файловый running/finished protocol полностью удалён.
-Threat model: произвольный fork-capable `$AS` того же UID знает прежний путь и может атомарно писать valid/corrupt/stale/replayed status, но эти файлы больше не читаются.
-Evidence: spoofed `status=0` + реальный gate `1` → release `5`, install events `0`; fork-success → install `1`; shell-suite ×3 → PASS.
-Evidence: `go test -timeout 5m ./...`, `go build ./...`, `cd web && npm ci && npm run build`, `git diff --check` → PASS.
+Branch: factory/b3052294-9b9-63503efd-ec9.
+Implementation commit: d6cda20403b9f72494c7cbf4b20decd16ccbae17 — вся gate-цепочка закреплена за проверенными абсолютными путями и живой session.
+What changed: `/usr/bin/setsid --fork --wait → /usr/bin/sudo → /bin/bash → абсолютный gate script`; системные executables проверяются как root-owned и не writable для group/other.
+What changed: nonce-handshake принимается только от живого session leader — прямого ребёнка запущенного supervisor; gate ждёт одноразовый ack, а итогом остаётся kernel wait status.
+Threat model: PATH/function/alias/env/config shadow, prewritten/replayed/forged handshake и исчезнувшая PGID не могут дать успех; `$AS` исключён из цепочки результата.
+Evidence: malicious PATH `setsid` с `sid=999999 pgid=999999 ready=1` + `0`, forged file и missing session → release `5`, installs/restarts/build replacements `0`; real fork fail/success и signal cleanup → PASS; shell-suite ×3 → PASS.
+Evidence: `go test -timeout 5m ./...`, `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS.
 One next action: human merge into main.
 
 ## LOG
@@ -39,3 +39,12 @@ Shell-suite прошёл трижды, Go test/build и UI production build пр
 identity launcher, а supervisor принимает только kernel wait status этой цепочки.
 Тестовый fork-capable `$AS` записал stale, corrupt, valid и replayed success до
 настоящего `exit 1`: выпуск вернул 5, не установил ничего и не оставил процессов.
+
+### 2026-08-11 — Implement
+
+Review-воспроизведение показало PATH bypass: подменённый `setsid` мог записать
+правдоподобный, но несуществующий SID/PGID и вернуть `0`. Gate-цепочка теперь
+использует только проверенные абсолютные executables, а nonce/ack доказывает живую
+session и её прямую связь с конкретным `setsid --fork --wait` supervisor до старта
+gate. PATH-shadow, forged/prewritten handshake, missing session, real fork fail/success
+и HUP/INT/TERM cleanup прошли shell-suite трижды; Go test/build и UI test/build зелёные.
