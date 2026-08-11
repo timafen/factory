@@ -348,7 +348,9 @@ AGENT_RULES = """
 4. Пиши для человека: первая строка коммита — по-русски, что и зачем.
    Голые хеши/ID на экранах и в текстах для владельца запрещены — только
    со словесной подписью. Ревью возвращает работу за голый хеш на экране.
-5. Знания: заводи ОТДЕЛЬНУЮ карточку под свою работу. В общие файлы-журналы
+5. Знания: если в контексте выдана строка `Card: CARD-…`, заводи карточку
+   только как `knowledge/cards/<выданный Card>-<slug>.md`. Не ищи следующий
+   номер в файлах и не выбирай его самостоятельно. В общие файлы-журналы
    (CARD-0030 и подобные) НЕ дописывай ни строки: общий файл — магнит для
    конфликтов слияния, когда работы идут параллельно. Всё побочное — строками
    ПРЕДЛОЖЕНИЕ/НАХОДКА в отчёте, карточка заведётся сама.
@@ -2294,6 +2296,49 @@ def branch_report(repo_identity, branch):
 IMPLEMENTATION_COMMIT_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?Implementation commit:\s*`?([0-9a-f]{40})`?\s*[—-]\s*\S",
     re.M)
+CARD_LINE = re.compile(r"^Card:\s*(CARD-\d{4,})\s*$", re.M)
+CARD_FILE_NUMBER = re.compile(r"^CARD-(\d+)\b")
+CARD_RESERVATIONS_KEY = "card_reservations"
+
+
+def reserved_card_number(state, repo_identity, branch):
+    """Reserve one card number for a published branch, durably and idempotently.
+
+    The Pilot has one state writer, so saving before task creation makes this a
+    small transaction: a failed create may leave a gap but can never reuse a
+    number for another branch.
+    """
+    if not repo_identity or not branch:
+        return None
+    reservations = state.get(CARD_RESERVATIONS_KEY, {})
+    if not isinstance(reservations, dict):
+        reservations = {}
+    key = repo_identity + "::" + branch
+    reserved = reservations.get(key)
+    if isinstance(reserved, int) and reserved > 0:
+        return f"CARD-{reserved:04d}"
+
+    repo = repo_identity.split("github.com/")[-1]
+    cards = gh_json(["api", f"repos/{repo}/contents/knowledge/cards?ref=main"])
+    if not isinstance(cards, list):
+        return None
+    existing = [int(match.group(1)) for item in cards if isinstance(item, dict)
+                for match in [CARD_FILE_NUMBER.match(str(item.get("name") or ""))]
+                if match]
+    local = [number for reserve_key, number in reservations.items()
+             if reserve_key.startswith(repo_identity + "::")
+             and isinstance(number, int) and number > 0]
+    number = max(existing + local + [0]) + 1
+    state[CARD_RESERVATIONS_KEY] = reservations
+    reservations[key] = number
+    save(STATE_PATH, state)
+    return f"CARD-{number:04d}"
+
+
+def extract_card(result, prev_context):
+    """Keep the reservation as a pipeline identity through every handoff."""
+    match = CARD_LINE.search(result or "") or CARD_LINE.search(prev_context or "")
+    return match.group(1) if match else ""
 
 
 def implementation_commit_gate(repo_identity, branch, files):
@@ -2443,7 +2488,8 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
             pass
 
 
-def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=""):
+def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
+                expected_card=""):
     """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
     Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
     не блокируют конвейер: тогда ворота просто молчат."""
@@ -2469,6 +2515,15 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
+
+        if expected_card and not any(
+                path.startswith("knowledge/cards/" + expected_card + "-")
+                and path.endswith(".md") for path in files):
+            return {"back": True, "note": (
+                "Машинная проверка перед Ревью: для выданного номера "
+                f"{expected_card} в поставке нет карточки "
+                f"knowledge/cards/{expected_card}-<slug>.md. "
+                "Не выбирай другой номер: создай карточку с выданным префиксом.")}
 
         implementation_gate = implementation_commit_gate(repo_identity, branch, files)
         if implementation_gate:
@@ -6521,6 +6576,7 @@ def cycle(conf, state):
             except Exception as e:
                 log("branch_pick_error", repr(e))
         branch_line = f"Branch: {branch}\n" if branch else ""
+        card = extract_card(result, detail.get("context", ""))
 
         # Спецификация является артефактом поставки, а не только текстом в
         # сокращённом отчёте.  До разработки подтверждаем, что выбранная ветка
@@ -6620,12 +6676,25 @@ def cycle(conf, state):
             except Exception as e:
                 log("spec_gate_error", repr(e))
 
+        # Номер карточки принадлежит опубликованной ветке, а не названию
+        # работы. Резерв сохраняется до создания Implement, поэтому два
+        # законченных Specification в одном цикле не увидят один номер.
+        if wf == "Specification":
+            rid_c = detail["task"].get("repository_id") or ""
+            card = reserved_card_number(state, repo_identity_by_id.get(rid_c, ""), branch)
+            if not card:
+                if tid in state["processed"]:
+                    state["processed"].remove(tid)
+                log(f"SPEC CARD WAIT {base[:40]!r}: каталог карточек недоступен")
+                continue
+        card_line = f"Card: {card}\n" if card else ""
+
         # Ворота: дешёвая машинная проверка вместо дорогого круга Ревью.
         gate_note = ""
         if next_stage == "Review" and branch:
             rid_g = detail["task"].get("repository_id") or ""
             g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
-                            area_repo=rid_g)
+                            area_repo=rid_g, expected_card=card)
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:
@@ -6636,7 +6705,7 @@ def cycle(conf, state):
                 try:
                     created_g = create_task({"request_key": str(uuid.uuid4()), "title": back_title,
                                  "context": (f"Pipeline: {base}\nPrevious stage: {wf}\n"
-                                             f"Branch: {branch}\n\n" + g["note"])[:20000],
+                                             f"Branch: {branch}\n{card_line}\n" + g["note"])[:20000],
                                  "worker_id": worker["id"],
                                  "repository_id": rid_g,
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
@@ -6656,7 +6725,7 @@ def cycle(conf, state):
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
-        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}"
+        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{card_line}"
                    f"Orchestrator handoff: {handoff}\n\n"
                    f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
                    + gate_note)[:20000]

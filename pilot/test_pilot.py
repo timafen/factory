@@ -409,6 +409,8 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
             }}
 
         def github_branch(args, **_kwargs):
+            if "/contents/knowledge/cards?ref=main" in args[-1]:
+                return [{"name": "CARD-0041-existing.md"}]
             name = args[-1].split("/branches/", 1)[-1]
             if published_branches is not None and name not in published_branches:
                 return None
@@ -468,6 +470,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         self.assertIn("Implement + Test", self.created[0]["title"])
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-implementation")
         self.assertIn("Branch: factory/published", self.created[0]["context"])
+        self.assertIn("Card: CARD-0042", self.created[0]["context"])
 
     def test_handoff_uses_published_branch_instead_of_stale_first_mention(self):
         report = self.run_cycle(
@@ -536,6 +539,64 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         with mock.patch.object(pilot.subprocess, "run", return_value=response):
             with self.assertRaisesRegex(RuntimeError, "connection reset"):
                 pilot.branch_report("github.com/acme/repo", "factory/task")
+
+
+class CardNumberReservationTests(unittest.TestCase):
+    def test_parallel_branches_reserve_distinct_numbers_and_retry_keeps_one(self):
+        state = {"processed": []}
+        cards = [{"name": "CARD-0069-old.md"}]
+        with mock.patch.object(pilot, "gh_json", return_value=cards) as github, \
+                mock.patch.object(pilot, "save") as save:
+            first = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
+            second = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/two")
+            retry = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
+
+        self.assertEqual((first, second, retry), ("CARD-0070", "CARD-0071", "CARD-0070"))
+        self.assertEqual(state[pilot.CARD_RESERVATIONS_KEY], {
+            "github.com/acme/repo::factory/one": 70,
+            "github.com/acme/repo::factory/two": 71,
+        })
+        self.assertEqual(save.call_count, 2)
+        self.assertEqual(github.call_count, 2)
+
+    def test_unreadable_card_catalogue_does_not_guess_a_number(self):
+        state = {"processed": []}
+        with mock.patch.object(pilot, "gh_json", return_value=None), \
+                mock.patch.object(pilot, "save") as save:
+            card = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
+
+        self.assertIsNone(card)
+        self.assertNotIn(pilot.CARD_RESERVATIONS_KEY, state)
+        save.assert_not_called()
+
+    def test_handoff_keeps_card_from_context_or_stage_report(self):
+        self.assertEqual(pilot.extract_card("", "Branch: factory/task\nCard: CARD-0070\n"),
+                         "CARD-0070")
+        self.assertEqual(pilot.extract_card("Card: CARD-0071\n", "Card: CARD-0070\n"),
+                         "CARD-0071")
+        self.assertIn("выдана строка `Card: CARD-…`", pilot.AGENT_RULES)
+
+    def test_review_rejects_card_with_other_reserved_number_first(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0071-wrong.md"]
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "implementation_commit_gate") as implementation:
+            result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
+                                       expected_card="CARD-0070")
+
+        self.assertTrue(result["back"])
+        self.assertIn("CARD-0070", result["note"])
+        implementation.assert_not_called()
+
+    def test_review_accepts_matching_card_for_normal_commit_gate(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0070-correct.md"]
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None) as implementation, \
+                mock.patch.object(pilot, "load", return_value={}):
+            result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
+                                       expected_card="CARD-0070")
+
+        self.assertFalse(result["back"])
+        implementation.assert_called_once_with("github.com/acme/repo", "factory/task", files)
 
 
 class CodexUsageTests(unittest.TestCase):
