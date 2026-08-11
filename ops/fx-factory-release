@@ -39,6 +39,7 @@ JOURNAL="$REL/transaction"
 GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
 GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
+GATE_IDENTITY_LAUNCHER=/usr/bin/sudo
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -229,6 +230,33 @@ case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
   *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
 esac
 
+# $AS is intentionally not accepted here. It is a convenience wrapper for
+# workspace operations and may be supplied by the caller, so it cannot be in
+# the trust chain that reports a gate result. The gate identity instead comes
+# from OWNER and is entered through one fixed, root-owned launcher whose wait
+# status is authoritative. OWNER='' is the explicit no-switch mode used by the
+# hermetic test fixture (and by an operator already running as the target UID).
+gate_identity=()
+if [ -n "$OWNER" ]; then
+  gate_user=${OWNER%%:*}
+  if ! [[ "$gate_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+    fail "некорректный пользователь для test gate"
+    exit 4
+  fi
+  if [ ! -x "$GATE_IDENTITY_LAUNCHER" ] \
+    || [ "$(stat -Lc %u "$GATE_IDENTITY_LAUNCHER" 2>/dev/null)" != 0 ]; then
+    fail "нет доверенного launcher для test gate"
+    exit 4
+  fi
+  gate_launcher_mode=$(stat -Lc %a "$GATE_IDENTITY_LAUNCHER" 2>/dev/null) \
+    || { fail "не смог проверить launcher для test gate"; exit 4; }
+  if (( (8#$gate_launcher_mode & 0022) != 0 )); then
+    fail "launcher для test gate доступен на запись не только root"
+    exit 4
+  fi
+  gate_identity=("$GATE_IDENTITY_LAUNCHER" -H -u "$gate_user" --)
+fi
+
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
@@ -326,10 +354,11 @@ trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
 # их общего успеха. Реальную SID/PGID сообщает оболочка, уже запущенная через
-# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid и $AS могут
-# forkнуть. До атомарной записи handshake ни $AS, ни сама команда не стартуют.
-# Отдельная оболочка вокруг самой команды атомарно публикует её итоговый статус:
-# статус $AS не авторитетен, потому что fork-обёртка может вернуть 0 раньше gate.
+# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid может forkнуть.
+# До атомарной записи handshake сама команда gate не стартует.
+# $AS не участвует в запуске gate: равноправный launcher мог бы подменить любой
+# файл или канал того же UID. Фиксированный identity launcher и setsid --wait
+# образуют waitable-цепочку, чей одноразовый exit status сообщает само ядро.
 read_test_gate_handshake() { # read_test_gate_handshake <файл>; sets gate_sid/gate_pgid
   local handshake=$1 sid_field='' pgid_field='' ready_field='' extra=''
   gate_sid=''
@@ -431,20 +460,12 @@ stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
 }
 
 start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
-  local name=$1 log=$2 handshake=$3 result="${3}.result" launcher
-  local -a as_command=()
+  local name=$1 log=$2 handshake=$3 launcher
   shift 3
-  [ -z "$AS" ] || read -r -a as_command <<<"$AS"
-  rm -f -- "$handshake" "$result"
+  rm -f -- "$handshake"
   setsid --wait bash -c '
     handshake=$1
-    result=$2
-    as_count=$3
-    stop_attempts=$4
-    poll_delay=$5
-    shift 5
-    as_command=("${@:1:as_count}")
-    shift "$as_count"
+    shift
     trap - HUP INT TERM
     read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 125
     case "$sid:$pgid" in
@@ -458,79 +479,8 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
       exit 125
     fi
 
-    # This wrapper, rather than the possibly forking $AS launcher, observes the
-    # real gate. Each state is published by rename so the supervisor never
-    # accepts a partial or stale successful record.
-    "${as_command[@]}" bash -c '\''
-      result=$1
-      shift
-      publish_gate_result() {
-        local contents=$1 temporary_result
-        temporary_result=$(mktemp "${result}.tmp.XXXXXX") || return 1
-        if ! printf "%s\\n" "$contents" >"$temporary_result" \
-          || ! mv -f -- "$temporary_result" "$result"; then
-          rm -f -- "$temporary_result"
-          return 1
-        fi
-      }
-      publish_gate_result "state=running pid=$$" || exit 125
-      "$@"
-      gate_status=$?
-      publish_gate_result "state=finished status=$gate_status" || exit 125
-      exit "$gate_status"
-    '\'' bash "$result" "$@" &
-    as_pid=$!
-    wait "$as_pid"
-    as_status=$?
-
-    # A synchronous $AS has already waited for the writer. A forking $AS may
-    # return first, so follow the published writer PID while it belongs to this
-    # process group. Once it disappears, only bounded retries are allowed and
-    # any missing/malformed final record fails closed.
-    unsettled=0
-    while :; do
-      state_field= value_field= extra=
-      if [ -s "$result" ] \
-        && IFS=" " read -r state_field value_field extra <"$result"; then
-        case "$state_field:$value_field:$extra" in
-          state=finished:status=*:)
-            gate_status=${value_field#status=}
-            case "$gate_status" in
-              ""|*[!0-9]*) exit 125 ;;
-            esac
-            [ "$gate_status" -le 255 ] || exit 125
-            [ "$gate_status" -ne 0 ] && exit "$gate_status"
-            [ "$as_status" -eq 0 ] || exit 125
-            exit 0
-            ;;
-          state=running:pid=:*) ;;
-          state=running:pid=*:)
-            gate_pid=${value_field#pid=}
-            case "$gate_pid" in
-              ""|*[!0-9]*) gate_pid= ;;
-            esac
-            if [ -n "$gate_pid" ]; then
-              actual_pgid= process_state=
-              read -r actual_pgid process_state \
-                < <(ps -o pgid= -o stat= -p "$gate_pid") || true
-              case "$process_state" in Z*|"") ;; *)
-                if [ "$actual_pgid" = "$pgid" ]; then
-                  unsettled=0
-                  sleep "$poll_delay"
-                  continue
-                fi
-                ;;
-              esac
-            fi
-            ;;
-        esac
-      fi
-      ((unsettled++))
-      [ "$unsettled" -lt "$stop_attempts" ] || exit 125
-      sleep "$poll_delay"
-    done
-  ' bash "$handshake" "$result" "${#as_command[@]}" "$GATE_STOP_ATTEMPTS" \
-    "$GATE_POLL_DELAY" "${as_command[@]}" "$@" >"$log" 2>&1 &
+    exec "$@"
+  ' bash "$handshake" "${gate_identity[@]}" "$@" >"$log" 2>&1 &
   launcher=$!
   gate_pids+=("$launcher")
   gate_handshakes+=("$handshake")
