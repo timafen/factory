@@ -233,7 +233,7 @@ type ProjectSecretStatus struct {
 	Present bool   `json:"present"`
 }
 
-type ProjectReadiness struct {
+type SecureProjectReadiness struct {
 	Ready         bool                  `json:"ready"`
 	CommitSHA     string                `json:"commit_sha,omitempty"`
 	Gates         []ProjectGate         `json:"gates"`

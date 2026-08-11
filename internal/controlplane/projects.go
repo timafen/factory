@@ -380,15 +380,15 @@ func gate(name string, ready bool, reason, sha string, checked int64) protocol.P
 	return result
 }
 
-func (s *Store) projectDatabaseReadiness(ctx context.Context, project protocol.Project) (protocol.ProjectReadiness, error) {
+func (s *Store) projectDatabaseReadiness(ctx context.Context, project protocol.Project) (protocol.SecureProjectReadiness, error) {
 	var sha string
 	var branch, executor int
 	var updated int64
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_sha,branch_access,executor_ready,updated_at FROM project_runtime_readiness WHERE project_id=?`, project.ID).Scan(&sha, &branch, &executor, &updated); err != nil {
-		return protocol.ProjectReadiness{}, unavailable(err)
+		return protocol.SecureProjectReadiness{}, unavailable(err)
 	}
 	fresh := projectCheckFresh(fromMillis(updated), s.now())
-	result := protocol.ProjectReadiness{Ready: true, CommitSHA: sha, Gates: []protocol.ProjectGate{gate("branch-access", branch != 0 && fresh, "main branch access is missing or stale", sha, updated), gate("executor", executor != 0 && fresh, "server-selected executor readiness is missing or stale", sha, updated)}}
+	result := protocol.SecureProjectReadiness{Ready: true, CommitSHA: sha, Gates: []protocol.ProjectGate{gate("branch-access", branch != 0 && fresh, "main branch access is missing or stale", sha, updated), gate("executor", executor != 0 && fresh, "server-selected executor readiness is missing or stale", sha, updated)}}
 	rows, err := s.db.QueryContext(ctx, `SELECT gate,commit_sha,passed,checked_at FROM project_gate_results WHERE project_id=?`, project.ID)
 	if err != nil {
 		return result, unavailable(err)
@@ -424,10 +424,10 @@ func (s *Store) projectDatabaseReadiness(ctx context.Context, project protocol.P
 	return result, rows.Err()
 }
 
-func (s *Store) ProjectReadiness(ctx context.Context, projectID, environment string) (protocol.ProjectReadiness, error) {
+func (s *Store) ProjectReadiness(ctx context.Context, projectID, environment string) (protocol.SecureProjectReadiness, error) {
 	project, err := s.Project(ctx, projectID)
 	if err != nil {
-		return protocol.ProjectReadiness{}, err
+		return protocol.SecureProjectReadiness{}, err
 	}
 	if environment == "" {
 		environment = "staging"
@@ -440,7 +440,7 @@ func (s *Store) ProjectReadiness(ctx context.Context, projectID, environment str
 		}
 	}
 	if !found {
-		return protocol.ProjectReadiness{}, ErrNotFound
+		return protocol.SecureProjectReadiness{}, ErrNotFound
 	}
 	result, err := s.projectDatabaseReadiness(ctx, project)
 	if err != nil {
