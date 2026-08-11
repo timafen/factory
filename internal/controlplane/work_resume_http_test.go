@@ -200,10 +200,10 @@ func TestResumePausedWorkRetryAfterSettingsWriteFailureDoesNotDuplicateTask(t *t
 	store, pilot, server, repo, workflows := resumeFixture(t, base)
 	addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
 
-	pilot.writeFile = func([]byte) error { return errors.New("disk unavailable") }
+	pilot.writeTemp = func(*os.File, []byte) (int, error) { return 0, errors.New("disk unavailable") }
 	status, _ := postResume(t, server, base)
-	if status != http.StatusInternalServerError {
-		t.Fatalf("resume with write failure status = %d, want %d", status, http.StatusInternalServerError)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("resume with write failure status = %d, want %d", status, http.StatusServiceUnavailable)
 	}
 	page, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 200})
 	if err != nil || len(page.Tasks) != 2 {
@@ -214,7 +214,7 @@ func TestResumePausedWorkRetryAfterSettingsWriteFailureDoesNotDuplicateTask(t *t
 		t.Fatal(err)
 	}
 
-	pilot.writeFile = nil
+	pilot.writeTemp = nil
 	status, retried := postResume(t, server, base)
 	if status != http.StatusOK || retried.Resumed || retried.Task.ID != createdID {
 		t.Fatalf("retry = status %d %#v, want existing task %s", status, retried, createdID)

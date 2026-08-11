@@ -3,6 +3,7 @@ package controlplane
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,83 @@ func TestPilotConfigStorePreservesNotesAndRejectsConflict(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(after) != string(before) {
 		t.Fatal("conflict changed config")
+	}
+}
+
+func TestPilotConfigStoreAtomicallyReplacesFile(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Settings.PollSeconds = 15
+	if _, err := store.Write(current.Version, current.Settings); err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(beforeInfo, afterInfo) {
+		t.Fatal("save rewrote the existing file instead of atomically replacing it")
+	}
+}
+
+func TestPilotConfigStoreAtomicWriteFailureKeepsOriginalAndRemovesTempFile(t *testing.T) {
+	tests := map[string]func(*os.File, []byte) (int, error){
+		"write error": func(tmp *os.File, body []byte) (int, error) {
+			written, _ := tmp.Write(body[:len(body)/2])
+			return written, errors.New("injected write failure")
+		},
+		"short write": func(tmp *os.File, body []byte) (int, error) {
+			return tmp.Write(body[:len(body)/2])
+		},
+	}
+	for name, writeTemp := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, path := writePilotFixture(t, validPilotSettings())
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var capturedTemp *os.File
+			store.writeTemp = func(tmp *os.File, body []byte) (int, error) {
+				capturedTemp = tmp
+				return writeTemp(tmp, body)
+			}
+			current.Settings.PollSeconds = 20
+			if _, err := store.Write(current.Version, current.Settings); err == nil {
+				t.Fatal("temporary-file write failure was accepted")
+			}
+			if capturedTemp == nil {
+				t.Fatal("atomic write did not reach the temporary file")
+			}
+			if _, err := capturedTemp.Write([]byte("still open")); err == nil {
+				t.Fatal("temporary file remained open after write failure")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatal("temporary-file write failure changed the previous config")
+			}
+			temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".pilot-config-*"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(temps) != 0 {
+				t.Fatalf("temporary-file write failure left files behind: %v", temps)
+			}
+		})
 	}
 }
 
@@ -169,6 +247,41 @@ func TestPilotConfigStoreRejectsSymlinkAndInvalidJSON(t *testing.T) {
 	}
 	if _, err := NewPilotConfigStore(link).Read(); err == nil {
 		t.Fatal("invalid JSON was accepted")
+	}
+	before, err := os.ReadFile(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPilotConfigStore(link).Write("stale", validPilotSettings()); err == nil {
+		t.Fatal("write replaced an invalid config")
+	}
+	after, err := os.ReadFile(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("failed write changed invalid config contents")
+	}
+}
+
+func TestPilotConfigStoreReportsMissingAndOversizedFiles(t *testing.T) {
+	dir := t.TempDir()
+	missing := NewPilotConfigStore(filepath.Join(dir, "missing.json"))
+	assertPilotConfigError(t, missing, "pilot_config_missing")
+
+	oversizedPath := filepath.Join(dir, "oversized.json")
+	if err := os.WriteFile(oversizedPath, bytes.Repeat([]byte("x"), maxPilotConfigBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertPilotConfigError(t, NewPilotConfigStore(oversizedPath), "pilot_config_too_large")
+}
+
+func assertPilotConfigError(t *testing.T, store *PilotConfigStore, code string) {
+	t.Helper()
+	_, err := store.Read()
+	var serviceErr *ServiceError
+	if !errors.As(err, &serviceErr) || serviceErr.Code != code {
+		t.Fatalf("error = %v, want service error %q", err, code)
 	}
 }
 
