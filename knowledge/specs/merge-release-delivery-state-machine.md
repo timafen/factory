@@ -223,4 +223,3 @@ status-before-PID и один `FXExecutor.Execute`. В
 ГОТОВО-КОГДА: файл ops/fx-factory-release
 ГОТОВО-КОГДА: файл ops/test-fx-factory-release.sh
 ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests
-
