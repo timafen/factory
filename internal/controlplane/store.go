@@ -2182,6 +2182,8 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	input.WorkerID = strings.TrimSpace(input.WorkerID)
 	input.RepositoryID = strings.TrimSpace(input.RepositoryID)
 	input.WorkflowRevisionID = strings.TrimSpace(input.WorkflowRevisionID)
+	input.ParentTaskID = strings.TrimSpace(input.ParentTaskID)
+	input.CorrectionKind = strings.TrimSpace(input.CorrectionKind)
 	if input.RequestKey == "" || len(input.RequestKey) > 200 {
 		return protocol.TaskDetail{}, false, invalid("invalid_request_key", "request_key is required")
 	}
@@ -2250,6 +2252,14 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		return detail, false, err
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return protocol.TaskDetail{}, false, unavailable(err)
+	}
+	if input.CorrectionKind != "" && input.ParentTaskID == "" {
+		return protocol.TaskDetail{}, false, invalid(
+			"correction_parent_required", "correction_kind requires parent_task_id",
+		)
+	}
+	if input.CorrectionKind != "" && !validCorrectionKind(input.CorrectionKind) {
+		return protocol.TaskDetail{}, false, invalid("invalid_correction_kind", "correction_kind is not supported")
 	}
 	if input.Route == nil {
 		if err := s.requireProjectRoutingReady(ctx, input.RepositoryID, input.WorkerID); err != nil {
@@ -2370,6 +2380,29 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	if err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
 	}
+	workID := taskID
+	if input.ParentTaskID != "" {
+		var parentWorkID sql.NullString
+		var parentRepositoryID string
+		err := tx.QueryRowContext(ctx, `
+			SELECT work_id, repository_id FROM tasks WHERE id = ?
+		`, input.ParentTaskID).Scan(&parentWorkID, &parentRepositoryID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return protocol.TaskDetail{}, false, invalid("parent_task_not_found", "parent task was not found")
+		}
+		if err != nil {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+		if parentRepositoryID != input.RepositoryID {
+			return protocol.TaskDetail{}, false, invalid(
+				"parent_repository_mismatch", "parent task belongs to another repository",
+			)
+		}
+		workID = parentWorkID.String
+		if workID == "" {
+			workID = input.ParentTaskID
+		}
+	}
 	if len(input.AttachmentIDs) > protocol.MaxTaskAttachments {
 		return protocol.TaskDetail{}, false, invalid("too_many_attachments", "к задаче можно прикрепить не больше 5 файлов")
 	}
@@ -2412,12 +2445,13 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		INSERT INTO tasks(
 			id, request_key, title, description, repository_id, timeout_seconds, created_at,
 			workflow_id, workflow_revision_id, workflow_title, workflow_revision_number,
-			context, read_only
+			context, read_only, work_id, parent_task_id, correction_kind
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, input.RequestKey, input.Title, resolvedPrompt, input.RepositoryID,
 		input.TimeoutSeconds, now, nullableString(workflowID), nullableString(input.WorkflowRevisionID),
-		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext, readOnly)
+		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext, readOnly,
+		workID, nullableString(input.ParentTaskID), nullableString(input.CorrectionKind))
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO executions(id, task_id, assigned_worker_id, required_runtime, state, created_at, updated_at)
@@ -2488,7 +2522,8 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	}
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
-		       e.assigned_worker_id, e.state, t.read_only, t.created_at
+		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id
 	`
 	args := make([]any, 0, 3)
@@ -2529,14 +2564,20 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var task protocol.Task
 	var created int64
+	var workID, parentTaskID, correctionKind sql.NullString
 	var err error
 	if detail {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.Description, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created)
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&workID, &parentTaskID, &correctionKind)
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created)
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&workID, &parentTaskID, &correctionKind)
 	}
+	task.WorkID = workID.String
+	task.ParentTaskID = parentTaskID.String
+	task.CorrectionKind = correctionKind.String
 	task.CreatedAt = fromMillis(created)
 	if task.State == "preparing" {
 		task.State = "running"
@@ -2551,6 +2592,16 @@ func nullableString(value string) any {
 	return value
 }
 
+func validCorrectionKind(value string) bool {
+	switch value {
+	case "review_return", "verify_return", "machine_gate_return", "execution_retry",
+		"merge_conflict_return", "answer_resume", "diagnostic_repair":
+		return true
+	default:
+		return false
+	}
+}
+
 func nullableInt(value int) any {
 	if value == 0 {
 		return nil
@@ -2562,7 +2613,8 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 	var detail protocol.TaskDetail
 	row := s.db.QueryRowContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
-		       e.assigned_worker_id, e.state, t.read_only, t.created_at
+		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?
 	`, id)
 	task, err := scanTask(row, true)

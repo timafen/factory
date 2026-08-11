@@ -1863,6 +1863,191 @@ func TestTaskCreationIsNormalizedAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestTaskProvenanceValidationAndReplay(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 2,
+		protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/factory"},
+		protocol.RepositoryRegistration{Key: "other", RemoteIdentity: "github.com/example/other"})
+	repositoryID := worker.Repositories[0].ID
+	otherRepositoryID := worker.Repositories[1].ID
+	root := createTestTask(t, store, "provenance-root", workerA, repositoryID)
+	if root.Task.WorkID != root.Task.ID || root.Task.ParentTaskID != "" || root.Task.CorrectionKind != "" {
+		t.Fatalf("root provenance = %#v", root.Task)
+	}
+
+	request := protocol.CreateTaskRequest{
+		RequestKey: "provenance-correction", Title: "Correction", Description: "Fix review",
+		WorkerID: workerA, RepositoryID: repositoryID, TimeoutSeconds: 60,
+		ParentTaskID: root.Task.ID, CorrectionKind: "review_return",
+	}
+	child, created, err := store.CreateTask(context.Background(), request)
+	if err != nil || !created {
+		t.Fatalf("create correction = %t, %v", created, err)
+	}
+	if child.Task.WorkID != root.Task.ID || child.Task.ParentTaskID != root.Task.ID ||
+		child.Task.CorrectionKind != "review_return" {
+		t.Fatalf("child provenance = %#v", child.Task)
+	}
+	replayRequest := request
+	replayRequest.ParentTaskID = "missing"
+	replayRequest.CorrectionKind = "not-a-kind"
+	replay, created, err := store.CreateTask(context.Background(), replayRequest)
+	if err != nil || created || replay.Task != child.Task {
+		t.Fatalf("replay = %#v, created %t, err %v", replay.Task, created, err)
+	}
+
+	cases := []struct {
+		name    string
+		request protocol.CreateTaskRequest
+		code    string
+	}{
+		{"kind without parent", protocol.CreateTaskRequest{RequestKey: "bad-no-parent", Title: "bad", Description: "bad", WorkerID: workerA, RepositoryID: repositoryID, CorrectionKind: "review_return", TimeoutSeconds: 60}, "correction_parent_required"},
+		{"unknown kind", protocol.CreateTaskRequest{RequestKey: "bad-kind", Title: "bad", Description: "bad", WorkerID: workerA, RepositoryID: repositoryID, ParentTaskID: root.Task.ID, CorrectionKind: "unknown", TimeoutSeconds: 60}, "invalid_correction_kind"},
+		{"missing parent", protocol.CreateTaskRequest{RequestKey: "bad-parent", Title: "bad", Description: "bad", WorkerID: workerA, RepositoryID: repositoryID, ParentTaskID: "missing", CorrectionKind: "review_return", TimeoutSeconds: 60}, "parent_task_not_found"},
+		{"other repository", protocol.CreateTaskRequest{RequestKey: "bad-repository", Title: "bad", Description: "bad", WorkerID: workerA, RepositoryID: otherRepositoryID, ParentTaskID: root.Task.ID, CorrectionKind: "review_return", TimeoutSeconds: 60}, "parent_repository_mismatch"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := store.CreateTask(context.Background(), test.request)
+			assertErrorCode(t, err, test.code)
+		})
+	}
+	page, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 20})
+	if err != nil || len(page.Tasks) != 2 {
+		t.Fatalf("tasks after rejected creates = %#v, %v", page.Tasks, err)
+	}
+	loaded, err := store.Task(context.Background(), child.Task.ID)
+	if err != nil || loaded.Task.WorkID != child.Task.WorkID ||
+		loaded.Task.ParentTaskID != child.Task.ParentTaskID ||
+		loaded.Task.CorrectionKind != child.Task.CorrectionKind {
+		t.Fatalf("detail provenance = %#v, %v", loaded.Task, err)
+	}
+}
+
+func TestTaskProvenancePersistsAcrossReopenAndParentDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provenance.sqlite3")
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/factory",
+	})
+	root := createTestTask(t, store, "persistent-root", workerA, worker.Repositories[0].ID)
+	child, _, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
+		RequestKey: "persistent-child", Title: "child", Description: "continue",
+		WorkerID: workerA, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60,
+		ParentTaskID: root.Task.ID, CorrectionKind: "verify_return",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM executions WHERE task_id=?`, root.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM tasks WHERE id=?`, root.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.Task(context.Background(), child.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Task.WorkID != root.Task.ID || loaded.Task.ParentTaskID != "" ||
+		loaded.Task.CorrectionKind != "verify_return" {
+		t.Fatalf("provenance after delete/reopen = %#v", loaded.Task)
+	}
+	if _, err := reopened.db.Exec(`
+		INSERT INTO tasks(id,request_key,title,description,repository_id,timeout_seconds,created_at)
+		VALUES ('legacy-task','legacy-request','legacy','legacy',?,60,1)`, worker.Repositories[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.db.Exec(`
+		INSERT INTO executions(id,task_id,assigned_worker_id,required_runtime,state,created_at,updated_at)
+		VALUES ('legacy-execution','legacy-task',?,'codex','queued',1,1)`, workerA); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := reopened.Task(context.Background(), "legacy-task")
+	if err != nil || legacy.Task.WorkID != "" || legacy.Task.ParentTaskID != "" || legacy.Task.CorrectionKind != "" {
+		t.Fatalf("legacy provenance = %#v, %v", legacy.Task, err)
+	}
+}
+
+func TestTaskProvenanceMigrationUpgradesLegacyDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-025.sqlite3")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() > "025_queue_reassignment_events.sql" {
+			continue
+		}
+		body, err := migrations.Files.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(string(body)); err != nil {
+			t.Fatalf("apply %s: %v", entry.Name(), err)
+		}
+		version++
+		if _, err := database.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES (?,0)`, version); err != nil {
+			t.Fatalf("record %s: %v", entry.Name(), err)
+		}
+	}
+	if version != 25 {
+		t.Fatalf("legacy migration count = %d", version)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO workers(id,name,worker_version,runtime_version,capacity,active_count,health,registered_at,last_heartbeat)
+		VALUES ('legacy-worker','legacy','legacy','legacy',1,0,'healthy',1,1);
+		INSERT INTO repositories(id,remote_identity,created_at)
+		VALUES ('legacy-repository','github.com/example/legacy',1);
+		INSERT INTO worker_repositories(worker_id,display_key,repository_id,updated_at)
+		VALUES ('legacy-worker','legacy','legacy-repository',1);
+		INSERT INTO tasks(id,request_key,title,description,repository_id,timeout_seconds,created_at)
+		VALUES ('legacy-task','legacy-key','legacy title','legacy prompt','legacy-repository',60,1);
+		INSERT INTO executions(id,task_id,assigned_worker_id,required_runtime,state,created_at,updated_at)
+		VALUES ('legacy-execution','legacy-task','legacy-worker','codex','queued',1,1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createDatabaseMarker(path + ".v2-control-plane"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := store.Task(context.Background(), "legacy-task")
+	if err != nil || hasTaskProvenance(legacy.Task) {
+		t.Fatalf("migrated legacy task = %#v, %v", legacy.Task, err)
+	}
+}
+
+func hasTaskProvenance(task protocol.Task) bool {
+	return task.WorkID != "" || task.ParentTaskID != "" || task.CorrectionKind != ""
+}
+
 func TestRoutedTaskChoosesLeastLoadedEligibleWorkerAndFreezesAssignment(t *testing.T) {
 	store := newTestStore(t)
 	fixed := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
