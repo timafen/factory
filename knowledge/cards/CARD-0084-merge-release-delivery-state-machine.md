@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — исправления review готовы к повторной проверке.
-- Branch: `factory/922d676e-7e3-bf047ab5-9de`.
+- Status: Implemented — исправления третьего строгого review готовы к повторной проверке.
+- Branch: `factory/4b80f667-aa4-f342742f-30a`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 3085c03f25cfa2184abff882f93185ffd46e86d3 — реальный Unix broker подтверждает восстановление одного выпуска.
-- What changed: Pilot-тест собирает и запускает Go broker на Unix-сокете, проходит API и один физический FX executor.
-- What changed: Все restart boundaries считают merge/POST/physical/owner done; `rc=8` retry завершает тот же N без N+1.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (206, 13 skipped); `go test ./internal/releasebroker` → OK; shell fixtures → OK; `just check` → passed.
-- Next action: Review проверить три исправленных доказательства CARD-0084.
+- Implementation commit: 380e77b1223a16a6608134e3d002f0d9629988ad — retry после `rc=8` сохраняет неизменный adapter/target и реальные crash boundaries.
+- What changed: Broker принимает новый SHA того же delivery id только при том же adapter/target; rollback и чужой target атомарно отклоняются.
+- What changed: Реальный FX PID и terminal phase сохраняются до recovery; отдельные Pilot-процессы проверяют post/wrapper_status/pid/running/terminal без ручной подмены phase.
+- Evidence: `python3 -m unittest pilot.test_pilot` → OK (208, 13 skipped); `go test -race ./internal/releasebroker` → OK; обе shell fixture → OK; `just check` → passed.
+- Next action: Review проверить неизменность retry и process-level evidence CARD-0084.
 
 ## LOG
 
@@ -37,3 +37,11 @@ Correction replaces the hand-written Python socket with the built Go broker,
 its real Unix API, and a fixed FX executor fixture. Restart boundaries now
 drive recovery to completion with explicit merge/POST/physical/owner counts;
 the lock retry joins a second merge to the same N and succeeds once.
+
+### 2026-08-11 — Implement
+
+Third strict-review correction keeps adapter and derived target immutable after
+`rc=8`, while allowing only the same delivery id to retry with a new commit SHA.
+The process fixture now exits a real Pilot after every durable delivery boundary,
+recovers against the built Unix broker and physical FX, and proves failed terminals
+cannot create receipts, finalization, or owner completion.
