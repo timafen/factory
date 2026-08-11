@@ -283,6 +283,7 @@ run_release() {
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
 }
@@ -343,8 +344,12 @@ assert_file "$success/broker-events" 'enable --now factory-release-broker.servic
   || fail "server was not restarted first"
 [ "$(sed -n '2p' "$success/events")" = 'stop factory-worker.service' ] \
   || fail "worker was not stopped before taking the heartbeat baseline"
-[ "$(sed -n '3p' "$success/events")" = 'start factory-worker.service' ] \
+[ "$(sed -n '3p' "$success/events")" = 'stop factory-worker-2.service' ] \
+  || fail "second worker was not stopped before the heartbeat baseline"
+[ "$(sed -n '4p' "$success/events")" = 'start factory-worker.service' ] \
   || fail "worker was not started after taking the heartbeat baseline"
+[ "$(sed -n '5p' "$success/events")" = 'start factory-worker-2.service' ] \
+  || fail "second worker was not started after taking the heartbeat baseline"
 grep -E '^systemd-run .*--on-active=30s /bin/systemctl restart factory-pilot.service$' \
   "$success/events" >/dev/null \
   || fail "Pilot restart was not detached until after release metadata"
@@ -377,8 +382,8 @@ for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop w
   fi
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
-  tail -n 2 "$failed/events" | diff -u - <(printf '%s\n' \
-    'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
+  tail -n 3 "$failed/events" | diff -u - <(printf '%s\n' \
+    'restart factory-server.service' 'restart factory-worker.service' 'restart factory-worker-2.service') >/dev/null \
     || fail "$mode rollback restart order is wrong"
   assert_no_fixture_processes "$failed"
 done
@@ -388,8 +393,8 @@ make_fixture "$brain_failed" brain-install-fail
 if run_release "$brain_failed" brain-install-fail; then fail "brain-install-fail unexpectedly succeeded"; fi
 assert_file "$brain_failed/install/factory-server" old-server
 assert_file "$brain_failed/install/factory-worker" old-worker
-tail -n 2 "$brain_failed/events" | diff -u - <(printf '%s\n' \
-  'restart factory-server.service' 'restart factory-worker.service') >/dev/null \
+tail -n 3 "$brain_failed/events" | diff -u - <(printf '%s\n' \
+  'restart factory-server.service' 'restart factory-worker.service' 'restart factory-worker-2.service') >/dev/null \
   || fail "brain-install-fail did not roll back the binary pair"
 ! grep -F 'systemd-run ' "$brain_failed/events" >/dev/null \
   || fail "failed brain install scheduled a Pilot restart"
