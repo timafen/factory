@@ -102,7 +102,11 @@ func invocation(adapter, sha string) ([]string, bool) {
 type operation struct {
 	Request Request `json:"request"`
 	Status  string  `json:"status"`
-	PID     int     `json:"pid,omitempty"` // diagnostic only; never recovery input
+	// Posts is an audit counter at the real privileged boundary.  It lets
+	// recovery diagnostics distinguish one accepted operation from its safe,
+	// same-identity retry without trusting an in-process client counter.
+	Posts int `json:"posts"`
+	PID   int `json:"pid,omitempty"` // diagnostic only; never recovery input
 }
 
 type Broker struct {
@@ -201,15 +205,28 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	if existing := b.items[input.OperationID]; existing != nil {
-		if existing.Request != input {
+		// A lock did not accept a release.  Pilot may therefore safely attach a
+		// later merge to the still-reserved generation and retry its same id
+		// with the newest immutable snapshot before the next executor launch.
+		lockedRetry := existing.Status == "locked" && b.active == ""
+		if existing.Request != input && !lockedRetry {
 			b.mu.Unlock()
 			http.Error(w, "operation identity already has different immutable input", http.StatusConflict)
+			return
+		}
+		if lockedRetry {
+			existing.Request = input
+		}
+		existing.Posts++
+		if err := b.persist(existing); err != nil {
+			b.mu.Unlock()
+			http.Error(w, "cannot persist operation", http.StatusServiceUnavailable)
 			return
 		}
 		// rc=8 is a reservation failure, not a terminal delivery.  It is
 		// explicitly safe to re-enter the executor with the same immutable
 		// operation id once the privileged release lock is available again.
-		if existing.Status == "locked" && b.active == "" {
+		if lockedRetry {
 			existing.Status = "launching"
 			if err := b.persist(existing); err != nil {
 				b.mu.Unlock()
@@ -232,7 +249,7 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "another privileged operation is running", http.StatusConflict)
 		return
 	}
-	item := &operation{Request: input, Status: "launching"}
+	item := &operation{Request: input, Status: "launching", Posts: 1}
 	// The wrapper status is durable before any external executor can run.
 	if err := b.persist(item); err != nil {
 		b.mu.Unlock()
