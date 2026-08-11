@@ -4,12 +4,12 @@ Implementation commit: c80569c53d59ae2d916284ac93ce9583ec59f038 — экран �
 
 ## HEAD
 
-- Status: Implemented — awaiting repeat review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/e9dee141-2a0-27797158-1e3`.
 - Implementation commit: `c80569c53d59ae2d916284ac93ce9583ec59f038` — восстановление после конфликта и безопасная запись настроек.
 - What changed: после `409` владелец загружает свежие настройки; `atomicWrite` отклоняет ошибку и короткую запись, закрывает и удаляет временный файл, не заменяя действующую конфигурацию.
-- Evidence: реальные write-error/short-write ветви `atomicWrite` и закрытие/очистка проверены; control-plane PASS, Settings 9/9 PASS, typecheck/lint/build PASS, `go build ./...` PASS.
-- One next action: повторно запустить Review для `/settings`.
+- Evidence: `just check` PASS (Go tests, static analysis, 147 UI tests, tooling and launcher); `just test-browser` PASS (19 Chromium E2E), включая сохранение `/settings` и проверку значения после reload.
+- One next action: владелец проверяет доказательства и принимает решение о merge.
 
 ## LOG
 
@@ -33,3 +33,12 @@ missing/oversized/invalid файл и сбой записи не поврежд�
 Доказательства: `go test ./internal/controlplane` — PASS, включая write error и
 short write; `Settings.test.tsx` — 9/9 PASS; web typecheck/lint/build и
 `go build ./...` — PASS.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Конфликт версии предлагает безопасное восстановление | `web/src/Settings.test.tsx` в `just check` | 9/9 Settings tests PASS; после 409 доступна загрузка свежих настроек. |
+| Сбой или короткая запись не повреждает текущую конфигурацию | `go test ./...` в `just check` | PASS; тесты `atomicWrite` подтверждают закрытие и очистку временного файла и неизменность прежней конфигурации. |
+| Экран реально сохраняет настройки | `just test-browser` | 19/19 Chromium E2E PASS; `/settings` отправляет PUT 200, а изменённый интервал остаётся `15` после reload. |
+| Смежные функции не регрессировали | `just check`; `just test-browser` | PASS: Go, статический анализ, 147 UI tests, tooling, launcher и все browser E2E. |
