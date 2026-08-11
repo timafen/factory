@@ -123,6 +123,10 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 	if err != nil {
 		return nil, err
 	}
+	credential, err := loadWorkerCredential(dataDirectory)
+	if err != nil {
+		return nil, err
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -130,6 +134,8 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 	for _, repository := range repositories {
 		byKey[repository.Key] = repository
 	}
+	apiClient := newClient(config.Server, options.HTTPClient)
+	apiClient.setWorkerCredential(credential)
 	cleanupLock = false
 	return &Manager{
 		config:                        config,
@@ -140,7 +146,7 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 		lock:                          lock,
 		repositories:                  repositories,
 		repositoriesByKey:             byKey,
-		client:                        newClient(config.Server, options.HTTPClient),
+		client:                        apiClient,
 		manifests:                     newManifestStore(dataDirectory, id),
 		slots:                         make(chan struct{}, config.MaxConcurrent),
 		health:                        health{State: "unhealthy"},

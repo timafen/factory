@@ -116,7 +116,8 @@ func (manager *Manager) registerLocked(ctx context.Context) {
 	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	registration := manager.registration()
-	if _, err := manager.client.register(requestContext, manager.id, registration); err != nil {
+	_, credential, err := manager.client.register(requestContext, manager.id, registration)
+	if err != nil {
 		manager.stateMutex.Lock()
 		manager.registered = false
 		manager.cancelPendingClaimsLocked()
@@ -127,6 +128,17 @@ func (manager *Manager) registerLocked(ctx context.Context) {
 		}
 		manager.logger.Warn("worker_registration_failed", "error_class", apiErrorClass(err))
 		return
+	}
+	if credential != "" {
+		if err := saveWorkerCredential(manager.dataDirectory, credential); err != nil {
+			manager.stateMutex.Lock()
+			manager.registered = false
+			manager.cancelPendingClaimsLocked()
+			manager.stateMutex.Unlock()
+			manager.logger.Error("worker_credential_persistence_failed", "error_class", "local_worker_state")
+			return
+		}
+		manager.client.setWorkerCredential(credential)
 	}
 	if err := manager.manifests.removeDisposedManifests(registration.DisposedAttemptIDs); err != nil {
 		manager.markUnhealthy("attempt_manifest", err)
