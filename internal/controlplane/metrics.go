@@ -96,9 +96,9 @@ func (s *Store) countQueueReassignments(
 	end time.Time,
 	count *int64,
 ) error {
-	filter, args := metricsTimeFilter("updated_at", start, end)
+	filter, args := metricsTimeFilter("reassigned_at", start, end)
 	return query.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(reassignment_count), 0) FROM executions WHERE `+filter,
+		`SELECT COUNT(*) FROM execution_reassignments WHERE `+filter,
 		args...,
 	).Scan(count)
 }

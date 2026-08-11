@@ -914,11 +914,14 @@ type EventBatchRequest struct {
 }
 
 type CompleteAttemptRequest struct {
-	LeaseToken string `json:"lease_token"`
-	State      string `json:"state"`
-	Result     string `json:"result,omitempty"`
-	Error      string `json:"error,omitempty"`
+	LeaseToken  string `json:"lease_token"`
+	State       string `json:"state"`
+	Disposition string `json:"disposition,omitempty"`
+	Result      string `json:"result,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
+
+const CompletionDispositionNotReady = "not_ready"
 
 type ErrorBody struct {
 	Error APIError `json:"error"`

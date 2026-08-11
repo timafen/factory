@@ -101,9 +101,9 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		return nil, nil
 	}
 
-	var executionID string
+	var executionID, assignedWorkerID string
 	err = tx.QueryRowContext(ctx, `
-		SELECT e.id
+		SELECT e.id, e.assigned_worker_id
 		FROM executions e
 		JOIN tasks t ON t.id = e.task_id
 		JOIN worker_repositories wr
@@ -131,7 +131,7 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		  ) < ?
 		ORDER BY e.created_at, e.id
 		LIMIT 1
-	`, workerID, runtime, workerID, workerID, protocol.MaxRetainedPerRepo).Scan(&executionID)
+	`, workerID, runtime, workerID, workerID, protocol.MaxRetainedPerRepo).Scan(&executionID, &assignedWorkerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := insertEmptyClaim(ctx, tx, workerID, input.RequestID, digest, nowMillis); err != nil {
 			return nil, err
@@ -175,6 +175,14 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
 		return nil, conflict("claim_conflict", "execution is no longer queued")
+	}
+	if assignedWorkerID != workerID {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO execution_reassignments(execution_id, from_worker_id, to_worker_id, reassigned_at)
+			VALUES (?, ?, ?, ?)
+		`, executionID, assignedWorkerID, workerID, nowMillis); err != nil {
+			return nil, unavailable(err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO claim_requests(worker_id, request_id, lease_digest, attempt_id, created_at)
@@ -259,16 +267,17 @@ type leaseState struct {
 	digest         []byte
 	expiry         int64
 	cancel         bool
+	readOnly       bool
 }
 
 func loadLease(ctx context.Context, tx *sql.Tx, attemptID string) (leaseState, error) {
 	var value leaseState
 	var cancel int
 	err := tx.QueryRowContext(ctx, `
-		SELECT a.state, a.execution_id, e.state, a.lease_digest, a.lease_expires_at, e.cancellation_requested
-		FROM attempts a JOIN executions e ON e.id = a.execution_id
+		SELECT a.state, a.execution_id, e.state, a.lease_digest, a.lease_expires_at, e.cancellation_requested, t.read_only
+		FROM attempts a JOIN executions e ON e.id = a.execution_id JOIN tasks t ON t.id = e.task_id
 		WHERE a.id = ?
-	`, attemptID).Scan(&value.attemptState, &value.executionID, &value.executionState, &value.digest, &value.expiry, &cancel)
+	`, attemptID).Scan(&value.attemptState, &value.executionID, &value.executionState, &value.digest, &value.expiry, &cancel, &value.readOnly)
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, ErrNotFound
 	}
@@ -537,16 +546,29 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 	if input.State == "succeeded" && lease.attemptState != "running" {
 		return protocol.Attempt{}, conflict("invalid_transition", "only a running attempt can succeed")
 	}
+	notReady := input.Disposition == protocol.CompletionDispositionNotReady
+	if input.Disposition != "" && (!notReady || input.State != "succeeded" || !lease.readOnly) {
+		return protocol.Attempt{}, invalid("invalid_completion_disposition", "not_ready is only valid for a successful read-only attempt")
+	}
+	attemptState, executionState := input.State, input.State
+	retryIncrement := 0
+	if notReady {
+		attemptState, executionState = "failed", "queued"
+		retryIncrement = 1
+		if input.Error == "" {
+			input.Error = "review reported NOT READY"
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE attempts SET state = ?, result = ?, error = ?, completed_at = ?
 		WHERE id = ? AND state IN ('preparing', 'running')
-	`, input.State, nullString(input.Result), nullString(input.Error), now, attemptID); err != nil {
+	`, attemptState, nullString(input.Result), nullString(input.Error), now, attemptID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE executions SET state = ?, updated_at = ?
+		UPDATE executions SET state = ?, retry_count = retry_count + ?, updated_at = ?
 		WHERE id = ? AND state IN ('preparing', 'running')
-	`, input.State, now, lease.executionID); err != nil {
+	`, executionState, retryIncrement, now, lease.executionID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
 	if err := tx.Commit(); err != nil {
