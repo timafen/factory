@@ -2,15 +2,15 @@
 
 ## HEAD
 
-Implementation commit: bb6748ae9492e874a78064bc9388336865053482 — Пилот сохраняет закреплённый номер карточки после конфликта слияния до следующего Review.
+Implementation commit: 0c1232d7d9f4e05ab96b07a91c76f0d93077fadf — Пилот сохраняет закреплённый номер из контекста, даже если Verify сообщил другой.
 
 - Status: Implemented — awaiting Review.
-- Branch: `factory/db1fc0bf-3d5-b1b5aea2-ddd`.
-- What changed: до запуска разработки номер сохраняется за парой репозиторий/ветка;
-  он передаётся в Implement, Review и Verify, включая возврат после конфликта слияния.
-- Evidence: целевой набор резервирования, handoff и merge → 15 tests, OK;
+- Branch: `factory/bd28a54c-43a-974ba111-3c4`.
+- What changed: закреплённая строка `Card:` из контекста имеет приоритет над поздним отчётом этапа.
+  Verify с другим номером не меняет карточку повторного Implement или последующего Review.
+- Evidence: целевые `CardNumberReservationTests` и merge-conflict regression → 6 tests, OK;
   `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → OK.
-- Next action: Review проверить изменение и целевые регрессии.
+- Next action: Review проверить сохранение номера при конфликте Verify.
 
 ## LOG
 
@@ -31,3 +31,11 @@ Implementation commit: bb6748ae9492e874a78064bc9388336865053482 — Пилот �
 `Card:` в контекст повторного Implement. Регрессионный сценарий проводит
 закреплённый номер через этот возврат и подтверждает его передачу в Review.
 Целевые 15 тестов, `py_compile` и `git diff --check` прошли успешно.
+
+### 2026-08-11 — Implement
+
+Контекст стал источником истины для номера карточки: поздний отчёт Verify с
+другим `Card:` больше не подменяет закреплённый резерв. Регрессия моделирует
+конфликт слияния, повторный Implement и передачу в Review, не допуская
+`CARD-0071` вместо `CARD-0070`. Целевые 6 тестов, `py_compile` и
+`git diff --check` прошли успешно.
