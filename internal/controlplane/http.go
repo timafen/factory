@@ -582,6 +582,10 @@ func requireDirectWorkerRegistration(r *http.Request) error {
 }
 
 func (a *API) clearRetainedWorktrees(w http.ResponseWriter, r *http.Request) {
+	if err := requireDirectWorkerRegistration(r); err != nil {
+		writeError(w, err)
+		return
+	}
 	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
 		return
 	}
