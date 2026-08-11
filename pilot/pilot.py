@@ -2320,6 +2320,7 @@ IMPLEMENTATION_COMMIT_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?Implementation commit:\s*`?([0-9a-f]{40})`?\s*[—-]\s*\S",
     re.M)
 CARD_LINE = re.compile(r"^Card:\s*(CARD-\d{4,})\s*$", re.M)
+SPECIFICATION_HEAD_LINE = re.compile(r"^HEAD:\s*([0-9a-f]{40})\s*$", re.M)
 CARD_FILE_NUMBER = re.compile(r"^CARD-(\d+)\b")
 CARD_RESERVATIONS_KEY = "card_reservations"
 
@@ -2363,6 +2364,12 @@ def extract_card(result, prev_context):
     # The context is the durable pipeline identity.  A later agent report can
     # repeat it, but must not silently replace it with a different card.
     match = CARD_LINE.search(prev_context or "") or CARD_LINE.search(result or "")
+    return match.group(1) if match else ""
+
+
+def extract_specification_head(result):
+    """Carry the exact published Specification revision into Implement."""
+    match = SPECIFICATION_HEAD_LINE.search(result or "")
     return match.group(1) if match else ""
 
 
@@ -6746,6 +6753,10 @@ def cycle(conf, state):
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
+        specification_head = (extract_specification_head(result)
+                              if wf == "Specification" else "")
+        specification_head_line = (f"Specification head: {specification_head}\n"
+                                   if specification_head else "")
         card = extract_card(result, detail.get("context", ""))
 
         # Спецификация является артефактом поставки, а не только текстом в
@@ -6907,7 +6918,8 @@ def cycle(conf, state):
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
-        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{head_line}{card_line}"
+        context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{head_line}"
+                   f"{specification_head_line}{card_line}"
                    f"Orchestrator handoff: {handoff}\n\n"
                    f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
                    + gate_note)[:20000]

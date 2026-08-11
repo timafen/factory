@@ -486,9 +486,10 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         return branch_report
 
     def test_published_nonempty_branch_starts_implementation(self):
+        specification_head = "a" * 40
         report = self.run_cycle(
             "BRANCH: factory/published\n"
-            "HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            f"HEAD: {specification_head}\n"
             "PUSHED: yes\n"
             "ГОТОВО-КОГДА: файл pilot/pilot.py")
 
@@ -497,6 +498,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         self.assertIn("Implement + Test", self.created[0]["title"])
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-implementation")
         self.assertIn("Branch: factory/published", self.created[0]["context"])
+        self.assertIn(f"Specification head: {specification_head}\n", self.created[0]["context"])
         self.assertIn("Card: CARD-0042", self.created[0]["context"])
 
     def test_handoff_uses_published_branch_instead_of_stale_first_mention(self):
