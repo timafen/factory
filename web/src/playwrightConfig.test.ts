@@ -44,13 +44,17 @@ describe("browser fixture server address", () => {
     const config = await createPlaywrightConfig("24567");
     const reloadedConfig = await createPlaywrightConfig(process.env.FACTORY_E2E_PORT);
 
-    expect(config.use?.baseURL).toBe("http://127.0.0.1:24567");
+    expect(config.use?.baseURL).toBe("https://127.0.0.1:24567");
     expect(reloadedConfig.use?.baseURL).toBe(config.use?.baseURL);
-    expect(config.webServer).toMatchObject({
+    expect(config.use?.ignoreHTTPSErrors).toBe(true);
+    const webServer = Array.isArray(config.webServer) ? config.webServer[0] : config.webServer;
+    expect(webServer).toMatchObject({
       command: "node e2e/server.mjs",
-      url: "http://127.0.0.1:24567/healthz",
       env: { FACTORY_E2E_PORT: "24567" },
     });
+    const backendPort = webServer?.env?.FACTORY_E2E_BACKEND_PORT;
+    expect(backendPort).toMatch(/^[0-9]+$/);
+    expect(webServer?.url).toBe(`http://127.0.0.1:${backendPort}/healthz`);
   });
 
   it.each(["", "0", "65536", "12.5", "not-a-port"]) (
@@ -71,7 +75,9 @@ describe("browser fixture server address", () => {
     expect(first.port).toBeGreaterThan(0);
     expect(first.port).toBeLessThanOrEqual(65_535);
     expect(second.port).not.toBe(first.port);
-    expect(first.origin).toBe(`http://127.0.0.1:${first.port}`);
-    expect(second.origin).toBe(`http://127.0.0.1:${second.port}`);
+    expect(first.backendPort).not.toBe(first.port);
+    expect(second.backendPort).not.toBe(second.port);
+    expect(first.origin).toBe(`https://127.0.0.1:${first.port}`);
+    expect(second.origin).toBe(`https://127.0.0.1:${second.port}`);
   });
 });

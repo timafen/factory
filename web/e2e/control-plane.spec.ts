@@ -16,6 +16,8 @@ const workerOffline = "worker-offline-e2e";
 const managedWorker = "worker-managed-e2e";
 const automationWorker = "worker-automation-e2e";
 const realWorker = "11111111-1111-4111-8111-111111111111";
+const pausedHTTPSWork = "HTTPS proxy resumes paused work";
+const completedHTTPSWork = "HTTPS proxy clears completed pause";
 const onlineRepositories = [
   { key: "factory", remote_identity: "github.com/example/factory", retained_count: 1 },
   { key: "handbook", remote_identity: "github.com/example/handbook", retained_count: 0 },
@@ -176,6 +178,19 @@ async function waitForRealWorker(api: APIRequestContext) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 500));
   }
   throw new Error("real Factory worker did not register as healthy within 30 seconds");
+}
+
+async function waitForHTTPSProxyFixture(api: APIRequestContext) {
+  const readyTitle = `[auto] [5/5 Verify] ${completedHTTPSWork}`;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const response = await api.get("/api/v1/tasks?limit=200");
+    if (response.ok()) {
+      const body = await response.json() as { tasks: Array<{ title: string; state: string }> };
+      if (body.tasks.some((task) => task.title === readyTitle && task.state === "succeeded")) return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error("HTTPS reverse-proxy browser fixture did not finish");
 }
 
 function observeBrowser(page: Page) {
@@ -417,9 +432,10 @@ async function exerciseMobileNavigation(page: Page) {
 }
 
 test.beforeAll(async ({ baseURL }) => {
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   fixtureAPI = api;
   const real = await waitForRealWorker(api);
+  await waitForHTTPSProxyFixture(api);
   identifiers.realFactoryRepository = real.repositories.find(
     (repository) => repository.key === "factory-demo",
   )!.id;
@@ -592,7 +608,7 @@ test.afterAll(async () => {
 
 test("shows every project product and saves the overview", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const dashboard = await json<{
     projects: Array<{ name: string }>;
   }>(await api.get("/api/v1/dashboard"));
@@ -698,7 +714,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   await revise.getByRole("button", { name: "Create revision" }).click();
   await expect(page.getByText("Revision 2", { exact: true }).first()).toBeVisible();
 
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const pinned = await json<TaskDetail>(await api.get(`/api/v1/tasks/${taskID}`));
   expect(pinned.context).toBe("JIRA-183 stays free text.");
   expect(pinned.task.description).toBe(pinned.resolved_prompt);
@@ -757,7 +773,7 @@ test("runs the complete UI to real-worker and Git-worktree workflow", async ({ p
   await page.reload();
   await expect(page.getByRole("heading", { name: "Prove the complete local workflow" })).toBeVisible();
 
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const detail = await json<TaskDetail>(await api.get(`/api/v1/tasks/${taskID}`));
   expect(detail.task.state).toBe("succeeded");
   expect(detail.attempts).toHaveLength(1);
@@ -820,6 +836,78 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   browser.assertClean();
 });
 
+test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin protected", async ({ page, baseURL }) => {
+  expect(baseURL).toMatch(/^https:\/\/127\.0\.0\.1:/);
+  const httpsOrigin = baseURL!;
+  const api = await request.newContext({ baseURL: httpsOrigin, ignoreHTTPSErrors: true });
+
+  // If proxy forwarding were client-controlled, this hostile origin/host pair
+  // would be accepted. The TLS proxy replaces both forwarded values instead.
+  const hostile = await api.post("/api/v1/works/resume", {
+    headers: {
+      Origin: "https://attacker.example",
+      "X-Forwarded-Host": "attacker.example",
+      "X-Forwarded-Proto": "https",
+    },
+    data: { title: pausedHTTPSWork },
+  });
+  expect(hostile.status()).toBe(403);
+  expect((await hostile.json()) as { error: { code: string } }).toMatchObject({
+    error: { code: "cross_origin_request" },
+  });
+
+  await page.goto("/work");
+  await expect(page.getByText(pausedHTTPSWork, { exact: true })).toBeVisible();
+  const resume = page.getByRole("button", { name: "Продолжить" });
+  await expect(resume).toBeVisible();
+
+  // A browser-visible failure keeps a retry available, but never leaks the
+  // control-plane Origin diagnostic that prompted this regression.
+  await page.route("**/api/v1/works/resume", (route) => route.fulfill({
+    status: 403,
+    contentType: "application/json",
+    body: JSON.stringify({ error: { code: "cross_origin_request", message: "browser mutations must be same-origin" } }),
+  }));
+  await resume.click();
+  await expect(page.getByRole("alert")).toHaveText("Продолжение не выполнено. Проверь состояние Factory и повтори попытку.");
+  await expect(page.getByText("browser mutations must be same-origin")).toHaveCount(0);
+  await expect(resume).toBeVisible();
+  await page.unroute("**/api/v1/works/resume");
+
+  await resume.click();
+  await expect(page.getByText("Поставлено на паузу")).toHaveCount(0);
+  await expect(page.getByText("В очереди Factory").first()).toBeVisible();
+  await page.screenshot({ path: "test-results/screenshots/pause-resume-https-desktop.png", fullPage: true });
+
+  const resumedSettings = await json<{ settings: { stopped_pipelines: string[] } }>(
+    await api.get("/api/v1/settings/pilot"),
+  );
+  expect(resumedSettings.settings.stopped_pipelines).not.toContain(pausedHTTPSWork);
+
+  const completed = await api.post("/api/v1/works/resume", {
+    headers: { Origin: httpsOrigin },
+    data: { title: completedHTTPSWork },
+  });
+  expect(completed.status()).toBe(409);
+  expect((await completed.json()) as { error: { code: string } }).toMatchObject({
+    error: { code: "pipeline_completed" },
+  });
+  const completedSettings = await json<{ settings: { stopped_pipelines: string[] } }>(
+    await api.get("/api/v1/settings/pilot"),
+  );
+  expect(completedSettings.settings.stopped_pipelines).not.toContain(completedHTTPSWork);
+
+  await page.goto("/work");
+  const completedCard = page.getByText(completedHTTPSWork, { exact: true })
+    .locator("xpath=ancestor::section[contains(@class, 'work-card')]");
+  await expect(completedCard).toBeVisible();
+  await expect(completedCard.getByText("Поставлено на паузу")).toHaveCount(0);
+  await expect(completedCard.getByText("работа завершена", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "test-results/screenshots/pause-resume-https-phone.png", fullPage: true });
+  await api.dispose();
+});
+
 test("confirms and deletes terminal task history", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto(`/tasks/${identifiers.succeededTask}`);
@@ -832,7 +920,7 @@ test("confirms and deletes terminal task history", async ({ page, baseURL }) => 
   await expect(page.getByText("Ship the stable API client")).toHaveCount(0);
   browser.assertClean();
 
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const response = await api.get(`/api/v1/tasks/${identifiers.succeededTask}`);
   expect(response.status()).toBe(404);
   await api.dispose();
@@ -848,7 +936,7 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   expect(heartbeat.ok()).toBe(true);
   await fixtureAPI!.dispose();
   fixtureAPI = undefined;
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   await registerWorker(
     api,
     workerOnline,
@@ -1015,7 +1103,7 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
 test("audits every Factory screen on desktop and phone", async ({ context, baseURL }) => {
   test.setTimeout(240_000);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const workflow = await json<{ workflow: { id: string } }>(
     await api.post("/api/v1/workflows", {
       data: {
@@ -1131,7 +1219,7 @@ test("opens and closes delegation from the keyboard", async ({ page }) => {
 
 test("manages repository routing end to end and preserves add input while polling", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   await json(
     await api.put(`/api/v1/workers/${managedWorker}`, {
       headers: {
@@ -1231,7 +1319,7 @@ test("manages repository routing end to end and preserves add input while pollin
 
 test("previews and dispatches one typed GitHub issue Automation without duplication", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   await registerWorker(
     api,
     automationWorker,
@@ -1294,7 +1382,7 @@ test("previews and dispatches one typed GitHub issue Automation without duplicat
 
 test("previews and dispatches one typed GitHub pull-request Automation without duplication", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   await registerWorker(
     api,
     automationWorker,
@@ -1356,7 +1444,7 @@ test("previews and dispatches one typed GitHub pull-request Automation without d
 
 test("previews, enables, and runs a schedule Automation through the ordinary task path", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   await registerWorker(
     api,
     automationWorker,
@@ -1427,7 +1515,7 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
 
 test("migrates a locked legacy snapshot through Resume and Finalize", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: baseURL });
+  const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const legacyRoot = `${process.cwd()}/test-results/legacy-poller`;
   await page.goto("/automations");
   await page.getByRole("button", { name: "Migrate legacy poller" }).click();

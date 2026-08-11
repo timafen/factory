@@ -18,6 +18,7 @@ export function serverBrowserLaunchOptions(
 
 export type E2EServerAddress = {
   port: number;
+  backendPort: number;
   origin: string;
   healthURL: string;
 };
@@ -61,8 +62,20 @@ export async function createE2EServerAddress(
     port = await findFreeE2EPort();
   }
   allocatedE2EPorts.add(port);
-  const origin = `http://${e2eHost}:${port}`;
-  return { port, origin, healthURL: `${origin}/healthz` };
+  let backendPort = await findFreeE2EPort();
+  while (backendPort === port || allocatedE2EPorts.has(backendPort)) {
+    backendPort = await findFreeE2EPort();
+  }
+  allocatedE2EPorts.add(backendPort);
+  const backendOrigin = `http://${e2eHost}:${backendPort}`;
+  return {
+    port,
+    backendPort,
+    origin: `https://${e2eHost}:${port}`,
+    // Playwright's webServer readiness probe cannot validate the fixture's
+    // short-lived self-signed certificate. Browsers still use HTTPS above.
+    healthURL: `${backendOrigin}/healthz`,
+  };
 }
 
 export async function createPlaywrightConfig(portOverride?: string) {
@@ -78,6 +91,7 @@ export async function createPlaywrightConfig(portOverride?: string) {
     outputDir: "test-results/artifacts",
     use: {
       baseURL: serverAddress.origin,
+      ignoreHTTPSErrors: true,
       launchOptions: serverBrowserLaunchOptions(),
       trace: "retain-on-failure",
       screenshot: "only-on-failure",
@@ -96,6 +110,7 @@ export async function createPlaywrightConfig(portOverride?: string) {
       timeout: 120_000,
       env: {
         FACTORY_E2E_PORT: String(serverAddress.port),
+        FACTORY_E2E_BACKEND_PORT: String(serverAddress.backendPort),
         FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
       },
     },
