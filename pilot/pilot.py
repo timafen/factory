@@ -5227,9 +5227,10 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
 def recent_done_block(tasks, n=5):
     """Recent owner work, based on pipeline facts rather than push wording.
 
-    A succeeded task is deliberately not called merged: only the merge journal
-    proves that.  Old notification-only records remain a small fallback while
-    the task history ages in.
+    Only the merge journal proves successful completion.  Failed and cancelled
+    stages are terminal results; successful stages without a merge are merely
+    pipeline progress.  Old notification-only records remain a small fallback
+    while the task history ages in.
     """
     merged = set()
     try:
@@ -5249,6 +5250,8 @@ def recent_done_block(tasks, n=5):
     for task in tasks:
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
+            continue
+        if task.get("state") == "succeeded" and task.get("id") not in merged:
             continue
         title, stage = parsed
         if not title or is_service_work(title):
