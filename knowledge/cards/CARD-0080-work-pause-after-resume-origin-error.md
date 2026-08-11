@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — холодный HTTPS fixture получает честные 120 секунд внутри `beforeAll`; готово к полному Verify.
+- Status: BLOCKED — полный HTTPS browser suite падает на `route.fetch: self-signed certificate`; runtime-критерии resume/Origin не достигнуты.
 - Branch: `factory/154779a5-fa3-d1267776-1f8`
 - Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — timeout 120 секунд установлен первой операцией `beforeAll` и закреплён unit-регрессией.
-- What changed: hook больше не наследует 45-секундный timeout конфигурации; SPKI/TLS/proxy/production не менялись.
-- Evidence: timeout unit, typecheck, lint → PASS (11/11 tests); Go/web production build и clean `web/dist` → PASS.
-- Evidence: два независимых холодных targeted запуска с `FACTORY_BROWSER_LAUNCHER=/missing` → PASS (`1.0m` и `48.2s`); SSL certificate errors отсутствуют.
-- Next action: Verify запускает полный 21-test browser suite с `FACTORY_BROWSER_LAUNCHER=/missing`.
+- What changed: Verify не менял код; проверены review head `04d3f782e37376d5a77c577a8db4c42fd5658703`, чистая сборка и единственный полный browser-запуск.
+- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just check` и отдельный production build прошли; 14 UI-файлов/156 тестов, Go/tooling/launcher PASS, `web/dist` воспроизводим.
+- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` собрал 21 тест, но дал `1 passed, 1 failed, 19 did not run`; первый HTTPS page-тест прошёл, второй упал на сертификате в `route.fetch()`.
+- Next action: исправить TLS-доверие для Playwright `route.fetch()` без расширения browser trust и вернуть полный 21-test HTTPS suite в Verify.
 
 ## LOG
 
@@ -63,3 +63,15 @@
 - Первый browser-сценарий и HTTPS resume/Origin отдельно прошли с холодным fixture и `FACTORY_BROWSER_LAUNCHER=/missing`: `1 passed (1.0m)` и `1 passed (48.2s)`.
 - В обоих логах нет SSL certificate errors; timeout unit (11/11), typecheck, lint, Go/web production build и clean `web/dist` прошли.
 - Полный 21-test browser suite оставлен Verify по контракту; открытый риск — только результат этого полного прогона.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+|---|---|---|
+| Review head и implementation commit валидны | `git reset --hard FETCH_HEAD`; `git merge-base --is-ancestor 08211c263423a4d563aa56eca9b62f910a0bd240 HEAD`; `git show --stat 08211c263...` | PASS: HEAD до карточки — `04d3f782e37376d5a77c577a8db4c42fd5658703`; implementation — предок, не tip и меняет два code/test-файла вне `knowledge/cards/`. |
+| Чистые Go/UI, lint, typecheck и tooling | `go clean -testcache`; `npm --prefix web ci`; `FACTORY_BROWSER_LAUNCHER=/missing just check` | PASS: format, vet, vuln, staticcheck, boundary, все Go-пакеты, 14 UI-файлов/156 тестов, tooling и launcher. |
+| Production build и воспроизводимый dist | `FACTORY_BUILD_DIR=<tmp> just build`; browser-команда выполнила `npm run build && git diff --exit-code -- dist`; финальный `git diff --exit-code -- web/dist` | PASS: три Go-бинарника собраны; committed `web/dist` не изменился. |
+| Полный HTTPS browser suite ровно один раз | `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` без фильтров и повторов | BLOCKED: собрано 21; первый тест PASS, второй `shows project readiness card` FAIL, 19 не запускались. Ошибка: `route.fetch: self-signed certificate` для `GET https://127.0.0.1:36307/api/v1/dashboard`. |
+| Реальный HTTPS, scoped SPKI и service worker | тот же запуск; URL и browser diagnostics | PARTIAL: Chromium со scoped SPKI открыл реальный HTTPS и первый page-тест прошёл без browser SSL errors; activation service worker явно не доказан, suite остановился на отдельном TLS-клиенте `route.fetch()`. |
+| Spoofed headers удалены; desktop/390 resume; stale pause; safe retry; cross-origin prevention | serial-сценарий №7 в том же полном suite; Go/UI regressions в `just check` | BLOCKED runtime: сценарий №7 не запущен. Unit/server regressions прошли, но они не заменяют обязательное browser-доказательство. |
+| Process, port и tree cleanup | `ps -eo pid,ppid,args` и `ss -ltnp` до/после browser; `git status --short`; `git diff --exit-code -- web/dist` | PASS: scoped процессов и новых listeners нет; до правки карточки дерево и `web/dist` чистые. |
