@@ -6877,7 +6877,11 @@ def cycle(conf, state):
         # same stage, so the next stage cannot guess which revision to use.
         if wf == "Specification":
             head_reason = specification_head_gate(result)
-            if head_reason and cap_rescues(base, "SPEC_HEAD") < 1:
+            if head_reason and cap_rescues(base, "SPEC_HEAD") >= 1:
+                log(f"SPEC HEAD STOP {base[:40]!r}: возврат уже использован, "
+                    "разработку не запускаю")
+                continue
+            if head_reason:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
                     create_cap_rescue(base, "SPEC_HEAD", {

@@ -512,6 +512,18 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
     def test_specification_head_gate_accepts_exact_full_sha(self):
         self.assertIsNone(pilot.specification_head_gate("HEAD: " + "a" * 40))
 
+    def test_second_invalid_specification_head_stays_out_of_implementation(self):
+        self.run_cycle(
+            "BRANCH: factory/published\nHEAD: abc123\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            cycles=2,
+            durable_caps=True,
+        )
+
+        self.assertEqual(len(self.successful_created), 1)
+        self.assertIn("Specification", self.successful_created[0]["title"])
+        self.assertNotIn("Implement + Test", self.successful_created[0]["title"])
+        self.assertEqual(self.rescues["Сохранить спецификацию::SPEC_HEAD"], 1)
+
     def test_handoff_uses_published_branch_instead_of_stale_first_mention(self):
         report = self.run_cycle(
             "BRANCH: factory/stale\n"
