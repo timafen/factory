@@ -35,6 +35,13 @@ Verify, влиться и закрыть исходную работу, но н�
   `review_return`, `verify_return`, `machine_gate_return`, `execution_retry`,
   `merge_conflict_return`, `answer_resume` и `diagnostic_repair`.
 
+Миграция 027 имеет жёсткую зависимость от
+`026_worker_capacity_reconciliations.sql` из CARD-0085. До первого `ALTER` она
+читает все контрактные поля `worker_capacity_reconciliations`; поэтому база на
+025 без 026 завершает транзакцию ошибкой, не получает provenance-колонки и не
+продвигает ledger. Runner берёт версию из числового префикса имени, поэтому 027
+никогда не записывается как версия 26 при дырке в наборе файлов.
+
 Создать индекс `tasks_work_created(work_id, created_at, id)` и индекс
 `tasks_parent_task(parent_task_id)`. Старые строки не обновлять: три `NULL`
 однозначно означают legacy-запись и позволяют ограниченный совместимый разбор
@@ -157,12 +164,13 @@ base title хранится атрибутом. Поэтому рестарт, �
    задач не увеличивается.
 7. Для отвергнутой root-классификации появляется ровно одно событие
    `pilot_duplicate_root_prevented` с четырьмя идентификаторами; повторный цикл
-   и рестарт не дублируют событие.
+   и рестарт не дублируют событие. Полная запись остаётся в durable outbox по
+   стабильному event ID при сбоях до/после append и acknowledgement.
 8. Старые задачи и старые клиенты остаются читаемыми/работоспособными; title
    fallback применяется только к legacy-строкам с тремя `NULL`.
-9. Миграция вперёд выполняется без остановки чтения старых задач. Rollback
-   бинарника допустим: старый код игнорирует nullable-колонки; миграция не
-   откатывается и не удаляет provenance.
+9. База 025 с одной 027 атомарно отказывается обновляться; 025 + 026 + 027
+   обновляется до версии 27 и безопасно открывается повторно. Rollback бинарника
+   допустим: старый код игнорирует nullable-колонки; миграция не откатывается.
 10. Реализация не включает Pilot. До поставки безопасной release state machine
     и прохождения smoke Pilot остаётся отключён операционно.
 
@@ -171,8 +179,9 @@ base title хранится атрибутом. Поэтому рестарт, �
 - `internal/controlplane/store_test.go`:
   `TestTaskProvenanceValidationAndReplay` проверяет root/child/correction и
   коды ошибок; `TestTaskProvenancePersistsAcrossReopenAndParentDelete` —
-  replay, удаление parent, повторное открытие SQLite; отдельный migration-тест
-  читает БД, остановленную на migration 025.
+  replay, удаление parent, повторное открытие SQLite;
+  `TestTaskProvenanceMigrationRequires026AndReopensSafely` проверяет отказ
+  025 + 027 без изменения схемы/ledger и успех 025 + 026 + 027 с reopen.
 - `internal/controlplane/http_test.go`:
   `TestTaskProvenanceHTTPCompatibilityAndLogging` проверяет старое create-body,
   новые JSON-поля в list/detail, 400-коды и structured log provenance.
@@ -181,11 +190,13 @@ base title хранится атрибутом. Поэтому рестарт, �
   пересоздать in-memory Pilot с теми же API-данными/durable state и довести
   correction через Review/Verify/merge. Проверить один root, один pipeline,
   отсутствие второго Triage и одно prevented-событие до и после рестарта.
-- В этом классе тесты
-  `test_review_correction_keeps_one_pipeline_before_and_after_restart` и
-  `test_verify_correction_keeps_one_pipeline_before_and_after_restart`
-  воспроизводят обе исторические точки возврата; тест
+- В этом классе параметризованный тест
+  `test_review_and_verify_corrections_complete_one_pipeline_after_restart`
+  воспроизводит обе исторические точки возврата через `handle_answers`,
+  сохранение/пересоздание state, реальные циклы Review/Verify и merge; тест
   `test_explicit_provenance_wins_over_auto_title` запрещает title-only решение.
+- `test_duplicate_root_outbox_converges_at_every_crash_boundary` проверяет
+  сбой до записи, после append и до/после acknowledgement: durable event один.
 - Там же параметризовать Review и Verify, заголовки `[auto]`, изменённый title и
   одинаковые base title у двух разных `work_id`; явная provenance всегда
   побеждает строку.
@@ -213,7 +224,8 @@ base title хранится атрибутом. Поэтому рестарт, �
 
 ## Rollout, rollback и вне области
 
-Rollout: backup SQLite; миграция и control plane; API smoke root/child/read;
+До появления CARD-0085/026 в `main` эта ветка намеренно не подлежит merge или
+release. После снятия зависимости rollout: backup SQLite; миграция и control plane; API smoke root/child/read;
 Pilot binary; storm-тест на копии данных; проверка journal-события; только затем
 отдельное решение о включении после поставки safe release logic. При ошибке
 остановить Pilot и вернуть предыдущий бинарник, не удаляя migration 027.
@@ -225,6 +237,8 @@ Pilot binary; storm-тест на копии данных; проверка jour
 ## Карточка работы
 
 `knowledge/cards/CARD-0086-correction-provenance-single-pipeline.md`
+
+Реализация строгой коррекции: `aa05c7eb3c01e665609bc847b0f493f35edd10f9`.
 
 Номер 0086 выбран после `git fetch` и проверки свежего `origin/main` и всех
 опубликованных `factory/*`: предыдущий номер уже занят параллельной работой, а
