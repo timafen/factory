@@ -1488,23 +1488,25 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
 
 test("edits pilot settings from the Settings screen", async ({ page }) => {
   const browser = observeBrowser(page);
+  const settings = page.locator(".settings-page");
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Настройки" })).toBeVisible();
-  await expect(page.getByText("Цепочка моделей")).toBeVisible();
-  await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
-  await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
-  const poll = page.getByLabel("Интервал проверки, секунд");
+  await expect(settings.getByRole("heading", { name: "Настройки", exact: true })).toBeVisible();
+  await expect(settings.getByText("Цепочка моделей")).toBeVisible();
+  await expect(settings.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
+  await expect(settings.getByLabel("Тип источника")).toHaveValue("factory");
+  const poll = settings.getByLabel("Интервал проверки, секунд");
   await expect(poll).toHaveValue("10");
   await poll.fill("15");
   const response = page.waitForResponse((result) =>
     result.url().endsWith("/api/v1/settings/pilot") && result.request().method() === "PUT",
   );
-  await page.getByRole("button", { name: "Сохранить настройки" }).click();
+  await settings.getByRole("button", { name: "Сохранить настройки", exact: true }).click();
   expect((await response).ok()).toBe(true);
-  await expect(page.getByText(/Настройки сохранены/)).toBeVisible();
+  await expect(settings.getByText(/Настройки сохранены/)).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("Интервал проверки, секунд")).toHaveValue("15");
-  await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
-  await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
+  const reloadedSettings = page.locator(".settings-page");
+  await expect(reloadedSettings.getByLabel("Интервал проверки, секунд")).toHaveValue("15");
+  await expect(reloadedSettings.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
+  await expect(reloadedSettings.getByLabel("Тип источника")).toHaveValue("factory");
   browser.assertClean();
 });
