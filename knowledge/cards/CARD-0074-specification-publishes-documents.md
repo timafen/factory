@@ -8,7 +8,7 @@ Implementation commit: cb556b1fae24773d150825dbdeb95fa96e5c4d75 — новая r
 - What changed: migration 023 устанавливает точный prompt для включённой
   Specification и сохраняет прежнюю revision в истории. Handoff-тест теперь
   передаёт BRANCH, полный HEAD и PUSHED: yes опубликованной ветки.
-- Evidence: `go test ./...` → PASS; `python3 -m unittest pilot.test_pilot` → 176 tests, OK; `git diff --check origin/main...HEAD` → PASS.
+- Evidence: `go test ./...` → PASS; `python3 -m unittest pilot.test_pilot` → 183 tests, OK; `git diff --check origin/main...HEAD` → PASS.
 - Next action: Human merges the verified branch.
 
 ## LOG
@@ -19,7 +19,7 @@ Implementation commit: cb556b1fae24773d150825dbdeb95fa96e5c4d75 — новая r
 | --- | --- | --- |
 | Upgrade устанавливает revision 023 и сохраняет историю | `go test ./...` | PASS, включая `internal/controlplane` |
 | Инструкция требует только документы, commit/push и BRANCH/HEAD/PUSHED | upgrade-тест с точным текстом revision | PASS |
-| Опубликованная непустая ветка запускает один Implement | `python3 -m unittest pilot.test_pilot` | PASS, 176 tests |
+| Опубликованная непустая ветка запускает один Implement | `python3 -m unittest pilot.test_pilot` | PASS, 183 tests |
 | Отсутствующая, пустая и недоступная ветка не запускают Implement | `SpecificationBranchHandoffTests` в полном наборе pilot | PASS |
 | Ворота Review/Verify, delivery и код приложения не изменены | `git diff --name-only origin/main...HEAD` | PASS: затронуты только migration, regression-тесты и документы |
 
