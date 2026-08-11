@@ -658,6 +658,83 @@ func TestHTTPContractLifecycleAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestTaskProvenanceHTTPCompatibilityAndLogging(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	worker := registerHTTPWorker(t, fixture, workerA, "factory", "github.com/example/factory", 2)
+	rootBody := map[string]any{
+		"request_key": "http-provenance-root", "title": "Legacy client body",
+		"description": "old clients send no provenance", "worker_id": workerA,
+		"repository_id": worker.Repositories[0].ID, "timeout_seconds": 60,
+	}
+	response := fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", fixture.server.URL, rootBody)
+	requireStatus(t, response, http.StatusCreated)
+	root := decodeResponse[protocol.TaskDetail](t, response)
+	if root.Task.WorkID != root.Task.ID || root.Task.ParentTaskID != "" || root.Task.CorrectionKind != "" {
+		t.Fatalf("root provenance = %#v", root.Task)
+	}
+	childBody := map[string]any{
+		"request_key": "http-provenance-child", "title": "Review correction",
+		"description": "apply review feedback", "worker_id": workerA,
+		"repository_id": worker.Repositories[0].ID, "timeout_seconds": 60,
+		"parent_task_id": root.Task.ID, "correction_kind": "review_return",
+	}
+	response = fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", fixture.server.URL, childBody)
+	requireStatus(t, response, http.StatusCreated)
+	child := decodeResponse[protocol.TaskDetail](t, response)
+	if child.Task.WorkID != root.Task.ID || child.Task.ParentTaskID != root.Task.ID || child.Task.CorrectionKind != "review_return" {
+		t.Fatalf("child provenance = %#v", child.Task)
+	}
+	response = fixture.request(http.MethodGet, "/api/v1/tasks/"+child.Task.ID, "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	detail := decodeResponse[protocol.TaskDetail](t, response)
+	response = fixture.request(http.MethodGet, "/api/v1/tasks", "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	page := decodeResponse[struct {
+		Tasks []protocol.Task `json:"tasks"`
+	}](t, response)
+	listed := nextTask(page.Tasks, child.Task.ID)
+	if listed == nil || listed.WorkID != detail.Task.WorkID ||
+		listed.ParentTaskID != detail.Task.ParentTaskID || listed.CorrectionKind != detail.Task.CorrectionKind {
+		t.Fatalf("list/detail provenance = %#v / %#v", listed, detail.Task)
+	}
+	invalidBody := mapsClone(childBody)
+	invalidBody["request_key"] = "http-provenance-invalid"
+	delete(invalidBody, "parent_task_id")
+	response = fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", fixture.server.URL, invalidBody)
+	requireStatus(t, response, http.StatusBadRequest)
+	errorBody := decodeResponse[protocol.ErrorBody](t, response)
+	if errorBody.Error.Code != "correction_parent_required" {
+		t.Fatalf("error code = %q", errorBody.Error.Code)
+	}
+	logs := fixture.logs.String()
+	for _, field := range []string{
+		`"work_id":"` + root.Task.ID + `"`,
+		`"parent_task_id":"` + root.Task.ID + `"`,
+		`"correction_kind":"review_return"`,
+	} {
+		if !strings.Contains(logs, field) {
+			t.Fatalf("structured create log missing %s", field)
+		}
+	}
+}
+
+func nextTask(tasks []protocol.Task, id string) *protocol.Task {
+	for index := range tasks {
+		if tasks[index].ID == id {
+			return &tasks[index]
+		}
+	}
+	return nil
+}
+
+func mapsClone(source map[string]any) map[string]any {
+	clone := make(map[string]any, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
 func TestHTTPTaskPaginationKeepsEqualTimestampOrdering(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	fixture.store.now = func() time.Time {
