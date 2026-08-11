@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — повторная проверка на свежем `origin/main` зелёная.
-- Branch: `factory/afffa74e-365-edac8b70-81e`.
-Implementation commit: bbeace8aa1cd8cef2a129c2e14b2ba5c3d0c4f79 — реализованы безопасные шаблоны Factory и staging Tarser.
+- Status: IMPLEMENTED — целевые проверки и обе сборки зелёные.
+- Branch: `factory/2b4dbde2-7be-4e0c9a76-9da`.
+Implementation commit: 904ffa0a804642b5cde31d982e2ee2e81d7e0b4b — завершены безопасные шаблоны Factory и staging Tarser со строгим FQDN и защитой secret-файла от подмены.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
 - What changed: сервер принимает только два утверждённых типа, сам выбирает
-  группу и фиксированные release/rollback; `/projects` показывает fail-closed
-  ворота и только наличие секретов.
+  группу и фиксированные release/rollback; точный allowlist отклоняет локальные
+  и некорректные DNS-имена, а secret-файл сверяется после открытия.
 - Evidence: `go test ./internal/controlplane -run 'Project|Secret|Adapter' -count=1` → PASS;
   `npm --prefix web test -- --run src/Projects.test.tsx` → 2 PASS;
   `npx tsc -p tsconfig.app.json --noEmit`, vet, lint и Go/Web build → PASS.
-- One next action: Verify открывает `/projects` и подтверждает безопасный сценарий владельца.
+- One next action: Review проверяет diff и экран `/projects`.
 
 ## LOG
 
@@ -39,3 +39,9 @@ rollback и экран `/projects`. Целевые Go-тесты, 2 Vitest-те�
 Работа повторно перенесена на свежий `origin/main` без посторонних файлов.
 Обязательный TypeScript-check без emit, целевые Go/Vitest-тесты, vet, lint и обе
 сборки прошли; SHA реализации подтверждён как предок текущей ветки.
+
+### 2026-08-10 — Implement
+
+После самостоятельной проверки точный allowlist усилен полноценной валидацией
+FQDN, а чтение secret-файла защищено от подмены после `Lstat`. Целевые Go-тесты,
+2 Vitest-теста, TypeScript-check, Go vet/build и Web lint/build прошли.
