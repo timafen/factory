@@ -3,15 +3,13 @@
 ## HEAD
 
 - Status: Implemented — ожидает review/verify.
-- Branch: `factory/d59886f6-4ff-ed449ae5-650`.
-- Implementation commit: 2951ac42e9883ecbb34c075388409a1a04bd296e — финальный PASS и уведомление выдаются только после успешного выпуска без повтора уведомления после рестарта.
-- What changed: ожидание выпуска сохраняется с задачей и поколением; `rc=0`
-  создаёт delivery receipt, а `rc=8`/коалесцирование сохраняют ожидание.
-- What changed: эпики и «Сделано недавно» признают готовность только по receipt
-  поставки; UI показывает «Ожидает слияния и выпуска».
-- Evidence: `python3 -m unittest -v pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests pilot.test_pilot.EpicCompletionReceiptTests pilot.test_pilot.RecentDoneTest` → 26 OK.
-- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 11 passed.
-- Next action: Review проверить обработку ошибки выпуска и восстановление состояния на реальном цикле Pilot.
+- Branch: `factory/981e1909-2f1-7977a914-6af`.
+- Implementation commit: 370c82994593fc96d49d8248e57a30b40de19738 — terminal failure выпуска сохраняет незавершённый Verify и честный статус Work.
+- What changed: Pilot связывает terminal release failure с ожидающими Verify, сохраняет причину для Work и не даёт архиву скрыть этот сбой.
+- What changed: Work по-русски сообщает «Выпуск остановлен», причину и безопасное повторное действие вместо ложного ожидания.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.WorkArchiveCleanupTests pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests` → 27 OK.
+- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 12 passed; `cd web && npm run build` → passed.
+- Next action: Review проверить terminal release failure на полном цикле Pilot.
 
 ## LOG
 
@@ -41,3 +39,11 @@ Python-тестами и 11 UI-тестами Work.
 Карточка перенумерована с CARD-0075 на CARD-0077: CARD-0075 уже занят
 параллельной работой. Реализационный коммит сохранён без изменений; целевые
 проверки ссылок, Python- и UI-регрессии подтверждают поставку.
+
+### 2026-08-11 — Implement
+
+После terminal failure Pilot записывает для ожидавшего Verify durable
+`release_failed`, снимает ложное ожидание и не повторяет уведомление после
+рестарта. Work показывает остановленный выпуск с причиной и безопасным
+действием. Сквозные Python-сценарии покрывают success, `rc=8`, failure и
+restart; Work UI и production build прошли.
