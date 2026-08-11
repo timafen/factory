@@ -62,6 +62,7 @@ make_fixture() {
   printf 'old-worker\n' >"$case_dir/install/factory-worker"
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
   : >"$case_dir/events"
+  : >"$case_dir/gates"
   : >"$case_dir/worker.toml"
 
   cat >"$case_dir/bin/git" <<'EOF'
@@ -129,6 +130,11 @@ case "$TEST_MODE:${1:-}" in
       while :; do /bin/sleep 0.01; done
     ) &
     wait_for_file "$TEST_UI_TERM_CHILD"
+    : >"$TEST_UI_RUNNING"
+    trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+    while :; do /bin/sleep 0.01; done
+    ;;
+  signal-before-pgid-go:tsc)
     : >"$TEST_UI_RUNNING"
     trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
     while :; do /bin/sleep 0.01; done
@@ -229,6 +235,38 @@ if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
 fi
 exec /bin/bash "$@"
 EOF
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+# The UI launcher has not entered setsid yet; its direct launcher PID must be
+# stopped after the supervisor's bounded readiness wait.
+case "${TEST_MODE}:${5:-}" in
+  signal-before-pgid-ui:*ui-checks.pid)
+    : >"$TEST_UI_SETSID_PENDING"
+    delay_pid=''
+    stop_delay() {
+      [ -z "$delay_pid" ] || kill -TERM "$delay_pid" 2>/dev/null || true
+      [ -z "$delay_pid" ] || wait "$delay_pid" 2>/dev/null || true
+      exit 143
+    }
+    trap stop_delay HUP INT TERM
+    /bin/sleep 2 &
+    delay_pid=$!
+    wait "$delay_pid"
+    exec /usr/bin/setsid "$@"
+    ;;
+  # Here setsid already made a session, but the gate's pid file is delayed.
+  # The supervisor must discover and stop this group before the readiness file.
+  signal-before-pgid-go:*go-checks.pid)
+    exec /usr/bin/setsid /bin/bash -c '
+      : >"$1"
+      shift
+      /bin/sleep 2
+      exec "$@"
+    ' bash "$TEST_GO_SETSID_PENDING" "$@"
+    ;;
+esac
+exec /usr/bin/setsid "$@"
+EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
 echo "$1 $2" >>"$TEST_EVENTS"
@@ -315,6 +353,8 @@ run_release() {
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_UI_TERM_CHILD="$case_dir/ui-term-child" TEST_GO_TERM_CHILD="$case_dir/go-term-child" \
+    TEST_UI_SETSID_PENDING="$case_dir/ui-setsid-pending" \
+    TEST_GO_SETSID_PENDING="$case_dir/go-setsid-pending" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
@@ -347,6 +387,8 @@ start_release() {
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_UI_TERM_CHILD="$case_dir/ui-term-child" TEST_GO_TERM_CHILD="$case_dir/go-term-child" \
+    TEST_UI_SETSID_PENDING="$case_dir/ui-setsid-pending" \
+    TEST_GO_SETSID_PENDING="$case_dir/go-setsid-pending" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
@@ -570,6 +612,33 @@ assert_file "$term_ignoring/install/factory-worker" old-worker
 ! grep -F 'go build ' "$term_ignoring/gates" >/dev/null \
   || fail "TERM with ignoring children reached production install"
 assert_no_fixture_processes "$term_ignoring"
+
+for signal in HUP INT TERM; do
+  for gate in ui go; do
+    pending="$temporary/signal-$signal-before-pgid-$gate"
+    make_fixture "$pending" "signal-before-pgid-$gate"
+    start_release "$pending" "signal-before-pgid-$gate"
+    if [ "$gate" = ui ]; then
+      wait_for_file "$pending/ui-setsid-pending"
+    else
+      wait_for_file "$pending/ui-running"
+      wait_for_file "$pending/go-setsid-pending"
+    fi
+    kill -"$signal" "$release_pid"
+    wait_for_release_exit "$release_pid" "$pending/supervisor-timeout"
+    [ "$RELEASE_STATUS" -eq 130 ] \
+      || fail "$signal before $gate PGID readiness returned $RELEASE_STATUS instead of 130"
+    assert_file "$pending/install/factory-server" old-server
+    assert_file "$pending/install/factory-worker" old-worker
+    [ ! -s "$pending/events" ] \
+      || fail "$signal before $gate PGID readiness touched services"
+    ! grep -F 'npx vite build' "$pending/gates" >/dev/null \
+      || fail "$signal before $gate PGID readiness reached the UI build"
+    ! grep -F 'go build ' "$pending/gates" >/dev/null \
+      || fail "$signal before $gate PGID readiness reached production install"
+    assert_no_fixture_processes "$pending"
+  done
+done
 
 auth_failed="$temporary/auth-provision-fail"
 make_fixture "$auth_failed" auth-provision-fail

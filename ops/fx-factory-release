@@ -36,6 +36,9 @@ LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
+# В фоне нужен PID именно launcher, а не subshell, исполняющий as_user: иначе
+# TERM останавливает оболочку, но оставляет её дочерний setsid без наблюдения.
+start_as_user() { if [ -n "$AS" ]; then exec $AS "$@"; else exec "$@"; fi; }
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
@@ -55,6 +58,9 @@ gate_pids=()
 gate_pid_files=()
 gate_logs=()
 gate_names=()
+gate_stop_file="$work/test-gates.stop"
+gate_starting=0
+pending_test_gate_signal=''
 release_stopping=0
 cleanup() {
   stop_test_gates
@@ -69,43 +75,39 @@ trap on_release_exit EXIT
 # выпуска завершается вся её группа процессов, включая возможных помощников
 # тестового раннера.
 # setsid может forkнуть, поэтому PID фонового launcher не всегда совпадает с
-# PGID. Launcher обязан сообщить PGID до возврата из этой функции: сигнал в
-# этот момент ждёт готовности файла, а не убивает launcher и не теряет группу.
+# PGID. До записи pid-файла launcher остаётся pending: сигнал ждёт его лишь
+# ограниченно, после чего останавливает и launcher, и уже найденную группу.
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
-  local name=$1 log=$2 pid_file=$3 i
+  local name=$1 log=$2 pid_file=$3 i launcher signal
   shift 3
-  as_user setsid bash -c '
+  # Bash исполняет trap между командами. Пока launcher ещё не добавлен в
+  # массив, запоминаем сигнал и немедленно обрабатываем его после регистрации.
+  gate_starting=1
+  start_as_user setsid bash -c '
     trap - INT
+    [ ! -e "$2" ] || exit 130
     printf "%s\\n" "$$" > "$1"
-    shift
+    [ ! -e "$2" ] || exit 130
+    shift 2
     exec "$@"
-  ' bash "$pid_file" "$@" >"$log" 2>&1 &
-  gate_pids+=("$!")
+  ' bash "$pid_file" "$gate_stop_file" "$@" >"$log" 2>&1 &
+  launcher=$!
+  gate_pids+=("$launcher")
   gate_pid_files+=("$pid_file")
   gate_logs+=("$log")
   gate_names+=("$name")
+  gate_starting=0
+  if [ -n "$pending_test_gate_signal" ]; then
+    signal=$pending_test_gate_signal
+    pending_test_gate_signal=''
+    on_test_gate_signal "$signal"
+  fi
   for ((i = 0; i < 500; i++)); do
     [ -s "$pid_file" ] && return 0
-    sleep 0.01
+    /bin/sleep 0.01
   done
   fail "не дождался отдельной process group для $name"
   return 1
-}
-
-stop_test_gates() {
-  local pid_file group_pid i
-  for pid_file in "${gate_pid_files[@]}"; do
-    [ -e "$pid_file" ] || continue
-    group_pid=''
-    for ((i = 0; i < 500; i++)); do
-      if [ -s "$pid_file" ]; then read -r group_pid <"$pid_file" || true; fi
-      case "$group_pid" in ''|*[!0-9]*) sleep 0.01 ;; *) break ;; esac
-    done
-    case "$group_pid" in
-      ''|*[!0-9]*) ;;
-      *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
-    esac
-  done
 }
 
 test_gate_group_pid() {
@@ -117,37 +119,127 @@ test_gate_group_pid() {
   esac
 }
 
+test_gate_launcher_group_pid() {
+  local launcher=$1 session_id group_pid
+  case "$launcher" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$launcher" 2>/dev/null || return 1
+  session_id=$(ps -o sid= -p "$launcher" 2>/dev/null | tr -d '[:space:]')
+  group_pid=$(ps -o pgid= -p "$launcher" 2>/dev/null | tr -d '[:space:]')
+  [ "$session_id" = "$launcher" ] && [ "$group_pid" = "$launcher" ] \
+    || return 1
+  printf '%s\n' "$launcher"
+}
+
+test_gate_group_for() {
+  local index=$1
+  test_gate_group_pid "${gate_pid_files[$index]}" \
+    || test_gate_launcher_group_pid "${gate_pids[$index]}"
+}
+
 test_gate_groups_running() {
-  local pid_file group_pid
-  for pid_file in "${gate_pid_files[@]}"; do
-    group_pid=$(test_gate_group_pid "$pid_file") || continue
+  local index group_pid
+  for index in "${!gate_pids[@]}"; do
+    group_pid=$(test_gate_group_for "$index") || continue
     kill -0 -- "-$group_pid" 2>/dev/null && return 0
   done
   return 1
 }
 
-wait_for_test_gates() {
-  local pid pid_file group_pid i
-  # Launcher может завершиться от TERM раньше потомка. Поэтому до KILL и после
-  # него проверяем именно каждую process group, а launcher затем только reap-им.
-  for ((i = 0; i < 200; i++)); do
-    test_gate_groups_running || break
-    sleep 0.01
+test_gate_launchers_running() {
+  local launcher
+  for launcher in "${gate_pids[@]}"; do
+    case "$launcher" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$launcher" 2>/dev/null && return 0
   done
-  if test_gate_groups_running; then
-    for pid_file in "${gate_pid_files[@]}"; do
-      group_pid=$(test_gate_group_pid "$pid_file") || continue
-      if kill -0 -- "-$group_pid" 2>/dev/null; then
-        step "TERM не остановил process group $group_pid; отправляю KILL"
-        kill -KILL -- "-$group_pid" 2>/dev/null || true
+  return 1
+}
+
+test_gate_startup_pending() {
+  local index group_pid launcher
+  for index in "${!gate_pids[@]}"; do
+    group_pid=$(test_gate_group_for "$index") && continue
+    launcher=${gate_pids[$index]}
+    case "$launcher" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$launcher" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+signal_test_gate_groups() { # signal_test_gate_groups <TERM|KILL>
+  local signal=$1 index group_pid
+  for index in "${!gate_pids[@]}"; do
+    group_pid=$(test_gate_group_for "$index") || continue
+    if kill -0 -- "-$group_pid" 2>/dev/null; then
+      [ "$signal" != KILL ] \
+        || step "TERM не остановил process group $group_pid; отправляю KILL"
+      kill -"$signal" -- "-$group_pid" 2>/dev/null || true
+    fi
+  done
+}
+
+signal_pending_test_gate_launchers() { # signal_pending_test_gate_launchers <TERM|KILL>
+  local signal=$1 index launcher group_pid
+  for index in "${!gate_pids[@]}"; do
+    group_pid=$(test_gate_group_for "$index") || group_pid=''
+    if [ -n "$group_pid" ] && kill -0 -- "-$group_pid" 2>/dev/null; then
+      continue
+    fi
+    launcher=${gate_pids[$index]}
+    case "$launcher" in ''|*[!0-9]*) continue ;; esac
+    if kill -0 "$launcher" 2>/dev/null; then
+      [ "$signal" != KILL ] \
+        || step "TERM не остановил pending launcher $launcher; отправляю KILL"
+      kill -"$signal" "$launcher" 2>/dev/null || true
+    fi
+  done
+}
+
+stop_test_gates() {
+  local i
+  [ -z "$gate_stop_file" ] || : >"$gate_stop_file"
+  signal_test_gate_groups TERM
+  # setsid может уже жить в отдельной сессии, но ещё не успеть записать PGID.
+  # Не ждём launcher без лимита: даём readiness одну секунду, затем TERM ему.
+  for ((i = 0; i < 100; i++)); do
+    test_gate_startup_pending || break
+    /bin/sleep 0.01
+    signal_test_gate_groups TERM
+  done
+  signal_test_gate_groups TERM
+  signal_pending_test_gate_launchers TERM
+  signal_test_gate_groups TERM
+}
+
+wait_for_test_gates() {
+  local index pid i
+  # Launcher может завершиться от TERM раньше потомка. Поэтому ограниченно
+  # ждём и группу, и pending launcher, затем отправляем KILL каждому из них.
+  for ((i = 0; i < 100; i++)); do
+    signal_test_gate_groups TERM
+    signal_pending_test_gate_launchers TERM
+    if ! test_gate_groups_running && ! test_gate_launchers_running \
+      && ! test_gate_startup_pending; then
+      break
+    fi
+    /bin/sleep 0.01
+  done
+  if test_gate_groups_running || test_gate_launchers_running \
+    || test_gate_startup_pending; then
+    signal_test_gate_groups KILL
+    signal_pending_test_gate_launchers KILL
+    for ((i = 0; i < 100; i++)); do
+      if ! test_gate_groups_running && ! test_gate_launchers_running \
+        && ! test_gate_startup_pending; then
+        break
       fi
-    done
-    for ((i = 0; i < 200; i++)); do
-      test_gate_groups_running || break
-      sleep 0.01
+      /bin/sleep 0.01
     done
   fi
-  for pid in "${gate_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  for index in "${!gate_pids[@]}"; do
+    pid=${gate_pids[$index]}
+    wait "$pid" 2>/dev/null || true
+    unset 'gate_pids[index]'
+  done
 }
 
 print_test_gate_logs() {
@@ -160,12 +252,21 @@ print_test_gate_logs() {
 
 on_test_gate_signal() {
   local signal=$1
+  # Не теряем сигнал между запуском setsid и записью его PID в gate_pids.
+  if [ "$gate_starting" = 1 ]; then
+    release_stopping=1
+    [ -n "$pending_test_gate_signal" ] || pending_test_gate_signal=$signal
+    return
+  fi
   release_stopping=1
   trap - HUP INT TERM
   stop_test_gates
   wait_for_test_gates
   print_test_gate_logs
-  cleanup
+  # Группы уже остановлены и reap-нуты выше; не запускаем EXIT-cleanup второй
+  # раз, иначе bounded timeout умножается и может пропустить watchdog.
+  trap - EXIT
+  rm -rf "$work"
   exit 130
 }
 
@@ -175,6 +276,9 @@ run_parallel_test_gates() {
   gate_pid_files=()
   gate_logs=()
   gate_names=()
+  gate_starting=0
+  pending_test_gate_signal=''
+  rm -f "$gate_stop_file"
 
   # A shell started as a background job can inherit ignored SIGINT. Reset it
   # before installing our handler so INT follows the same cleanup path.
@@ -200,7 +304,7 @@ run_parallel_test_gates() {
       [ -n "$pid" ] || continue
       if ! kill -0 "$pid" 2>/dev/null; then
         wait "$pid" || status=$?
-        gate_pids[$i]=''
+        unset 'gate_pids[i]'
         remaining=$((remaining - 1))
         if [ "$status" -ne 0 ]; then
           failed_name=${gate_names[$i]}
@@ -208,7 +312,7 @@ run_parallel_test_gates() {
         fi
       fi
     done
-    sleep 0.02
+    /bin/sleep 0.02
   done
   if [ "$status" -ne 0 ]; then
     stop_test_gates
