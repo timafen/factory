@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: BLOCKED — обычный Chromium стартовал, но полный Playwright остановился на SSL-ошибке service worker первого сценария; 20 тестов не запустились.
-- Branch: `factory/9544acc4-6eb-0c2cd660-356`
-- Implementation commit: `833ec02301b10d7958d4e15aa48133ad7c08f769` — настоящий TLS reverse proxy и browser-доказательство resume.
-- Evidence summary: после `go clean -testcache` чистый `npm ci`, `just check`, `just build` и `git diff --exit-code -- web/dist` прошли; 14 UI-файлов/155 тестов и все Go-пакеты зелёные.
-- Evidence summary: единственный `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` собрал 21 тест и открыл `https://127.0.0.1:42731/`, но первый тест получил `An SSL certificate error occurred when fetching the script.` при регистрации `/sw.js`; `1 failed`, `20 did not run`.
-- Cleanup: новых слушающих сокетов и процессов этого worktree после остановки нет; Git-дерево чистое.
-- Next action: исправить HTTPS e2e fixture так, чтобы `/sw.js` загружался без certificate console error в обычном Chromium, затем повторить полный 21-test suite.
+- Status: IMPLEMENTED — Chromium и service worker проходят настоящий TLS proxy с доверием только к сертификату fixture; готово к полному Verify.
+- Branch: `factory/ac2a85c4-0d8-c6175304-b7f`
+- Implementation commit: 80555c2f1ebd5eb299f5c49f1572bb56cb251622 — общий ephemeral key/cert и scoped Chromium SPKI trust без глобального отключения TLS.
+- What changed: Playwright создаёт сертификат до browser launch, публикует его paths всем процессам fixture и вычисляет SHA-256 от DER SPKI; TLS proxy использует тот же сертификат.
+- Evidence: `npm --prefix web test -- --run src/playwrightConfig.test.ts`, `typecheck`, `lint` → PASS (10/10 tests); `just build`, web build и clean `web/dist` → PASS.
+- Evidence: оба targeted запуска с `FACTORY_BROWSER_LAUNCHER=/missing` → PASS: первый serial browser test `1 passed`, HTTPS resume/Origin scenario `1 passed`; SSL certificate errors отсутствуют.
+- Next action: Verify запускает полный 21-test browser suite с `FACTORY_BROWSER_LAUNCHER=/missing`.
 
 ## LOG
 
@@ -48,3 +48,11 @@
 | Настоящий HTTPS proxy не создаёт browser errors | первый browser-сценарий и сохранённый trace | BLOCKED: регистрация service worker `/sw.js` дала `An SSL certificate error occurred when fetching the script.`, после чего `observeBrowser().assertClean()` упал. |
 | Spoofed headers, desktop/390 resume, stale pause, safe retry и cross-origin mutations | целевой serial-сценарий №7 в том же полном suite | BLOCKED: сценарий не запущен из-за падения сценария №1; runtime-доказательства отсутствуют. Серверные Go и UI unit regression-тесты прошли. |
 | Cleanup процессов, портов и дерева | `ps -eo pid,ppid,args`, `ss -ltnp`, `git status --short` до/после | PASS: процессов с путём этого worktree и новых listeners нет; tracked/untracked изменений до карточки не было. |
+
+### 2026-08-11 — Implement
+
+- HTTPS fixture теперь создаёт key/cert до старта браузера, переиспользует их между Playwright config/test-worker процессами и передаёт TLS proxy те же paths.
+- Chromium получает только `--ignore-certificate-errors-spki-list=<SHA-256 DER SPKI>`; browser-level `ignoreHTTPSErrors` удалён, production и spoofed-header/Origin проверки не менялись.
+- `npm --prefix web test -- --run src/playwrightConfig.test.ts`, `typecheck`, `lint`, `just build`, web build и clean `web/dist` → PASS.
+- `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test -g 'shows every project product and saves the overview'` → `1 passed`; HTTPS resume/Origin targeted rerun → `1 passed`, без SSL certificate errors.
+- Первый холодный запуск resume-сценария упёрся в общий 45-second `beforeAll` timeout; повтор после прогрева прошёл. Полный 21-test suite оставлен Verify по контракту.
