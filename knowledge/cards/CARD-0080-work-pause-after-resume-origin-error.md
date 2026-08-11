@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — Chromium и service worker проходят настоящий TLS proxy с доверием только к сертификату fixture; готово к полному Verify.
-- Branch: `factory/ac2a85c4-0d8-c6175304-b7f`
-- Implementation commit: 80555c2f1ebd5eb299f5c49f1572bb56cb251622 — общий ephemeral key/cert и scoped Chromium SPKI trust без глобального отключения TLS.
-- What changed: Playwright создаёт сертификат до browser launch, публикует его paths всем процессам fixture и вычисляет SHA-256 от DER SPKI; TLS proxy использует тот же сертификат.
-- Evidence: `npm --prefix web test -- --run src/playwrightConfig.test.ts`, `typecheck`, `lint` → PASS (10/10 tests); `just build`, web build и clean `web/dist` → PASS.
-- Evidence: оба targeted запуска с `FACTORY_BROWSER_LAUNCHER=/missing` → PASS: первый serial browser test `1 passed`, HTTPS resume/Origin scenario `1 passed`; SSL certificate errors отсутствуют.
+- Status: IMPLEMENTED — холодный HTTPS fixture получает честные 120 секунд внутри `beforeAll`; готово к полному Verify.
+- Branch: `factory/154779a5-fa3-d1267776-1f8`
+- Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — timeout 120 секунд установлен первой операцией `beforeAll` и закреплён unit-регрессией.
+- What changed: hook больше не наследует 45-секундный timeout конфигурации; SPKI/TLS/proxy/production не менялись.
+- Evidence: timeout unit, typecheck, lint → PASS (11/11 tests); Go/web production build и clean `web/dist` → PASS.
+- Evidence: два независимых холодных targeted запуска с `FACTORY_BROWSER_LAUNCHER=/missing` → PASS (`1.0m` и `48.2s`); SSL certificate errors отсутствуют.
 - Next action: Verify запускает полный 21-test browser suite с `FACTORY_BROWSER_LAUNCHER=/missing`.
 
 ## LOG
@@ -56,3 +56,10 @@
 - `npm --prefix web test -- --run src/playwrightConfig.test.ts`, `typecheck`, `lint`, `just build`, web build и clean `web/dist` → PASS.
 - `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test -g 'shows every project product and saves the overview'` → `1 passed`; HTTPS resume/Origin targeted rerun → `1 passed`, без SSL certificate errors.
 - Первый холодный запуск resume-сценария упёрся в общий 45-second `beforeAll` timeout; повтор после прогрева прошёл. Полный 21-test suite оставлен Verify по контракту.
+
+### 2026-08-11 — Implement
+
+- `test.setTimeout(120_000)` перенесён в начало общего `beforeAll`, чтобы холодный setup не ограничивался конфигурационными 45 секундами; добавлена unit-регрессия размещения timeout.
+- Первый browser-сценарий и HTTPS resume/Origin отдельно прошли с холодным fixture и `FACTORY_BROWSER_LAUNCHER=/missing`: `1 passed (1.0m)` и `1 passed (48.2s)`.
+- В обоих логах нет SSL certificate errors; timeout unit (11/11), typecheck, lint, Go/web production build и clean `web/dist` прошли.
+- Полный 21-test browser suite оставлен Verify по контракту; открытый риск — только результат этого полного прогона.
