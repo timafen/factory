@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,9 +51,20 @@ func invalid(code, message string) error {
 	return &ServiceError{Code: code, Message: message, Status: 400}
 }
 
+func unauthorized(code, message string) error {
+	return &ServiceError{Code: code, Message: message, Status: 401}
+}
+
+func forbidden(code, message string) error {
+	return &ServiceError{Code: code, Message: message, Status: 403}
+}
+
 type Store struct {
 	db                    *sql.DB
 	attachmentRoot        string
+	projectSecretRoot     string
+	projectSecretOwnerUID uint32
+	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
 	sweepEvery            time.Duration
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
@@ -113,7 +126,7 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	attachmentRoot := "/opt/factory-data/attachments"
-	store := &Store{db: db, attachmentRoot: attachmentRoot, now: time.Now, sweepEvery: 5 * time.Second}
+	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create attachment directory: %w", err)
@@ -583,6 +596,55 @@ func digestToken(token string) []byte {
 func validateToken(token string) error {
 	if len(token) < 32 || len(token) > 1024 {
 		return invalid("invalid_lease_token", "lease_token must contain at least 32 bytes")
+	}
+	return nil
+}
+
+// IssueWorkerCredential returns a server-generated credential exactly once for
+// a worker identity. Only its digest is retained by the control plane.
+func (s *Store) IssueWorkerCredential(ctx context.Context, workerID string) (string, error) {
+	var body [32]byte
+	if _, err := rand.Read(body[:]); err != nil {
+		return "", unavailable(err)
+	}
+	credential := base64.RawURLEncoding.EncodeToString(body[:])
+	result, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO worker_credentials(worker_id, credential_digest, created_at)
+		VALUES (?, ?, ?)
+	`, workerID, digestToken(credential), s.now().UnixMilli())
+	if err != nil {
+		return "", unavailable(err)
+	}
+	created, err := result.RowsAffected()
+	if err != nil {
+		return "", unavailable(err)
+	}
+	if created == 0 {
+		return "", nil
+	}
+	return credential, nil
+}
+
+// AuthenticateWorkerCredential binds a credential to the worker identity from
+// the route. Missing, malformed, unknown, and foreign credentials deliberately
+// return the same response.
+func (s *Store) AuthenticateWorkerCredential(ctx context.Context, workerID, credential string) error {
+	failure := unauthorized("worker_authentication_failed", "a valid credential for the reporting worker is required")
+	decoded, err := base64.RawURLEncoding.DecodeString(credential)
+	if err != nil || len(decoded) != 32 {
+		return failure
+	}
+	var stored []byte
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT credential_digest FROM worker_credentials WHERE worker_id = ?
+	`, workerID).Scan(&stored); errors.Is(err, sql.ErrNoRows) {
+		return failure
+	} else if err != nil {
+		return unavailable(err)
+	}
+	provided := digestToken(credential)
+	if len(stored) != len(provided) || subtle.ConstantTimeCompare(stored, provided) != 1 {
+		return failure
 	}
 	return nil
 }
@@ -2159,6 +2221,42 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		}
 		if err := normalizeTaskRoute(input.Route); err != nil {
 			return protocol.TaskDetail{}, false, err
+		}
+	}
+	// Project readiness performs several server-owned reads (worker state,
+	// gates, branch attestation, and secret-file checks). Do this before the
+	// SQLite write transaction so stores configured with one connection cannot
+	// deadlock waiting for their own transaction.
+	var replayID string
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE request_key=?`, input.RequestKey).Scan(&replayID); err == nil {
+		detail, err := s.Task(ctx, replayID)
+		return detail, false, err
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return protocol.TaskDetail{}, false, unavailable(err)
+	}
+	if input.Route == nil {
+		if err := s.requireProjectRoutingReady(ctx, input.RepositoryID, input.WorkerID); err != nil {
+			return protocol.TaskDetail{}, false, err
+		}
+	} else {
+		var routedRepositoryID string
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM repositories WHERE remote_identity=?`, input.Route.RepositoryRemoteIdentity).Scan(&routedRepositoryID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+		if err == nil {
+			verifiedWorkerID, project, err := s.verifiedProjectWorker(ctx, routedRepositoryID)
+			if err != nil {
+				return protocol.TaskDetail{}, false, err
+			}
+			if project {
+				if input.WorkerID == "" {
+					input.WorkerID = verifiedWorkerID
+				}
+				if err := s.requireProjectRoutingReady(ctx, routedRepositoryID, input.WorkerID); err != nil {
+					return protocol.TaskDetail{}, false, err
+				}
+			}
 		}
 	}
 	now := s.now().UnixMilli()
