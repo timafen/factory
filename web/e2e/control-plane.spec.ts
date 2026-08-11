@@ -432,6 +432,7 @@ async function exerciseMobileNavigation(page: Page) {
 }
 
 test.beforeAll(async ({ baseURL }) => {
+  test.setTimeout(120_000);
   const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   fixtureAPI = api;
   const real = await waitForRealWorker(api);

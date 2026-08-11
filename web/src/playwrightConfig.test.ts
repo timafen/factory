@@ -65,6 +65,17 @@ describe("server browser launcher", () => {
 });
 
 describe("browser fixture server address", () => {
+  it("extends the cold fixture setup timeout inside its beforeAll hook", () => {
+    const specification = readFileSync(
+      join(process.cwd(), "e2e/control-plane.spec.ts"),
+      "utf8",
+    );
+
+    expect(specification).toMatch(
+      /test\.beforeAll\(async \(\{ baseURL \}\) => \{\s+test\.setTimeout\(120_000\);/,
+    );
+  });
+
   it("uses an explicit valid port for every Playwright consumer", async () => {
     const config = await createPlaywrightConfig("24567");
     const reloadedConfig = await createPlaywrightConfig(process.env.FACTORY_E2E_PORT);
