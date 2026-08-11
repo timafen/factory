@@ -54,7 +54,7 @@ describe("browser fixture server address", () => {
       expect.objectContaining({
         command: "node e2e/server.mjs",
         url: "http://127.0.0.1:24567/healthz",
-        env: { FACTORY_E2E_PORT: "24567" },
+        env: expect.objectContaining({ FACTORY_E2E_PORT: "24567" }),
       }),
       expect.objectContaining({
         command: expect.stringContaining("intake-fixture.py"),
