@@ -17,6 +17,8 @@ import (
 
 	"github.com/owainlewis/factory/internal/buildinfo"
 	"github.com/owainlewis/factory/internal/controlplane"
+	"github.com/owainlewis/factory/internal/protocol"
+	"github.com/owainlewis/factory/internal/securetoken"
 	"github.com/owainlewis/factory/internal/statepath"
 	factoryweb "github.com/owainlewis/factory/web"
 )
@@ -112,6 +114,18 @@ func run() (returnErr error) {
 			returnErr = fmt.Errorf("close SQLite: %w", err)
 		}
 	}()
+	workerStateDirectory := filepath.Join(dataRoot, "server")
+	if err := os.MkdirAll(workerStateDirectory, 0o700); err != nil {
+		return fmt.Errorf("create worker bootstrap directory: %w", err)
+	}
+	workerStateInfo, err := os.Lstat(workerStateDirectory)
+	if err != nil || !workerStateInfo.IsDir() || workerStateInfo.Mode()&os.ModeSymlink != 0 || workerStateInfo.Mode().Perm()&0o022 != 0 {
+		return errors.New("worker bootstrap directory must be a real directory not writable by group or other users")
+	}
+	workerBootstrapCredential, err := securetoken.LoadOrCreate(filepath.Join(workerStateDirectory, protocol.WorkerBootstrapCredentialFile))
+	if err != nil {
+		return fmt.Errorf("prepare worker bootstrap credential: %w", err)
+	}
 	expired, err := store.SweepExpired(rootContext)
 	if err != nil {
 		return fmt.Errorf("startup lease sweep: %w", err)
@@ -181,7 +195,7 @@ func run() (returnErr error) {
 		return fmt.Errorf("listen: %w", err)
 	}
 	pilotConfig := controlplane.NewPilotConfigStore(filepath.Join(dataRoot, "pilot", "config.json"))
-	handler := factoryweb.NewHandler(controlplane.NewHandlerWithPilotConfig(store, logger, automationService, pilotConfig))
+	handler := factoryweb.NewHandler(controlplane.NewHandlerWithPilotConfig(store, logger, automationService, pilotConfig, workerBootstrapCredential))
 	server := controlplane.NewHTTPServer(*listen, handler)
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -192,6 +206,7 @@ func run() (returnErr error) {
 		)
 		serverErrors <- server.Serve(listener)
 	}()
+	go controlplane.RunProjectOperationReconciler(rootContext, store, logger)
 
 	select {
 	case err := <-serverErrors:

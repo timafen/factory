@@ -12,6 +12,7 @@ build:
     mkdir -p "$build_directory"
     go build -o "$build_directory/factory-server" ./cmd/factory-server
     go build -o "$build_directory/factory-worker" ./cmd/factory-worker
+    go build -o "$build_directory/factory-release-broker" ./cmd/factory-release-broker
     printf 'Factory binaries built in %s\n' "$build_directory"
 
 # Start one control plane and worker. Pass a worker config path when needed.
@@ -70,6 +71,7 @@ test-tooling:
     ./scripts/test-build.sh
     ./scripts/test-update-go-minimum.sh
     ./ops/test-provision-codex-auth.sh
+    ./ops/test-install-project-release-broker.sh
 
 # Test local startup, readiness, and signal handling.
 test-launcher:

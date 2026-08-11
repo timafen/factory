@@ -5,6 +5,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { testWorkerBootstrapCredential } from "../playwright.config";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
@@ -22,6 +23,7 @@ const offlineRepositories = [
   { key: "archive", remote_identity: "github.com/example/archive", retained_count: 0 },
 ];
 const identifiers: Record<string, string> = {};
+const workerCredentials: Record<string, string> = {};
 let fixtureAPI: APIRequestContext | undefined;
 let runningHeartbeat: ReturnType<typeof setInterval> | undefined;
 
@@ -52,37 +54,44 @@ async function registerWorker(
   runtime: "codex" | "claude-code" = "codex",
   sourceAccess: Array<{ provider: "github"; hostname: string }> = [],
 ) {
+  const response = await api.put(`/api/v1/workers/${id}`, {
+    headers: {
+      "X-Factory-Worker-Bootstrap-Credential": testWorkerBootstrapCredential,
+    },
+    data: {
+      name,
+      worker_version: "2.0.0-test",
+      runtime,
+      runtime_version: runtime === "claude-code" ? "2.1.220-test" : "0.42.0-test",
+      capacity: 2,
+      active_count: activeCount,
+      health: "healthy",
+      source_access: sourceAccess,
+      capacity_handoff_version: 1,
+      disposed_attempt_ids: disposedAttemptIDs,
+      repositories,
+      retained_worktrees:
+        id === workerOnline
+          ? [
+              {
+                attempt_id: "attempt-retained-001",
+                repository_id: identifiers.factoryRepository ?? "",
+                path: "/tmp/factory-e2e/worktrees/attempt-retained-001",
+                reason: "failed with local changes",
+                cleanup_command: "factory-worker cleanup attempt-retained-001 --confirm",
+              },
+            ]
+          : [],
+    },
+  });
+  const credential = response.headers()["x-factory-worker-credential"];
+  if (response.ok() && !credential) {
+    throw new Error(`worker ${id} registration did not return a credential`);
+  }
+  if (credential) workerCredentials[id] = credential;
   return json<{
     repositories: Array<{ id: string; key: string }>;
-  }>(
-    await api.put(`/api/v1/workers/${id}`, {
-      data: {
-        name,
-        worker_version: "2.0.0-test",
-        runtime,
-        runtime_version: runtime === "claude-code" ? "2.1.220-test" : "0.42.0-test",
-        capacity: 2,
-        active_count: activeCount,
-        health: "healthy",
-        source_access: sourceAccess,
-        capacity_handoff_version: 1,
-        disposed_attempt_ids: disposedAttemptIDs,
-        repositories,
-        retained_worktrees:
-          id === workerOnline
-            ? [
-                {
-                  attempt_id: "attempt-retained-001",
-                  repository_id: identifiers.factoryRepository ?? "",
-                  path: "/tmp/factory-e2e/worktrees/attempt-retained-001",
-                  reason: "failed with local changes",
-                  cleanup_command: "factory-worker cleanup attempt-retained-001 --confirm",
-                },
-              ]
-            : [],
-      },
-    }),
-  );
+  }>(response);
 }
 
 async function createTask(
@@ -115,6 +124,9 @@ async function claimAndStart(api: APIRequestContext, requestID: string) {
     task: { id: string };
   }>(
     await api.post(`/api/v1/workers/${workerOnline}/claims`, {
+      headers: {
+        "X-Factory-Worker-Credential": workerCredentials[workerOnline],
+      },
       data: { request_id: requestID, lease_token: token },
     }),
   );
@@ -802,6 +814,9 @@ test("manages repository routing end to end and preserves add input while pollin
   const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
   await json(
     await api.put(`/api/v1/workers/${managedWorker}`, {
+      headers: {
+        "X-Factory-Worker-Bootstrap-Credential": testWorkerBootstrapCredential,
+      },
       data: {
         name: "Managed repository worker",
         worker_version: "2.0.0-test",
