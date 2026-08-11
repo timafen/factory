@@ -77,12 +77,14 @@ func (manager *Manager) registration() protocol.WorkerRegistration {
 	}
 	acceptsManagedRepositories := hasGitHubSourceAccess(manager.health.SourceAccess)
 	return protocol.WorkerRegistration{
-		Name:                       strings.TrimSpace(manager.config.Name),
-		WorkerVersion:              manager.options.WorkerVersion,
-		Runtime:                    manager.config.Runtime,
-		RuntimeVersion:             manager.health.RuntimeVersion,
-		Capacity:                   manager.config.MaxConcurrent,
-		ActiveCount:                len(manager.slots),
+		Name:           strings.TrimSpace(manager.config.Name),
+		WorkerVersion:  manager.options.WorkerVersion,
+		Runtime:        manager.config.Runtime,
+		RuntimeVersion: manager.health.RuntimeVersion,
+		Capacity:       manager.config.MaxConcurrent,
+		// Kept on the wire for older control planes. The server derives capacity
+		// from leased attempts, so local supervisors cannot create ghost slots.
+		ActiveCount:                0,
 		Health:                     manager.health.State,
 		Repositories:               repositories,
 		SourceAccess:               append([]protocol.SourceAccess(nil), manager.health.SourceAccess...),

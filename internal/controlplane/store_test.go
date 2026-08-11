@@ -70,6 +70,61 @@ func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	}
 }
 
+func TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/reconcile"})
+	createTestTask(t, store, "reconcile-first", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "reconcile-second", workerA, worker.Repositories[0].ID)
+	if _, err := store.db.Exec(`UPDATE workers SET active_count = 1 WHERE id = ?`, workerA); err != nil {
+		t.Fatal(err)
+	}
+	first := claimTestTask(t, store, workerA, "reconcile-first", tokenA)
+	second := claimTestTask(t, store, workerA, "reconcile-second", tokenB)
+	if first.Attempt.ID == second.Attempt.ID {
+		t.Fatal("two queued tasks reused one attempt")
+	}
+	registered, err := store.Worker(context.Background(), workerA)
+	if err != nil || registered.ActiveCount != 2 {
+		t.Fatalf("derived active count = %d, %v; want 2", registered.ActiveCount, err)
+	}
+	var corrections, ghosts int
+	if err := store.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(ghost_slots_released), 0) FROM worker_capacity_reconciliations WHERE worker_id = ?`, workerA).Scan(&corrections, &ghosts); err != nil {
+		t.Fatal(err)
+	}
+	if corrections == 0 || ghosts != 0 {
+		t.Fatalf("reconciliation journal = corrections %d ghosts %d; want correction without expired lease", corrections, ghosts)
+	}
+}
+
+func TestRegistrationAuditsCachedCapacityBeforeReplacingIt(t *testing.T) {
+	store := newTestStore(t)
+	store.now = func() time.Time { return time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC) }
+	registration := protocol.WorkerRegistration{
+		Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex,
+		Capacity: 2, ActiveCount: 0, Health: "healthy",
+		Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/register-reconcile"}},
+	}
+	if _, err := store.RegisterWorker(context.Background(), workerA, registration); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE workers SET active_count = 1 WHERE id = ?`, workerA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RegisterWorker(context.Background(), workerA, registration); err != nil {
+		t.Fatal(err)
+	}
+	var count, previous, derived int
+	if err := store.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(MAX(previous_active_count), -1), COALESCE(MAX(derived_active_count), -1)
+		FROM worker_capacity_reconciliations WHERE worker_id = ?
+	`, workerA).Scan(&count, &previous, &derived); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || previous != 1 || derived != 0 {
+		t.Fatalf("registration reconciliation = count %d previous %d derived %d; want 1, 1, 0", count, previous, derived)
+	}
+}
+
 func TestCompatibleWorkersClaimOnceWhileWriterContinues(t *testing.T) {
 	store := newTestStore(t)
 	repository := protocol.RepositoryRegistration{
@@ -1413,6 +1468,45 @@ func TestWorkerCapacityMigrationUpgradesExistingDatabase(t *testing.T) {
 	}
 	if repositoryCount != 1 {
 		t.Fatalf("migrated worker repository rows = %d; want 1", repositoryCount)
+	}
+}
+
+func TestCapacityReconciliationMigrationUpgrades025AndKeepsRollbackReadable(t *testing.T) {
+	path := t.TempDir() + "/capacity-reconciliations.sqlite3"
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the exact pre-026 schema state. Migration 026 is additive, so
+	// an older binary must still be able to read the compatibility snapshot.
+	if _, err := store.db.Exec(`
+		DROP TABLE worker_capacity_reconciliations;
+		DELETE FROM schema_migrations WHERE version = 26;
+		INSERT INTO workers(id, name, worker_version, runtime, runtime_version, capacity, active_count, health, retained_worktrees_json, registered_at, last_heartbeat)
+		VALUES ('rollback-worker', 'rollback', 'old', 'codex', 'old', 2, 1, 'healthy', '[]', 1, 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrade from 025: %v", err)
+	}
+	defer upgraded.Close()
+	var migration, activeCount int
+	if err := upgraded.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 26`).Scan(&migration); err != nil {
+		t.Fatal(err)
+	}
+	// This is the query used by the pre-026 worker/control-plane contract and
+	// demonstrates that rollback leaves its data and schema intact.
+	if err := upgraded.db.QueryRow(`SELECT active_count FROM workers WHERE id = 'rollback-worker'`).Scan(&activeCount); err != nil {
+		t.Fatalf("rollback compatibility query: %v", err)
+	}
+	if migration != 1 || activeCount != 1 {
+		t.Fatalf("026 upgrade/rollback compatibility = migration %d active_count %d; want 1, 1", migration, activeCount)
 	}
 }
 

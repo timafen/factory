@@ -1542,7 +1542,7 @@ func (s *Store) RegisterWorker(ctx context.Context, workerID string, input proto
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, worker_version=excluded.worker_version, runtime_version=excluded.runtime_version,
-			capacity=excluded.capacity, active_count=excluded.active_count, health=excluded.health,
+			capacity=excluded.capacity, health=excluded.health,
 			source_access_json=excluded.source_access_json,
 			accepts_managed_repositories=excluded.accepts_managed_repositories,
 			managed_repository_ids_json=excluded.managed_repository_ids_json,
@@ -1551,7 +1551,7 @@ func (s *Store) RegisterWorker(ctx context.Context, workerID string, input proto
 			weekly_limit_resets_at=excluded.weekly_limit_resets_at,
 			last_heartbeat=excluded.last_heartbeat
 	`, workerID, input.Name, input.WorkerVersion, input.Runtime, input.RuntimeVersion,
-		input.Capacity, input.ActiveCount, input.Health, sourceAccessJSON,
+		input.Capacity, 0, input.Health, sourceAccessJSON,
 		input.AcceptsManagedRepositories, managedRepositoryIDsJSON, retained,
 		weeklyLimitUsedPercent, weeklyLimitResetsAt, now, now)
 	if err != nil {
@@ -1764,6 +1764,14 @@ func (s *Store) RegisterWorker(ctx context.Context, workerID string, input proto
 			}
 		}
 	}
+	// Registration is a guaranteed server-time maintenance point even when the
+	// worker has no active attempts and therefore no capacity correction.
+	if err := pruneCapacityReconciliations(ctx, tx, now); err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
+	if _, err := reconcileWorkerCapacity(ctx, tx, workerID, now, "registration"); err != nil {
+		return protocol.Worker{}, unavailable(err)
+	}
 	if err := tx.Commit(); err != nil {
 		return protocol.Worker{}, unavailable(err)
 	}
@@ -1773,7 +1781,7 @@ func (s *Store) RegisterWorker(ctx context.Context, workerID string, input proto
 func (s *Store) Workers(ctx context.Context) ([]protocol.Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT w.id, w.name, w.worker_version, w.runtime, w.runtime_version,
-		       w.capacity, w.active_count, w.health, w.source_access_json,
+		       w.capacity, (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.id AND a.state IN ('preparing', 'running') AND a.lease_expires_at > ?), w.health, w.source_access_json,
 		       w.accepts_managed_repositories, w.managed_repository_ids_json,
 		       w.retained_worktrees_json,
 		       w.registered_at, w.last_heartbeat,
@@ -1784,8 +1792,8 @@ func (s *Store) Workers(ctx context.Context) ([]protocol.Worker, error) {
 		           ORDER BY e.updated_at DESC, e.id DESC
 		           LIMIT 1
 		       ), '')
-		FROM workers w ORDER BY w.registered_at, w.id
-	`)
+	FROM workers w ORDER BY w.registered_at, w.id
+	`, s.now().UnixMilli())
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -1817,7 +1825,7 @@ func (s *Store) Workers(ctx context.Context) ([]protocol.Worker, error) {
 func (s *Store) Worker(ctx context.Context, id string) (protocol.Worker, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT w.id, w.name, w.worker_version, w.runtime, w.runtime_version,
-		       w.capacity, w.active_count, w.health, w.source_access_json,
+		       w.capacity, (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.id AND a.state IN ('preparing', 'running') AND a.lease_expires_at > ?), w.health, w.source_access_json,
 		       w.accepts_managed_repositories, w.managed_repository_ids_json,
 		       w.retained_worktrees_json,
 		       w.registered_at, w.last_heartbeat,
@@ -1829,7 +1837,7 @@ func (s *Store) Worker(ctx context.Context, id string) (protocol.Worker, error) 
 		           LIMIT 1
 		       ), '')
 		FROM workers w WHERE w.id = ?
-	`, id)
+	`, s.now().UnixMilli(), id)
 	worker, err := scanWorker(row, s.now())
 	if errors.Is(err, sql.ErrNoRows) {
 		return protocol.Worker{}, ErrNotFound
@@ -2032,7 +2040,12 @@ func (s *Store) selectTaskRouteWithSourceRequirement(
 		return taskRouteCandidate{}, unavailable(err)
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT w.id, w.runtime, w.capacity, w.active_count,
+		SELECT w.id, w.runtime, w.capacity, (
+		    SELECT COUNT(*) FROM attempts active_capacity
+		    WHERE active_capacity.worker_id = w.id
+		      AND active_capacity.state IN ('preparing', 'running')
+		      AND active_capacity.lease_expires_at > ?
+		),
 		       w.source_access_json, COALESCE(wr.advertised, 0),
 		       w.accepts_managed_repositories,
 		       COALESCE((
@@ -2099,7 +2112,7 @@ func (s *Store) selectTaskRouteWithSourceRequirement(
 		        AND terminal_attempt.capacity_acknowledged = 0
 		  ) < ?
 		ORDER BY w.id
-	`, repositoryID, now-protocol.WorkerOnlineWindow.Milliseconds(), workerID, workerID,
+	`, now, repositoryID, now-protocol.WorkerOnlineWindow.Milliseconds(), workerID, workerID,
 		repositoryIdentity, repositoryID,
 		repositoryID, protocol.MaxRepositoryCacheEntries,
 		repositoryID, repositoryID, protocol.MaxRetainedPerRepo)

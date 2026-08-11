@@ -2076,6 +2076,111 @@ func TestLostClaimAndCompletionResponsesAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestReconnectAfterLostCompletionRestoresEveryWorkerSlot(t *testing.T) {
+	var handlerMutex sync.RWMutex
+	var current http.Handler
+	var droppedCompletion atomic.Bool
+	completionCommitted := make(chan struct{}, 1)
+	fixture := newServerFixture(t, func(next http.Handler) http.Handler {
+		current = next
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			handlerMutex.RLock()
+			handler := current
+			handlerMutex.RUnlock()
+			if strings.HasSuffix(request.URL.Path, "/complete") && !droppedCompletion.Load() {
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				if recorder.Code == http.StatusOK && droppedCompletion.CompareAndSwap(false, true) {
+					select {
+					case completionCommitted <- struct{}{}:
+					default:
+					}
+					hijacker, ok := writer.(http.Hijacker)
+					if !ok {
+						t.Error("test server cannot hijack connections")
+						return
+					}
+					connection, _, err := hijacker.Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					_ = connection.Close()
+					return
+				}
+				copyResponse(writer, recorder)
+				return
+			}
+			handler.ServeHTTP(writer, request)
+		})
+	})
+	repository := createRepository(t, "capacity-reconnect")
+	codexPath := filepath.Join(t.TempDir(), "codex")
+	writeFakeCodex(t, codexPath)
+	dataDirectory := filepath.Join(t.TempDir(), "worker")
+	manager := newTestManager(t, fixture, codexPath, dataDirectory,
+		map[string]repositoryFixture{"capacity": repository}, 2)
+	cancel, done := startManager(t, manager)
+	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" })
+	completed := createTask(t, fixture.store, worker, "capacity", "success", 60)
+	select {
+	case <-completionCommitted:
+	case <-time.After(15 * time.Second):
+		t.Fatal("successful completion response was not dropped")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace the Store behind the same listener to exercise a control-plane
+	// restart while the new manager reconnects with its persisted identity.
+	restartedStore, err := controlplane.Open(context.Background(), fixture.databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restartedStore.Close() })
+	credential, err := securetoken.LoadOrCreate(filepath.Join(os.Getenv("FACTORY_DATA_HOME"), "server", protocol.WorkerBootstrapCredentialFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerMutex.Lock()
+	current = controlplane.NewHandlerWithWorkerBootstrapCredential(restartedStore, slog.New(slog.NewTextHandler(io.Discard, nil)), credential)
+	handlerMutex.Unlock()
+
+	reconnected := newTestManager(t, fixture, codexPath, dataDirectory,
+		map[string]repositoryFixture{"capacity": repository}, 2)
+	startManager(t, reconnected)
+	worker = waitForWorker(t, restartedStore, reconnected.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" && worker.ActiveCount == 0 })
+	first := createTask(t, restartedStore, worker, "capacity", "barrier", 60)
+	second := createTask(t, restartedStore, worker, "capacity", "barrier", 60)
+	logDirectory := os.Getenv("FACTORY_TEST_CODEX_LOG")
+	var firstDetail, secondDetail protocol.TaskDetail
+	waitFor(t, 15*time.Second, func() bool {
+		firstDetail, _ = restartedStore.Task(context.Background(), first.Task.ID)
+		secondDetail, _ = restartedStore.Task(context.Background(), second.Task.ID)
+		if len(firstDetail.Attempts) != 1 || len(secondDetail.Attempts) != 1 {
+			return false
+		}
+		_, firstErr := os.Stat(filepath.Join(logDirectory, firstDetail.Attempts[0].ID+".ready"))
+		_, secondErr := os.Stat(filepath.Join(logDirectory, secondDetail.Attempts[0].ID+".ready"))
+		return firstErr == nil && secondErr == nil
+	})
+	if firstDetail.Attempts[0].ID == secondDetail.Attempts[0].ID {
+		t.Fatal("a live barrier supervisor was duplicated instead of filling the second slot")
+	}
+	if detail, err := restartedStore.Task(context.Background(), completed.Task.ID); err != nil || detail.Execution.State != "succeeded" {
+		t.Fatalf("lost completion changed terminal task: state=%q err=%v", detail.Execution.State, err)
+	}
+	for _, attemptID := range []string{firstDetail.Attempts[0].ID, secondDetail.Attempts[0].ID} {
+		if err := os.WriteFile(filepath.Join(logDirectory, attemptID+".release"), []byte("go\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForTaskState(t, restartedStore, first.Task.ID, "succeeded")
+	waitForTaskState(t, restartedStore, second.Task.ID, "succeeded")
+}
+
 func TestCodexStartsOnlyAfterAttemptStartIsAccepted(t *testing.T) {
 	startReached := make(chan struct{}, 1)
 	releaseStart := make(chan struct{})
