@@ -1,12 +1,12 @@
 # Безопасное обновление всех worker-служб
 
-Implementation commit: c2f7ad8b64d5a68da054c0b5e60ea8fbbc78ac0e — выпуск управляет списком worker-служб
+Implementation commit: d6d6bb2d8fb57953ae15c1f3b48f5b1dc26263d3 — выпуск управляет списком worker-служб
 
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge
 - Branch: factory/7907240b-8c8-5e39d767-6f2
-- Implementation commit: c2f7ad8b64d5a68da054c0b5e60ea8fbbc78ac0e — выпуск управляет списком worker-служб
+- Implementation commit: d6d6bb2d8fb57953ae15c1f3b48f5b1dc26263d3 — выпуск управляет списком worker-служб
 - What changed: `FACTORY_WORKER_SERVICES` задаёт все службы; остановка, запуск и откат выполняются для каждой.
 - Evidence: `bash ops/test-fx-factory-release.sh` → PASS: остановка и запуск двух служб, а также откат с перезапуском обеих; `bash -n ops/fx-factory-release` → PASS. Полный `just check` дошёл до всех Go-пакетов, но завершился внешним таймаутом `TestClaudeCodeWorkerUsesTheSameConcurrentPool` в `internal/worker`.
 - One next action: принять решение о слиянии с учётом отдельного таймаута теста пула Claude worker.
