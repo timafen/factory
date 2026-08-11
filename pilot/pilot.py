@@ -6568,7 +6568,7 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
                     continue
                 mark_final(tid, wf, True)
-                branch, _implementation_head = selected_delivery(
+                branch, implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
@@ -6615,6 +6615,8 @@ def cycle(conf, state):
                             try:
                                 card = extract_card(result, detail.get("context", ""))
                                 card_line = f"Card: {card}\n" if card else ""
+                                head_line = (f"Implementation head: {implementation_head}\n"
+                                             if implementation_head else "")
                                 stages_all = [x["workflow"] for x in conf["stages"]]
                                 back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
                                 bidx = stages_all.index(back_st)
@@ -6625,7 +6627,7 @@ def cycle(conf, state):
                                         "request_key": str(uuid.uuid4()),
                                         "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
                                         "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n"
-                                            f"{card_line}\n"
+                                            f"{head_line}{card_line}\n"
                                             "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
                                             "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
                                             "оставайся на своей. Сделай ровно это: "

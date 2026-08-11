@@ -1715,6 +1715,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         original = "factory/original-implementation"
         rebuilt = "factory/original-implementation-clean"
         head = "e" * 40
+        card = "CARD-0070"
         pilot.save(works_path, {base: {
             "run_generation": "generation-1",
             "implementation_artifact": {
@@ -1742,8 +1743,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             "implement": {
                 "task": {"repository_id": "repo-id"},
                 "workflow": {"title": "Implement + Test"},
-                "context": "",
-                "attempts": [{"result": f"BRANCH: {original}\nГотово"}],
+                "context": f"Card: {card}",
+                "attempts": [{"result": (
+                    f"BRANCH: {original}\nCard: {card}\nГотово")}],
             },
         }
         created = []
@@ -1767,12 +1769,15 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                     "id": stage.lower(), "enabled": True,
                     "current_revision": {"id": "rev-" + stage.lower(),
                                          "title": stage},
-                } for stage in ("Review", "Verify")]}
+                } for stage in ("Implement + Test", "Review", "Verify")]}
             raise AssertionError(path)
 
         def create(body, _conf):
-            stage = "Review" if " Review]" in body["title"] else "Verify"
-            task_id = stage.lower()
+            stage = next(stage for stage in
+                         ("Implement + Test", "Review", "Verify")
+                         if f" {stage}]" in body["title"])
+            task_id = ("implement-rescue" if stage == "Implement + Test"
+                       else stage.lower())
             task = {
                 "id": task_id, "title": body["title"], "state": "created",
                 "created_at": "2026-08-11T10:0%d:00Z" % (len(created) + 1),
@@ -1829,6 +1834,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 candidates[0] if candidates else ""))
             stack.enter_context(mock.patch.object(
                 pilot, "merge_recorded", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "cap_rescues", return_value=0))
+            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
             def github(args, strict=False):
                 path = args[-1]
                 if "/branches/" in path:
@@ -1838,7 +1846,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 raise AssertionError(path)
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
-                pilot, "gh_merge", return_value=(True, "merged")))
+                pilot, "gh_merge", return_value=(False, "merge conflict")))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
@@ -1864,9 +1872,14 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             details["verify"]["attempts"] = [{"result": "PASS"}]
             pilot.cycle(conf, state)
 
+            rescue_context = created[2]["context"]
+            self.assertIn(f"Branch: {rebuilt}", rescue_context)
+            self.assertIn(f"Implementation head: {head}", rescue_context)
+            self.assertIn(f"Card: {card}", rescue_context)
+
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
-            area_repo="repo-id")
+            area_repo="repo-id", expected_card=card)
         merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
 
 
