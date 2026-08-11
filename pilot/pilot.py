@@ -1321,7 +1321,7 @@ def live_or_done_at(tasks, base, stage_no, since=None):
         if since and (t.get("created_at") or "") <= since:
             continue
         if stage_no_of(t.get("title")) >= stage_no and t.get("state") in (
-                "running", "queued", "preparing", "succeeded"):
+                "created", "running", "queued", "preparing", "succeeded"):
             return t
     return None
 
@@ -6382,6 +6382,12 @@ def cycle(conf, state):
                 state["processed"].remove(tid)
             log(f"cannot advance '{base}' {wf} -> {next_stage} (повторю позже): {e}")
             continue
+        # The task snapshot was loaded before this cycle started.  Keep it
+        # current so another completed attempt for this same work sees the
+        # newly created next stage through live_or_done_at() below.
+        created_task = created.get("task") if isinstance(created, dict) else None
+        if isinstance(created_task, dict):
+            tasks.append(created_task)
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
