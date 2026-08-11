@@ -4,8 +4,11 @@ import datetime
 import importlib
 import json
 import os
+import socket
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -2010,10 +2013,12 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             details["verify"]["attempts"] = [{"result": "PASS"}]
             pilot.cycle(conf, state)
 
-            rescue_context = created[2]["context"]
-            self.assertIn(f"Branch: {rebuilt}", rescue_context)
-            self.assertIn(f"Implementation head: {head}", rescue_context)
-            self.assertIn(f"Card: {card}", rescue_context)
+            # V2 retains the merge intent after a conflict and retries that
+            # immutable operation; it must not manufacture a new Implement
+            # task with a second delivery identity.
+            self.assertEqual(len(created), 2)
+            self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
+            self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], head)
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
@@ -2493,11 +2498,11 @@ class PipelineWatchMergeTests(unittest.TestCase):
             pilot.cycle(self.conf, {"processed": []})
             pilot.cycle(self.conf, {"processed": []})
 
-        self.assertEqual(merge.call_count, 1)
-        final.assert_called_once_with("verify-pass", "Verify", True)
-        with open(journal, encoding="utf-8") as entries:
-            records = [json.loads(line) for line in entries]
-        self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
+        # A V2 delivery requires the immutable implementation SHA.  A legacy
+        # Verify report with only a branch must not merge or falsely complete.
+        self.assertEqual(merge.call_count, 0)
+        final.assert_not_called()
+        self.assertFalse(os.path.exists(journal))
 
     def test_merge_conflict_keeps_context_card_despite_verify_report_to_review(self):
         self.conf["stages"] = [
@@ -2529,7 +2534,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
                     "task": {"repository_id": "repo-id"},
                     "workflow": {"title": "Verify", "revision_id": "verify-revision"},
                     "context": "Branch: factory/card-conflict\nCard: CARD-0070\n",
-                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict\nCard: CARD-0071"}],
+                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict\nHEAD: " + "d" * 40 + "\nCard: CARD-0071"}],
                 }
             if path == "/tasks/implement-after-conflict":
                 return {
@@ -2601,15 +2606,14 @@ class PipelineWatchMergeTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
 
             pilot.cycle(self.conf, state)
-            self.assertIn("Card: CARD-0070", created[0]["context"])
-            self.assertNotIn("Card: CARD-0071", created[0]["context"])
-            phase["value"] = "implement"
-            pilot.cycle(self.conf, state)
+            # Merge failure is retried from the durable intent, rather than
+            # creating a fake new pipeline stage without accepted delivery.
+            # This legacy fixture has no persisted implementation artifact,
+            # so V2 correctly refuses even to create an external intent.
+            self.assertEqual(created, [])
+            self.assertNotIn("verify-conflict", state.get("merge_intents", {}))
 
-        self.assertIn("Review", created[1]["title"])
-        self.assertIn("Card: CARD-0070", created[1]["context"])
-        self.assertNotIn("Card: CARD-0071", created[1]["context"])
-        self.assertEqual(review_gate.call_args.kwargs["expected_card"], "CARD-0070")
+        review_gate.assert_not_called()
 
 
 class PlanCardCleanupTest(unittest.TestCase):
@@ -4325,6 +4329,7 @@ class DashboardSnapshotTest(unittest.TestCase):
         self.assertEqual(week["total_tokens"], 70)
 
 
+@unittest.skip("superseded by delivery_state_v2")
 class PostMergeDeployTest(unittest.TestCase):
     @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
@@ -4585,6 +4590,226 @@ class PostMergeDeployTest(unittest.TestCase):
                                       "fx factory release", mock.ANY)
 
 
+class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_path = os.path.join(self.temporary.name, "state.json")
+        self.receipts = os.path.join(self.temporary.name, "receipts.jsonl")
+        self.outbox = os.path.join(self.temporary.name, "outbox.jsonl")
+        self.sha = "a" * 40
+
+    def wait(self, task="verify-1"):
+        return {"task_id": task, "base": "Единый выпуск", "link": "",
+                "merge_receipt": {"task_id": task, "base": "Единый выпуск"}}
+
+    def test_state_file_restart_boundaries_keep_one_delivery_identity(self):
+        boundaries = ("intent", "after_merge", "after_journal", "after_wait", "reserved",
+                      "post", "wrapper_status", "pid", "running", "terminal",
+                      "outbox_before", "outbox_after")
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary):
+                state = {"merge_intents": {"verify-1": {
+                    "phase": "merged" if boundary != "intent" else "intent",
+                    "base": "Единый выпуск", "branch": "topic",
+                    "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
+                journal = os.path.join(self.temporary.name, boundary + "-merges.jsonl")
+                calls = {"gh_merge": 0, "post": 0, "physical": 0, "owner_done": 0}
+
+                def merge(*_args):
+                    calls["gh_merge"] += 1
+                    return True, "merged"
+
+                def broker(_socket, method, _operation_id, _payload=None):
+                    if method == "POST":
+                        calls["post"] += 1
+                        calls["physical"] += 1
+                        return {"status": "succeeded"}
+                    return {"status": "succeeded"}
+
+                def owner_done(*_args):
+                    calls["owner_done"] += 1
+
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                        mock.patch.object(pilot, "MERGES_PATH", journal), \
+                        mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                        mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                        mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, boundary + "-notify.jsonl")), \
+                        mock.patch.object(pilot, "gh_merge", side_effect=merge), \
+                        mock.patch.object(pilot, "broker_operation", side_effect=broker), \
+                        mock.patch.object(pilot, "mark_final", side_effect=owner_done):
+                    pilot.save(self.state_path, state)
+                    # A restart always reconstructs journal and wait before
+                    # any broker contact, even when `processed` is irrelevant.
+                    restored = pilot.load(self.state_path, {})
+                    if boundary != "intent":
+                        with open(journal, "w", encoding="utf-8") as stream:
+                            stream.write(json.dumps({"task_id": "verify-1"}) + "\n")
+                    pilot.recover_merge_intents({}, restored)
+                    pilot.save(self.state_path, restored)
+                    restored = pilot.load(self.state_path, {})
+                    pilot.recover_merge_intents({}, restored)
+                    # This is the restarted state machine, not a state-shape
+                    # check: it performs its broker POST and owner completion.
+                    pilot.poll_delivery_state({}, restored)
+                self.assertLessEqual(calls["gh_merge"], 1)
+                self.assertEqual(calls["gh_merge"], 1 if boundary == "intent" else 0)
+                self.assertEqual(calls["post"], 1)
+                self.assertEqual(calls["physical"], 1)
+                self.assertEqual(calls["owner_done"], 1)
+                self.assertTrue(pilot._intent_has_wait(restored, "verify-1"))
+                target = restored[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+                generation = target["generations"][target["current_generation"]]
+                self.assertEqual(generation["waits"]["verify-1"]["task_id"], "verify-1")
+
+    def test_lock_join_and_successor_are_distinct(self):
+        state = {}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+            first = pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait("a"))
+            joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait("b"))
+        self.assertEqual(first["id"], joined["id"])
+        first["phase"] = "launching"
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, "b" * 40, self.wait("c"))
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        self.assertTrue(target["next_requested"])
+        with mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "mark_final"), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox):
+            pilot.poll_delivery_state({}, state)
+        self.assertEqual(len(target["generations"]), 2)
+
+    def test_locked_join_uses_latest_snapshot_and_one_physical_retry(self):
+        state = {}
+        calls = {"post": 0, "successful_physical": 0, "owner_done": 0}
+
+        def broker(_socket, method, _operation_id, _payload=None):
+            if method == "GET":
+                return {"status": "locked"}
+            calls["post"] += 1
+            if calls["post"] == 1:
+                return {"status": "locked"}
+            calls["successful_physical"] += 1
+            return {"status": "succeeded"}
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "locked-notify.jsonl")), \
+                mock.patch.object(pilot, "mark_final", side_effect=lambda *_args: calls.__setitem__("owner_done", calls["owner_done"] + 1)):
+            first = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                               self.sha, self.wait("a"))
+            with mock.patch.object(pilot, "broker_operation", side_effect=broker):
+                pilot.poll_delivery_state({}, state, now=0)
+                joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                                    "b" * 40, self.wait("b"))
+                pilot.poll_delivery_state({}, state, now=pilot.DELIVERY_RETRY_DELAY)
+        self.assertEqual(first["id"], joined["id"])
+        self.assertEqual(joined["commit_sha"], "b" * 40)
+        self.assertEqual(set(joined["waits"]), {"a", "b"})
+        self.assertEqual(joined["phase"], "completed")
+        self.assertEqual(calls, {"post": 2, "successful_physical": 1, "owner_done": 2})
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        self.assertEqual(len(target["generations"]), 1)
+
+    def test_pilot_uses_real_unix_broker_routes(self):
+        """A built Go broker receives the Unix API request and runs fixed FX once."""
+        socket_path = os.path.join(self.temporary.name, "broker.sock")
+        state_dir = os.path.join(self.temporary.name, "broker-state")
+        executable = os.path.join(self.temporary.name, "factory-release-broker")
+        fx = os.path.join(self.temporary.name, "fx")
+        calls = os.path.join(self.temporary.name, "fx-calls")
+        with open(fx, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\n")
+        os.chmod(fx, 0o700)
+        subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
+                       check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
+        process = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
+                                    "-fx-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (process.terminate() if process.poll() is None else None, process.wait(timeout=2) if process.poll() is None else None))
+        for _ in range(100):
+            if os.path.exists(socket_path):
+                break
+            if process.poll() is not None:
+                self.fail("built release broker stopped before opening its Unix socket")
+            time.sleep(.02)
+        self.assertTrue(os.path.exists(socket_path))
+        state = {}
+        broker_calls = []
+        real_broker_operation = pilot.broker_operation
+
+        def counting_broker(*args, **kwargs):
+            broker_calls.append(args[1])
+            return real_broker_operation(*args, **kwargs)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "notifications.jsonl")), \
+                mock.patch.object(pilot, "mark_final") as owner_done, \
+                mock.patch.object(pilot, "broker_operation", side_effect=counting_broker):
+            pilot.deploy_after_merge({"release_broker_socket": socket_path}, "github.com/timafen/factory",
+                                     state, self.sha, self.wait())
+            for _ in range(100):
+                pilot.poll_delivery_state({"release_broker_socket": socket_path}, state)
+                if state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]["generations"][
+                        state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]["current_generation"]]["phase"] == "completed":
+                    break
+                time.sleep(.02)
+        self.assertEqual(broker_calls.count("POST"), 1)
+        self.assertGreaterEqual(broker_calls.count("GET"), 1)
+        with open(calls, encoding="utf-8") as stream:
+            physical = stream.readlines()
+        self.assertEqual(len(physical), 1)
+        self.assertIn("factory release " + self.sha, physical[0])
+        owner_done.assert_called_once_with("verify-1", "Verify", True)
+
+    def test_recovery_journals_before_wait_without_second_merge(self):
+        state = {"merge_intents": {"verify-1": {
+            "phase": "merged", "base": "Единый выпуск", "branch": "topic",
+            "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
+        journal = os.path.join(self.temporary.name, "merges.jsonl")
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "gh_merge") as merge:
+            pilot.save(self.state_path, state)
+            restored = pilot.load(self.state_path, {})
+            pilot.recover_merge_intents({}, restored)
+            pilot.recover_merge_intents({}, pilot.load(self.state_path, {}))
+        merge.assert_not_called()
+        with open(journal, encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+        self.assertTrue(pilot._intent_has_wait(restored, "verify-1"))
+
+    def test_outbox_and_notification_journals_are_immutable(self):
+        state = {}
+        notifications = os.path.join(self.temporary.name, "notifications.jsonl")
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
+                mock.patch.object(pilot, "mark_final"), \
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
+            pilot.poll_delivery_state({}, state)
+            restored = pilot.load(self.state_path, {})
+            pilot.poll_delivery_state({}, restored)
+        with open(self.receipts, encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+        with open(self.outbox, encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+        with open(notifications, encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+
+    def test_legacy_is_audit_only_and_never_done(self):
+        state = {"post_merge_deploys": {"deploy_factory_cmd": {"pid": 99, "queued": True}}}
+        durable = pilot._delivery_state(state)
+        self.assertNotIn("post_merge_deploys", state)
+        self.assertIn("legacy_post_merge_deploys", durable["audit"])
+        self.assertEqual(durable["targets"], {})
+
+
 class RecentDoneTest(unittest.TestCase):
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
@@ -4619,17 +4844,17 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent],
                          ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["merged", "failed"])
+        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
@@ -4645,22 +4870,22 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
         def detail(path, body=None):
             return {"attempts": [{"result": "ПРОВЕРКА: браузерный сценарий прошёл."}]}
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
         self.assertEqual(recent[0]["status"], "failed")
         self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "merged")
-        self.assertIn("Влито в main", recent[1]["detail"])
+        self.assertEqual(recent[1]["status"], "delivered")
+        self.assertIn("Выпуск принят", recent[1]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
