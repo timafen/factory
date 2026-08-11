@@ -4,19 +4,18 @@
 
 Implementation commit: e1d50162290f72b3156503a40b0476a36b94df15 — реализована полная карточка готовности проекта из девяти безопасных проверок.
 
-- Status: BLOCKED — встроенный UI-артефакт теперь соответствует исходникам, но
-  полный живой браузерный набор падает в смежном сценарии Work view.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/e810f198-b10-8f930792-64b`.
 - Specification: `knowledge/specs/project-readiness-card.md`.
 - What changed: пилот публикует девять упорядоченных проверок, а «Обзор»
   показывает итог, причины и время снимка для каждого enabled-проекта.
-- Evidence: чистые `npm ci` и `just ui-build 0` не изменили `web/dist`; полный
-  `just check`, `just build` и `just test-release` — PASS. Карточка readiness
-  прошла в реальном Chromium, но `just test-browser` — FAIL: 5 passed, 1 failed.
+- Evidence: чистые `npm ci` и `just ui-build 0` не изменили `web/dist`; `just
+  check`, `just build`, `just test-release`, полный `just test-browser` и
+  целевые readiness-проверки — PASS. Playwright выполнил 19 сценариев, включая
+  карточку readiness на реальном Go server.
 - Safe defaults: unknown не становится ready, production-write не требуется,
   rollback не запускается, значения секретов и сырой stderr не публикуются.
-- Next action: исправить или стабилизировать Work-view browser-сценарий, затем
-  повторить Verify с полным реальным Chromium-набором.
+- Next action: передать изменения на human merge.
 
 ## LOG
 
@@ -69,3 +68,20 @@ Playwright-карточка и установочный shell smoke; web build �
 Смежные проверки: `just build` — PASS; `git diff --check origin/main...HEAD` —
 PASS; рабочее дерево чисто. Верификация заблокирована до зелёного полного
 браузерного набора.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Встроенный UI соответствует исходникам | `npm --prefix web ci && just ui-build 0 && git diff --exit-code -- web/dist` | PASS: чистая сборка не изменила `web/dist`. |
+| Полный проектный набор | `just check` | PASS: формат, vet, vuln, staticcheck, boundary, все Go-тесты, UI-check, tooling и launcher. |
+| Сборка и release-артефакты | `just build`; `just test-release` | PASS: бинарники собраны; release targets воспроизводимы. |
+| Все живые браузерные сценарии и карточка | `just test-browser` | PASS: Playwright выполнил 19 сценариев, включая `shows project readiness card`. |
+| Девять независимых источников и причины | `python3 -m unittest pilot.test_pilot` | PASS: 167 тестов; девять строк, явный unknown и детерминированный итог. |
+| Разрешённые verdicts | `pilot.test_pilot::test_readiness_verdict_is_order_independent_and_unknown_is_not_ready` | PASS: только `ready`, `blocked`, `needs_configuration`; unknown не готов. |
+| Безопасные scope, секреты и rollback | `pilot.test_pilot::test_readiness_uses_all_nine_safe_sources_without_exposing_values` | PASS: staging-only по умолчанию, production-write выключен, значений секретов нет, rollback не исполняется. |
+| Свежий browser marker | `bash ops/test-install-server-browser.sh`; `pilot.test_pilot::test_browser_readiness_requires_fresh_valid_smoke_marker` | PASS: marker появляется только после sandbox smoke; устаревший/невалидный остаётся unknown. |
+
+Смежные проверки: `git diff --check origin/main...HEAD` — PASS; реализационный
+commit `e1d50162290f72b3156503a40b0476a36b94df15` является предком ветки и меняет
+код вне `knowledge/cards/`; рабочее дерево чисто.
