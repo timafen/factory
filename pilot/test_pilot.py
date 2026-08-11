@@ -1878,6 +1878,116 @@ class PipelineWatchMergeTests(unittest.TestCase):
             records = [json.loads(line) for line in entries]
         self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
 
+    def test_merge_conflict_keeps_reserved_card_through_implement_to_review(self):
+        self.conf["stages"] = [
+            {"workflow": "Implement + Test"},
+            {"workflow": "Review"},
+            {"workflow": "Verify"},
+        ]
+        self.conf["auto_merge"] = True
+        created = []
+        phase = {"value": "verify"}
+        verify = {
+            "id": "verify-conflict",
+            "title": "[auto] [3/3 Verify] Сохранить номер карточки",
+            "state": "succeeded", "repository_id": "repo-id",
+            "created_at": "2026-08-11T10:00:00Z",
+        }
+        implement = {
+            "id": "implement-after-conflict",
+            "title": "[auto] [1/3 Implement + Test] Сохранить номер карточки",
+            "state": "succeeded", "repository_id": "repo-id",
+            "created_at": "2026-08-11T10:01:00Z",
+        }
+
+        def fake_api(path, payload=None):
+            if path in ("/tasks?limit=100", "/tasks?limit=200"):
+                return {"tasks": [verify] if phase["value"] == "verify" else [implement]}
+            if path == "/tasks/verify-conflict":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Verify", "revision_id": "verify-revision"},
+                    "context": "Branch: factory/card-conflict\nCard: CARD-0070\n",
+                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict"}],
+                }
+            if path == "/tasks/implement-after-conflict":
+                return {
+                    "task": {"repository_id": "repo-id", "worker_id": "implement-worker"},
+                    "workflow": {"title": "Implement + Test", "revision_id": "implement-revision"},
+                    "context": created[0]["context"],
+                    "attempts": [{"result": "BRANCH: factory/card-conflict\nГотово"}],
+                }
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                    "remote_identity": "github.com/acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": name, "enabled": True,
+                    "current_revision": {"id": name + "-revision", "title": title}}
+                    for name, title in (("implement", "Implement + Test"),
+                                        ("review", "Review"), ("verify", "Verify"))]}
+            raise AssertionError(path)
+
+        def create(body, _conf):
+            created.append(body)
+            return {"task": {"id": "created-" + str(len(created)),
+                "title": body["title"], "state": "created",
+                "repository_id": body["repository_id"]}}
+
+        noops = ("collect_automation_findings", "cleanup_completed_plan_cards",
+                 "write_dashboard", "provider_limits_tick", "detect_limits",
+                 "record_new_works", "budget_guard", "money_guard", "handle_epics",
+                 "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+                 "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+                 "handle_answers", "advance_epics", "pipeline_watch",
+                 "cleanup_work_archive", "retry_pending_factory_deploy",
+                 "autostart_plan", "area_extend", "collect_ideas", "save_promises")
+        workers = {"implement-worker": {"id": "implement-worker"},
+                   "review-worker": {"id": "review-worker"}}
+        state = {"processed": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value=workers))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", side_effect=lambda _conf, stage, *_args:
+                "review-worker" if stage == "Review" else "implement-worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot", side_effect=lambda day, _week: {day: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "is_stopped", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "live_or_done_at", return_value=None))
+            stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
+            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
+            stack.enter_context(mock.patch.object(pilot, "notify"))
+            stack.enter_context(mock.patch.object(pilot, "mark_final"))
+            stack.enter_context(mock.patch.object(pilot, "gh_merge",
+                                                  return_value=(False, "merge conflict")))
+            stack.enter_context(mock.patch.object(
+                pilot, "gh_json", side_effect=lambda args, **_kwargs:
+                {"ahead_by": 1} if "/compare/" in args[-1]
+                else {"name": "factory/card-conflict"}))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "reason": "готово", "next_complexity": "medium",
+                "handoff": "проверить исправление",
+            }))
+            review_gate = stack.enter_context(mock.patch.object(
+                pilot, "review_gate", return_value={"back": False, "note": "Карточка принята"}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, state)
+            self.assertIn("Card: CARD-0070", created[0]["context"])
+            phase["value"] = "implement"
+            pilot.cycle(self.conf, state)
+
+        self.assertIn("Review", created[1]["title"])
+        self.assertIn("Card: CARD-0070", created[1]["context"])
+        self.assertEqual(review_gate.call_args.kwargs["expected_card"], "CARD-0070")
+
 
 class PlanCardCleanupTest(unittest.TestCase):
     def setUp(self):
