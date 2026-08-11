@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventSummary } from "./format";
+import { eventSummary, stateLabel, timeAgo } from "./format";
 import type { AttemptEvent } from "./types";
 
 function event(payload: unknown, kind = "codex"): AttemptEvent {
@@ -11,7 +11,7 @@ describe("eventSummary", () => {
     expect(eventSummary(event({
       type: "item.completed",
       item: { id: "item-1", type: "agent_message", text: "The tests pass." },
-    }))).toEqual({ label: "Assistant", text: "The tests pass." });
+    }))).toEqual({ label: "Агент", text: "The tests pass." });
   });
 
   it("summarizes Codex commands without exposing captured output", () => {
@@ -25,7 +25,7 @@ describe("eventSummary", () => {
       },
     }));
 
-    expect(summary).toEqual({ label: "Command", text: "Succeeded: go test ./..." });
+    expect(summary).toEqual({ label: "Команда", text: "Успешно: go test ./..." });
     expect(summary?.text).not.toContain("unreadable output");
   });
 
@@ -33,11 +33,11 @@ describe("eventSummary", () => {
     expect(eventSummary(event({
       type: "item.completed",
       item: { type: "mcp_tool_call", tool: "js", status: "failed", error: "private detail" },
-    }))).toEqual({ label: "Tool error", text: "js failed" });
+    }))).toEqual({ label: "Ошибка инструмента", text: "js: ошибка" });
     expect(eventSummary(event({
       type: "item.completed",
       item: { type: "file_change", status: "failed" },
-    }))).toEqual({ label: "File error", text: "File changes failed" });
+    }))).toEqual({ label: "Ошибка файлов", text: "Не удалось изменить файлы" });
   });
 
   it("renders Claude text and tool use from a nested assistant message", () => {
@@ -52,8 +52,8 @@ describe("eventSummary", () => {
         ],
       },
     }, "claude-code"))).toEqual({
-      label: "Assistant",
-      text: "I found the failure.\n\nUsing Bash: go test ./internal/controlplane",
+      label: "Агент",
+      text: "I found the failure.\n\nИспользует Bash: go test ./internal/controlplane",
     });
   });
 
@@ -66,7 +66,7 @@ describe("eventSummary", () => {
       },
     }, "claude-code"));
 
-    expect(summary).toEqual({ label: "Tool", text: "Tool call completed" });
+    expect(summary).toEqual({ label: "Инструмент", text: "Вызов инструмента завершён" });
     expect(summary?.text).not.toContain("private command output");
   });
 
@@ -75,14 +75,14 @@ describe("eventSummary", () => {
       type: "result",
       is_error: true,
       result: "The release check failed.",
-    }, "claude-code"))).toEqual({ label: "Error", text: "The release check failed." });
+    }, "claude-code"))).toEqual({ label: "Ошибка", text: "The release check failed." });
     expect(eventSummary(event({
       type: "result",
       is_error: true,
       result: "",
     }, "claude-code"))).toEqual({
-      label: "Error",
-      text: "Claude Code reported a terminal error",
+      label: "Ошибка",
+      text: "Claude Code сообщил о финальной ошибке",
     });
   });
 
@@ -90,7 +90,7 @@ describe("eventSummary", () => {
     expect(eventSummary(event({
       type: "turn.failed",
       error: { message: "The model provider rejected the request." },
-    }))).toEqual({ label: "Error", text: "The model provider rejected the request." });
+    }))).toEqual({ label: "Ошибка", text: "The model provider rejected the request." });
   });
 
   it("hides lifecycle and telemetry events", () => {
@@ -103,24 +103,33 @@ describe("eventSummary", () => {
       stream: "stdout",
       text: '{"large":"runtime envelope',
       truncated: true,
-    }))).toEqual({ label: "Output", text: "Large structured runtime output omitted" });
+    }))).toEqual({ label: "Вывод", text: "Крупный структурированный вывод среды выполнения скрыт" });
   });
 
   it("never serializes an unknown object as raw JSON", () => {
     const summary = eventSummary(event({ unfamiliar: { deeply: "nested" } }));
 
-    expect(summary).toEqual({ label: "Runtime", text: "Runtime update" });
+    expect(summary).toEqual({ label: "Среда выполнения", text: "Обновление среды выполнения" });
     expect(summary?.text).not.toContain("unfamiliar");
   });
 
   it("preserves existing string and top-level message events", () => {
     expect(eventSummary(event("Plain progress", "progress"))).toEqual({
-      label: "Progress",
+      label: "Ход работы",
       text: "Plain progress",
     });
     expect(eventSummary(event({ message: "Task completed" }, "progress"))).toEqual({
-      label: "Progress",
+      label: "Ход работы",
       text: "Task completed",
     });
+  });
+
+  it("uses one Russian dictionary for task states and fresh timestamps", () => {
+    expect(stateLabel("queued")).toBe("В очереди");
+    expect(stateLabel("running")).toBe("В работе");
+    expect(stateLabel("succeeded")).toBe("Успешно");
+    expect(stateLabel("failed")).toBe("Ошибка");
+    expect(stateLabel("cancelled")).toBe("Отменено");
+    expect(timeAgo(new Date(1_000).toISOString(), 5_000)).toBe("только что");
   });
 });

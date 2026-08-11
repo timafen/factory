@@ -3386,8 +3386,9 @@ class PlanManualTaskTest(unittest.TestCase):
                 self.body = content.encode("utf-8")
 
         class RedirectResponse:
-            def __init__(self, *_args, **_kwargs):
-                pass
+            def __init__(self, location, status_code=307, **_kwargs):
+                self.headers = {"location": location}
+                self.status_code = status_code
 
         fastapi.APIRouter = Router
         fastapi.Form = lambda default, **_kwargs: default
@@ -3428,13 +3429,26 @@ class PlanManualTaskTest(unittest.TestCase):
         self.assertIn("В план", markup)
         self.assertIn("Завести задачу", markup)
 
-    def test_plan_actions_keep_the_real_intake_route(self):
+    def test_plan_actions_redirect_to_the_public_intake_route(self):
         with mock.patch.object(self.plan.pilot, "ideas_all", return_value=[]), \
                 mock.patch.object(self.plan, "repos_map", return_value={}):
             markup = self.html(self.plan.plan_page())
 
-        self.assertIn('name="back" value="/plan?repo=&amp;show=open"', markup)
-        self.assertNotIn("/intake/plan", markup)
+        self.assertIn('name="back" value="/intake/plan?repo=&amp;show=open"', markup)
+        self.assertNotIn('name="back" value="/plan?', markup)
+
+        record = {"id": "idea-1", "title": "Проверить redirect"}
+        with mock.patch.object(self.plan.pilot, "ideas_all", return_value=[record]), \
+                mock.patch.object(self.plan.pilot, "plan_idea"):
+            action = self.plan.idea_action(
+                "idea-1", "plan", back="/plan?repo=repo-1&show=all")
+        self.assertEqual(action.status_code, 303)
+        self.assertEqual(action.headers["location"], "/intake/plan?repo=repo-1&show=all")
+
+        with mock.patch.object(self.plan.pilot, "add_idea"):
+            added = self.plan.plan_add("Новая карточка", back="/plan?show=open")
+        self.assertEqual(added.status_code, 303)
+        self.assertEqual(added.headers["location"], "/intake/plan?show=open")
 
     def test_alerts_default_limit_groups_filters_and_keeps_newest_first(self):
         records = []

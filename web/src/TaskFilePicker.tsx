@@ -25,7 +25,7 @@ export function TaskFilePicker({
         id="task-files"
         type="file"
         multiple
-        aria-label="Files"
+        aria-label="Файлы"
         onChange={(event) => {
 		  const next = [...files, ...Array.from(event.currentTarget.files ?? [])];
 		  const problem = validate(next); setLocalError(problem);
@@ -33,9 +33,9 @@ export function TaskFilePicker({
           event.currentTarget.value = "";
         }}
       />
-      <span className="field-hint">Choose screenshots or files to include with this task.</span>
+      <span className="field-hint">Выберите снимки экрана или файлы, которые нужно приложить к задаче.</span>
       {files.length > 0 && (
-        <ul className="task-file-list" aria-label="Selected files">
+        <ul className="task-file-list" aria-label="Выбранные файлы">
           {files.map((file, index) => (
             <li key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
               <Paperclip size={15} aria-hidden="true" />
@@ -44,7 +44,7 @@ export function TaskFilePicker({
               <button
                 type="button"
                 className="icon-button"
-                aria-label={`Remove ${file.name}`}
+                aria-label={`Удалить ${file.name}`}
                 onClick={() => onChange(files.filter((_, candidate) => candidate !== index))}
               ><X size={15} /></button>
             </li>

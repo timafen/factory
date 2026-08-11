@@ -99,9 +99,9 @@ describe("browser fixture server address", () => {
     expect(backendPort).toMatch(/^[0-9]+$/);
     expect(webServer?.url).toBe(`http://127.0.0.1:${backendPort}/healthz`);
     expect(process.env.FACTORY_INTAKE_E2E_ORIGIN).toBe("http://127.0.0.1:24568");
-    expect(config.webServer).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        command: expect.stringContaining("intake-fixture.py"),
+      expect(config.webServer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("intake-fixture.py"),
         url: "http://127.0.0.1:24568/healthz",
         env: { FACTORY_INTAKE_E2E_PORT: "24568" },
       }),
