@@ -22,6 +22,7 @@ import { AutomationDetail, AutomationsView } from "./Automations";
 import { Settings } from "./Settings";
 import { Dialog } from "./Dialog";
 import { SandboxKeys } from "./SandboxKeys";
+import { ProjectsView } from "./Projects";
 
 type Route =
   | { page: "overview" }
@@ -33,6 +34,7 @@ type Route =
   | { page: "work" }
   | { page: "workers" }
   | { page: "repositories" }
+  | { page: "projects" }
   | { page: "task"; id: string }
   | { page: "worker"; id: string }
   | { page: "repository"; id: string }
@@ -60,6 +62,7 @@ function readRoute(): Route {
   if (parts[0] === "workers") return { page: "workers" };
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
+  if (parts[0] === "projects") return { page: "projects" };
   if (parts[0] === "work") return { page: "work" };
   if (parts[0] === "say") return { page: "say" };
   if (parts[0] === "epics") return { page: "epics" };
@@ -83,6 +86,7 @@ function routePath(route: Route): string {
   if (route.page === "workers") return "/workers";
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
+  if (route.page === "projects") return "/projects";
   if (route.page === "say") return "/say";
   if (route.page === "epics") return "/epics";
   if (route.page === "answer") return "/answer";
@@ -307,6 +311,13 @@ export function App() {
             <GitBranch size={17} /> Repositories
           </button>
           <button
+            className={`nav-item ${route.page === "projects" ? "active" : ""}`}
+            aria-current={route.page === "projects" ? "page" : undefined}
+            onClick={() => navigate({ page: "projects" })}
+          >
+            <Boxes size={17} /> Проекты
+          </button>
+          <button
             className={`nav-item ${route.page === "dialog" ? "active" : ""}`}
             aria-current={route.page === "dialog" ? "page" : undefined}
             onClick={() => navigate({ page: "dialog" })}
@@ -347,6 +358,7 @@ export function App() {
             {route.page === "task" && "Task detail"}
             {route.page === "worker" && "Worker detail"}
             {route.page === "repositories" && "Repositories"}
+            {route.page === "projects" && "Безопасные проекты"}
             {route.page === "repository" && "Repository detail"}
             {route.page === "workflows" && "Workflows"}
             {route.page === "workflow" && "Workflow detail"}
@@ -409,6 +421,7 @@ export function App() {
           {route.page === "repositories" && (
             <RepositoriesView onRepository={(id) => navigate({ page: "repository", id })} />
           )}
+          {route.page === "projects" && <ProjectsView />}
           {route.page === "task" && (
             <TaskDetail
               id={route.id}

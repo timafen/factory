@@ -58,7 +58,13 @@ requires a worker restart; an unexpected change fails before agent launch.
 
 The first start creates a protected `worker-id` file in the worker data
 directory. The worker reuses that ID on every restart. The local API does not
-authenticate workers, so the ID is identity, not a credential.
+generally authenticate workers, so the ID alone is not a credential. The
+project-verification boundary is stricter: the control plane issues a credential
+during direct loopback registration, and the worker keeps it in a protected
+`worker-credential` file for authenticated project attestations. Later
+registrations confirm that credential; if the initial response was lost or its
+atomic `0600` file write failed, the next direct registration rotates it and
+returns a recoverable replacement.
 
 Registration advertises:
 
