@@ -393,6 +393,42 @@ test("shows every project product and saves the overview", async ({ page }) => {
   browser.assertClean();
 });
 
+test("shows project readiness card", async ({ page }) => {
+  const browser = observeBrowser(page);
+  const checks = [
+    ["repository", "Репозиторий"], ["workers", "Исполнители"],
+    ["safe_environment", "Безопасный стенд"], ["access", "Доступы"],
+    ["tests", "Тесты"], ["release", "Выпуск"], ["rollback", "Откат"],
+    ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
+  ].map(([key, title]) => ({ key, title, state: "ready", reason: `${title} подтверждено` }));
+  await page.route("**/api/v1/dashboard", async (route) => {
+    const response = await route.fetch();
+    const dashboard = await response.json();
+    dashboard.projects[0].readiness = {
+      verdict: "ready", checked_at: "2026-08-10T12:00:00Z", checks,
+    };
+    dashboard.projects[1].readiness = {
+      verdict: "ready", checked_at: "2026-08-10T12:00:00Z",
+      checks: checks.map((check) => check.key === "safe_environment"
+        ? { ...check, state: "unknown", reason: "Для Factory отдельный безопасный стенд не выбран." }
+        : check),
+    };
+    await route.fulfill({ response, json: dashboard });
+  });
+
+  await page.goto("/");
+  const factory = page.getByRole("region", { name: "Продукт — factory-demo" });
+  await expect(factory.getByLabel("Готовность проекта")).toContainText("Готов");
+  await expect(factory.getByLabel("Готовность проекта").locator("strong")).toHaveCount(10);
+  const handbook = page.getByRole("region", { name: "Продукт — handbook-demo" });
+  await expect(handbook.getByLabel("Готовность проекта")).toContainText("Требует настройки");
+  await expect(handbook.getByLabel("Готовность проекта")).toContainText(
+    "Для Factory отдельный безопасный стенд не выбран.",
+  );
+  await page.screenshot({ path: "test-results/screenshots/project-readiness-card.png", fullPage: true });
+  browser.assertClean();
+});
+
 test("creates, pins, revises, and disables a reusable Workflow", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");

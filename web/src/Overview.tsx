@@ -64,7 +64,35 @@ type ProductCapacityPeriod = {
 type ProductCapacitySummary = { generated_at: string; capacity: number; periods: Record<"24h" | "7d", ProductCapacityPeriod> };
 
 export type ProductEnvironment = { name: string; status: "available" | "unavailable"; release_label?: string; health?: "healthy" | "unhealthy" };
-export type ProductProject = { id: string; name: string; remote_identity: string; main_subject?: string; provider_status: "configured" | "not_configured"; environments: ProductEnvironment[] };
+export type ProjectReadinessState = "ready" | "needs_configuration" | "blocked" | "unknown";
+export type ProjectReadinessVerdict = "ready" | "needs_configuration" | "blocked";
+export type ProjectReadinessCheck = { key: string; title: string; state: ProjectReadinessState; reason: string };
+export type ProjectReadiness = { verdict?: string; checked_at?: string; checks?: ProjectReadinessCheck[] };
+export type ProductProject = { id: string; name: string; remote_identity: string; main_subject?: string; provider_status: "configured" | "not_configured"; environments: ProductEnvironment[]; readiness?: ProjectReadiness };
+
+const READINESS_CATALOG = [
+  ["repository", "Репозиторий"], ["workers", "Исполнители"],
+  ["safe_environment", "Безопасный стенд"], ["access", "Доступы"],
+  ["tests", "Тесты"], ["release", "Выпуск"], ["rollback", "Откат"],
+  ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
+] as const;
+const READINESS_STATES = new Set<ProjectReadinessState>(["ready", "needs_configuration", "blocked", "unknown"]);
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function normalizeProjectReadiness(readiness?: ProjectReadiness) {
+  const checks = READINESS_CATALOG.map(([key, title]) => {
+    const source = readiness?.checks?.find((check) => check.key === key);
+    const state = source && READINESS_STATES.has(source.state) ? source.state : "unknown";
+    return {
+      key, title, state,
+      reason: source?.reason?.trim() || "Нет проверяемых данных.",
+    } satisfies ProjectReadinessCheck;
+  });
+  const verdict: ProjectReadinessVerdict = checks.some((check) => check.state === "blocked")
+    ? "blocked"
+    : checks.every((check) => check.state === "ready") ? "ready" : "needs_configuration";
+  return { verdict, checked_at: readiness?.checked_at, checks };
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function productState(project: ProductProject) {
@@ -158,6 +186,33 @@ function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "bad" | "mut
     <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 999,
                    background: c[0], color: c[1], whiteSpace: "nowrap" }}>{text}</span>
   );
+}
+
+const READINESS_LABELS = {
+  ready: "Готово", needs_configuration: "Нужна настройка", blocked: "Заблокировано", unknown: "Неизвестно",
+} satisfies Record<ProjectReadinessState, string>;
+const READINESS_VERDICTS = {
+  ready: "Готов", needs_configuration: "Требует настройки", blocked: "Заблокирован",
+} satisfies Record<ProjectReadinessVerdict, string>;
+
+function ProjectReadinessCard({ readiness }: { readiness?: ProjectReadiness }) {
+  const normalized = normalizeProjectReadiness(readiness);
+  const verdictTone = normalized.verdict === "ready" ? "ok" : normalized.verdict === "blocked" ? "bad" : "warn";
+  return <div aria-label="Готовность проекта" style={{ marginTop: 14, borderTop: "1px solid #262c38", paddingTop: 12 }}>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+      <CheckCircle2 size={15} color="#8ec5ff" /><strong>Готовность проекта</strong>
+      <Pill text={READINESS_VERDICTS[normalized.verdict]} tone={verdictTone} />
+      <span style={{ flex: 1 }} />
+      <span style={{ fontSize: 11.5, color: muted }}>снимок: {normalized.checked_at?.slice(0, 16).replace("T", " ") || "время неизвестно"}</span>
+    </div>
+    <div style={{ display: "grid", gap: 6 }}>
+      {normalized.checks.map((check) => <div key={check.key} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 0.7fr) minmax(125px, auto) minmax(220px, 1.7fr)", gap: 10, alignItems: "baseline", fontSize: 12.5 }}>
+        <strong>{check.title}</strong>
+        <span style={{ color: check.state === "ready" ? "#7ee2a8" : check.state === "blocked" ? "#ffb4b4" : "#e0cf9f" }}>{READINESS_LABELS[check.state]}</span>
+        <span style={{ color: muted }}>{check.reason}</span>
+      </div>)}
+    </div>
+  </div>;
 }
 
 const SHARE_RU: Record<string, string> = {
@@ -467,6 +522,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><strong>{environment.name}</strong>{environment.status === "available" && <Pill text={environment.health === "healthy" ? "отвечает" : "не отвечает"} tone={environment.health === "healthy" ? "ok" : "bad"}/>}</div>
             {environment.status === "available" ? <div style={{ fontSize: 12.5, color: muted }}>релиз: {environment.release_label}</div> : <div style={{ color: "#e0cf9f" }}>Сведения о выпуске недоступны</div>}
           </div>)}</div>}
+        <ProjectReadinessCard readiness={project.readiness} />
       </section>)}
 
       {/* 3. Расход и лимиты */}
