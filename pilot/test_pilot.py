@@ -2308,14 +2308,17 @@ class WorkArchiveCleanupTests(unittest.TestCase):
     def test_08_owner_stop_and_genuine_stuck_are_not_archived(self):
         self.remember("Пауза владельца")
         self.remember("Настоящий тупик")
+        self.remember("Сбой выпуска")
         self.statuses["Пауза владельца"] = {"state": "stopped_owner"}
         self.statuses["Настоящий тупик"] = {"state": "stuck"}
+        self.statuses["Сбой выпуска"] = {"state": "release_failed"}
         tasks = [
             self.task("paused", "Пауза владельца", "failed"),
             self.task("stuck", "Настоящий тупик", "failed"),
+            self.task("release", "Сбой выпуска", "succeeded", stage="Verify"),
         ]
         self.run_cleanup(tasks, stopped=["Пауза владельца"])
-        for base in ("Пауза владельца", "Настоящий тупик"):
+        for base in ("Пауза владельца", "Настоящий тупик", "Сбой выпуска"):
             self.assertNotIn("closed", self.works[base])
 
     def test_09_live_generation_stays_open_and_old_attempt_is_idempotent(self):
@@ -4501,6 +4504,119 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class PostMergeDeliveryCompletionTests(unittest.TestCase):
+    def test_merge_registers_wait_and_successful_release_finishes_verify(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        status = os.path.join(temporary.name, "release.status")
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        verdict_dir = os.path.join(temporary.name, "verdicts")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("0\n")
+        state = {}
+
+        def reserve(command_key, label, command, saved_state):
+            saved_state[pilot.DEPLOY_STATE_KEY] = {
+                "generation": 1,
+                command_key: {"generation": 1, "status": status,
+                              "output": "/missing", "queued": False},
+            }
+
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries), \
+                mock.patch.object(pilot, "VERDICT_DIR", verdict_dir), \
+                mock.patch.object(pilot, "_start_post_merge_deploy", side_effect=reserve), \
+                mock.patch.object(pilot, "notify") as notify:
+            generation = pilot.deploy_after_merge(
+                {"deploy_factory_cmd": "fx factory release"},
+                "github.com/timafen/factory", state,
+                delivery={"task_id": "verify-1", "stage": "Verify", "base": "Оплата"})
+            self.assertEqual(generation, 1)
+            self.assertEqual(state[pilot.DELIVERY_WAIT_KEY][0]["generation"], 1)
+
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+            self.assertTrue(pilot.final_ok("verify-1", strict=True))
+
+        self.assertEqual(state[pilot.DELIVERY_WAIT_KEY], [])
+        with open(deliveries, encoding="utf-8") as recorded:
+            self.assertEqual(len(recorded.readlines()), 1)
+        notify.assert_called_once_with(
+            {"deploy_factory_cmd": "fx factory release"}, "Задача выполнена", mock.ANY,
+            tags="white_check_mark", click=mock.ANY)
+
+    def test_release_lock_keeps_registered_wait_for_delayed_retry(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        status = os.path.join(temporary.name, "release.status")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("8\n")
+        state = {
+            pilot.DELIVERY_WAIT_KEY: [{"task_id": "verify-1", "stage": "Verify",
+                "base": "Оплата", "command_key": "deploy_factory_cmd", "generation": 1}],
+            pilot.DEPLOY_STATE_KEY: {"generation": 1, "deploy_factory_cmd": {
+                "generation": 1, "status": status, "output": "/missing", "queued": False}},
+        }
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "DEPLOY_DIR", temporary.name):
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state, now=100)
+
+        retry = state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+        self.assertEqual(retry["generation"], 2)
+        self.assertTrue(retry["queued"])
+        self.assertEqual(state[pilot.DELIVERY_WAIT_KEY][0]["task_id"], "verify-1")
+
+    def test_terminal_release_failure_marks_wait_failed_and_updates_work_status(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        status_path = os.path.join(temporary.name, "pilot", "work_status.json")
+        status = os.path.join(temporary.name, "release.status")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("7\n")
+        state = {
+            pilot.DELIVERY_WAIT_KEY: [{"task_id": "verify-1", "stage": "Verify",
+                "base": "Оплата", "command_key": "deploy_factory_cmd", "generation": 1}],
+            pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {"generation": 1,
+                "status": status, "output": "/missing", "queued": False}},
+        }
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "VERDICT_DIR", temporary.name), \
+                mock.patch.object(pilot, "HOME", temporary.name), \
+                mock.patch.object(pilot, "notify"):
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+            self.assertFalse(pilot.final_ok("verify-1", strict=True))
+
+        self.assertEqual(state[pilot.DELIVERY_WAIT_KEY], [])
+        with open(status_path, encoding="utf-8") as saved:
+            work_status = json.load(saved)
+        self.assertEqual(work_status["Оплата"]["state"], "release_failed")
+        self.assertIn("кодом 7", work_status["Оплата"]["text"])
+
+    def test_terminal_release_failure_does_not_notify_again_after_restart(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        status = os.path.join(temporary.name, "release.status")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("7\n")
+        state = {
+            pilot.DELIVERY_WAIT_KEY: [{"task_id": "verify-1", "stage": "Verify",
+                "base": "Оплата", "command_key": "deploy_factory_cmd", "generation": 1}],
+            pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {"generation": 1,
+                "status": status, "output": "/missing", "queued": False}},
+        }
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "HOME", temporary.name), \
+                mock.patch.object(pilot, "notify") as notify:
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+            restored = pilot.load(state_path, {})
+            restored[pilot.DEPLOY_STATE_KEY] = {"deploy_factory_cmd": {"generation": 1,
+                "status": status, "output": "/missing", "queued": False}}
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, restored)
+
+        notify.assert_called_once()
+
     def test_only_the_successful_promised_release_completes_verify_once(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
