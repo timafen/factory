@@ -887,7 +887,7 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   await expect(page.getByRole("heading", { name: "Исполнение" })).toBeVisible();
   await expect(page.getByText("Только чтение")).toBeVisible();
   await expect(page.getByRole("meter", { name: "Параллельность исполнителя" })).toHaveAttribute("max", "2");
-  await expect(page.getByRole("tabpanel")).toContainText("restart the worker");
+  await expect(page.getByRole("tabpanel")).toContainText("Обнови файл и перезапусти исполнителя");
   const assign = page.getByRole("button", { name: "Назначить работу" });
   await assign.click();
   await expect(page.getByRole("dialog").getByLabel("Исполнитель")).toHaveValue(workerOnline);

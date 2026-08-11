@@ -2,15 +2,20 @@
 
 ## HEAD
 
-- Status: Verify FAIL — human merge blocked by an outdated browser expectation.
-- Branch: `factory/07abde0f-50d-31baa95e-284`.
-Implementation commit: 5442ad5450b3192c99fad32ca5394f2678eb7a59 — План сохраняет внешний `/intake/plan`, а TaskDetail, постановка задачи и общий словарь переведены.
+- Status: Implemented — targeted browser checks pass; full browser suite remains for Verify.
+- Branch: `factory/4d1fc847-78d-58c2d589-8aa`.
+Implementation commit: 34af0677eb18fa6b3d2e6decbc89b5ae2d679bac — План сохраняет внешний `/intake/plan`, а TaskDetail, постановка задачи и общий словарь переведены.
 - What changed: redirect `Location` нормализуется к публичному пути; технические ID/SHA остаются без изменений.
 - What changed: intake и control-plane browser fixtures используют раздельные свободные порты после ребейза на `main`.
-- Evidence: `go test -timeout 5m ./...`, `go vet ./...`, gofmt-check, UI lint/typecheck/Vitest/build → PASS; full `npm run test:browser` → 9 passed, 1 failed, 12 did not run; isolated visual audit → PASS.
-- Next action: Обновить устаревшее ожидание `restart the worker` на русскую строку и повторить Verify.
+- Evidence: targeted Worker Playwright and visual audit pass; implementation UI checks remain covered by the source branch evidence.
+- Next action: Повторить полный browser suite на этапе Verify.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Обновлено только устаревшее ожидание Worker Settings: тест проверяет актуальную
+русскую фразу «Обнови файл и перезапусти исполнителя». Production UI не менялся.
 
 ### 2026-08-11 — Implement
 
