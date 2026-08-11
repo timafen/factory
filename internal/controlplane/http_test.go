@@ -811,6 +811,51 @@ func TestPrepareMutationAllowsSameOriginHTTPS(t *testing.T) {
 	}
 }
 
+func TestPrepareMutationAllowsHTTPSFromTrustedLoopbackProxy(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7337/api/v1/works/resume", strings.NewReader(`{}`))
+	request.RemoteAddr = "127.0.0.1:42123"
+	request.Header.Set("Origin", "https://factory.timafen.com")
+	request.Header.Set("X-Forwarded-Host", "factory.timafen.com")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	if !prepareMutation(response, request, protocol.MaxBodyBytes) {
+		t.Fatalf("trusted same-origin HTTPS proxy mutation was rejected: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPrepareMutationRejectsUntrustedOrMismatchedForwardedOrigin(t *testing.T) {
+	tests := []struct {
+		name           string
+		remote         string
+		forwardedHost  string
+		forwardedProto string
+	}{
+		{name: "non-loopback proxy", remote: "203.0.113.9:42123", forwardedHost: "factory.timafen.com", forwardedProto: "https"},
+		{name: "different forwarded host", remote: "127.0.0.1:42123", forwardedHost: "evil.example", forwardedProto: "https"},
+		{name: "different forwarded protocol", remote: "127.0.0.1:42123", forwardedHost: "factory.timafen.com", forwardedProto: "http"},
+		{name: "missing forwarded protocol", remote: "127.0.0.1:42123", forwardedHost: "factory.timafen.com"},
+		{name: "multiple forwarded hosts", remote: "127.0.0.1:42123", forwardedHost: "factory.timafen.com, evil.example", forwardedProto: "https"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7337/api/v1/works/resume", strings.NewReader(`{}`))
+			request.RemoteAddr = test.remote
+			request.Header.Set("Origin", "https://factory.timafen.com")
+			request.Header.Set("X-Forwarded-Host", test.forwardedHost)
+			request.Header.Set("X-Forwarded-Proto", test.forwardedProto)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			if prepareMutation(response, request, protocol.MaxBodyBytes) {
+				t.Fatal("untrusted or mismatched forwarded origin was accepted")
+			}
+			requireStatus(t, response.Result(), http.StatusForbidden)
+		})
+	}
+}
+
 func TestPrepareMutationRejectsNonWebSameAuthorityOrigin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "http://factory.timafen.com/api/v1/works/resume", strings.NewReader(`{}`))
 	request.Host = "factory.timafen.com"
