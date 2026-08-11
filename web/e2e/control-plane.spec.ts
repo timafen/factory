@@ -416,8 +416,8 @@ async function exerciseMobileNavigation(page: Page) {
   await expect(page.locator("main")).toBeVisible();
 }
 
-test.beforeAll(async () => {
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+test.beforeAll(async ({ baseURL }) => {
+  const api = await request.newContext({ baseURL: baseURL });
   fixtureAPI = api;
   const real = await waitForRealWorker(api);
   identifiers.realFactoryRepository = real.repositories.find(
@@ -590,9 +590,9 @@ test.afterAll(async () => {
   await fixtureAPI?.dispose();
 });
 
-test("shows every project product and saves the overview", async ({ page }) => {
+test("shows every project product and saves the overview", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const dashboard = await json<{
     projects: Array<{ name: string }>;
   }>(await api.get("/api/v1/dashboard"));
@@ -657,7 +657,7 @@ test("shows project readiness card", async ({ page }) => {
   browser.assertClean();
 });
 
-test("creates, pins, revises, and disables a reusable Workflow", async ({ page }) => {
+test("creates, pins, revises, and disables a reusable Workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");
   await expect(page.getByRole("heading", { name: "Runbooks", exact: true })).toBeVisible();
@@ -698,7 +698,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
   await revise.getByRole("button", { name: "Create revision" }).click();
   await expect(page.getByText("Revision 2", { exact: true }).first()).toBeVisible();
 
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const pinned = await json<TaskDetail>(await api.get(`/api/v1/tasks/${taskID}`));
   expect(pinned.context).toBe("JIRA-183 stays free text.");
   expect(pinned.task.description).toBe(pinned.resolved_prompt);
@@ -716,7 +716,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
   browser.assertClean();
 });
 
-test("runs the complete UI to real-worker and Git-worktree workflow", async ({ page }) => {
+test("runs the complete UI to real-worker and Git-worktree workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Delegate task" }).first().click();
@@ -757,7 +757,7 @@ test("runs the complete UI to real-worker and Git-worktree workflow", async ({ p
   await page.reload();
   await expect(page.getByRole("heading", { name: "Prove the complete local workflow" })).toBeVisible();
 
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const detail = await json<TaskDetail>(await api.get(`/api/v1/tasks/${taskID}`));
   expect(detail.task.state).toBe("succeeded");
   expect(detail.attempts).toHaveLength(1);
@@ -820,7 +820,7 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   browser.assertClean();
 });
 
-test("confirms and deletes terminal task history", async ({ page }) => {
+test("confirms and deletes terminal task history", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto(`/tasks/${identifiers.succeededTask}`);
   await expect(page.getByRole("heading", { name: "Ship the stable API client" })).toBeVisible();
@@ -832,13 +832,13 @@ test("confirms and deletes terminal task history", async ({ page }) => {
   await expect(page.getByText("Ship the stable API client")).toHaveCount(0);
   browser.assertClean();
 
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const response = await api.get(`/api/v1/tasks/${identifiers.succeededTask}`);
   expect(response.status()).toBe(404);
   await api.dispose();
 });
 
-test("shows worker capacity, current work, retained cleanup, and saves Workers", async ({ page }) => {
+test("shows worker capacity, current work, retained cleanup, and saves Workers", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   if (runningHeartbeat) clearInterval(runningHeartbeat);
   const heartbeat = await fixtureAPI!.put(
@@ -848,7 +848,7 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   expect(heartbeat.ok()).toBe(true);
   await fixtureAPI!.dispose();
   fixtureAPI = undefined;
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   await registerWorker(
     api,
     workerOnline,
@@ -1013,9 +1013,9 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   browser.assertClean();
 });
 
-test("audits every Factory screen on desktop and phone", async ({ context }) => {
+test("audits every Factory screen on desktop and phone", async ({ context, baseURL }) => {
   test.setTimeout(240_000);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const workflow = await json<{ workflow: { id: string } }>(
     await api.post("/api/v1/workflows", {
       data: {
@@ -1129,9 +1129,9 @@ test("opens and closes delegation from the keyboard", async ({ page }) => {
   browser.assertClean();
 });
 
-test("manages repository routing end to end and preserves add input while polling", async ({ page }) => {
+test("manages repository routing end to end and preserves add input while polling", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   await json(
     await api.put(`/api/v1/workers/${managedWorker}`, {
       headers: {
@@ -1229,9 +1229,9 @@ test("manages repository routing end to end and preserves add input while pollin
   browser.assertClean();
 });
 
-test("previews and dispatches one typed GitHub issue Automation without duplication", async ({ page }) => {
+test("previews and dispatches one typed GitHub issue Automation without duplication", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   await registerWorker(
     api,
     automationWorker,
@@ -1292,9 +1292,9 @@ test("previews and dispatches one typed GitHub issue Automation without duplicat
   browser.assertClean();
 });
 
-test("previews and dispatches one typed GitHub pull-request Automation without duplication", async ({ page }) => {
+test("previews and dispatches one typed GitHub pull-request Automation without duplication", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   await registerWorker(
     api,
     automationWorker,
@@ -1354,9 +1354,9 @@ test("previews and dispatches one typed GitHub pull-request Automation without d
   browser.assertClean();
 });
 
-test("previews, enables, and runs a schedule Automation through the ordinary task path", async ({ page }) => {
+test("previews, enables, and runs a schedule Automation through the ordinary task path", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   await registerWorker(
     api,
     automationWorker,
@@ -1425,9 +1425,9 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
   browser.assertClean();
 });
 
-test("migrates a locked legacy snapshot through Resume and Finalize", async ({ page }) => {
+test("migrates a locked legacy snapshot through Resume and Finalize", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
-  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const api = await request.newContext({ baseURL: baseURL });
   const legacyRoot = `${process.cwd()}/test-results/legacy-poller`;
   await page.goto("/automations");
   await page.getByRole("button", { name: "Migrate legacy poller" }).click();
