@@ -370,17 +370,13 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
     def run_cycle(self, result, branch_result=("есть", ["knowledge/spec.md"]),
                   branch_error=None, published_branches=None, create_effects=None,
                   cycles=1, restart_after_first=False, durable_caps=False,
-                  branch_results=None, task_variants=None, result_by_task=None):
+                  branch_results=None):
         effects = list(create_effects or [])
-        tasks = list(task_variants or [self.task])
-        results = result_by_task or {task["id"]: result for task in tasks}
-        self.log_messages = []
 
         def fake_api(path, body=None):
             if path in ("/tasks?limit=100", "/tasks?limit=200"):
-                return {"tasks": tasks}
-            task_id = path.removeprefix("/tasks/")
-            if task_id in results:
+                return {"tasks": [self.task]}
+            if path == "/tasks/specification-done":
                 return {
                     "task": {
                         "repository_id": "repo-id",
@@ -391,9 +387,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                         "revision_id": "rev-specification",
                     },
                     "context": "",
-                    "attempts": [{"id": f"attempt-{task_id}",
-                                   "execution_id": f"execution-{task_id}",
-                                   "result": results[task_id]}],
+                    "attempts": [{"result": result}],
                 }
             if path == "/workers":
                 return {"workers": [{
@@ -428,8 +422,6 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
             return response
 
         def github_branch(args, **_kwargs):
-            if "/contents/knowledge/cards?ref=main" in args[-1]:
-                return [{"name": "CARD-0041-existing.md"}]
             name = args[-1].split("/branches/", 1)[-1]
             if published_branches is not None and name not in published_branches:
                 return None
@@ -478,9 +470,6 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
                 stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
             self.notify = stack.enter_context(mock.patch.object(pilot, "notify"))
-            stack.enter_context(mock.patch.object(
-                pilot, "log", side_effect=lambda *args: self.log_messages.append(
-                    " ".join(map(str, args)))))
             stack.enter_context(mock.patch.object(pilot, "decide", return_value={
                 "action": "advance", "reason": "готово",
                 "next_complexity": "medium", "handoff": "использовать документ",
@@ -495,10 +484,9 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         return branch_report
 
     def test_published_nonempty_branch_starts_implementation(self):
-        specification_head = "a" * 40
         report = self.run_cycle(
             "BRANCH: factory/published\n"
-            f"HEAD: {specification_head}\n"
+            "HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
             "PUSHED: yes\n"
             "ГОТОВО-КОГДА: файл pilot/pilot.py")
 
@@ -507,50 +495,6 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         self.assertIn("Implement + Test", self.created[0]["title"])
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-implementation")
         self.assertIn("Branch: factory/published", self.created[0]["context"])
-        self.assertIn(f"Specification head: {specification_head}\n", self.created[0]["context"])
-        self.assertIn("Card: CARD-0042", self.created[0]["context"])
-
-    def test_specification_head_gate_rejects_missing_short_and_malformed(self):
-        cases = ("", "HEAD: abc123", "HEAD: " + "g" * 40)
-        for result in cases:
-            with self.subTest(result=result):
-                reason = pilot.specification_head_gate(result)
-                self.assertIsNotNone(reason)
-                self.assertIn("точный полный SHA", reason)
-
-    def test_specification_head_gate_accepts_exact_full_sha(self):
-        self.assertIsNone(pilot.specification_head_gate("HEAD: " + "a" * 40))
-
-    def test_exhausted_head_rescue_hard_stops_a_second_independent_specification(self):
-        second_task = {
-            "id": "specification-done-second",
-            "title": self.task["title"],
-            "state": "succeeded",
-            "created_at": "2026-08-11T10:01:00Z",
-            "repository_id": "repo-id",
-        }
-        self.run_cycle(
-            "BRANCH: factory/published\nHEAD: abc123\nГОТОВО-КОГДА: файл pilot/pilot.py",
-            cycles=3,
-            durable_caps=True,
-            task_variants=[self.task, second_task],
-            result_by_task={
-                self.task["id"]: "BRANCH: factory/published\nHEAD: abc123\n"
-                               "ГОТОВО-КОГДА: файл pilot/pilot.py",
-                second_task["id"]: "BRANCH: factory/published\nHEAD: def456\n"
-                                      "ГОТОВО-КОГДА: файл pilot/pilot.py",
-            },
-        )
-
-        self.assertEqual(len(self.successful_created), 1)
-        self.assertIn("Specification", self.successful_created[0]["title"])
-        self.assertNotIn("Implement + Test", self.successful_created[0]["title"])
-        self.assertEqual(self.rescues["Сохранить спецификацию::SPEC_HEAD"], 1)
-        self.assertEqual(self.state["processed"], [
-            "specification-done", "specification-done-second",
-        ])
-        self.assertEqual(len(self.created), 1)
-        self.assertTrue(any("SPEC HEAD STOP" in message for message in self.log_messages))
 
     def test_handoff_uses_published_branch_instead_of_stale_first_mention(self):
         report = self.run_cycle(
@@ -619,7 +563,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
 
     def test_next_cycle_retries_failed_spec_return_and_records_one_success(self):
         self.run_cycle(
-            "BRANCH: factory/published\nHEAD: " + "a" * 40,
+            "BRANCH: factory/published",
             create_effects=[RuntimeError("control plane unavailable"), None],
             cycles=2,
             durable_caps=True,
@@ -648,7 +592,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
 
     def test_no_eligible_worker_then_published_branch_starts_implementation(self):
         self.run_cycle(
-            "BRANCH: factory/published\nHEAD: " + "a" * 40 + "\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            "BRANCH: factory/published\nГОТОВО-КОГДА: файл pilot/pilot.py",
             branch_results=[("нет", []), ("есть", ["knowledge/spec.md"])],
             create_effects=[RuntimeError("no_eligible_worker"), None],
             cycles=2,
@@ -719,64 +663,6 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         with mock.patch.object(pilot.subprocess, "run", return_value=response):
             with self.assertRaisesRegex(RuntimeError, "connection reset"):
                 pilot.branch_report("github.com/acme/repo", "factory/task")
-
-
-class CardNumberReservationTests(unittest.TestCase):
-    def test_parallel_branches_reserve_distinct_numbers_and_retry_keeps_one(self):
-        state = {"processed": []}
-        cards = [{"name": "CARD-0069-old.md"}]
-        with mock.patch.object(pilot, "gh_json", return_value=cards) as github, \
-                mock.patch.object(pilot, "save") as save:
-            first = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
-            second = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/two")
-            retry = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
-
-        self.assertEqual((first, second, retry), ("CARD-0070", "CARD-0071", "CARD-0070"))
-        self.assertEqual(state[pilot.CARD_RESERVATIONS_KEY], {
-            "github.com/acme/repo::factory/one": 70,
-            "github.com/acme/repo::factory/two": 71,
-        })
-        self.assertEqual(save.call_count, 2)
-        self.assertEqual(github.call_count, 2)
-
-    def test_unreadable_card_catalogue_does_not_guess_a_number(self):
-        state = {"processed": []}
-        with mock.patch.object(pilot, "gh_json", return_value=None), \
-                mock.patch.object(pilot, "save") as save:
-            card = pilot.reserved_card_number(state, "github.com/acme/repo", "factory/one")
-
-        self.assertIsNone(card)
-        self.assertNotIn(pilot.CARD_RESERVATIONS_KEY, state)
-        save.assert_not_called()
-
-    def test_handoff_keeps_card_from_context_or_stage_report(self):
-        self.assertEqual(pilot.extract_card("", "Branch: factory/task\nCard: CARD-0070\n"),
-                         "CARD-0070")
-        self.assertEqual(pilot.extract_card("Card: CARD-0071\n", "Card: CARD-0070\n"),
-                         "CARD-0070")
-        self.assertIn("выдана строка `Card: CARD-…`", pilot.AGENT_RULES)
-
-    def test_review_rejects_card_with_other_reserved_number_first(self):
-        files = ["pilot/pilot.py", "knowledge/cards/CARD-0071-wrong.md"]
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
-                mock.patch.object(pilot, "implementation_commit_gate") as implementation:
-            result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
-                                       expected_card="CARD-0070")
-
-        self.assertTrue(result["back"])
-        self.assertIn("CARD-0070", result["note"])
-        implementation.assert_not_called()
-
-    def test_review_accepts_matching_card_for_normal_commit_gate(self):
-        files = ["pilot/pilot.py", "knowledge/cards/CARD-0070-correct.md"]
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
-                mock.patch.object(pilot, "implementation_commit_gate", return_value=None) as implementation, \
-                mock.patch.object(pilot, "load", return_value={}):
-            result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
-                                       expected_card="CARD-0070")
-
-        self.assertFalse(result["back"])
-        implementation.assert_called_once_with("github.com/acme/repo", "factory/task", files)
 
 
 class CodexUsageTests(unittest.TestCase):
@@ -1768,7 +1654,6 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         original = "factory/original-implementation"
         rebuilt = "factory/original-implementation-clean"
         head = "e" * 40
-        card = "CARD-0070"
         pilot.save(works_path, {base: {
             "run_generation": "generation-1",
             "implementation_artifact": {
@@ -1796,9 +1681,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             "implement": {
                 "task": {"repository_id": "repo-id"},
                 "workflow": {"title": "Implement + Test"},
-                "context": f"Card: {card}",
-                "attempts": [{"result": (
-                    f"BRANCH: {original}\nCard: {card}\nГотово")}],
+                "context": "",
+                "attempts": [{"result": f"BRANCH: {original}\nГотово"}],
             },
         }
         created = []
@@ -1822,15 +1706,12 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                     "id": stage.lower(), "enabled": True,
                     "current_revision": {"id": "rev-" + stage.lower(),
                                          "title": stage},
-                } for stage in ("Implement + Test", "Review", "Verify")]}
+                } for stage in ("Review", "Verify")]}
             raise AssertionError(path)
 
         def create(body, _conf):
-            stage = next(stage for stage in
-                         ("Implement + Test", "Review", "Verify")
-                         if f" {stage}]" in body["title"])
-            task_id = ("implement-rescue" if stage == "Implement + Test"
-                       else stage.lower())
+            stage = "Review" if " Review]" in body["title"] else "Verify"
+            task_id = stage.lower()
             task = {
                 "id": task_id, "title": body["title"], "state": "created",
                 "created_at": "2026-08-11T10:0%d:00Z" % (len(created) + 1),
@@ -1887,9 +1768,6 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 candidates[0] if candidates else ""))
             stack.enter_context(mock.patch.object(
                 pilot, "merge_recorded", return_value=False))
-            stack.enter_context(mock.patch.object(
-                pilot, "cap_rescues", return_value=0))
-            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
             def github(args, strict=False):
                 path = args[-1]
                 if "/branches/" in path:
@@ -1899,7 +1777,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 raise AssertionError(path)
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
-                pilot, "gh_merge", return_value=(False, "merge conflict")))
+                pilot, "gh_merge", return_value=(True, "merged")))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
@@ -1925,14 +1803,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             details["verify"]["attempts"] = [{"result": "PASS"}]
             pilot.cycle(conf, state)
 
-            rescue_context = created[2]["context"]
-            self.assertIn(f"Branch: {rebuilt}", rescue_context)
-            self.assertIn(f"Implementation head: {head}", rescue_context)
-            self.assertIn(f"Card: {card}", rescue_context)
-
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
-            area_repo="repo-id", expected_card=card)
+            area_repo="repo-id")
         merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
 
 
@@ -2412,122 +2285,115 @@ class PipelineWatchMergeTests(unittest.TestCase):
             pilot.cycle(self.conf, {"processed": []})
 
         self.assertEqual(merge.call_count, 1)
-        final.assert_called_once_with("verify-pass", "Verify", True)
+        # Один merge не завершает Verify: это делает только delivery receipt.
+        final.assert_not_called()
         with open(journal, encoding="utf-8") as entries:
             records = [json.loads(line) for line in entries]
         self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
 
-    def test_merge_conflict_keeps_context_card_despite_verify_report_to_review(self):
-        self.conf["stages"] = [
-            {"workflow": "Implement + Test"},
-            {"workflow": "Review"},
-            {"workflow": "Verify"},
-        ]
-        self.conf["auto_merge"] = True
-        created = []
-        phase = {"value": "verify"}
+    def test_restart_after_merge_journal_restores_one_delivery_wait(self):
+        """A crash between merge journal and deploy reservation cannot lose release."""
+        self.conf.update({"stages": [{"workflow": "Verify"}], "auto_merge": True,
+                          "deploy_factory_cmd": "fx factory release"})
         verify = {
-            "id": "verify-conflict",
-            "title": "[auto] [3/3 Verify] Сохранить номер карточки",
+            "id": "verify-pass",
+            "title": "[auto] [1/1 Verify] Восстановить выпуск после рестарта",
             "state": "succeeded", "repository_id": "repo-id",
-            "created_at": "2026-08-11T10:00:00Z",
         }
-        implement = {
-            "id": "implement-after-conflict",
-            "title": "[auto] [1/3 Implement + Test] Сохранить номер карточки",
-            "state": "succeeded", "repository_id": "repo-id",
-            "created_at": "2026-08-11T10:01:00Z",
+        detail = {
+            "task": {"repository_id": "repo-id"}, "workflow": {"title": "Verify"},
+            "context": "Branch: factory/restart-delivery",
+            "attempts": [{"result": "PASS\nBRANCH: factory/restart-delivery"}],
         }
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        state_path = os.path.join(temporary.name, "state.json")
+        verdict_dir = os.path.join(temporary.name, "verdicts")
+        status = os.path.join(temporary.name, "release.status")
+        with open(journal, "w", encoding="utf-8") as entries:
+            entries.write(json.dumps({"task_id": "verify-pass",
+                                      "base": "Восстановить выпуск после рестарта"}) + "\n")
+        with open(status, "w", encoding="utf-8") as result:
+            result.write("0\n")
 
         def fake_api(path, payload=None):
-            if path in ("/tasks?limit=100", "/tasks?limit=200"):
-                return {"tasks": [verify] if phase["value"] == "verify" else [implement]}
-            if path == "/tasks/verify-conflict":
-                return {
-                    "task": {"repository_id": "repo-id"},
-                    "workflow": {"title": "Verify", "revision_id": "verify-revision"},
-                    "context": "Branch: factory/card-conflict\nCard: CARD-0070\n",
-                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict\nCard: CARD-0071"}],
-                }
-            if path == "/tasks/implement-after-conflict":
-                return {
-                    "task": {"repository_id": "repo-id", "worker_id": "implement-worker"},
-                    "workflow": {"title": "Implement + Test", "revision_id": "implement-revision"},
-                    "context": created[0]["context"],
-                    "attempts": [{"result": "BRANCH: factory/card-conflict\nГотово"}],
-                }
+            if path == "/tasks?limit=100":
+                return {"tasks": [verify]}
+            if path == "/tasks/verify-pass":
+                return detail
             if path == "/workers":
                 return {"workers": []}
             if path == "/repositories":
                 return {"repositories": [{"id": "repo-id",
-                    "remote_identity": "github.com/acme/repo"}]}
+                                             "remote_identity": "github.com/timafen/factory"}]}
             if path == "/workflows":
-                return {"workflows": [{"id": name, "enabled": True,
-                    "current_revision": {"id": name + "-revision", "title": title}}
-                    for name, title in (("implement", "Implement + Test"),
-                                        ("review", "Review"), ("verify", "Verify"))]}
+                return {"workflows": [{"id": "verify-workflow", "enabled": True,
+                    "current_revision": {"id": "verify-revision", "title": "Verify"}}]}
             raise AssertionError(path)
 
-        def create(body, _conf):
-            created.append(body)
-            return {"task": {"id": "created-" + str(len(created)),
-                "title": body["title"], "state": "created",
-                "repository_id": body["repository_id"]}}
+        def reserve(command_key, _label, _command, state):
+            state[pilot.DEPLOY_STATE_KEY] = {
+                "generation": 1,
+                command_key: {"generation": 1, "status": status,
+                              "output": "/missing", "queued": False},
+            }
 
-        noops = ("collect_automation_findings", "cleanup_completed_plan_cards",
-                 "write_dashboard", "provider_limits_tick", "detect_limits",
-                 "record_new_works", "budget_guard", "money_guard", "handle_epics",
-                 "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
-                 "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
-                 "handle_answers", "advance_epics", "pipeline_watch",
-                 "cleanup_work_archive", "retry_pending_factory_deploy",
-                 "autostart_plan", "area_extend", "collect_ideas", "save_promises")
-        workers = {"implement-worker": {"id": "implement-worker"},
-                   "review-worker": {"id": "review-worker"}}
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan", "cleanup_work_archive", "retry_pending_factory_deploy")
         state = {"processed": []}
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
-            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
-            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value=workers))
-            stack.enter_context(mock.patch.object(
-                pilot, "stage_worker", side_effect=lambda _conf, stage, *_args:
-                "review-worker" if stage == "Review" else "implement-worker"))
-            stack.enter_context(mock.patch.object(
-                pilot, "codex_usage_snapshot", side_effect=lambda day, _week: {day: {}}))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                                                  side_effect=lambda day_start, _week_start:
+                                                  {day_start: {}}))
             stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
             stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
-            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block", return_value=""))
-            stack.enter_context(mock.patch.object(pilot, "is_stopped", return_value=False))
-            stack.enter_context(mock.patch.object(pilot, "live_or_done_at", return_value=None))
-            stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
-            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
-            stack.enter_context(mock.patch.object(pilot, "notify"))
-            stack.enter_context(mock.patch.object(pilot, "mark_final"))
-            stack.enter_context(mock.patch.object(pilot, "gh_merge",
-                                                  return_value=(False, "merge conflict")))
-            stack.enter_context(mock.patch.object(
-                pilot, "gh_json", side_effect=lambda args, **_kwargs:
-                {"ahead_by": 1} if "/compare/" in args[-1]
-                else {"name": "factory/card-conflict"}))
-            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
-                "action": "advance", "reason": "готово", "next_complexity": "medium",
-                "handoff": "проверить исправление",
-            }))
-            review_gate = stack.enter_context(mock.patch.object(
-                pilot, "review_gate", return_value={"back": False, "note": "Карточка принята"}))
+            stack.enter_context(mock.patch.object(pilot, "area_extend"))
+            stack.enter_context(mock.patch.object(pilot, "collect_ideas"))
+            stack.enter_context(mock.patch.object(pilot, "decide",
+                                                  return_value={"action": "stop"}))
+            stack.enter_context(mock.patch.object(pilot, "gh_merge"))
+            start = stack.enter_context(mock.patch.object(
+                pilot, "_start_post_merge_deploy", side_effect=reserve))
+            notify = stack.enter_context(mock.patch.object(pilot, "notify"))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", journal))
+            stack.enter_context(mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries))
+            stack.enter_context(mock.patch.object(pilot, "STATE_PATH", state_path))
+            stack.enter_context(mock.patch.object(pilot, "VERDICT_DIR", verdict_dir))
+            stack.enter_context(mock.patch.object(pilot, "HOME", temporary.name))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
+            # This is the restart point: merge journal exists, delivery wait does not.
             pilot.cycle(self.conf, state)
-            self.assertIn("Card: CARD-0070", created[0]["context"])
-            self.assertNotIn("Card: CARD-0071", created[0]["context"])
-            phase["value"] = "implement"
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(state[pilot.DELIVERY_WAIT_KEY][0]["task_id"], "verify-pass")
+            self.assertFalse(pilot.final_ok("verify-pass", strict=True))
+
+            # A second restart before release completion keeps the same wait,
+            # rather than queueing a second release or reporting completion.
+            state["processed"] = []
+            pilot.cycle(self.conf, state)
+            self.assertEqual(start.call_count, 1)
+            self.assertFalse(pilot.final_ok("verify-pass", strict=True))
+
+            pilot.poll_post_merge_deploys(self.conf, state)
+            self.assertTrue(pilot.final_ok("verify-pass", strict=True))
+
+            # The durable receipt makes later restarts entirely idempotent.
+            state["processed"] = []
             pilot.cycle(self.conf, state)
 
-        self.assertIn("Review", created[1]["title"])
-        self.assertIn("Card: CARD-0070", created[1]["context"])
-        self.assertNotIn("Card: CARD-0071", created[1]["context"])
-        self.assertEqual(review_gate.call_args.kwargs["expected_card"], "CARD-0070")
+        with open(deliveries, encoding="utf-8") as records:
+            self.assertEqual(len(records.readlines()), 1)
+        self.assertEqual(start.call_count, 1)
+        notify.assert_called_once()
 
 
 class PlanCardCleanupTest(unittest.TestCase):
