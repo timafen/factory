@@ -284,7 +284,7 @@ export function DelegateModal({
             <Field label="Repository" htmlFor="delegate-repository" error={errors.repository}>
               <select id="delegate-repository" value={repositoryID} onChange={(event) => setRepositoryID(event.target.value)} disabled={!workerID || repositoryOptions.isPending}>
                 <option value="">{!workerID ? "Choose a worker first" : repositoryOptions.isPending ? "Loading repositories…" : repositories.length ? "Choose a repository" : "No repositories available"}</option>
-                {repositories.map((repo) => <option key={repo.id} value={repo.id} disabled={!repo.ready}>{repo.key ? `${repo.key} · ` : ""}{repo.remote_identity}{repo.ready && !repo.advertised ? " · acquired on demand" : ""}{!repo.ready ? ` · ${repo.reason}` : ""}</option>)}
+                {repositories.map((repo) => <option key={repo.id} value={repo.id} disabled={!repo.ready && !repo.advertised}>{repo.key ? `${repo.key} · ` : ""}{repo.remote_identity}{repo.ready && !repo.advertised ? " · acquired on demand" : ""}{!repo.ready ? ` · ${repo.reason}` : ""}</option>)}
               </select>
             </Field>
             {repositoryOptions.error && <InlineError error={repositoryOptions.error} />}

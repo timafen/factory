@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { cpuLoadExplanation, fetchAllTasks, Overview, overviewWork, productState } from "./Overview";
+import { stageHandoffTargetStatus } from "./efficiency";
 
 describe("cpuLoadExplanation", () => {
   it("uses actual running work and slot values", () => {
@@ -85,6 +86,15 @@ describe("Overview recent work", () => {
 });
 
 describe("Overview Factory efficiency", () => {
+  it.each([
+    [0, "данных мало"],
+    [1, "данных мало"],
+    [4, "данных мало"],
+    [5, "цель достигнута"],
+  ])("shows an honest handoff target for a sample of %i", (completedWorks, expected) => {
+    expect(stageHandoffTargetStatus(completedWorks, 5, true).text).toBe(expected);
+  });
+
   it("marks a small sample, shows exact denominators, and compares both periods", async () => {
     const share = (key: string, seconds: number, ratio: number, sample = 1) => ({
       key, seconds, sample, denominator_seconds: 7200, share: ratio,
@@ -114,7 +124,11 @@ describe("Overview Factory efficiency", () => {
       generated_at: "2026-08-10T12:00:00Z", minimum_sample: 5,
       periods: {
         "24h": { assessment: "low_data", current: period(), previous: period({ completed_works: 1 }) },
-        "7d": { assessment: "degraded", current: period({ completed_works: 8 }), previous: period({ completed_works: 10 }) },
+        "7d": {
+          assessment: "degraded",
+          stage_handoff_wait_target: { maximum_share: 0.1, current_share: 0.08, previous_share: 0.25, met: true },
+          current: period({ completed_works: 8 }), previous: period({ completed_works: 10 }),
+        },
       },
     };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -141,12 +155,35 @@ describe("Overview Factory efficiency", () => {
 
     fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
     expect(within(section).getByText("есть деградация")).toBeVisible();
+    const target = within(section).getByLabelText("Цель ожидания между стадиями");
+    expect(within(target).getByText("цель достигнута")).toBeVisible();
+    expect(within(target).getByText(/цель ≤10% · текущие 7 дней 8% · предыдущие 7 дней 25%/)).toBeVisible();
     expect(within(section).getByText("выборка: 8 влитых работ · минимум для оценки 5")).toBeVisible();
     expect(within(section).getByText("предыдущий период: 10")).toBeVisible();
   });
 });
 
 describe("Overview product capacity", () => {
+  it("keeps the overview visible when a fresh capacity window has no underload intervals", async () => {
+    const period = { started_at: "2026-08-10T12:00:00Z", ended_at: "2026-08-10T12:00:00Z", samples: 1, low_data: true,
+      active_time: [0, 1, 2, 3, 4].map((active) => ({ active, seconds: 0, share: null })), average_busy: null, queue_p90: null,
+      underload: null,
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/metrics/product-capacity" ? { generated_at: "2026-08-10T12:00:00Z", capacity: 4, periods: { "24h": period, "7d": period } }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, {}));
+
+    expect(await screen.findByRole("heading", { name: "Обзор" })).toBeVisible();
+    const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
+    expect(within(section).getByText("данных мало")).toBeVisible();
+    expect(within(section).getByText("0: — · 1: — · 2: — · 3: — · 4: —")).toBeVisible();
+  });
+
   it("shows the four-stream history honestly and keeps unknown explicit", async () => {
     const period = { started_at: "2026-08-09T12:00:00Z", ended_at: "2026-08-10T12:00:00Z", observation_from: "2026-08-10T11:00:00Z", samples: 2, low_data: true,
       active_time: [0, 1, 2, 3, 4].map((active) => ({ active, seconds: active === 0 ? 3600 : 0, share: active === 0 ? 1 : 0 })), average_busy: 0, queue_p90: 2,

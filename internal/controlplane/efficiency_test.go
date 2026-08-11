@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -121,6 +122,39 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 		if share.Definition == "" {
 			t.Fatalf("time share %q has no API definition", share.Key)
 		}
+	}
+}
+
+func TestEfficiencyTargetComparesCurrentAndPreviousStageHandoffShares(t *testing.T) {
+	period := func(completedWorks int, value float64) EfficiencyPeriod {
+		return EfficiencyPeriod{CompletedWorks: completedWorks, TimeShares: []EfficiencyTimeShare{{
+			Key: "stage_handoff_wait", Share: &value,
+		}}}
+	}
+
+	for _, completedWorks := range []int{0, 1, 4} {
+		t.Run(fmt.Sprintf("low sample %d", completedWorks), func(t *testing.T) {
+			got := efficiencyStageHandoffWaitTarget(period(completedWorks, 0.08), period(5, 0.25))
+			if got.CurrentShare == nil || *got.CurrentShare != 0.08 || got.Met != nil {
+				t.Fatalf("low sample must keep the measured share without claiming success = %#v", got)
+			}
+		})
+	}
+
+	met := efficiencyStageHandoffWaitTarget(period(5, 0.10), period(5, 0.25))
+	if met.MaximumShare != 0.10 || met.CurrentShare == nil || *met.CurrentShare != 0.10 ||
+		met.PreviousShare == nil || *met.PreviousShare != 0.25 || met.Met == nil || !*met.Met {
+		t.Fatalf("met target = %#v", met)
+	}
+
+	missed := efficiencyStageHandoffWaitTarget(period(5, 0.11), EfficiencyPeriod{})
+	if missed.Met == nil || *missed.Met || missed.PreviousShare != nil {
+		t.Fatalf("missed target = %#v", missed)
+	}
+
+	unknown := efficiencyStageHandoffWaitTarget(EfficiencyPeriod{CompletedWorks: 5}, period(5, 0.25))
+	if unknown.CurrentShare != nil || unknown.Met != nil {
+		t.Fatalf("unknown target must not claim success = %#v", unknown)
 	}
 }
 

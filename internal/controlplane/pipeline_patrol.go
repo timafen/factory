@@ -11,7 +11,9 @@ import (
 // PipelinePatrolInstruction is deliberately kept in the Automation context.
 // Schedule occurrences snapshot that context, so a restarted control plane
 // cannot lose the patrol's instructions or replace old run evidence.
-const PipelinePatrolInstruction = `Factory pipeline patrol. Inspect only canonical [auto] [N/M Stage] pipeline tasks. Do not touch an owner-paused pipeline or a final stage. If a succeeded stage has no live successor, wait 600 seconds before continuing it, preserve its repository, workflow revision and worker route, and make at most two continuation attempts. Escalate the stalled work once after those attempts. Record the outcome and diagnostic in this Automation run.`
+const PipelinePatrolInstruction = `Factory pipeline patrol. Inspect only canonical [auto] [N/M Stage] pipeline tasks. Do not touch an owner-paused pipeline or a final stage. If a succeeded stage has no live successor, wait 450 seconds before continuing it, preserve its repository, workflow revision and worker route, and make at most two continuation attempts. Escalate the stalled work once after those attempts. Record the outcome and diagnostic in this Automation run.`
+
+const legacyPipelinePatrolInstruction = `Factory pipeline patrol. Inspect only canonical [auto] [N/M Stage] pipeline tasks. Do not touch an owner-paused pipeline or a final stage. If a succeeded stage has no live successor, wait 600 seconds before continuing it, preserve its repository, workflow revision and worker route, and make at most two continuation attempts. Escalate the stalled work once after those attempts. Record the outcome and diagnostic in this Automation run.`
 
 // ProvisionPipelinePatrol turns an already configured schedule Automation into
 // the single durable runner for the pipeline patrol.  The caller supplies the
@@ -45,12 +47,18 @@ func (s *Store) ProvisionPipelinePatrol(ctx context.Context, automationID string
 	}
 
 	contextValue := snapshot.context
+	instructionChanged := false
+	if strings.Contains(contextValue, legacyPipelinePatrolInstruction) {
+		contextValue = strings.ReplaceAll(contextValue, legacyPipelinePatrolInstruction, PipelinePatrolInstruction)
+		instructionChanged = true
+	}
 	addingInstruction := !strings.Contains(contextValue, PipelinePatrolInstruction)
 	if addingInstruction {
 		if strings.TrimSpace(contextValue) != "" {
 			contextValue += "\n\n"
 		}
 		contextValue += PipelinePatrolInstruction
+		instructionChanged = true
 	}
 	if len([]byte(contextValue)) > protocol.MaxAutomationContextBytes {
 		return protocol.AutomationDetail{}, invalid("invalid_automation_context", "context is limited to 8 KiB")
@@ -69,7 +77,7 @@ func (s *Store) ProvisionPipelinePatrol(ctx context.Context, automationID string
 		nextDue = sql.NullInt64{Int64: next.UnixMilli(), Valid: true}
 	}
 	versionIncrement := 0
-	if addingInstruction {
+	if instructionChanged {
 		versionIncrement = 1
 	}
 	result, err := tx.ExecContext(ctx, `
