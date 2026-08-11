@@ -2,15 +2,15 @@
 
 ## HEAD
 
-Implementation commit: c34efaa6d0c69a9d8c39fca60125806edfb85a45 — Пилот резервирует уникальный номер карточки и переносит его через handoff.
+Implementation commit: 662de7f877f1de43ea5f240d348c688d2447b6d5 — Пилот сохраняет идентичность реализации при возврате после конфликта слияния.
 
-- Status: Verified PASS — ветка обновлена после продвижения `main`.
-- Branch: `factory/35156296-93f-8e395a67-293`.
-- What changed: закреплённая строка `Card:` сохраняется в handoff, а `Implementation head`
-  и каноническая delivery-ветка не теряются при конфликтном возврате из Verify.
-- Evidence: 7 целевых unittest → `OK`; `python3 -m py_compile pilot/pilot.py` → exit 0;
+- Status: Implemented and tested — блокеры независимого Review исправлены.
+- Branch: `factory/4f3be794-214-3c24b813-cfc`.
+- What changed: rescue-handoff после merge conflict одновременно сохраняет `Card:`,
+  `Implementation head` и каноническую delivery-ветку; тест проверяет все три поля.
+- Evidence: 28 целевых unittest → `OK`; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0;
   `git diff --check` → exit 0; `just test` → exit 0.
-- Next action: Проверить PR и слить ветку.
+- Next action: Провести независимый Review и слить ветку в `main`.
 
 ## LOG
 
@@ -55,3 +55,12 @@ Implementation commit: c34efaa6d0c69a9d8c39fca60125806edfb85a45 — Пилот �
 после продвижения `main`; в конфликте `pilot/pilot.py` сохранены одновременно
 `Card:` во всех handoff и `Implementation head` с канонической delivery-веткой.
 Целевые 7 unittest, `py_compile`, `git diff --check` и полный `just test` прошли.
+
+### 2026-08-11 — Implement
+
+После перебазирования на актуальный `main` исправлен merge-conflict rescue:
+повторный Implement получает вместе каноническую delivery-ветку, полный
+`Implementation head` и закреплённый `Card:`. Регрессионный сценарий также
+проверяет передачу `expected_card` в review gate. Кодовый коммит:
+`662de7f877f1de43ea5f240d348c688d2447b6d5`. Целевые 28 unittest,
+`py_compile`, `git diff --check` и полный `just test` прошли успешно.
