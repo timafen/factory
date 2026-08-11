@@ -1,5 +1,9 @@
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const defaultBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox";
@@ -9,11 +13,50 @@ export const testWorkerBootstrapCredential =
   process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL ??
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+function createHTTPSFixtureCertificate() {
+  const inheritedKeyPath = process.env.FACTORY_E2E_TLS_KEY;
+  const inheritedCertificatePath = process.env.FACTORY_E2E_TLS_CERTIFICATE;
+  if (inheritedKeyPath && inheritedCertificatePath) {
+    return describeHTTPSFixtureCertificate(inheritedKeyPath, inheritedCertificatePath);
+  }
+  if (inheritedKeyPath || inheritedCertificatePath) {
+    throw new Error("FACTORY_E2E_TLS_KEY and FACTORY_E2E_TLS_CERTIFICATE must be set together");
+  }
+  const directory = mkdtempSync(join(tmpdir(), "factory-e2e-tls-"));
+  const keyPath = join(directory, "https-proxy.key");
+  const certificatePath = join(directory, "https-proxy.crt");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    "-keyout", keyPath, "-out", certificatePath,
+    "-subj", "/CN=127.0.0.1",
+    "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
+  ], { stdio: "ignore" });
+  process.env.FACTORY_E2E_TLS_KEY = keyPath;
+  process.env.FACTORY_E2E_TLS_CERTIFICATE = certificatePath;
+  process.once("exit", () => rmSync(directory, { recursive: true, force: true }));
+  return describeHTTPSFixtureCertificate(keyPath, certificatePath);
+}
+
+function describeHTTPSFixtureCertificate(keyPath: string, certificatePath: string) {
+  const certificate = new X509Certificate(readFileSync(certificatePath));
+  const spkiSHA256 = createHash("sha256")
+    .update(certificate.publicKey.export({ type: "spki", format: "der" }))
+    .digest("base64");
+  return { keyPath, certificatePath, spkiSHA256 };
+}
+
+export const httpsFixtureCertificate = createHTTPSFixtureCertificate();
+
 export function serverBrowserLaunchOptions(
   launcher = process.env.FACTORY_BROWSER_LAUNCHER ?? defaultBrowserLauncher,
 ) {
-  if (!existsSync(launcher)) return undefined;
-  return { executablePath: launcher, chromiumSandbox: true };
+  const options = {
+    args: [
+      `--ignore-certificate-errors-spki-list=${httpsFixtureCertificate.spkiSHA256}`,
+    ],
+  };
+  if (!existsSync(launcher)) return options;
+  return { ...options, executablePath: launcher, chromiumSandbox: true };
 }
 
 export type E2EServerAddress = {
@@ -91,7 +134,6 @@ export async function createPlaywrightConfig(portOverride?: string) {
     outputDir: "test-results/artifacts",
     use: {
       baseURL: serverAddress.origin,
-      ignoreHTTPSErrors: true,
       launchOptions: serverBrowserLaunchOptions(),
       trace: "retain-on-failure",
       screenshot: "only-on-failure",
@@ -111,6 +153,8 @@ export async function createPlaywrightConfig(portOverride?: string) {
       env: {
         FACTORY_E2E_PORT: String(serverAddress.port),
         FACTORY_E2E_BACKEND_PORT: String(serverAddress.backendPort),
+        FACTORY_E2E_TLS_KEY: httpsFixtureCertificate.keyPath,
+        FACTORY_E2E_TLS_CERTIFICATE: httpsFixtureCertificate.certificatePath,
         FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
       },
     },

@@ -363,14 +363,11 @@ const server = spawn(
   },
 );
 
-const proxyKey = join(temporary, "https-proxy.key");
-const proxyCertificate = join(temporary, "https-proxy.crt");
-await run("openssl", [
-  "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-  "-keyout", proxyKey, "-out", proxyCertificate,
-  "-subj", "/CN=127.0.0.1",
-  "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
-], { stdio: "ignore" });
+const proxyKey = process.env.FACTORY_E2E_TLS_KEY;
+const proxyCertificate = process.env.FACTORY_E2E_TLS_CERTIFICATE;
+if (!proxyKey || !proxyCertificate) {
+  throw new Error("FACTORY_E2E_TLS_KEY and FACTORY_E2E_TLS_CERTIFICATE are required");
+}
 
 // This is deliberately a real TLS hop, not a mocked Origin header. It strips
 // client-supplied forwarding metadata before adding the one trusted loopback
