@@ -152,4 +152,21 @@ describe("build", () => {
     });
     expect(sectionOf(waiting)).not.toBe("done");
   });
+
+  it("shows a terminal release failure instead of promising that it is waiting", () => {
+    const stopped = build([task("verify", "Verify", "succeeded", 1)], {}, [], {}, {
+      "Экран Работа": {
+        state: "release_failed",
+        text: "Выпуск остановился с кодом 7. Причина: проверка здоровья не прошла.",
+      },
+    })[0];
+
+    expect(stopped.status).toMatchObject({
+      kind: "stuck", label: "Выпуск остановлен",
+      happened: "Выпуск остановился с кодом 7. Причина: проверка здоровья не прошла.",
+      next: "Выпуск не подтверждён; работа остаётся незавершённой.",
+      owner: "Проверь причину выпуска в уведомлении и запусти выпуск повторно после исправления.",
+    });
+    expect(sectionOf(stopped)).toBe("stuck");
+  });
 });
