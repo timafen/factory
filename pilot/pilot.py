@@ -3799,9 +3799,9 @@ def advance_epics(conf, tasks, workflows, workers):
                     complete_subtask(sub, "task_history", receipt)
                     finished.append(i)
             elif state_now == "none" and sub.get("status") == "running":
-                receipt = merge_receipt(sub["title"], since)
+                receipt = delivery_receipt(sub["title"], since)
                 if receipt:
-                    complete_subtask(sub, "merge_journal", receipt, receipt["at"])
+                    complete_subtask(sub, "delivery_receipt", receipt, receipt["at"])
                     finished.append(i)
             elif sub.get("status") == "done" and state_now in ("working", "waiting", "stuck"):
                 new_generation = state_now in ("working", "waiting") or any(
@@ -5605,6 +5605,8 @@ def host_load_admits(tasks, stage, load, respect_host_load=True):
 
 
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
+DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/deliveries.jsonl"
+DELIVERY_WAIT_KEY = "post_merge_delivery_waits"
 
 
 def merge_recorded(task_id):
@@ -5625,6 +5627,72 @@ def merge_recorded(task_id):
     except OSError:
         pass
     return False
+
+
+def delivery_receipt(base, since=""):
+    """Return a successful release receipt, never a merge-only receipt."""
+    try:
+        with open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as deliveries:
+            records = list(deliveries)
+    except OSError:
+        return None
+    for line in reversed(records):
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        at = str(record.get("at") or "")
+        if record.get("base") != (base or "").strip() or not at:
+            continue
+        if since and not receipt_after(at, since):
+            continue
+        return record
+    return None
+
+
+def _delivery_already_recorded(task_id, command_key, generation):
+    try:
+        with open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as deliveries:
+            return any(json.loads(line).get("task_id") == task_id
+                       for line in deliveries if line.strip())
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _complete_delivery_waits(conf, state, command_key, generation):
+    """Finish exactly the tasks whose promised release generation succeeded."""
+    waits = state.setdefault(DELIVERY_WAIT_KEY, [])
+    remaining = []
+    for wait in waits:
+        if (wait.get("command_key") != command_key or
+                int(wait.get("generation", generation + 1)) > int(generation)):
+            remaining.append(wait)
+            continue
+        task_id = wait.get("task_id")
+        if not task_id:
+            continue
+        if not _delivery_already_recorded(task_id, command_key, generation):
+            receipt = {"task_id": task_id, "base": wait.get("base", ""),
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "command_key": command_key, "generation": generation}
+            try:
+                os.makedirs(os.path.dirname(DELIVERY_RECEIPTS_PATH), exist_ok=True)
+                with open(DELIVERY_RECEIPTS_PATH, "a", encoding="utf-8") as deliveries:
+                    deliveries.write(json.dumps(receipt, ensure_ascii=False) + chr(10))
+            except OSError as exc:
+                log("delivery_receipt_error", repr(exc))
+                remaining.append(wait)
+                continue
+        mark_final(task_id, wait.get("stage", "Verify"), True)
+        link = wait.get("try_url") or ""
+        proof = wait.get("proof") or ""
+        body = "\nПосмотреть: " + link if link else (
+            "\nРезультат не визуальный. Проверено: " + proof if proof else
+            "\nВыпуск завершён; подробности есть в карточке.")
+        notify(conf, "Задача выполнена", wait.get("base", "") + body,
+               tags="white_check_mark", click=link or f"{UI_BASE}/tasks/{task_id}")
+    state[DELIVERY_WAIT_KEY] = remaining
+    save(STATE_PATH, state)
 
 
 def _median(xs):
@@ -5789,14 +5857,14 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
 def recent_done_block(tasks, n=5):
     """Recent owner work, based on pipeline facts rather than push wording.
 
-    Only the merge journal proves successful completion.  Failed and cancelled
+    Only a successful delivery receipt proves completion.  Failed and cancelled
     stages are terminal results; successful stages without a merge are merely
     pipeline progress.  Old notification-only records remain a small fallback
     while the task history ages in.
     """
-    merged = set()
+    delivered = set()
     try:
-        with io.open(MERGES_PATH, encoding="utf-8") as stream:
+        with io.open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as stream:
             lines = stream.readlines()[-400:]
         for line in reversed(lines):
             try:
@@ -5804,7 +5872,7 @@ def recent_done_block(tasks, n=5):
             except Exception:
                 continue
             if r.get("task_id"):
-                merged.add(r["task_id"])
+                delivered.add(r["task_id"])
     except Exception:
         pass
 
@@ -5813,7 +5881,7 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
-        if task.get("state") == "succeeded" and task.get("id") not in merged:
+        if task.get("state") == "succeeded" and task.get("id") not in delivered:
             continue
         title, stage = parsed
         if not title or is_service_work(title):
@@ -5826,8 +5894,8 @@ def recent_done_block(tasks, n=5):
     out = []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
-        if task.get("id") in merged:
-            status, detail = "merged", "Влито в main."
+        if task.get("id") in delivered:
+            status, detail = "delivered", "Влито в main и выпущено."
         elif state == "succeeded":
             status, detail = "passed", "Проверка прошла; слияние не подтверждено."
         else:
@@ -6356,6 +6424,19 @@ def poll_post_merge_deploys(conf, state, now=None):
             # a failed release. Every other non-zero result is an incident.
             if rc not in (0, 8):
                 _record_release_failure(command_key, release, output)
+                alerted = state.setdefault("post_merge_delivery_failures", set())
+                # JSON state cannot persist a set; accept older in-memory state too.
+                if not isinstance(alerted, list):
+                    alerted = list(alerted)
+                    state["post_merge_delivery_failures"] = alerted
+                failure_id = f"{command_key}:{release.get('generation')}"
+                if failure_id not in alerted:
+                    alerted.append(failure_id)
+                    notify(conf, "Выпуск после слияния не прошёл",
+                           "Работа остаётся незавершённой; выпуск завершился с ошибкой. " + output,
+                           priority="high", tags="warning")
+            elif rc == 0:
+                _complete_delivery_waits(conf, state, command_key, release.get("generation", 0))
             releases.pop(command_key, None)
             if rc == 8 and command_key == "deploy_factory_cmd" and conf.get(command_key):
                 # An independently started release owns the lock.  This must
@@ -6383,7 +6464,7 @@ def retry_pending_factory_deploy(conf, state, now=None):
     poll_post_merge_deploys(conf, state, now)
 
 
-def deploy_after_merge(conf, repo_identity, state=None, now=None):
+def deploy_after_merge(conf, repo_identity, state=None, now=None, delivery=None):
     """Queue a durable background release for the repository that was merged."""
     identity = (repo_identity or "").lower()
     if identity.endswith(".git"):
@@ -6406,13 +6487,22 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None):
         state = {}
     releases = state.setdefault(DEPLOY_STATE_KEY, {})
     running = releases.get(command_key)
+    if delivery:
+        # A merge behind an active release must wait for its coalesced successor.
+        target_generation = (int(running.get("generation", 0)) + 1 if running
+                             else int(releases.get("generation", 0)) + 1)
+        wait = dict(delivery, command_key=command_key, generation=target_generation)
+        waits = state.setdefault(DELIVERY_WAIT_KEY, [])
+        if not any(item.get("task_id") == wait.get("task_id") for item in waits):
+            waits.append(wait)
+        save(STATE_PATH, state)
     if running:
         running["queued"] = True
         save(STATE_PATH, state)
         log(f"{label} queued after generation={running.get('generation')}")
-        return None
+        return target_generation if delivery else None
     _start_post_merge_deploy(command_key, label, command, state)
-    return None
+    return target_generation if delivery else None
 
 
 def cycle(conf, state):
@@ -6709,7 +6799,6 @@ def cycle(conf, state):
                 if merge_recorded(tid):
                     log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
                     continue
-                mark_final(tid, wf, True)
                 branch, implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
@@ -6733,21 +6822,12 @@ def cycle(conf, state):
                                     ensure_ascii=False) + chr(10))
                         except Exception as e:
                             log("merge_journal_error", repr(e))
-                        # Хозяину не нужно знать про main — это кухня. Ему нужно:
-                        # задача выполнена, и вот дверь, где потрогать результат.
+                        # Финальный PASS и сообщение владельцу принадлежат не merge,
+                        # а успешному выпуску: до него работа только ожидает поставки.
                         link = try_url(result, rid)
                         if link and any(u in link for u in TRY_USELESS):
                             link = ""
                         pf = proof_of(result)
-                        if link:
-                            body_txt = "\nПосмотреть: " + link
-                        elif pf:
-                            body_txt = "\nРезультат не визуальный. Проверено: " + pf
-                        else:
-                            body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
-                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
-                               tags="white_check_mark",
-                               click=link or f"{UI_BASE}/tasks/{tid}")
                     else:
                         # Конфликт слияния — рабочий случай, а не тупик: пока эта
                         # работа шла, в main влилась соседняя. Возвращаем в
@@ -6792,7 +6872,10 @@ def cycle(conf, state):
                             notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     if ok:
-                        deploy_after_merge(conf, repo_identity, state)
+                        deploy_after_merge(conf, repo_identity, state, delivery={
+                            "task_id": tid, "stage": wf, "base": base_title(title),
+                            "try_url": link, "proof": pf,
+                        })
                 else:
                     log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
             else:

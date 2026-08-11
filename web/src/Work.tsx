@@ -177,6 +177,9 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const failed = g.items[g.items.length - 1]?.task.state === "failed";
     const allCancelled = g.items.every((i) => i.task.state === "cancelled");
     const completed = g.items[g.items.length - 1]?.task.state === "succeeded";
+    const awaitingDelivery = g.items.some((i) => i.stage === "Verify"
+      && i.task.state === "succeeded" && i.verdict?.final_pass !== true
+      && i.verdict?.final_pass !== false);
 
     if (waiting) {
       g.status = {
@@ -241,6 +244,13 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       g.status = {
         kind: "archive", label: "сбой в истории", tone: "muted",
         happened: "Последняя попытка завершилась сбоем.", next: "Новый активный шаг в API не найден.",
+        owner: "Участие владельца не требуется.",
+      };
+    } else if (awaitingDelivery) {
+      g.status = {
+        kind: "active", label: "Ожидает слияния и выпуска", tone: "live",
+        happened: "Проверка приняла изменения; Factory ждёт подтверждённый выпуск.",
+        next: "После успешного выпуска работа будет отмечена завершённой.",
         owner: "Участие владельца не требуется.",
       };
     } else if (passed || completed) {
