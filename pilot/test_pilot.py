@@ -2285,10 +2285,115 @@ class PipelineWatchMergeTests(unittest.TestCase):
             pilot.cycle(self.conf, {"processed": []})
 
         self.assertEqual(merge.call_count, 1)
-        final.assert_called_once_with("verify-pass", "Verify", True)
+        # Один merge не завершает Verify: это делает только delivery receipt.
+        final.assert_not_called()
         with open(journal, encoding="utf-8") as entries:
             records = [json.loads(line) for line in entries]
         self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
+
+    def test_restart_after_merge_journal_restores_one_delivery_wait(self):
+        """A crash between merge journal and deploy reservation cannot lose release."""
+        self.conf.update({"stages": [{"workflow": "Verify"}], "auto_merge": True,
+                          "deploy_factory_cmd": "fx factory release"})
+        verify = {
+            "id": "verify-pass",
+            "title": "[auto] [1/1 Verify] Восстановить выпуск после рестарта",
+            "state": "succeeded", "repository_id": "repo-id",
+        }
+        detail = {
+            "task": {"repository_id": "repo-id"}, "workflow": {"title": "Verify"},
+            "context": "Branch: factory/restart-delivery",
+            "attempts": [{"result": "PASS\nBRANCH: factory/restart-delivery"}],
+        }
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        state_path = os.path.join(temporary.name, "state.json")
+        verdict_dir = os.path.join(temporary.name, "verdicts")
+        status = os.path.join(temporary.name, "release.status")
+        with open(journal, "w", encoding="utf-8") as entries:
+            entries.write(json.dumps({"task_id": "verify-pass",
+                                      "base": "Восстановить выпуск после рестарта"}) + "\n")
+        with open(status, "w", encoding="utf-8") as result:
+            result.write("0\n")
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [verify]}
+            if path == "/tasks/verify-pass":
+                return detail
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                                             "remote_identity": "github.com/timafen/factory"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": "verify-workflow", "enabled": True,
+                    "current_revision": {"id": "verify-revision", "title": "Verify"}}]}
+            raise AssertionError(path)
+
+        def reserve(command_key, _label, _command, state):
+            state[pilot.DEPLOY_STATE_KEY] = {
+                "generation": 1,
+                command_key: {"generation": 1, "status": status,
+                              "output": "/missing", "queued": False},
+            }
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "rescue_queued",
+                 "supersede_stale_questions", "handle_answers", "advance_epics",
+                 "autostart_plan", "cleanup_work_archive", "retry_pending_factory_deploy")
+        state = {"processed": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                                                  side_effect=lambda day_start, _week_start:
+                                                  {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "area_extend"))
+            stack.enter_context(mock.patch.object(pilot, "collect_ideas"))
+            stack.enter_context(mock.patch.object(pilot, "decide",
+                                                  return_value={"action": "stop"}))
+            stack.enter_context(mock.patch.object(pilot, "gh_merge"))
+            start = stack.enter_context(mock.patch.object(
+                pilot, "_start_post_merge_deploy", side_effect=reserve))
+            notify = stack.enter_context(mock.patch.object(pilot, "notify"))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", journal))
+            stack.enter_context(mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries))
+            stack.enter_context(mock.patch.object(pilot, "STATE_PATH", state_path))
+            stack.enter_context(mock.patch.object(pilot, "VERDICT_DIR", verdict_dir))
+            stack.enter_context(mock.patch.object(pilot, "HOME", temporary.name))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            # This is the restart point: merge journal exists, delivery wait does not.
+            pilot.cycle(self.conf, state)
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(state[pilot.DELIVERY_WAIT_KEY][0]["task_id"], "verify-pass")
+            self.assertFalse(pilot.final_ok("verify-pass", strict=True))
+
+            # A second restart before release completion keeps the same wait,
+            # rather than queueing a second release or reporting completion.
+            state["processed"] = []
+            pilot.cycle(self.conf, state)
+            self.assertEqual(start.call_count, 1)
+            self.assertFalse(pilot.final_ok("verify-pass", strict=True))
+
+            pilot.poll_post_merge_deploys(self.conf, state)
+            self.assertTrue(pilot.final_ok("verify-pass", strict=True))
+
+            # The durable receipt makes later restarts entirely idempotent.
+            state["processed"] = []
+            pilot.cycle(self.conf, state)
+
+        with open(deliveries, encoding="utf-8") as records:
+            self.assertEqual(len(records.readlines()), 1)
+        self.assertEqual(start.call_count, 1)
+        notify.assert_called_once()
 
 
 class PlanCardCleanupTest(unittest.TestCase):

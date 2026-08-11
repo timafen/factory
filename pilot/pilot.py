@@ -5462,6 +5462,29 @@ def _delivery_already_recorded(task_id, command_key, generation):
         return False
 
 
+def recover_post_merge_delivery(conf, state, repo_identity, delivery):
+    """Restore a release wait when Pilot stopped after writing merge journal.
+
+    The merge journal is the durable idempotency guard for ``gh_merge``.  It
+    can therefore outlive a process that stopped before ``deploy_after_merge``
+    persisted its wait.  A successful delivery receipt or terminal release
+    failure is authoritative; otherwise registering the same task again is
+    safe and starts at most one release.
+    """
+    task_id = delivery.get("task_id")
+    if (not task_id or final_ok(task_id, strict=True) or
+            _delivery_already_recorded(task_id, "", 0)):
+        return None
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    if (statuses.get(delivery.get("base", "")) or {}).get("state") == "release_failed":
+        return None
+    for wait in state.get(DELIVERY_WAIT_KEY, []):
+        if wait.get("task_id") == task_id:
+            return wait.get("generation")
+    log(f"POST-MERGE-DELIVERY restore task={task_id}")
+    return deploy_after_merge(conf, repo_identity, state, delivery=delivery)
+
+
 def _complete_delivery_waits(conf, state, command_key, generation):
     """Finish exactly the tasks whose promised release generation succeeded."""
     waits = state.setdefault(DELIVERY_WAIT_KEY, [])
@@ -6648,13 +6671,27 @@ def cycle(conf, state):
         if not next_stage:
             # end of pipeline (Verify): auto-merge on PASS, then optional staging deploy
             if conf.get("auto_merge", True) and verify_passed(result):
-                if merge_recorded(tid):
-                    log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
-                    continue
                 branch, _implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
+                link = try_url(result, rid)
+                if link and any(u in link for u in TRY_USELESS):
+                    link = ""
+                delivery = {
+                    "task_id": tid, "stage": wf, "base": base_title(title),
+                    "try_url": link, "proof": proof_of(result),
+                }
+                if merge_recorded(tid):
+                    # A prior process may have stopped in the small window
+                    # after recording its merge receipt and before reserving
+                    # the release wait.  Restore that wait before skipping the
+                    # duplicate merge; receipt/failure checks make this a noop
+                    # for a completed or terminally failed delivery.
+                    if repo_identity:
+                        recover_post_merge_delivery(conf, state, repo_identity, delivery)
+                    log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
+                    continue
                 if branch and repo_identity:
                     # Замок: если ветка уже в main (второй PASS той же работы),
                     # второй PR не открываем — «Обзор» так влился дважды.
@@ -6676,10 +6713,6 @@ def cycle(conf, state):
                             log("merge_journal_error", repr(e))
                         # Финальный PASS и сообщение владельцу принадлежат не merge,
                         # а успешному выпуску: до него работа только ожидает поставки.
-                        link = try_url(result, rid)
-                        if link and any(u in link for u in TRY_USELESS):
-                            link = ""
-                        pf = proof_of(result)
                     else:
                         # Конфликт слияния — рабочий случай, а не тупик: пока эта
                         # работа шла, в main влилась соседняя. Возвращаем в
@@ -6719,10 +6752,7 @@ def cycle(conf, state):
                             notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                     if ok:
-                        deploy_after_merge(conf, repo_identity, state, delivery={
-                            "task_id": tid, "stage": wf, "base": base_title(title),
-                            "try_url": link, "proof": pf,
-                        })
+                        recover_post_merge_delivery(conf, state, repo_identity, delivery)
                 else:
                     log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
             else:
