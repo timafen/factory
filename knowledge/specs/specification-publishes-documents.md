@@ -119,7 +119,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0077-specification-publishes-current-work.md`
+`knowledge/cards/CARD-0079-specification-publishes-current-work.md`
 
 ГОТОВО-КОГДА: файл migrations/023_specification_publishes_documents.sql
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
