@@ -165,8 +165,15 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		// A broker restart cannot prove an old in-process executor still exists.
 		// Fail closed instead of launching it again.
 		if item.Status == "launching" || item.Status == "running" {
-			item.Status = "failed"
-			_ = b.persist(&item)
+			updated := item
+			updated.Status = "failed"
+			if err := b.persist(&updated); err != nil {
+				// Do not publish a terminal recovery result which the next
+				// restart cannot observe.  Refusing to start also prevents any
+				// caller from mistaking an in-memory result for durable proof.
+				return nil, err
+			}
+			item = updated
 		}
 		b.items[item.Request.OperationID] = &item
 	}
@@ -335,8 +342,15 @@ func (b *Broker) execute(item *operation) {
 		status = "failed"
 	}
 	b.mu.Lock()
-	item.Status = status
-	_ = b.persist(item)
+	// A terminal response is delivery proof.  Publish it only after the same
+	// value is durably represented by the operation record.  If persistence
+	// fails, retain the prior non-terminal state: callers must not create a
+	// receipt from an outcome which a fresh broker cannot confirm.
+	updated := *item
+	updated.Status = status
+	if err := b.persist(&updated); err == nil {
+		*item = updated
+	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
 	}
@@ -351,21 +365,19 @@ func (b *Broker) runnerStarted(item *operation, pid int) bool {
 	if b.active != item.Request.OperationID || item.Status != "launching" {
 		return false
 	}
-	item.PID = pid
-	if err := b.persist(item); err != nil {
-		item.PID = 0
-		item.Status = "failed"
-		_ = b.persist(item)
+	updated := *item
+	updated.PID = pid
+	if err := b.persist(&updated); err != nil {
 		b.active = ""
 		return false
 	}
-	item.Status = "running"
-	if err := b.persist(item); err != nil {
-		item.Status = "failed"
-		_ = b.persist(item)
+	*item = updated
+	updated.Status = "running"
+	if err := b.persist(&updated); err != nil {
 		b.active = ""
 		return false
 	}
+	*item = updated
 	return true
 }
 
