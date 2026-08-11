@@ -2,13 +2,14 @@
 
 ## HEAD
 
-Implementation commit: 5849057e79d935d49e30b603d3921289ddfe3170 — Пилот резервирует уникальный номер карточки для опубликованной ветки.
+Implementation commit: bb6748ae9492e874a78064bc9388336865053482 — Пилот сохраняет закреплённый номер карточки после конфликта слияния до следующего Review.
 
 - Status: Implemented — awaiting Review.
-- Branch: `factory/e7b754fc-fcb-63573b74-3e5`.
+- Branch: `factory/db1fc0bf-3d5-b1b5aea2-ddd`.
 - What changed: до запуска разработки номер сохраняется за парой репозиторий/ветка;
-  он передаётся в Implement, Review и Verify и проверяется перед Review.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.CardNumberReservationTests pilot.test_pilot.SpecificationBranchHandoffTests` → 13 tests, OK.
+  он передаётся в Implement, Review и Verify, включая возврат после конфликта слияния.
+- Evidence: целевой набор резервирования, handoff и merge → 15 tests, OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → OK.
 - Next action: Review проверить изменение и целевые регрессии.
 
 ## LOG
@@ -23,3 +24,10 @@ Implementation commit: 5849057e79d935d49e30b603d3921289ddfe3170 — Пилот �
 
 Целевые 13 тестов и `python3 -m py_compile pilot/pilot.py` прошли успешно;
 `git diff --check` не нашёл ошибок пробелов.
+
+### 2026-08-11 — Implement
+
+После конфликта автоматического слияния возврат из Verify теперь переносит
+`Card:` в контекст повторного Implement. Регрессионный сценарий проводит
+закреплённый номер через этот возврат и подтверждает его передачу в Review.
+Целевые 15 тестов, `py_compile` и `git diff --check` прошли успешно.
