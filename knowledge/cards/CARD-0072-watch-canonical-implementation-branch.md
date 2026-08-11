@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented and tested — awaiting Review.
-- Branch: `factory/607396d9-c82-f83b9850-8ef`.
-- Implementation commit: 16c213aba9ab0278ed3085c22967d3673992e94c — сторож сохраняет подтверждённые branch/head настоящей реализации и продолжает с них.
-- What changed: успешная `Implement + Test` закрепляет опубликованный непустой
-  артефакт; Watch, Review, Verify, вопросы и resume предпочитают его случайной
-  ветке поздней стадии. Созданная Watch задача сразу попадает в снимок цикла.
-- Evidence: целевые классы — 11/11 OK; полный `pilot.test_pilot` — 180/180 OK;
-  `py_compile` и `git diff --check` — OK.
-- One next action: Review сверяет diff и сохранение canonical identity во всех
-  переходах без повторного полного прогона.
+- Status: Implemented and targeted tests pass — awaiting Review.
+- Branch: `factory/7341e44a-675-b7e7c7ff-d0a`.
+- Implementation commit: a1d91bcca6c11a9df71767ae9a05c7d689c1feb6 — пересобранная delivery-ветка сохраняется до Verify и auto-merge.
+- What changed: выбранная `review_gate` ветка хранится отдельно от canonical
+  implementation artifact и проходит через Review → Verify → merge; новая
+  реализация и новое поколение сбрасывают прежний выбор.
+- Evidence: 22/22 связанных теста OK; `py_compile` и `git diff --check` — OK.
+- One next action: Review подтверждает, что delivery-ветка не подменяется
+  canonical fallback после перехода Review → Verify.
 
 ## LOG
 
@@ -37,3 +36,12 @@ deduplication и продолжение через Review/Verify/auto-answer/res
 нормализует созданную задачу в текущем снимке, поэтому поздний отменённый retry
 видит уже живую следующую стадию. Доказательство: 11/11 целевых и 180/180 всех
 тестов `pilot.test_pilot`, `py_compile` и `git diff --check` прошли.
+
+### 2026-08-11 — Implement
+
+Коммит `a1d91bcca6c11a9df71767ae9a05c7d689c1feb6` устранил замечание повторного
+Review: чистая ветка, пересобранная `review_gate`, теперь записывается как
+поколенно-ограниченный delivery artifact и остаётся выбранной для Review,
+Verify, вопросов, resume и auto-merge; canonical branch/head сохранены как
+fallback. Сквозной тест воспроизвёл rebuild → Review → Verify → merge, все 22
+связанных теста, `py_compile` и `git diff --check` прошли.
