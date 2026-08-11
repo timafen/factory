@@ -343,6 +343,85 @@ class DeliveryAreaTests(unittest.TestCase):
         self.assertIn("только карточки", result["note"])
 
 
+class FreshDefaultBranchSnapshotTests(unittest.TestCase):
+    def git(self, cwd, *args):
+        rc, out = pilot._git(cwd, *args)
+        self.assertEqual(rc, 0, out)
+        return out.strip()
+
+    def commit(self, work, name, body):
+        path = os.path.join(work, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        self.git(work, "add", name)
+        self.git(work, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                 "commit", "-qm", name)
+
+    def test_remote_advance_replaces_stale_scope_and_preserves_worker_branch(self):
+        """The regression must use a real bare remote, not mocked GitHub data."""
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            observer = os.path.join(tmp, "observer")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "README.md", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+            self.git(tmp, "clone", "-q", remote, observer)  # its origin/main is now stale
+
+            self.commit(author, "foreign-from-advanced-main.txt", "not this delivery\n")
+            self.git(author, "push", "-q", "origin", "main")
+            self.git(author, "checkout", "-qb", "factory/candidate", "origin/main")
+            expected = ["delivery/file-%02d.txt" % i for i in range(1, 12)]
+            for names, message in ((expected[:6], "first delivery batch"),
+                                   (expected[6:], "second delivery batch")):
+                for name in names:
+                    path = os.path.join(author, name)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(name)
+                self.git(author, "add", "delivery")
+                self.git(author, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                         "commit", "-qm", message)
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+
+            self.git(observer, "fetch", "-q", "origin",
+                     "factory/candidate:refs/remotes/origin/factory/candidate")
+            old_scope = self.git(observer, "diff", "--name-only",
+                                 "origin/main...origin/factory/candidate").splitlines()
+            self.assertIn("foreign-from-advanced-main.txt", old_scope)
+            self.assertEqual(len(old_scope), 12)
+            self.git(observer, "checkout", "-qb", "worker-owned")
+            before = self.git(observer, "symbolic-ref", "--short", "HEAD")
+
+            snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
+
+            self.assertEqual(snapshot["state"], "ok")
+            self.assertEqual(snapshot["files"], expected)
+            self.assertEqual(snapshot["ahead_by"], 2)
+            self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
+            self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
+            self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
+
+    def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
+        snapshot = pilot.fresh_branch_snapshot("file:///definitely/not/a/repository", "factory/candidate")
+        self.assertEqual(snapshot["state"], "blocked")
+        self.assertIn("default branch", snapshot["reason"])
+
+    def test_review_gate_keeps_infrastructure_failure_out_of_request_changes(self):
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
+                "state": "blocked", "reason": "cannot fetch authoritative refs"}):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+        self.assertTrue(result["blocked"])
+        self.assertNotIn("REQUEST CHANGES", result["note"])
+        self.assertIn("review infrastructure", result["note"])
+
+
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
         self.created = []

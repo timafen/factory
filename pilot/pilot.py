@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -328,12 +328,20 @@ AGENT_RULES = """
 1. Ветка: режь от свежего origin/main (git fetch origin). НИКОГДА не делай
    checkout другой ветки в рабочей копии — это ломает воркера. Чужую работу
    забирай так: git fetch origin <ветка> && git reset --hard FETCH_HEAD.
-2. Сдача: сначала перебазируй на свежий main (git fetch origin main,
+2. Review и Verify: ДО ЛЮБОГО diff, log, merge-base или решения о пустой
+   поставке получи default branch именно remote (`git ls-remote --symref origin
+   HEAD`), fetch-ни только этот ref и рабочую ветку в отдельный read-only
+   каталог, зафиксируй полные `base_sha` и `candidate_sha`. Все сравнения
+   делай только как `<base_sha>...<candidate_sha>`; cached `origin/main`
+   запрещён. Ошибка resolution/fetch — это `BLOCKED: review infrastructure`,
+   никогда не REQUEST CHANGES. В финальном отчёте укажи обе SHA и причину,
+   если инфраструктура заблокировала проверку.
+3. Сдача: сначала перебазируй на свежий main (git fetch origin main,
    затем git rebase origin/main), потом проверь список файлов командой
    git diff --name-only origin/main...HEAD — именно ТРИ точки, сравнение от
    точки ветвления. В списке ТОЛЬКО твои файлы. Запушь:
    git push --force-with-lease -u origin HEAD. Непушенная работа не существует.
-3. Отчёт заканчивай строками:
+4. Отчёт заканчивай строками:
    ОБЛАСТЬ: <файлы через запятую, ровно как в git>
    TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
    страницы (health, login, «ok») — НЕ результат. Если работа невидимая
@@ -345,10 +353,10 @@ AGENT_RULES = """
    одной командой (проверено 25 целевыми проверками)». Голые «тесты
    зелёные», «diff чистый», «коммит запушен» доказательством НЕ считаются
    и будут возвращены>
-4. Пиши для человека: первая строка коммита — по-русски, что и зачем.
+5. Пиши для человека: первая строка коммита — по-русски, что и зачем.
    Голые хеши/ID на экранах и в текстах для владельца запрещены — только
    со словесной подписью. Ревью возвращает работу за голый хеш на экране.
-5. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
+6. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
    только как `knowledge/cards/<выданный Card>-<slug>.md`. Не ищи следующий
    номер в файлах и не выбирай его самостоятельно. В общие файлы-журналы
    (CARD-0030 и подобные) НЕ дописывай ни строки: общий файл — магнит для
@@ -360,7 +368,7 @@ AGENT_RULES = """
    изменения вне `knowledge/cards/`. Не пиши `Head commit` и не сверяй это
    поле с текущим `git HEAD`: запись карточки закономерно создаёт следующий
    документационный коммит.
-6. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
+7. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
    только целевые тесты своей области (и новые). Ревью тесты не запускает —
    читает дифф, максимум целевые при сомнении. Полный набор — ровно ОДИН раз,
    на Проверке, перед вливанием. Итерации должны быть минутами, не десятками.
@@ -2303,17 +2311,97 @@ def save_promises(base, text):
     log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
 
 
+GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _remote_url(repo_identity):
+    """Return the canonical read-only URL without looking at a worker checkout."""
+    if str(repo_identity or "").startswith(("file://", "http://", "https://", "ssh://")):
+        return str(repo_identity)
+    short = (repo_identity or "").split("github.com/")[-1].strip("/")
+    return f"https://github.com/{short}.git" if short and "/" in short else ""
+
+
+def _default_branch(url):
+    """Resolve the remote's symbolic HEAD; never assume that it is `main`."""
+    rc, out = _git(None, "ls-remote", "--symref", url, "HEAD")
+    if rc:
+        return "", "cannot resolve remote default branch: " + out.strip()[:240]
+    match = re.search(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", out, re.M)
+    if not match:
+        return "", "remote did not advertise a default branch"
+    return match.group(1), ""
+
+
+def fresh_branch_snapshot(repo_identity, branch):
+    """Fetch and pin the exact remote base and candidate in an isolated repo.
+
+    This is deliberately independent of a retained worker worktree: cached
+    refs can be stale and a review must never checkout, switch, or reset the
+    branch that belongs to the worker.  A caller may only use the returned
+    immutable SHA values for ancestry and diff decisions.
+    """
+    url = _remote_url(repo_identity)
+    if not url or not branch:
+        return {"state": "blocked", "reason": "missing repository or candidate branch"}
+    default, error = _default_branch(url)
+    if error:
+        return {"state": "blocked", "reason": error}
+    try:
+        with tempfile.TemporaryDirectory(prefix="factory-review-") as work:
+            rc, out = _git(work, "init", "-q")
+            if rc:
+                return {"state": "blocked", "reason": "cannot create review repository: " + out[:180]}
+            rc, out = _git(work, "remote", "add", "origin", url)
+            if rc:
+                return {"state": "blocked", "reason": "cannot configure review remote: " + out[:180]}
+            # A separate ls-remote lets a genuinely missing delivery remain a
+            # delivery issue while every resolution/fetch failure is BLOCKED.
+            rc, heads = _git(work, "ls-remote", "--heads", "origin", "refs/heads/" + branch)
+            if rc:
+                return {"state": "blocked", "reason": "cannot resolve candidate branch: " + heads[:180]}
+            if not heads.strip():
+                return {"state": "missing", "default_branch": default}
+            refs = ["+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
+            if branch != default:
+                refs.append("+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch))
+            rc, out = _git(work, "fetch", "--prune", "origin", *refs)
+            if rc:
+                return {"state": "blocked", "reason": "cannot fetch authoritative refs: " + out[:240]}
+            rc, base_sha = _git(work, "rev-parse", "refs/remotes/origin/" + default)
+            if rc:
+                return {"state": "blocked", "reason": "cannot pin fetched base: " + base_sha[:180]}
+            rc, candidate_sha = _git(work, "rev-parse", "refs/remotes/origin/" + branch)
+            if rc:
+                return {"state": "blocked", "reason": "cannot pin fetched candidate: " + candidate_sha[:180]}
+            base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
+            if not GIT_SHA.fullmatch(base_sha) or not GIT_SHA.fullmatch(candidate_sha):
+                return {"state": "blocked", "reason": "remote returned an invalid commit SHA"}
+            rc, out = _git(work, "merge-base", "--is-ancestor", base_sha, candidate_sha)
+            if rc:
+                return {"state": "blocked", "reason": "candidate is not based on fetched default branch"}
+            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
+            if rc:
+                return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
+            rc, ahead = _git(work, "rev-list", "--count", base_sha + ".." + candidate_sha)
+            if rc:
+                return {"state": "blocked", "reason": "cannot calculate pinned delivery distance: " + ahead[:180]}
+            return {"state": "ok", "default_branch": default, "base_sha": base_sha,
+                    "candidate_sha": candidate_sha,
+                    "files": [p for p in out.splitlines() if p][:80],
+                    "ahead_by": int(ahead.strip())}
+    except Exception as e:
+        return {"state": "blocked", "reason": "review snapshot failed: " + str(e)[:240]}
+
+
 def branch_report(repo_identity, branch):
-    """Что реально лежит в хранилище: ('нет'|'есть', [файлы диффа])."""
-    repo = repo_identity.split("github.com/")[-1]
-    if not repo or not branch:
-        return "", []
-    b = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
-    if b is None:
+    """Compatibility view of the authoritative snapshot used by Review gates."""
+    snapshot = fresh_branch_snapshot(repo_identity, branch)
+    if snapshot.get("state") == "missing":
         return "нет", []
-    cmp_ = gh_json(["api", f"repos/{repo}/compare/main...{branch}"], strict=True)
-    files = [f.get("filename") for f in (cmp_ or {}).get("files", [])][:80]
-    return "есть", files
+    if snapshot.get("state") != "ok":
+        raise RuntimeError(snapshot.get("reason") or "review infrastructure blocked")
+    return "есть", snapshot["files"]
 
 
 IMPLEMENTATION_COMMIT_LINE = re.compile(
@@ -2534,14 +2622,25 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
                 expected_card=""):
-    """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
-    Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
-    не блокируют конвейер: тогда ворота просто молчат."""
-    try:
+    """Create Review context only from a freshly fetched, pinned snapshot."""
+    snapshot = fresh_branch_snapshot(repo_identity, branch)
+    # Test-only/legacy callers without a remote identity retain the small
+    # branch_report seam. Every real repository enters the pinned path above.
+    if not _remote_url(repo_identity):
         state_, files = branch_report(repo_identity, branch)
-    except Exception as e:
-        log("gate_error", repr(e))
-        return None
+        snapshot = {"state": "ok", "default_branch": "unavailable",
+                    "base_sha": "unavailable", "candidate_sha": "unavailable",
+                    "ahead_by": "unavailable", "files": files}
+    elif snapshot.get("state") == "blocked":
+        reason = snapshot.get("reason") or "unknown review infrastructure failure"
+        log("REVIEW BLOCKED " + repr(reason))
+        return {"blocked": True, "note": (
+            "BLOCKED: review infrastructure. Невозможно получить свежую основную "
+            "ветку или зафиксировать SHA до проверки; возврат на доработку не создавался. "
+            "Причина: " + reason)}
+    else:
+        state_ = "нет" if snapshot.get("state") == "missing" else "есть"
+    files = snapshot.get("files") or []
     if state_ == "нет":
         note_cap = cap_rescues(base, "GATE")
         if note_cap >= 2:
@@ -2666,7 +2765,10 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
 
         return {"back": False,
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
-                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}"
+                         "Проверяется свежая remote-основа "
+                         f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
+                         f"candidate_sha={snapshot['candidate_sha']}, ahead_by={snapshot['ahead_by']}). "
+                         f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
                          + prom_note + "\n"
                          "Сверяй записку с этим списком, а не с памятью. "
                          "Возвращай работу только по правилам из инструкций: чужие файлы, "
@@ -6924,6 +7026,16 @@ def cycle(conf, state):
                 overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:
                     state["processed"].remove(tid)
+                continue
+            if g and g.get("blocked"):
+                # A failed authoritative fetch is an infrastructure verdict,
+                # not a code defect and never a synthetic REQUEST CHANGES.
+                route_question(
+                    conf, tid, "Review", "Review", base, rid_g,
+                    "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
+                    "Повторить проверку после восстановления доступа к репозиторию?",
+                    ["Повтори проверку", "Покажи причину", "Останови работу"],
+                    g["note"], attempts_so_far=0, branch=branch)
                 continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
