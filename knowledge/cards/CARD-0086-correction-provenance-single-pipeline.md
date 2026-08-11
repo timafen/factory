@@ -1,4 +1,4 @@
-# CARD-0085 — Одна корректировка не создаёт второй конвейер
+# CARD-0086 — Одна корректировка не создаёт второй конвейер
 
 ## HEAD
 
@@ -25,6 +25,6 @@ task API/storage, makes explicit provenance authoritative in Pilot, retains a
 legacy-only title fallback, and requires a restart storm regression with
 exactly one pipeline.
 
-CARD-0085 was absent from fresh `origin/main` and every published remote branch
-when reserved. Existing parallel reservations CARD-0083 and CARD-0084 were not
-reused; old conflicted CARD-0079 remains untouched.
+CARD-0086 was absent from fresh `origin/main` and every published `factory/*`
+branch when reserved. The prior reservation is owned by concurrent work and
+was not reused; old conflicted CARD-0079 remains untouched.
