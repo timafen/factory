@@ -156,7 +156,7 @@ context и не обновляет снимок после `create_task`.
 
 ## Карточка
 
-`knowledge/cards/CARD-0070-watch-canonical-implementation-branch.md`
+`knowledge/cards/CARD-0072-watch-canonical-implementation-branch.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
