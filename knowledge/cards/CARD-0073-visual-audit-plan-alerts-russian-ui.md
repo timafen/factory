@@ -44,6 +44,18 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 Обновлено только устаревшее ожидание Worker Settings: тест проверяет актуальную
 русскую фразу «Обнови файл и перезапусти исполнителя». Production UI не менялся.
 
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| Полный Go/UI/lint/typecheck/build gate | `just check`; `npm run build`; `FACTORY_BUILD_DIR=/tmp/card-0073-build just build` | PASS: Go tests, vet, vuln, staticcheck, format, boundary, tooling, launcher; 15 UI-файлов и 157 UI-тестов; production UI и три Go-бинарника собраны. |
+| Русский Plan/Alerts и отсутствие overflow | `npx playwright test` (один запуск), tests 13, 21, 22 | PASS: 22 теста начаты; visual audit desktop/phone, narrow grouped layout, Plan и Alerts прошли. 55 PNG присутствуют в `web/test-results/screenshots`; audit проверил horizontal overflow и клиппинг. |
+| Все browser-сценарии | `npx playwright test` (один запуск) | FAIL: 16 passed, 1 failed, 5 did not run. `manages repository routing...` завис на `getByLabel('Canonical identity')` в `web/e2e/control-plane.spec.ts:1161`; timeout 120s. |
+| Browser wrapper и committed dist | `npm run test:browser` (один запуск) | FAIL до Playwright: build создал `index-BK4d6-ve.js`, а committed dist ссылается на `index-BLGRwC7Z.js`; `git diff --exit-code -- dist` остановил wrapper. |
+| Cleanup и дерево | process/port check; `git status --short` | Test-specific Playwright/server processes завершились; generated dist восстановлен, рабочее дерево чистое. |
+
+Итог: Verify FAIL. Код не изменялся; изменена только эта карточка для фиксации evidence.
+
 ### 2026-08-11 — Implement
 
 После review исправлен ослабленный locator около `control-plane.spec.ts:1502`:
