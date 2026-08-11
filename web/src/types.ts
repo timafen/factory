@@ -47,7 +47,7 @@ export interface Worker {
 
 export type PilotStage = "Triage" | "Specification" | "Implement + Test" | "Review" | "Verify";
 export type PilotTier = "low" | "medium" | "high";
-export type PilotNotificationGroup = "questions" | "stuck" | "money" | "done" | "escalate" | "routine";
+export type PilotNotificationGroup = "questions" | "stuck" | "money" | "done" | "escalate" | "diag" | "plan" | "routine";
 
 // Этапы приходят с сервера списком, а не словарём: порядок этапов —
 // это и есть конвейер, и его нельзя терять при сериализации.
@@ -65,9 +65,17 @@ export interface PilotSettings {
   auto_answer: boolean;
   max_stage_attempts: number;
   allow_any_worker: boolean;
+  respect_host_load: boolean;
   allowed_workers: string[];
   max_parallel_subtasks: number;
   max_parallel_works: number;
+  max_work_rounds?: number;
+  max_cap_rescues?: number;
+  max_loop_rescues?: number;
+  work_day_cap?: number;
+  day_task_cap?: number;
+  deep_diag_rounds?: number;
+  day_pct_cap?: number;
   day_cap_usd: number;
   deploy_staging_cmd: string;
   deploy_factory_cmd: string;

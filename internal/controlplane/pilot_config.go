@@ -28,6 +28,7 @@ type PilotConfigStore struct {
 	path      string
 	mu        sync.Mutex
 	writeFile func([]byte) error
+	writeTemp func([]byte) (int, error)
 }
 
 func NewPilotConfigStore(path string) *PilotConfigStore { return &PilotConfigStore{path: path} }
@@ -137,8 +138,17 @@ func (s *PilotConfigStore) atomicWrite(body []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err == nil {
-		_, _ = tmp.Write(body)
+	err = tmp.Chmod(0o600)
+	if err == nil {
+		writeTemp := tmp.Write
+		if s.writeTemp != nil {
+			writeTemp = s.writeTemp
+		}
+		var written int
+		written, err = writeTemp(body)
+		if err == nil && written != len(body) {
+			err = io.ErrShortWrite
+		}
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -177,6 +187,25 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 	}
 	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 || settings.MaxParallelWorks <= 0 {
 		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
+	}
+	optionalPositive := []struct {
+		name  string
+		value int
+	}{
+		{"max_work_rounds", settings.MaxWorkRounds},
+		{"max_cap_rescues", settings.MaxCapRescues},
+		{"max_loop_rescues", settings.MaxLoopRescues},
+		{"work_day_cap", settings.WorkDayCap},
+		{"day_task_cap", settings.DayTaskCap},
+		{"deep_diag_rounds", settings.DeepDiagRounds},
+	}
+	for _, field := range optionalPositive {
+		if field.value < 0 {
+			return nil, invalid("invalid_pilot_settings", field.name+" must be positive when set")
+		}
+	}
+	if math.IsNaN(settings.DayPctCap) || math.IsInf(settings.DayPctCap, 0) || settings.DayPctCap < 0 {
+		return nil, invalid("invalid_pilot_settings", "day_pct_cap must be positive when set")
 	}
 	if len(settings.Stages) != len(pilotStages) || len(settings.StageBaseUSD) != len(pilotStages) {
 		return nil, invalid("invalid_pilot_settings", "stages and stage_base_usd must contain exactly the five pilot stages")

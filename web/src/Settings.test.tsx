@@ -10,7 +10,8 @@ const response: PilotSettingsResponse = {
   warnings: ["Unknown worker: worker-new"],
   settings: {
     _note: "owner note", enabled: true, poll_seconds: 10, timeout_seconds: 60, auto_merge: true, auto_answer: false,
-    max_stage_attempts: 2, allow_any_worker: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2, max_parallel_works: 4,
+    max_stage_attempts: 2, allow_any_worker: true, respect_host_load: true, allowed_workers: ["worker-1"], max_parallel_subtasks: 2, max_parallel_works: 4,
+    max_work_rounds:8,max_cap_rescues:2,max_loop_rescues:2,work_day_cap:12,day_task_cap:120,deep_diag_rounds:5,day_pct_cap:90,
     day_cap_usd: 20, deploy_staging_cmd: "deploy staging", deploy_factory_cmd: "deploy factory", owner_chat_url: "https://example.test/chat", owner_ui_url: "https://example.test/ui",
     stages: [
       {workflow:"Triage",workers:{low:"worker-1",medium:"worker-1",high:"worker-new"}},
@@ -21,7 +22,7 @@ const response: PilotSettingsResponse = {
     ],
     skip_stages_for_low: ["Review"], stopped_pipelines: [], stage_base_usd: {"Triage":1,"Specification":1,"Implement + Test":2,"Review":1,"Verify":1},
     complexity_factor:{low:1,medium:2,high:3}, work_cap_usd:{low:2,medium:4,high:8}, ntfy_topic:"factory", ntfy_server:"https://ntfy.sh", ntfy_owner_topic:"owner",
-    notify_groups:{questions:true,stuck:false,money:true,done:true,routine:false},
+    notify_groups:{questions:true,stuck:false,money:true,done:true,escalate:true,diag:true,plan:true,routine:false},
     project_providers:[{remote_identity:"github.com/acme/factory",type:"factory"}],
     brain_chain:[{cli:"codex",model:"gpt",provider:"openai",note:"first"},{cli:"claude",model:"sonnet",provider:"anthropic",note:"second"}],
   },
@@ -88,26 +89,26 @@ it("shows every notification group in Russian with a hint and saves the changed 
     return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
+  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Диагностика остановок","Новые работы в Плане","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
   expect(screen.getByText("Присылать уведомление, если задача остановилась и требует вмешательства.")).toBeVisible();
   expect(screen.getByLabelText("Работа встала")).not.toBeChecked();
   await user.click(screen.getByLabelText("Работа встала")); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
-  expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,routine:false,escalate:true});
+  expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,escalate:true,diag:true,plan:true,routine:false});
 });
 
 it("uses pilot defaults when notification groups are absent", async () => {
   const settingsWithoutGroups={...response.settings}; delete settingsWithoutGroups.notify_groups;
   renderSettings(vi.fn(async()=>new Response(JSON.stringify({...response,settings:settingsWithoutGroups}),{status:200,headers:{"Content-Type":"application/json"}})));
-  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач"]) expect(await screen.findByLabelText(label)).toBeChecked();
+  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Диагностика остановок","Новые работы в Плане"]) expect(await screen.findByLabelText(label)).toBeChecked();
   expect(screen.getByLabelText("Рабочая рутина")).not.toBeChecked();
 });
 
 it("blocks strict routing to a worker outside the editable allow-list", async () => {
   const strict={...response,settings:{...response.settings,allow_any_worker:false}};
   renderSettings(vi.fn(async()=>new Response(JSON.stringify(strict),{status:200,headers:{"Content-Type":"application/json"}})));
-  expect(await screen.findByText(/Every routed worker must be in the allowed list/)).toBeVisible();
+  expect(await screen.findByText(/Каждый назначенный исполнитель должен входить в список/)).toBeVisible();
   expect(screen.getByRole("button",{name:"Сохранить настройки"})).toBeDisabled();
 });
 
@@ -124,4 +125,36 @@ it("allows adding a configuration note when the API omits it", async () => {
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
+});
+
+it("edits all operational limits and preserves them in the save request", async () => {
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({...response,settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  expect(await screen.findByText("Ограничения и восстановление")).toBeVisible();
+  expect(screen.getByLabelText("Учитывать нагрузку хоста")).toBeChecked();
+  await user.click(screen.getByLabelText("Учитывать нагрузку хоста"));
+  const rounds=screen.getByLabelText("Максимум кругов работы"); await user.clear(rounds); await user.type(rounds,"9");
+  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText("Настройки сохранены.");
+  const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
+  const saved=JSON.parse(String(put![1]!.body)).settings;
+  expect(saved.respect_host_load).toBe(false); expect(saved.max_work_rounds).toBe(9);
+  expect(saved).toMatchObject({max_cap_rescues:2,max_loop_rescues:2,work_day_cap:12,day_task_cap:120,deep_diag_rounds:5,day_pct_cap:90});
+});
+
+it("explains a stale save and loads the latest settings on request", async () => {
+  let latest=false;
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({error:{code:"config_conflict",message:"stale"}}),{status:409,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify({...response,version:latest?"version-two":"version-one",settings:{...response.settings,poll_seconds:latest?20:10}}),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  expect(await screen.findByLabelText("Интервал проверки, секунд")).toHaveValue(10);
+  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  expect(await screen.findByText(/Настройки уже изменились/)).toBeVisible();
+  latest=true; await user.click(screen.getByRole("button",{name:"Загрузить свежие настройки"}));
+  expect(await screen.findByLabelText("Интервал проверки, секунд")).toHaveValue(20);
 });
