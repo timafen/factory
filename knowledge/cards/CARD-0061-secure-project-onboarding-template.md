@@ -2,13 +2,17 @@
 
 ## HEAD
 
-- Status: SPECIFIED — ожидает реализации.
-- Branch: `factory/a78d60aa-96f-0281b277-4d5`.
-- Implementation commit: pending — реализация не начата на стадии Specification.
+- Status: IMPLEMENTED — целевые проверки и сборки зелёные.
+- Branch: `factory/718146bb-bd7-872cc553-67c`.
+Implementation commit: 82ed942cb86ab6bae9c660748e0f60a6e9e1ec2e — реализованы безопасные шаблоны Factory и staging Tarser.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
-- What changes: новый проект получает обязательный staging, fail-closed readiness,
-  именованные release/rollback-адаптеры и секреты вне репозитория и БД Factory.
-- One next action: реализовать утверждённый шаблон v1 по спецификации.
+- What changed: сервер принимает только два утверждённых типа, сам выбирает
+  группу и фиксированные release/rollback; `/projects` показывает fail-closed
+  ворота и только наличие секретов.
+- Evidence: `go test ./internal/controlplane -run 'Project|Secret|Adapter' -count=1` → PASS;
+  `npm --prefix web test -- --run src/Projects.test.tsx` → 2 PASS;
+  Go/Web build и web lint → PASS.
+- One next action: Verify проверяет целевые контракты и живой экран `/projects`.
 
 ## LOG
 
@@ -21,3 +25,11 @@
 секретов и secret-scan, static/typecheck, tests, build на одном SHA. Секреты
 остаются в `/etc/factory/projects/<project>/<environment>.env` с `root`, группой
 исполнителя и режимом `0640`; значения не выходят из разрешённой операции.
+
+### 2026-08-10 — Implement
+
+Реализованы миграция, API/store, серверные политики для
+`factory-single-instance` и `tarser-operations-staging`, безопасный secret
+resolver, единый SHA-набор ворот, фиксированные адаптеры с автоматическим
+rollback и экран `/projects`. Целевые Go-тесты, 2 Vitest-теста, vet, lint и обе
+сборки прошли; production Tarser и универсальные shell/SSH-адаптеры не добавлены.
