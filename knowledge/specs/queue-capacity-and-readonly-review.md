@@ -40,7 +40,7 @@ writer только как read-only работа по зафиксирован�
 ## Проверяемые обещания
 
 ГОТОВО-КОГДА: файл internal/controlplane/state.go
-ГОТОВО-КОГДА: файл migrations/023_queue_reassignment.sql
+ГОТОВО-КОГДА: файл migrations/024_queue_reassignment.sql
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/controlplane/workflows_test.go
 ГОТОВО-КОГДА: файл internal/worker/prompt_test.go
