@@ -1,15 +1,15 @@
 # CARD-0059 — Метрики обзора понятны без p90
 
-Implementation commit: d640ee285168fdbaea30732578093e30a10b0077 — подписи трёх метрик объясняют границу для 90% случаев без изменения API и расчётов.
+Implementation commit: e097fb1026c0d0991cc17eb891fdcd58c9ac0602 — подписи метрик объясняют границу для 90% случаев, а при отсутствии значения честно сообщают «данных нет».
 
 ## HEAD
 
-- Status: Implemented — awaiting review.
-- Branch: `factory/d3b020a7-563-79ce1d41-388`.
-- Implementation commit: d640ee285168fdbaea30732578093e30a10b0077 — пользовательские подписи времени до слияния, кругов и очереди объясняют верхнюю границу для 90% случаев.
-- What changed: экран «Обзор» и его production-бандл больше не показывают `p90`; значения, выборки, прошлый период и состояние отсутствующих данных сохранены.
-- Evidence: `npm --prefix web test -- --run src/Overview.test.ts` → PASS, 19 tests; `npm --prefix web run lint` → PASS; `npm --prefix web run build` → PASS.
-- One next action: проверить изменения на экране «Обзор» и принять решение о слиянии.
+- Status: Implemented — awaiting repeated review; release not requested.
+- Branch: `factory/faeceaae-6a4-4e5d1ad4-ca2`.
+- Implementation commit: e097fb1026c0d0991cc17eb891fdcd58c9ac0602 — текущий и предыдущий периоды независимо показывают «данных нет», когда граница времени до слияния или числа кругов отсутствует.
+- What changed: экран «Обзор» и production-бандл сохраняют понятные подписи для 90% случаев без видимого `p90` и больше не утверждают границу при пустом значении.
+- Evidence: `npm test -- --run src/Overview.test.ts` → PASS, 19 tests; `npx tsc -p tsconfig.app.json --noEmit` → PASS; `npm run lint` → PASS; `npm run build` → PASS.
+- One next action: повторно провести Review без выката.
 
 ## LOG
 
@@ -20,3 +20,7 @@ Implementation commit: d640ee285168fdbaea30732578093e30a10b0077 — подпис
 ### 2026-08-10 — Implement
 
 После production-сборки обновлён отслеживаемый бандл экрана, поэтому поставляемый интерфейс соответствует исходным подписям. Команда сборки завершилась успешно.
+
+### 2026-08-10 — Implement
+
+После замечания Review пустая граница для времени до слияния и кругов больше не превращается в утверждение с тире: текущий и предыдущий периоды независимо сообщают «данных нет». Проверка меняет наличие значения между периодами в обе стороны; целевой Vitest прошёл 19 тестов, TypeScript, линтер и production-сборка завершились успешно. Выкат не выполнялся, следующий шаг — повторный Review.
