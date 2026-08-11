@@ -1989,6 +1989,9 @@ def autostart_plan(conf, tasks, workflows, workers):
     if not stage_name or not workflow.get("enabled") or not worker:
         return None
     for rec in planned:
+        if is_stopped(conf, rec.get("title") or ""):
+            log("PLAN paused " + repr(rec.get("title", "")[:70]))
+            continue
         if not rec.get("repo"):
             reason = "Не запущено автоматически: сначала выберите проект."
             set_idea(rec["id"], state="new", reason=reason)
