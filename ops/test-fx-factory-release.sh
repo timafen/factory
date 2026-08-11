@@ -151,6 +151,11 @@ case "$output" in
 #!/bin/bash
 [ "${1:-}" = identity ] && {
   grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null || exit 9
+  if [ "$TEST_MODE" = identity-transient ] && [ ! -e "$TEST_IDENTITY_MARK" ]; then
+    : >"$TEST_IDENTITY_MARK"
+    echo 'data directory is still releasing its lock' >&2
+    exit 9
+  fi
   echo worker-release-test
   exit 0
 }
@@ -261,6 +266,7 @@ run_release() {
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -289,6 +295,7 @@ start_release() {
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -350,6 +357,12 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
 ! grep -F '1234567890abcdef' "$success/output" >/dev/null \
   || fail "release exposed a bare technical version in owner-facing output"
+
+identity_retry="$temporary/identity-transient"
+make_fixture "$identity_retry" identity-transient
+run_release "$identity_retry" identity-transient \
+  || { cat "$identity_retry/output" >&2; fail "transient identity lock was not retried"; }
+[ -e "$identity_retry/identity-retried" ] || fail "identity retry scenario did not exercise the transient failure"
 
 for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop worker-install-fail interrupt-between-install control-install-fail browser-install-fail; do
   failed="$temporary/$mode"

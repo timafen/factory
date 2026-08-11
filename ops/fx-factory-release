@@ -255,9 +255,23 @@ code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashbo
 [ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
 
 systemctl stop "$WORKER_SERVICE" || rollback "воркер не остановился" 6
-worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
-  || rollback "не удалось определить identity воркера" 6
-[ -n "$worker_id" ] || rollback "identity воркера пуст" 6
+worker_id=''
+identity_error="$work/worker-identity-error"
+identity_attempt=1
+while [ "$identity_attempt" -le 5 ]; do
+  if worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>"$identity_error") \
+    && [ -n "$worker_id" ]; then
+    break
+  fi
+  worker_id=''
+  identity_attempt=$((identity_attempt + 1))
+  [ "$identity_attempt" -gt 5 ] || sleep 1
+done
+if [ -z "$worker_id" ]; then
+  identity_detail=$(tr '\n' ' ' <"$identity_error" | cut -c1-300)
+  [ -z "$identity_detail" ] || fail "причина identity: $identity_detail"
+  rollback "не удалось определить identity воркера после пяти попыток" 6
+fi
 previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
 previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
   'import json,sys
