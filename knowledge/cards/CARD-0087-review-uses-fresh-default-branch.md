@@ -2,13 +2,12 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/0b933443-daf-3aa76b07-abe`.
-Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
-What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: human merge this verified narrow config fix.
+Status: Verified PASS — awaiting human merge; live Workflow revisions remain unchanged.
+Branch: `factory/c92696e9-aa7-d6595696-a5d`.
+Implementation commit: f29e45dc382e35b0ef33453b6be3d19f83d2b58e — Review получает свежий pinned snapshot remote default branch.
+What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
+Evidence: `python3 -m unittest pilot.test_pilot`, `go test ./...`, `go build ./cmd/factory-server`, `npm run typecheck` and `npm test` → PASS.
+Next action: human merge; separately create and smoke immutable live Review/Verify revisions before pinning them.
 
 ## LOG
 
@@ -16,12 +15,11 @@ Next action: human merge this verified narrow config fix.
 
 | Критерий | Команда / проверка | Результат |
 | --- | --- | --- |
-| Пример Pilot проходит строгую серверную схему | `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS: пример декодирован строгим `PilotConfigStore`; `respect_host_load=true`, `max_parallel_works=4`. |
-| Полная Go-регрессия чиста | `umask 077; go test ./...` | PASS: все пакеты прошли. |
-| Поведение Pilot и свежих Review/Verify не нарушено | `python3 -m unittest pilot.test_pilot`; `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests` | PASS: 202 tests OK; focused 3 tests OK. |
-| JSON, сборка и чистота diff | `python3 -m json.tool pilot/config.example.json`; `go build ./cmd/factory-server`; `git diff --check` | PASS. |
-| Scope и поставка согласованы | `git diff --name-only origin/main...HEAD`; `git rev-list --left-right --count origin/main...HEAD`; проверка отсутствия `rollout` | PASS: только CARD-0087 и пример; behind_by=0; поле `rollout` отсутствует. |
-| Реализационный коммит корректен | `git merge-base --is-ancestor 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 HEAD` | PASS: SHA — предок ветки и меняет runtime-файл вне `knowledge/cards/`. |
+| Свежая база и точный scope | `python3 -m unittest pilot.test_pilot` | PASS: real bare-remote fixture показывает stale scope из 12 файлов и pinned scope из 11 файлов, `ahead_by=2`, SHA и сохранение ветки воркера. |
+| Инфраструктурный сбой не обвиняет код | тот же набор, `FreshDefaultBranchSnapshotTests` | PASS: failure resolution/fetch даёт BLOCKED без REQUEST CHANGES. |
+| Регрессии runtime | `go test ./...`; `go build ./cmd/factory-server` | PASS. |
+| Регрессии web | `npm run typecheck`; `npm test` | PASS: 14 файлов тестов, 155 тестов. |
+| Чистота поставки | `git diff --check`; `git diff --name-only origin/main...HEAD` | PASS: только запись Verify в карточке. |
 
 ### 2026-08-11 — Specification
 
@@ -32,6 +30,12 @@ Next action: human merge this verified narrow config fix.
 получения задача становится BLOCKED. Existing running tasks не изменяются.
 
 Связь: worker-discovered finding из CARD-0085; CARD-0086 зарезервирована.
+
+### 2026-08-11 — Implement
+
+Реализован isolated fetch-and-pin snapshot для Review и блокировка инфраструктурных ошибок без cached `origin/main`.
+Регрессия с bare remote доказывает: stale comparison даёт 12 файлов, pinned snapshot — точные 11 и `ahead_by=2`; ветка воркера сохраняется.
+Проверены `python3 -m unittest pilot.test_pilot`, `go test ./...`, `go build ./cmd/factory-server`, JSON config и `git diff --check` — PASS.
 
 ### Передача в реализацию
 
