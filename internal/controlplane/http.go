@@ -1083,8 +1083,7 @@ func (a *API) completeAttempt(w http.ResponseWriter, r *http.Request) {
 func prepareMutation(w http.ResponseWriter, r *http.Request, limit int64) bool {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		parsed, err := url.Parse(origin)
-		webScheme := parsed.Scheme == "http" || parsed.Scheme == "https"
-		if err != nil || !webScheme || !sameAuthority(parsed.Host, r.Host) {
+		if err != nil || !mutationOriginMatchesRequest(parsed, r) {
 			writeError(w, &ServiceError{Code: "cross_origin_request", Message: "browser mutations must be same-origin", Status: 403})
 			return false
 		}
@@ -1096,6 +1095,33 @@ func prepareMutation(w http.ResponseWriter, r *http.Request, limit int64) bool {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	return true
+}
+
+func mutationOriginMatchesRequest(origin *url.URL, r *http.Request) bool {
+	if origin == nil || (origin.Scheme != "http" && origin.Scheme != "https") || origin.Host == "" {
+		return false
+	}
+	authority := r.Host
+	forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if forwardedHost != "" || forwardedProto != "" {
+		if forwardedHost == "" || forwardedProto == "" ||
+			strings.Contains(forwardedHost, ",") || strings.Contains(forwardedProto, ",") ||
+			!remoteAddressIsLoopback(r.RemoteAddr) || !strings.EqualFold(origin.Scheme, forwardedProto) {
+			return false
+		}
+		authority = forwardedHost
+	}
+	return sameAuthority(origin.Host, authority)
+}
+
+func remoteAddressIsLoopback(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateRequestHost(authority string) error {
