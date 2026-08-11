@@ -88,7 +88,7 @@ restart` напрямую. За это время следующий выпус�
 
 ## Карточка
 
-`knowledge/cards/CARD-0075-pilot-restart-current-release.md`
+`knowledge/cards/CARD-0078-pilot-restart-current-release.md`
 
 ## Проверяемые обещания
 

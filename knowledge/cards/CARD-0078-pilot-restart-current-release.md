@@ -1,9 +1,9 @@
-# CARD-0075 — Старый restart Пилота не прерывает новый выпуск
+# CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
 ## HEAD
 
 - Status: Implemented — awaiting review.
-- Branch: `factory/556681e2-1ec-91d0a6a9-3a6`.
+- Branch: `factory/cae0f386-943-b234212d-a0d`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
 - Implementation commit: dcb5e2c7d72f191648e8643fb18361e67d7b06b0 — отложенный
   restart Пилота перенесён после release-info и защищён общим release-lock.
