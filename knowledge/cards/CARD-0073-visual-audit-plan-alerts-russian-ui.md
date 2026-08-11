@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented — targeted repository routing and visual audit pass; full browser suite remains for Verify.
+- Status: Verify FAIL — full browser suite has one failing legacy migration scenario.
 - Branch: `factory/f96a9d17-685-e490b9a1-1db`.
 Implementation commit: 9bdba3c63cc815fec799659dd7d451482c5f7a48 — Проверки repository routing синхронизированы с русским интерфейсом, а production `web/dist` пересобран.
 - What changed: repository routing assertions используют актуальные русские labels/actions, сохраняя exact identity и API routing checks.
 - What changed: production `web/dist` пересобран воспроизводимо и совпадает с исходниками.
-- Evidence: repository Playwright 1 passed; visual audit 1 passed; UI Vitest 157 passed; `npm run build` passed.
-- Next action: Повторить полный Verify после доставки этой реализации.
+- Evidence: `just check` passed; `just build` passed; `npm run test:browser` rebuilt and matched committed `web/dist`, then reported 20 passed, 1 failed, 1 not run.
+- Next action: Исправить отсутствие кнопки `Review E2E imported legacy issues` в legacy migration dialog и повторить полный Verify.
 
 ## LOG
 
@@ -63,3 +63,16 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 | Cleanup и дерево | process/port check; `git status --short` | Test-specific Playwright/server processes завершились; generated dist восстановлен, рабочее дерево чистое. |
 
 Итог: Verify FAIL. Код не изменялся; изменена только эта карточка для фиксации evidence.
+
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| Полный Go/UI/lint/typecheck gate | `just check` | PASS: Go format/vet/vuln/staticcheck/boundary, все Go-тесты, ESLint, TypeScript, 15 UI-файлов и 157 тестов, tooling и launcher. |
+| Production build | `FACTORY_BUILD_DIR=$(mktemp -d /tmp/card-0073-build.XXXXXX) just build` | PASS: собраны три бинарника в изолированный `/tmp` каталог. |
+| `web/dist` воспроизводим | `npm run test:browser` (единственный запуск полного wrapper) | PASS: `npm run build` завершился, `git diff --exit-code -- dist` прошёл до Playwright. |
+| Русский Plan/Alerts, desktop/phone visual audit, routing и overflow | `npm run test:browser` | PASS: тесты Plan/Alerts на desktop и phone прошли; visual audit и проверки overflow прошли до сбоя. |
+| Все браузерные сценарии | `npm run test:browser` (ровно один запуск) | FAIL: 20 passed, 1 failed, 1 did not run. Первый сбой: `web/e2e/control-plane.spec.ts:1484`, сценарий `migrates a locked legacy snapshot through Resume and Finalize`; в диалоге `Перенести старый опросчик` не найдена кнопка `Review E2E imported legacy issues`. |
+| Cleanup и дерево | process/port check; `git status --short` | PASS: процессы/серверы этого прогона завершились, рабочее дерево чистое до записи этой карточки; сторонние процессы не затрагивались. |
+
+Итог: Verify FAIL. Код не изменялся; эта запись фиксирует полный прогон и первый точный сбой.
