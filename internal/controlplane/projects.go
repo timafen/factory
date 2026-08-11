@@ -79,13 +79,30 @@ func validSecretName(value string) bool {
 	return true
 }
 
+func validExactFQDN(host string) bool {
+	if len(host) > 253 || !strings.Contains(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if !(character >= 'a' && character <= 'z') && !(character >= '0' && character <= '9') && character != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func exactHTTPSURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Host == "" || parsed.Fragment != "" {
 		return nil, invalid("invalid_project_url", "environment and health URLs must be absolute HTTPS URLs without credentials or fragments")
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if host == "" || net.ParseIP(host) != nil || strings.Contains(host, "*") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+	if !validExactFQDN(host) || net.ParseIP(host) != nil {
 		return nil, invalid("invalid_project_host", "project hosts must be exact FQDNs; wildcards and IP addresses are forbidden")
 	}
 	return parsed, nil

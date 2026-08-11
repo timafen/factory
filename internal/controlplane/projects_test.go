@@ -74,6 +74,12 @@ func TestProjectCreateUsesServerAllowlistAndIsIdempotent(t *testing.T) {
 	wildcard := factoryProjectRequest()
 	wildcard.Environments[0].WebHosts = []string{"*.timafen.com"}
 	invalidCases = append(invalidCases, wildcard)
+	singleLabelHost := factoryProjectRequest()
+	singleLabelHost.Environments[0].WebHosts = []string{"factory.timafen.com", "localhost"}
+	invalidCases = append(invalidCases, singleLabelHost)
+	invalidDNSLabel := factoryProjectRequest()
+	invalidDNSLabel.Environments[0].WebHosts = []string{"factory.timafen.com", "internal_host.timafen.com"}
+	invalidCases = append(invalidCases, invalidDNSLabel)
 	missing := factoryProjectRequest()
 	missing.Environments[0].RequiredSecrets = nil
 	invalidCases = append(invalidCases, missing)

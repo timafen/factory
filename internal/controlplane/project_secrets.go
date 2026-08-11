@@ -40,7 +40,16 @@ func (s *Store) ResolveProjectSecrets(project protocol.Project, environment stri
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o640 {
 		return statuses, errors.New("secret file must be a regular non-symlink file with mode 0640")
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	file, err := os.Open(path)
+	if err != nil {
+		return statuses, errors.New("secret file cannot be read")
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil || !os.SameFile(info, openedInfo) {
+		return statuses, errors.New("secret file changed while it was being verified")
+	}
+	stat, ok := openedInfo.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != s.projectSecretOwnerUID {
 		return statuses, errors.New("secret file must be owned by root")
 	}
@@ -52,11 +61,6 @@ func (s *Store) ResolveProjectSecrets(project protocol.Project, environment stri
 	if err != nil || uint32(groupID) != stat.Gid {
 		return statuses, errors.New("secret file group does not match the server project allowlist")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return statuses, errors.New("secret file cannot be read")
-	}
-	defer file.Close()
 	present := map[string]bool{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
