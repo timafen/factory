@@ -28,7 +28,10 @@ CONFIG=$LIBEXEC/factory-browser.conf
 STATE=$LIBEXEC/factory-browser-install.state
 SUDOERS=${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}
 APPARMOR=${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}
+DATA_HOME=${FACTORY_DATA_HOME:-/opt/factory-data}
+READINESS_MARKER=${FACTORY_BROWSER_READINESS_MARKER:-$DATA_HOME/pilot/browser-readiness.json}
 backup=
+marker_tmp=
 changed=0
 
 sha256() { sha256sum "$1" | awk '{print $1}'; }
@@ -56,6 +59,7 @@ rollback() {
         || echo "warning: previous Factory browser AppArmor profile was not reloaded" >&2
     fi
   fi
+  [ -z "$marker_tmp" ] || rm -f -- "$marker_tmp"
   [ -z "$backup" ] || rm -rf -- "$backup"
   exit "$status"
 }
@@ -228,6 +232,17 @@ fi
 chown root:root "$STATE.new"
 chmod 600 "$STATE.new"
 mv -f -- "$STATE.new" "$STATE"
+
+# Publish only the allowlisted proof after the live sandbox smoke and the
+# installed fingerprint have both succeeded. Dashboard reads never run a browser.
+install -d -o "$FACTORY_USER" -g "$(id -gn "$FACTORY_USER")" -m 755 "$(dirname "$READINESS_MARKER")"
+marker_tmp=$(mktemp "${READINESS_MARKER}.tmp.XXXXXX")
+printf '{"passed_at":"%s","browser_fingerprint":"%s"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$browser_sha" >"$marker_tmp"
+chown "$FACTORY_USER:$(id -gn "$FACTORY_USER")" "$marker_tmp"
+chmod 644 "$marker_tmp"
+mv -f -- "$marker_tmp" "$READINESS_MARKER"
+marker_tmp=
 changed=0
 rm -rf -- "$backup"
 backup=

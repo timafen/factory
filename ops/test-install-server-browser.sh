@@ -5,6 +5,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INSTALLER="$SCRIPT_DIR/install-server-browser.sh"
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
+export FACTORY_DATA_HOME="$temporary/data-home"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -289,6 +290,8 @@ set -e
 [ "$probe_status" -ne 0 ] || fail "installer продолжил работу без systemd BPF firewall"
 [ ! -e "$libexec/factory-browser-sandbox" ] \
   || fail "installer изменил launcher после неуспешной BPF-пробы"
+[ ! -e "$FACTORY_DATA_HOME/pilot/browser-readiness.json" ] \
+  || fail "неуспешная BPF-проба создала browser readiness marker"
 
 : >"$temporary/events"
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
@@ -378,6 +381,10 @@ grep -Fx "page-close=$auth_page" "$temporary/events" >/dev/null \
   || fail "page с Basic Auth error не была закрыта до продолжения smoke"
 grep -F 'Factory server browser installed:' "$temporary/output" >/dev/null \
   || fail "installer не подтвердил установку Chromium"
+readiness_marker="$FACTORY_DATA_HOME/pilot/browser-readiness.json"
+[ -f "$readiness_marker" ] || fail "успешный sandbox smoke не создал browser readiness marker"
+grep -E '^\{"passed_at":"[0-9TZ:-]+","browser_fingerprint":"[a-f0-9]{64}"\}$' \
+  "$readiness_marker" >/dev/null || fail "browser readiness marker содержит лишние или неверные поля"
 
 # A second identical release still proves the browser works, but must not
 # download it or reinstall its system dependencies.
@@ -572,9 +579,11 @@ fi
   || fail "ошибка Factory FQDN не откатила launcher"
 
 smoke_failure="$temporary/smoke-failure"
+smoke_failure_marker="$smoke_failure/browser-readiness.json"
 status=0
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   TEST_CHROMIUM_NO_USABLE_SANDBOX=1 PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_READINESS_MARKER="$smoke_failure_marker" \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$smoke_failure/libexec" \
   FACTORY_BROWSER_SUDOERS="$smoke_failure/sudoers/factory-browser" \
   FACTORY_BROWSER_APPARMOR="$smoke_failure/apparmor.d/factory-browser" \
@@ -590,6 +599,8 @@ fi
   || fail "ошибка Chromium smoke оставила launcher"
 [ ! -e "$smoke_failure/apparmor.d/factory-browser" ] \
   || fail "ошибка Chromium smoke оставила AppArmor profile"
+[ ! -e "$smoke_failure_marker" ] \
+  || fail "ошибка Chromium smoke создала успешный browser readiness marker"
 
 apparmor_failure="$temporary/apparmor-failure"
 status=0

@@ -1,5 +1,6 @@
 import contextlib
 import base64
+import datetime
 import importlib
 import json
 import os
@@ -3645,6 +3646,83 @@ class DashboardProjectsTest(unittest.TestCase):
         pilot._dash_slow = {"at": 0, "data": {}}
 
     @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
+    @mock.patch.object(pilot, "_fixed_command")
+    @mock.patch.object(pilot, "api")
+    def test_readiness_uses_all_nine_safe_sources_without_exposing_values(
+            self, api, command, _repo):
+        api.side_effect = lambda path: ({"routing_ready": True, "workers": []}
+                                        if path.endswith("/readiness") else {
+                                            "attempts": [{
+                                                "state": "succeeded", "result": "PASS — verified",
+                                                "completed_at": "2026-08-10T11:30:00Z",
+                                            }],
+                                        })
+        command.side_effect = lambda args, timeout=25: (
+            (True, "HTTP 200") if args[-1] == "health" else
+            (True, "DATABASE_URL\nAPI_TOKEN\nSECRET=value\narbitrary output"))
+        tasks = [{
+            "id": "verify-1", "title": "[auto] [5/5 Verify] Shop",
+            "repository_id": "shop", "state": "succeeded",
+            "created_at": "2026-08-10T11:00:00Z",
+        }]
+        environments = [{
+            "name": "Стейдж", "status": "available",
+            "release_label": "Летний выпуск", "health": "healthy",
+        }]
+        browser = pilot._readiness_check("browser", "ready", "Smoke прошёл.")
+
+        readiness = pilot._project_readiness(
+            {"id": "shop"}, "trade", environments, tasks,
+            [{"key": "staging", "enabled": True},
+             {"key": "production-write", "enabled": False}], browser,
+            now=1_754_824_000,
+        )
+
+        self.assertEqual([check["key"] for check in readiness["checks"]],
+                         [key for key, _title in pilot.PROJECT_READINESS_CHECKS])
+        self.assertEqual([check["state"] for check in readiness["checks"]], ["ready"] * 9)
+        self.assertEqual(readiness["verdict"], "ready")
+        secret_reason = readiness["checks"][7]["reason"]
+        self.assertEqual(secret_reason, "Доступны имена секретов: 2.")
+        self.assertNotIn("SECRET=value", repr(readiness))
+        self.assertNotIn("arbitrary output", repr(readiness))
+        self.assertEqual(command.call_args_list, [
+            mock.call(["sudo", "-n", "/usr/local/bin/fx", "staging", "health"]),
+            mock.call(["sudo", "-n", "/usr/local/bin/fx", "staging", "env-names"]),
+        ])
+        rollback_argv = pilot.PROJECT_PROVIDER_CATALOG["trade"]["rollback_argv"]
+        self.assertNotIn(mock.call(list(rollback_argv)), command.call_args_list)
+
+    def test_readiness_verdict_is_order_independent_and_unknown_is_not_ready(self):
+        ready = [pilot._readiness_check(key, "ready", "ok")
+                 for key, _title in pilot.PROJECT_READINESS_CHECKS]
+        self.assertEqual(pilot._readiness_verdict(list(reversed(ready))), "ready")
+        unknown = [dict(check) for check in ready]
+        unknown[0]["state"] = "unknown"
+        self.assertEqual(pilot._readiness_verdict(unknown), "needs_configuration")
+        blocked = [dict(check) for check in unknown]
+        blocked[-1]["state"] = "blocked"
+        self.assertEqual(pilot._readiness_verdict(blocked), "blocked")
+
+    def test_browser_readiness_requires_fresh_valid_smoke_marker(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        marker = os.path.join(temporary.name, "browser-readiness.json")
+        now = datetime.datetime(2026, 8, 10, 12, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(pilot._browser_readiness(now, marker)["state"], "unknown")
+        with open(marker, "w", encoding="utf-8") as marker_file:
+            json.dump({"passed_at": "2026-08-10T11:00:00Z",
+                       "browser_fingerprint": "a" * 64}, marker_file)
+        self.assertEqual(pilot._browser_readiness(now, marker)["state"], "ready")
+        with open(marker, "w", encoding="utf-8") as marker_file:
+            json.dump({"passed_at": "2026-08-08T11:00:00Z",
+                       "browser_fingerprint": "a" * 64}, marker_file)
+        self.assertEqual(pilot._browser_readiness(now, marker)["state"], "unknown")
+        with open(marker, "w", encoding="utf-8") as marker_file:
+            marker_file.write("not-json")
+        self.assertEqual(pilot._browser_readiness(now, marker)["state"], "blocked")
+
+    @mock.patch.object(pilot, "_project_repo_dirs", return_value=["/work/shop"])
     @mock.patch.object(pilot, "_fixed_command", side_effect=[
         (True, "origin/trunk"),
         (True, "updated"),
@@ -3699,7 +3777,10 @@ class DashboardProjectsTest(unittest.TestCase):
         self.assertEqual([e["name"] for e in projects[1]["environments"]], ["Прод"])
         self.assertEqual(projects[2]["provider_status"], "not_configured")
         scopes = [call.args[0][3] for call in command.call_args_list]
-        self.assertEqual(scopes, ["staging", "staging", "prod", "prod", "factory", "factory"])
+        self.assertEqual(scopes, [
+            "staging", "staging", "prod", "prod", "staging", "staging",
+            "factory", "factory",
+        ])
         self.assertTrue(all(call.args[0][:3] == ["sudo", "-n", "/usr/local/bin/fx"]
                             for call in command.call_args_list))
 
