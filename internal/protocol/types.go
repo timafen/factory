@@ -848,22 +848,24 @@ type TestAutomationResult struct {
 }
 
 type MetricsSummary struct {
-	Window                 string       `json:"window"`
-	GeneratedAt            time.Time    `json:"generated_at"`
-	ExecutionsCreated      int64        `json:"executions_created"`
-	ExecutionsCompleted    int64        `json:"executions_completed"`
-	Succeeded              int64        `json:"succeeded"`
-	Failed                 int64        `json:"failed"`
-	Cancelled              int64        `json:"cancelled"`
-	Queued                 int64        `json:"queued"`
-	Running                int64        `json:"running"`
-	SuccessRate            *float64     `json:"success_rate"`
-	RetryRate              *float64     `json:"retry_rate"`
-	MedianCycleTimeSeconds *float64     `json:"median_cycle_time_seconds"`
-	WorkersOnline          int64        `json:"workers_online"`
-	WorkersTotal           int64        `json:"workers_total"`
-	QueueReassignments     int64        `json:"queue_reassignments"`
-	WeeklyLimit            *WeeklyLimit `json:"weekly_limit,omitempty"`
+	Window                  string       `json:"window"`
+	GeneratedAt             time.Time    `json:"generated_at"`
+	ExecutionsCreated       int64        `json:"executions_created"`
+	ExecutionsCompleted     int64        `json:"executions_completed"`
+	Succeeded               int64        `json:"succeeded"`
+	Failed                  int64        `json:"failed"`
+	Cancelled               int64        `json:"cancelled"`
+	Queued                  int64        `json:"queued"`
+	Running                 int64        `json:"running"`
+	SuccessRate             *float64     `json:"success_rate"`
+	RetryRate               *float64     `json:"retry_rate"`
+	MedianCycleTimeSeconds  *float64     `json:"median_cycle_time_seconds"`
+	WorkersOnline           int64        `json:"workers_online"`
+	WorkersTotal            int64        `json:"workers_total"`
+	QueueReassignments      int64        `json:"queue_reassignments"`
+	CapacityReconciliations int64        `json:"capacity_reconciliations"`
+	GhostSlotsReleased      int64        `json:"ghost_slots_released"`
+	WeeklyLimit             *WeeklyLimit `json:"weekly_limit,omitempty"`
 }
 
 type ClaimRequest struct {

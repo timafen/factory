@@ -27,6 +27,9 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		return nil, unavailable(err)
 	}
 	defer tx.Rollback()
+	if _, err := reconcileWorkerCapacity(ctx, tx, workerID, nowMillis, "claim"); err != nil {
+		return nil, unavailable(err)
+	}
 
 	var storedDigest []byte
 	var storedAttempt sql.NullString
@@ -84,11 +87,8 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 	if err != nil {
 		return nil, unavailable(err)
 	}
-	var active int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM attempts
-		WHERE worker_id = ? AND state IN ('preparing', 'running')
-	`, workerID).Scan(&active); err != nil {
+	active, err := reconcileWorkerCapacity(ctx, tx, workerID, nowMillis, "claim")
+	if err != nil {
 		return nil, unavailable(err)
 	}
 	if healthy == 0 || now.Sub(fromMillis(lastHeartbeat)) > protocol.WorkerOnlineWindow || active >= capacity {
@@ -190,6 +190,9 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 	`, workerID, input.RequestID, digest, attemptID, nowMillis); err != nil {
 		return nil, unavailable(err)
 	}
+	if _, err := reconcileWorkerCapacity(ctx, tx, workerID, nowMillis, "claim"); err != nil {
+		return nil, unavailable(err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, unavailable(err)
 	}
@@ -261,6 +264,7 @@ func (s *Store) claimDetail(ctx context.Context, attemptID string) (protocol.Cla
 }
 
 type leaseState struct {
+	workerID       string
 	attemptState   string
 	executionID    string
 	executionState string
@@ -274,10 +278,10 @@ func loadLease(ctx context.Context, tx *sql.Tx, attemptID string) (leaseState, e
 	var value leaseState
 	var cancel int
 	err := tx.QueryRowContext(ctx, `
-		SELECT a.state, a.execution_id, e.state, a.lease_digest, a.lease_expires_at, e.cancellation_requested, t.read_only
+		SELECT a.worker_id, a.state, a.execution_id, e.state, a.lease_digest, a.lease_expires_at, e.cancellation_requested, t.read_only
 		FROM attempts a JOIN executions e ON e.id = a.execution_id JOIN tasks t ON t.id = e.task_id
 		WHERE a.id = ?
-	`, attemptID).Scan(&value.attemptState, &value.executionID, &value.executionState, &value.digest, &value.expiry, &cancel, &value.readOnly)
+	`, attemptID).Scan(&value.workerID, &value.attemptState, &value.executionID, &value.executionState, &value.digest, &value.expiry, &cancel, &value.readOnly)
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, ErrNotFound
 	}
@@ -301,6 +305,71 @@ func verifyActiveLease(value leaseState, token string, now int64) error {
 func isActive(state string) bool { return state == "preparing" || state == "running" }
 func isTerminal(state string) bool {
 	return state == "succeeded" || state == "failed" || state == "cancelled" || state == "lost"
+}
+
+// reconcileWorkerCapacity makes workers.active_count a server-derived snapshot.
+// It deliberately uses the Store clock: a worker's local slots and clock are
+// diagnostic data only and must never admit work.
+func reconcileWorkerCapacity(ctx context.Context, tx *sql.Tx, workerID string, now int64, trigger string) (int, error) {
+	var previous int
+	if err := tx.QueryRowContext(ctx, `SELECT active_count FROM workers WHERE id = ?`, workerID).Scan(&previous); err != nil {
+		return 0, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, execution_id FROM attempts
+		WHERE worker_id = ? AND state IN ('preparing', 'running') AND lease_expires_at <= ?
+	`, workerID, now)
+	if err != nil {
+		return 0, err
+	}
+	var expired []ExpiredLease
+	for rows.Next() {
+		var value ExpiredLease
+		if err := rows.Scan(&value.AttemptID, &value.ExecutionID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		expired = append(expired, value)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	released := 0
+	for _, value := range expired {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE attempts SET state = 'lost', error = 'lease expired', completed_at = ?
+			WHERE id = ? AND state IN ('preparing', 'running') AND lease_expires_at <= ?
+		`, now, value.AttemptID, now)
+		if err != nil {
+			return 0, err
+		}
+		changed, _ := result.RowsAffected()
+		if changed == 1 {
+			released++
+			if _, err := tx.ExecContext(ctx, `UPDATE executions SET state = 'failed', updated_at = ? WHERE id = ? AND state IN ('preparing', 'running')`, now, value.ExecutionID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	var derived int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM attempts
+		WHERE worker_id = ? AND state IN ('preparing', 'running') AND lease_expires_at > ?
+	`, workerID, now).Scan(&derived); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workers SET active_count = ? WHERE id = ?`, derived, workerID); err != nil {
+		return 0, err
+	}
+	if previous != derived || released != 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO worker_capacity_reconciliations(worker_id, reconciled_at, trigger, previous_active_count, derived_active_count, ghost_slots_released)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, workerID, now, trigger, previous, derived, released); err != nil {
+			return 0, err
+		}
+	}
+	return derived, nil
 }
 
 func (s *Store) StartAttempt(ctx context.Context, attemptID string, input protocol.StartAttemptRequest) (protocol.Attempt, error) {
@@ -333,6 +402,9 @@ func (s *Store) StartAttempt(ctx context.Context, attemptID string, input protoc
 	} else if lease.attemptState != "running" {
 		return protocol.Attempt{}, conflict("invalid_transition", "attempt cannot be started from its current state")
 	}
+	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now, "heartbeat"); err != nil {
+		return protocol.Attempt{}, unavailable(err)
+	}
 	if err := tx.Commit(); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
@@ -362,6 +434,9 @@ func (s *Store) Heartbeat(ctx context.Context, attemptID, token string) (protoco
 	}
 	expiry := now.Add(protocol.LeaseDuration)
 	if _, err := tx.ExecContext(ctx, `UPDATE attempts SET lease_expires_at = ? WHERE id = ?`, expiry.UnixMilli(), attemptID); err != nil {
+		return protocol.HeartbeatResponse{}, unavailable(err)
+	}
+	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now.UnixMilli(), "heartbeat"); err != nil {
 		return protocol.HeartbeatResponse{}, unavailable(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -571,6 +646,9 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 	`, executionState, retryIncrement, now, lease.executionID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
+	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now, "terminal"); err != nil {
+		return protocol.Attempt{}, unavailable(err)
+	}
 	if err := tx.Commit(); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
@@ -755,6 +833,27 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 	if err := rows.Close(); err != nil {
 		return nil, unavailable(err)
 	}
+	ghostWorkers, err := tx.QueryContext(ctx, `SELECT DISTINCT worker_id FROM attempts WHERE state IN ('preparing', 'running') AND lease_expires_at <= ?`, now)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	var ghostWorkerIDs []string
+	for ghostWorkers.Next() {
+		var workerID string
+		if err := ghostWorkers.Scan(&workerID); err != nil {
+			ghostWorkers.Close()
+			return nil, unavailable(err)
+		}
+		ghostWorkerIDs = append(ghostWorkerIDs, workerID)
+	}
+	if err := ghostWorkers.Close(); err != nil {
+		return nil, unavailable(err)
+	}
+	for _, workerID := range ghostWorkerIDs {
+		if _, err := reconcileWorkerCapacity(ctx, tx, workerID, now, "sweep"); err != nil {
+			return nil, unavailable(err)
+		}
+	}
 	for _, value := range values {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE attempts SET state = 'lost', error = 'lease expired', completed_at = ?
@@ -771,6 +870,27 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 				`, now, value.ExecutionID); err != nil {
 				return nil, unavailable(err)
 			}
+		}
+	}
+	workerRows, err := tx.QueryContext(ctx, `SELECT id FROM workers`)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	var workerIDs []string
+	for workerRows.Next() {
+		var workerID string
+		if err := workerRows.Scan(&workerID); err != nil {
+			workerRows.Close()
+			return nil, unavailable(err)
+		}
+		workerIDs = append(workerIDs, workerID)
+	}
+	if err := workerRows.Close(); err != nil {
+		return nil, unavailable(err)
+	}
+	for _, workerID := range workerIDs {
+		if _, err := reconcileWorkerCapacity(ctx, tx, workerID, now, "sweep"); err != nil {
+			return nil, unavailable(err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

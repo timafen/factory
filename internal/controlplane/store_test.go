@@ -70,6 +70,32 @@ func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	}
 }
 
+func TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/reconcile"})
+	createTestTask(t, store, "reconcile-first", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "reconcile-second", workerA, worker.Repositories[0].ID)
+	if _, err := store.db.Exec(`UPDATE workers SET active_count = 1 WHERE id = ?`, workerA); err != nil {
+		t.Fatal(err)
+	}
+	first := claimTestTask(t, store, workerA, "reconcile-first", tokenA)
+	second := claimTestTask(t, store, workerA, "reconcile-second", tokenB)
+	if first.Attempt.ID == second.Attempt.ID {
+		t.Fatal("two queued tasks reused one attempt")
+	}
+	registered, err := store.Worker(context.Background(), workerA)
+	if err != nil || registered.ActiveCount != 2 {
+		t.Fatalf("derived active count = %d, %v; want 2", registered.ActiveCount, err)
+	}
+	var corrections, ghosts int
+	if err := store.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(ghost_slots_released), 0) FROM worker_capacity_reconciliations WHERE worker_id = ?`, workerA).Scan(&corrections, &ghosts); err != nil {
+		t.Fatal(err)
+	}
+	if corrections == 0 || ghosts != 0 {
+		t.Fatalf("reconciliation journal = corrections %d ghosts %d; want correction without expired lease", corrections, ghosts)
+	}
+}
+
 func TestCompatibleWorkersClaimOnceWhileWriterContinues(t *testing.T) {
 	store := newTestStore(t)
 	repository := protocol.RepositoryRegistration{

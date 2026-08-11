@@ -108,6 +108,26 @@ func TestMetricsSummarizesBoundedExecutionFacts(t *testing.T) {
 	}
 }
 
+func TestMetricsCountsCapacityReconciliationsInWindow(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	seedMetricsWorker(t, store, "capacity-metrics", now)
+	if _, err := store.db.Exec(`
+		INSERT INTO worker_capacity_reconciliations(worker_id, reconciled_at, trigger, previous_active_count, derived_active_count, ghost_slots_released)
+		VALUES ('capacity-metrics', ?, 'sweep', 2, 0, 2), ('capacity-metrics', ?, 'claim', 0, 1, 0)
+	`, now.Add(-time.Hour).UnixMilli(), now.Add(-8*24*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := store.Metrics(context.Background(), metricsWindow24Hours)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CapacityReconciliations != 1 || summary.GhostSlotsReleased != 2 {
+		t.Fatalf("capacity metrics = reconciliations %d, ghost slots %d; want 1, 2", summary.CapacityReconciliations, summary.GhostSlotsReleased)
+	}
+}
+
 func TestMetricsHaveUndefinedRatesWithoutCompletedAgentOutcomes(t *testing.T) {
 	store := newTestStore(t)
 	store.now = func() time.Time {
