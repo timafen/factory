@@ -2,14 +2,12 @@
 
 ## HEAD
 
-Implementation commit: a9102cfc45c7f9296e36e38afe4f8de637d17ff5 — Пилот сохраняет номера карточек и строгую передачу ревизии после конфликта.
+Implementation commit: 86f9d14f6247e3006980d0761bb7d1f068df4d64 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
 
-- Status: Implemented and tested — передача после конфликта и строгий HEAD-gate исправлены.
-- Branch: `factory/8ecbb0e0-cbc-bdea3e55-5a3`.
-- What changed: rescue-handoff после merge conflict одновременно сохраняет `Card:`,
-  `Implementation head` и каноническую delivery-ветку; тест проверяет все три поля.
-- Evidence: 28 целевых unittest → `OK`; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → exit 0;
-  `git diff --check` → exit 0; `just test` → exit 0.
+- Status: Implemented and tested — уникальные номера и строгий HEAD-gate исправлены.
+- Branch: `factory/39bed45d-49c-7c30a9dc-059`.
+- What changed: после первого SPEC_HEAD rescue повторный missing/short/malformed HEAD безопасно останавливает переход в Implement; добавлен cycle test.
+- Evidence: `python3 -m unittest pilot.test_pilot.SpecificationBranchHandoffTests` → 18 tests, `OK`.
 - Next action: Провести независимый Review и слить ветку в `main`.
 
 ### 2026-08-11 — Implement
@@ -19,6 +17,12 @@ Implementation commit: a9102cfc45c7f9296e36e38afe4f8de637d17ff5 — Пилот �
 Целевые `SpecificationBranchHandoffTests` и полный Python-набор прошли; `py_compile` и `git diff --check` чисты.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+После исчерпания cap_rescues для SPEC_HEAD второй невалидный результат больше не обходится
+условием gate: конвейер останавливается до создания Implement. Регрессионный cycle test
+подтвердил один rescue и отсутствие Implement task; implementation commit — `86f9d14f6247e3006980d0761bb7d1f068df4d64`.
 
 ### 2026-08-11 — Implement
 
