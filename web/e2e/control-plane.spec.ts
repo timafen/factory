@@ -3,6 +3,7 @@ import {
   request,
   test,
   type APIRequestContext,
+  type Locator,
   type Page,
 } from "@playwright/test";
 import { testWorkerBootstrapCredential } from "../playwright.config";
@@ -198,6 +199,133 @@ function observeBrowser(page: Page) {
       expect(realtime, "the UI must use HTTP polling only").toEqual([]);
     },
   };
+}
+
+type AuditScreen = {
+  name: string;
+  path: string;
+  ready: (page: Page) => Locator;
+};
+
+async function expectAuditedLayout(page: Page, desktop: boolean) {
+  const layout = await page.evaluate<{
+    documentFits: boolean;
+    documentWidth: number;
+    mainFits: boolean;
+    actionOverlaps: string[];
+    horizontalOffenders: Array<{ element: string; left: number; right: number }>;
+    overflowElements: Array<{ element: string; left: number; right: number }>;
+    sidebar: { left: number; right: number } | null;
+    mainShell: { left: number; right: number } | null;
+    topbar: { left: number; right: number } | null;
+    viewportWidth: number;
+  }>(`(() => {
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const viewportWidth = document.documentElement.clientWidth;
+    const insideHorizontalScroller = (element) => {
+      let parent = element.parentElement;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        if (["auto", "scroll", "hidden"].includes(style.overflowX) && parent.scrollWidth > parent.clientWidth) {
+          return true;
+        }
+        parent = parent.parentElement;
+      }
+      return false;
+    };
+    const horizontalOffenders = Array.from(
+      document.querySelectorAll(".topbar, main, main .button, main input, main select, main textarea, .modal"),
+    )
+      .filter((element) => visible(element) && !insideHorizontalScroller(element))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          element: element.tagName.toLowerCase() + "." + String(element.className).trim().split(" ").join("."),
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+        };
+      })
+      .filter(({ left, right }) => left < -1 || right > viewportWidth + 1);
+    const rect = (selector) => {
+      const bounds = document.querySelector(selector)?.getBoundingClientRect();
+      return bounds ? { left: bounds.left, right: bounds.right } : null;
+    };
+    const main = document.querySelector("main");
+    const contentControls = Array.from(document.querySelectorAll("main input, main select, main textarea, main button"))
+      .filter(visible);
+    const actionOverlaps = Array.from(document.querySelectorAll("main *"))
+      .filter((element) => visible(element) && ["fixed", "sticky"].includes(window.getComputedStyle(element).position))
+      .flatMap((floating) => {
+        const floatingBounds = floating.getBoundingClientRect();
+        return contentControls
+          .filter((control) => !floating.contains(control))
+          .filter((control) => {
+            const bounds = control.getBoundingClientRect();
+            return floatingBounds.left < bounds.right && floatingBounds.right > bounds.left
+              && floatingBounds.top < bounds.bottom && floatingBounds.bottom > bounds.top;
+          })
+          .map((control) => floating.className + " overlaps " + control.tagName.toLowerCase());
+      });
+    const overflowElements = Array.from(document.querySelectorAll("*"))
+      .filter(visible)
+      .map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          element: element.tagName.toLowerCase() + "." + String(element.className).trim().split(" ").join("."),
+          left: Math.round(bounds.left),
+          right: Math.round(bounds.right),
+        };
+      })
+      .filter(({ right }) => right > viewportWidth + 1);
+    return {
+      documentFits: document.documentElement.scrollWidth <= viewportWidth + 1,
+      documentWidth: document.documentElement.scrollWidth,
+      mainFits: Boolean(main && main.scrollWidth <= main.clientWidth + 1),
+      actionOverlaps,
+      horizontalOffenders,
+      overflowElements,
+      sidebar: rect(".sidebar"),
+      mainShell: rect(".main-shell"),
+      topbar: rect(".topbar"),
+      viewportWidth,
+    };
+  })()`);
+
+  expect(layout.documentFits, `the document must not scroll horizontally: ${JSON.stringify(layout)}`).toBe(true);
+  expect(layout.mainFits, "main content must not scroll horizontally").toBe(true);
+  expect(layout.actionOverlaps, "sticky actions must not cover form controls").toEqual([]);
+  expect(layout.horizontalOffenders, "controls and shell must stay inside the viewport").toEqual([]);
+  expect(layout.topbar?.left ?? -1).toBeGreaterThanOrEqual(0);
+  expect(layout.topbar?.right ?? Infinity).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  if (desktop) {
+    expect(layout.sidebar?.right ?? Infinity).toBeLessThanOrEqual((layout.mainShell?.left ?? 0) + 1);
+  } else {
+    expect(layout.mainShell?.left ?? -1).toBe(0);
+  }
+}
+
+async function exerciseMobileNavigation(page: Page) {
+  const toggle = page.getByRole("button", { name: "Toggle navigation" });
+  const sidebar = page.locator(".sidebar");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(sidebar).toBeInViewport();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toBeFocused();
+  await expect(sidebar).not.toBeInViewport();
+
+  await toggle.click();
+  const scrim = page.getByRole("button", { name: "Close navigation" });
+  await expect(scrim).toBeVisible();
+  await scrim.click({ position: { x: 380, y: 100 } });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(sidebar).not.toBeInViewport();
+  await expect(page.locator("main")).toBeVisible();
 }
 
 test.beforeAll(async () => {
@@ -795,6 +923,106 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
     fullPage: true,
   });
   browser.assertClean();
+});
+
+test("audits every Factory screen on desktop and phone", async ({ context }) => {
+  test.setTimeout(240_000);
+  const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
+  const workflow = await json<{ workflow: { id: string } }>(
+    await api.post("/api/v1/workflows", {
+      data: {
+        request_key: "e2e-full-visual-audit-workflow",
+        title: "Full visual audit runbook",
+        summary: "Keeps every Factory route available to the visual audit.",
+        instructions: "Inspect the representative repository and report the verified result.",
+      },
+    }),
+  );
+  const automation = await json<{ automation: { id: string } }>(
+    await api.post("/api/v1/automations", {
+      data: {
+        request_key: "e2e-full-visual-audit-automation",
+        title: "Full visual audit Automation",
+        workflow_id: workflow.workflow.id,
+        repository_id: identifiers.automationRepository,
+        context: "A disabled schedule fixture for deterministic visual inspection.",
+        timeout_seconds: 60,
+        trigger: { type: "schedule", cron: "0 9 * * 1", timezone: "UTC" },
+      },
+    }),
+  );
+
+  // This table mirrors every non-detail branch in App.readRoute/routePath.
+  // Detail routes and Delegate task follow in the same audited sequence below.
+  const routeScreens: AuditScreen[] = [
+    { name: "overview", path: "/", ready: (page) => page.getByRole("heading", { name: "Обзор", exact: true }) },
+    { name: "say", path: "/say", ready: (page) => page.getByRole("button", { name: "Начать запись" }) },
+    { name: "epics", path: "/epics", ready: (page) => page.getByText(/Эпики — большие цели/) },
+    { name: "answer", path: "/answer", ready: (page) => page.getByText(/Здесь конвейер спрашивает тебя/) },
+    { name: "access", path: "/access", ready: (page) => page.getByRole("heading", { name: "Доступы" }) },
+    { name: "sandbox-keys", path: "/sandbox-keys", ready: (page) => page.getByRole("heading", { name: "Ключи песочницы" }) },
+    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа агентов" }) },
+    { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Execution capacity" }) },
+    { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Managed repositories" }) },
+    { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },
+    { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Runbooks", exact: true }) },
+    { name: "pipeline", path: "/pipeline", ready: (page) => page.getByRole("heading", { name: "Pipeline", exact: true }) },
+    { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Cards", exact: true }) },
+    { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Automations", exact: true }) },
+    { name: "settings", path: "/settings", ready: (page) => page.getByRole("heading", { name: "Настройки" }) },
+    { name: "dialog", path: "/dialog", ready: (page) => page.getByRole("heading", { name: "Диалог", exact: true }) },
+  ];
+  const detailScreens: AuditScreen[] = [
+    { name: "task-detail", path: `/tasks/${identifiers.runningTask}`, ready: (page) => page.getByRole("heading", { name: "Implement the modern control-plane UI" }) },
+    { name: "worker-detail", path: `/workers/${workerOnline}`, ready: (page) => page.getByRole("heading", { name: "Build Mac" }) },
+    { name: "repository-detail", path: `/repositories/${identifiers.automationRepository}`, ready: (page) => page.getByRole("heading", { name: "github.com/example/automation-fixture" }) },
+    { name: "workflow-detail", path: `/workflows/${workflow.workflow.id}`, ready: (page) => page.getByRole("heading", { name: "Full visual audit runbook" }) },
+    { name: "automation-detail", path: `/automations/${automation.automation.id}`, ready: (page) => page.getByRole("heading", { name: "Full visual audit Automation" }) },
+  ];
+  const screens = [...routeScreens, ...detailScreens];
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 1000 },
+    { name: "phone", width: 390, height: 844 },
+  ] as const) {
+    for (const screen of screens) {
+      const page = await context.newPage();
+      const browser = observeBrowser(page);
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(screen.path);
+      await expect(screen.ready(page), `${screen.name} must show meaningful content`).toBeVisible();
+      if (viewport.name === "phone") await exerciseMobileNavigation(page);
+      await expectAuditedLayout(page, viewport.name === "desktop");
+      await page.screenshot({
+        path: `test-results/screenshots/${screen.name}-${viewport.name}.png`,
+        fullPage: true,
+      });
+      browser.assertClean();
+      await page.close();
+    }
+
+    const page = await context.newPage();
+    const browser = observeBrowser(page);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
+    if (viewport.name === "phone") await exerciseMobileNavigation(page);
+    await page.getByRole("button", { name: "Delegate task" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delegate task" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Worker").selectOption(workerOffline);
+    await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
+    await dialog.getByLabel("Title").fill("Delegate from the full desktop and phone visual audit");
+    await dialog.getByLabel("Context").fill("All fields and actions remain reachable without page-level horizontal scrolling.");
+    await expectAuditedLayout(page, viewport.name === "desktop");
+    await page.screenshot({
+      path: `test-results/screenshots/delegate-task-${viewport.name}.png`,
+      fullPage: true,
+    });
+    browser.assertClean();
+    await page.close();
+  }
+  await api.dispose();
 });
 
 test("opens and closes delegation from the keyboard", async ({ page }) => {
