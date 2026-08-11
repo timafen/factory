@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Verify FAIL — full browser suite has one failing legacy migration scenario.
-- Branch: `factory/f96a9d17-685-e490b9a1-1db`.
-Implementation commit: 9bdba3c63cc815fec799659dd7d451482c5f7a48 — Проверки repository routing синхронизированы с русским интерфейсом, а production `web/dist` пересобран.
-- What changed: repository routing assertions используют актуальные русские labels/actions, сохраняя exact identity и API routing checks.
-- What changed: production `web/dist` пересобран воспроизводимо и совпадает с исходниками.
-- Evidence: `just check` passed; `just build` passed; `npm run test:browser` rebuilt and matched committed `web/dist`, then reported 20 passed, 1 failed, 1 not run.
-- Next action: Исправить отсутствие кнопки `Review E2E imported legacy issues` в legacy migration dialog и повторить полный Verify.
+- Status: Verify PASS — full browser suite зелёный.
+- Branch: `factory/421c71cf-9b7-1c860b02-11d`.
+Implementation commit: 2891a9046192c7164a76736094be9b686d9d0e62 — Legacy migration E2E проверяет точную русскую кнопку импортированной автоматизации.
+- What changed: assertion использует exact role/name `Проверить E2E imported legacy issues`; production не менялся.
+- What changed: Settings E2E выбирает первый responsive-дубликат кнопки сохранения.
+- Evidence: `just check` passed; targeted migration and visual audit passed; full `npm --prefix web run test:browser` — 22 passed.
+- Next action: Отправить ветку и подтвердить её наличие через `git ls-remote`.
 
 ## LOG
 
@@ -76,3 +76,10 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 | Cleanup и дерево | process/port check; `git status --short` | PASS: процессы/серверы этого прогона завершились, рабочее дерево чистое до записи этой карточки; сторонние процессы не затрагивались. |
 
 Итог: Verify FAIL. Код не изменялся; эта запись фиксирует полный прогон и первый точный сбой.
+
+### 2026-08-11 — Implement
+
+Исправлен legacy migration Playwright locator: вместо английского `Review ...` тест
+проверяет точную русскую кнопку `Проверить ...`, сохраняя проверку импортированной
+legacy issue. Также закреплён responsive Settings locator. `just check`, targeted
+migration, visual audit и полный browser suite прошли: 22/22.
