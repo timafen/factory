@@ -100,6 +100,35 @@ func postResume(t *testing.T, server *httptest.Server, base string) (int, resume
 	return response.StatusCode, result
 }
 
+func TestResumeHTTPSProxyOriginReachesBodyValidation(t *testing.T) {
+	_, _, server, _, _ := resumeFixture(t, "Проверка origin")
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/works/resume", bytes.NewBufferString(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "127.0.0.1:7337"
+	request.RemoteAddr = "127.0.0.1:42123"
+	request.Header.Set("Origin", "https://factory.timafen.com")
+	request.Header.Set("X-Forwarded-Host", "factory.timafen.com")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("proxy resume status = %d, want body validation 400 (not origin 403)", response.StatusCode)
+	}
+	var body protocol.ErrorBody
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "invalid_work_title" {
+		t.Fatalf("proxy resume error = %q, want invalid_work_title", body.Error.Code)
+	}
+}
+
 func TestResumePausedWorkRestartsFailedFirstEffectiveStageAndIsIdempotent(t *testing.T) {
 	for _, terminal := range []string{"failed", "cancelled"} {
 		t.Run(terminal, func(t *testing.T) {
@@ -163,7 +192,7 @@ func TestResumePausedWorkUsesVerdictActionForReviewAndVerify(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := "Вердикт " + tc.name
-			store, _, server, repo, workflows := resumeFixture(t, base)
+			store, pilot, server, repo, workflows := resumeFixture(t, base)
 			history := addResumeHistory(t, store, repo, workflows, base, tc.stages, "succeeded")
 			for stage, action := range tc.verdicts {
 				writeResumeVerdict(t, history[stage].ID, action)
@@ -171,6 +200,12 @@ func TestResumePausedWorkUsesVerdictActionForReviewAndVerify(t *testing.T) {
 			status, resumed := postResume(t, server, base)
 			if status != tc.wantStatus || (tc.wantStage != "" && resumed.Stage != tc.wantStage) {
 				t.Fatalf("resume = status %d %#v, want status %d stage %q", status, resumed, tc.wantStatus, tc.wantStage)
+			}
+			if tc.name == "verify advance completes pipeline" {
+				settings, err := pilot.Read()
+				if err != nil || len(settings.Settings.StoppedPipelines) != 0 {
+					t.Fatalf("completed pipeline retained pause = %#v, %v", settings.Settings.StoppedPipelines, err)
+				}
 			}
 		})
 	}

@@ -103,6 +103,12 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 	metadata := readResumeWorkMetadata(base)
 	target, source := resumeTarget(tasks, settings.Stages, metadata)
 	if target == "" || source == nil {
+		if pausedAt >= 0 {
+			settings.StoppedPipelines = removePipeline(settings.StoppedPipelines, pausedAt)
+			if _, err := a.pilotConfig.Write(settingsResponse.Version, settings); err != nil {
+				return resumeWorkResponse{}, err
+			}
+		}
 		return resumeWorkResponse{}, conflict("pipeline_completed", "all required pipeline stages have already completed")
 	}
 	worker, err := a.resumeWorker(ctx, settings, target, source.RepositoryID)

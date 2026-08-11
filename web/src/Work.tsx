@@ -315,6 +315,8 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 
+const RESUME_ERROR_MESSAGE = "Продолжение не выполнено. Проверь состояние Factory и повтори попытку.";
+
 export function WorkView({
   tasks, workers, pending, error, fetching, updatedAt,
   onTask, onAnswer, onResume, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
@@ -570,7 +572,9 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
               e.stopPropagation();
               onResumeError(""); onResuming(g.base);
               Promise.resolve(onResume(g.base)).catch((error: unknown) => {
-                onResumeError(error instanceof Error ? error.message : "Не удалось продолжить работу.");
+                // Внутренний API-текст может раскрыть детали control plane или прокси.
+                void error;
+                onResumeError(RESUME_ERROR_MESSAGE);
               }).finally(() => onResuming(""));
             }}
             title="Снять паузу и поставить следующий обязательный этап в очередь"

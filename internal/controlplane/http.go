@@ -1106,8 +1106,13 @@ func mutationOriginMatchesRequest(origin *url.URL, r *http.Request) bool {
 		return false
 	}
 	authority := r.Host
+	forwardedHosts, hostPresent := r.Header["X-Forwarded-Host"]
+	forwardedProtos, protoPresent := r.Header["X-Forwarded-Proto"]
 	forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
 	forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if (hostPresent && len(forwardedHosts) != 1) || (protoPresent && len(forwardedProtos) != 1) {
+		return false
+	}
 	if forwardedHost != "" || forwardedProto != "" {
 		if forwardedHost == "" || forwardedProto == "" ||
 			strings.Contains(forwardedHost, ",") || strings.Contains(forwardedProto, ",") ||
