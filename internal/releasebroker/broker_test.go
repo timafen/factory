@@ -22,6 +22,20 @@ type recordingExecutor struct {
 	done    chan struct{}
 }
 
+type sequenceExecutor struct {
+	mu       sync.Mutex
+	statuses []string
+	calls    int
+}
+
+func (executor *sequenceExecutor) Execute(_ context.Context, _, _ string) string {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	status := executor.statuses[executor.calls]
+	executor.calls++
+	return status
+}
+
 func (executor *recordingExecutor) Execute(_ context.Context, adapter, sha string) string {
 	executor.mu.Lock()
 	executor.adapter, executor.sha = adapter, sha
@@ -181,5 +195,41 @@ func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
 	}
 	if got := post(`{"operation_id":"delivery-2","adapter":"fx-factory-rollback","commit_sha":"` + testSHA + `"}`); got != http.StatusConflict {
 		t.Fatalf("changed=%d", got)
+	}
+}
+
+func TestLockedOperationRetriesOnceButTerminalOperationDoesNot(t *testing.T) {
+	executor := &sequenceExecutor{statuses: []string{"locked", "succeeded"}}
+	broker := New(executor)
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"lock-retry-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	post := func() int {
+		response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	if got := post(); got != http.StatusAccepted {
+		t.Fatalf("first=%d", got)
+	}
+	for i := 0; i < 100 && broker.items["lock-retry-1"].Status != "locked"; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if got := post(); got != http.StatusAccepted {
+		t.Fatalf("retry=%d", got)
+	}
+	for i := 0; i < 100 && broker.items["lock-retry-1"].Status != "succeeded"; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if got := post(); got != http.StatusOK {
+		t.Fatalf("terminal duplicate=%d", got)
+	}
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if executor.calls != 2 {
+		t.Fatalf("physical executions=%d, want 2 (locked + retry)", executor.calls)
 	}
 }

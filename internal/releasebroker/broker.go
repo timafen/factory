@@ -206,6 +206,22 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "operation identity already has different immutable input", http.StatusConflict)
 			return
 		}
+		// rc=8 is a reservation failure, not a terminal delivery.  It is
+		// explicitly safe to re-enter the executor with the same immutable
+		// operation id once the privileged release lock is available again.
+		if existing.Status == "locked" && b.active == "" {
+			existing.Status = "launching"
+			if err := b.persist(existing); err != nil {
+				b.mu.Unlock()
+				http.Error(w, "cannot persist operation", http.StatusServiceUnavailable)
+				return
+			}
+			b.active = input.OperationID
+			b.mu.Unlock()
+			go b.execute(existing)
+			writeJSON(w, http.StatusAccepted, Response{Status: "launching"})
+			return
+		}
 		status := existing.Status
 		b.mu.Unlock()
 		writeJSON(w, http.StatusOK, Response{Status: status})

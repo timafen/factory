@@ -188,27 +188,36 @@ def no_bare_hashes(text):
 NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"
 
 
-def _notify_journal(title, message, group, delivered, click):
+def _notify_journal(title, message, group, delivered, click, journal_id=""):
     """Каждое уведомление остаётся в журнале — экран «Уведомления» читает его.
     Тихие (выключенная группа) тоже пишутся, с пометкой."""
     try:
+        if journal_id and os.path.exists(NOTIFY_LOG_PATH):
+            with open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
+                if any(json.loads(line).get("id") == journal_id
+                       for line in stream if line.strip()):
+                    return False
         rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
                "title": title, "message": message[:1500],
                "group": group, "delivered": bool(delivered), "click": click}
+        if journal_id:
+            rec["id"] = journal_id
         with open(NOTIFY_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         if os.path.getsize(NOTIFY_LOG_PATH) > 1_500_000:
             lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-800:]
             io.open(NOTIFY_LOG_PATH, "w", encoding="utf-8").writelines(lines)
+        return True
     except Exception as e:
         log("notify_journal_error", repr(e))
+        return False
 
 
-def notify(conf, title, message, priority="default", tags="", click=""):
+def notify(conf, title, message, priority="default", tags="", click="", journal_id=""):
     title = no_bare_hashes(title)
     message = no_bare_hashes(message)
     _notify_journal(title, message, notify_group(title),
-                    notify_allowed(conf, title), click)
+                    notify_allowed(conf, title), click, journal_id)
     if not notify_allowed(conf, title):
         log("QUIET[" + notify_group(title) + "] " + str(title)
             + " :: " + str(message)[:80].replace("\n", " "))
@@ -6072,6 +6081,11 @@ DELIVERY_RETRY_DELAY = 60
 DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
 
 
+def retry_pending_factory_deploy(_conf, _state):
+    """Compatibility seam for older callers; V2 polling is the only runner."""
+    return None
+
+
 def _delivery_state(state):
     """Return the only active delivery model and audit old, unsafe state once."""
     current = state.get(DELIVERY_STATE_KEY)
@@ -6105,7 +6119,13 @@ def _delivery_generation(state, repo_identity, commit_sha, wait):
     if current:
         generation = target["generations"].get(current)
         if generation and generation["phase"] == "reserved":
+            # Reserved N has not been accepted by the broker.  Its source
+            # snapshot is therefore intentionally mutable: a merge arriving
+            # during lock retry is released once, from the newest main head.
+            generation["adapter"] = adapter
+            generation["commit_sha"] = commit_sha
             generation["waits"][wait["task_id"]] = wait
+            generation.setdefault("merge_receipts", []).append(wait["merge_receipt"])
             return generation
         if generation and generation["phase"] in ("launching", "running"):
             target["next_requested"] = True
@@ -6125,8 +6145,11 @@ def _delivery_generation(state, repo_identity, commit_sha, wait):
 
 def broker_operation(socket_path, method, operation_id, payload=None):
     """Small Unix-socket client; unknown I/O is deliberately not success."""
+    endpoint = "http://release-broker/v1/operations"
+    if method == "GET":
+        endpoint += "/" + operation_id
     args = ["curl", "--silent", "--show-error", "--unix-socket", socket_path,
-            "--max-time", "10", "-X", method, "http://release-broker/v1/operations/" + operation_id]
+            "--max-time", "10", "-X", method, endpoint]
     if payload is not None:
         args[args.index("-X"):args.index("-X")] = ["-H", "Content-Type: application/json", "--data", json.dumps(payload)]
     try:
@@ -6144,12 +6167,31 @@ def _delivery_record(path, record):
         stream.write(json.dumps(record, ensure_ascii=False) + chr(10))
 
 
+def _delivery_record_once(path, record):
+    """Append immutable journal records at most once across process restarts."""
+    record_id = record.get("id")
+    if record_id and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as stream:
+                for line in stream:
+                    if line.strip() and json.loads(line).get("id") == record_id:
+                        return False
+        except (OSError, ValueError):
+            pass
+    _delivery_record(path, record)
+    return True
+
+
 def _complete_generation(conf, state, generation):
     durable = _delivery_state(state)
+    completed = generation.setdefault("completed_waits", {})
     for task_id, wait in generation["waits"].items():
+        if task_id in completed:
+            continue
         receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
                    "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        _delivery_record(DELIVERY_RECEIPTS_PATH, receipt)
+        _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
+        completed[task_id] = receipt["id"]
         mark_final(task_id, "Verify", True)
     durable["outbox"].setdefault(generation["id"] + ":done", {"id": generation["id"] + ":done",
         "generation_id": generation["id"], "status": "pending", "waits": list(generation["waits"].values())})
@@ -6162,11 +6204,14 @@ def dispatch_delivery_outbox(conf, state):
             continue
         # Journal first: local owner history is deduplicated even if the
         # process dies while the best-effort push transport is in flight.
-        _delivery_record(DELIVERY_OUTBOX_PATH, {"id": item["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        _delivery_record_once(DELIVERY_OUTBOX_PATH, {"id": item["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        item["status"] = "journaled"
+        save(STATE_PATH, state)
         wait = item["waits"][0] if item["waits"] else {}
         notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
-               click=wait.get("link") or f"{UI_BASE}/work")
+               click=wait.get("link") or f"{UI_BASE}/work", journal_id=item["id"])
         item["status"] = "sent"
+        save(STATE_PATH, state)
 
 
 def poll_delivery_state(conf, state, now=None):
@@ -6194,6 +6239,7 @@ def poll_delivery_state(conf, state, now=None):
                 generation["phase"] = "failed"
             elif response is None and generation["phase"] in ("launching", "running"):
                 generation["phase"] = "failed"  # status is authoritative; unknown fails closed
+        save(STATE_PATH, state)
         current = target.get("current_generation")
         active = target["generations"].get(current) if current else None
         if active and active["phase"] in ("completed", "failed") and target.get("next_requested"):
@@ -6208,6 +6254,8 @@ def poll_delivery_state(conf, state, now=None):
                 "commit_sha": source.get("commit_sha", active["commit_sha"]), "waits": pending,
                 "merge_receipts": [w["merge_receipt"] for w in pending.values()]}
             target["current_generation"] = gid
+        # This also makes a just-created N+1 survive before its first POST.
+        save(STATE_PATH, state)
     dispatch_delivery_outbox(conf, state)
 
 
@@ -6229,6 +6277,15 @@ def _intent_has_wait(state, task_id):
     return False
 
 
+def _merge_journaled(task_id):
+    try:
+        with open(MERGES_PATH, encoding="utf-8") as stream:
+            return any(json.loads(line).get("task_id") == task_id
+                       for line in stream if line.strip())
+    except (OSError, ValueError):
+        return False
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -6243,7 +6300,7 @@ def recover_merge_intents(conf, state):
         if not repo or not branch:
             intent["phase"] = "failed"
             continue
-        merged = intent.get("phase") == "merged"
+        merged = intent.get("phase") in ("merged", "journaled", "waiting")
         if not merged:
             compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
             if compare is not None and compare.get("ahead_by") == 0:
@@ -6255,15 +6312,23 @@ def recover_merge_intents(conf, state):
                     continue
                 merged = True
             intent["phase"] = "merged"
+            save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            # The physical journal is the boundary before a delivery wait.
+            # A restart after this append recognizes it by task id and cannot
+            # let an already-processed Verify task suppress its missing wait.
+            if not _merge_journaled(task_id):
+                _delivery_record(MERGES_PATH, receipt)
+            intent["phase"] = "journaled"
+            save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
             if generation:
                 intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
-                _delivery_record(MERGES_PATH, receipt)
+                save(STATE_PATH, state)
 
 
 def cycle(conf, state):
@@ -6900,8 +6965,8 @@ def cycle(conf, state):
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
 
-    # Releases are polled after pipeline work, never awaited in this cycle.
-    retry_pending_factory_deploy(conf, state)
+    # V2 release state was polled before task processing and is the only
+    # active delivery mechanism.  Legacy retry flags are audit-only.
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
