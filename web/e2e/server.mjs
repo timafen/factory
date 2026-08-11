@@ -23,10 +23,20 @@ const legacyConfig = join(legacyRoot, "poller.toml");
 const legacyLedger = join(legacyRoot, "poller", "poller.sqlite3");
 const workerID = "11111111-1111-4111-8111-111111111111";
 const workerBootstrapCredential = process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL;
+const e2ePortValue = process.env.FACTORY_E2E_PORT;
 
 if (!workerBootstrapCredential) {
   throw new Error("FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL is required");
 }
+if (!e2ePortValue || !/^[0-9]+$/.test(e2ePortValue)) {
+  throw new Error("FACTORY_E2E_PORT must be an integer from 1 to 65535");
+}
+const e2ePort = Number(e2ePortValue);
+if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65_535) {
+  throw new Error("FACTORY_E2E_PORT must be an integer from 1 to 65535");
+}
+const e2eServerAddress = `127.0.0.1:${e2ePort}`;
+const e2eServerOrigin = `http://${e2eServerAddress}`;
 
 function run(command, args, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
@@ -157,7 +167,7 @@ async function createLegacyPollerFixture() {
   await mkdir(join(legacyRoot, "poller"), { recursive: true });
   await writeFile(
     legacyConfig,
-    `server = "http://127.0.0.1:17437"
+    `server = ${JSON.stringify(e2eServerOrigin)}
 poll_every = "30s"
 data_directory = "poller"
 
@@ -304,7 +314,7 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
 await writeFile(join(workerData, "worker-id"), `${workerID}\n`, { mode: 0o600 });
 await writeFile(
   workerConfig,
-  `server = "http://127.0.0.1:17437"
+  `server = ${JSON.stringify(e2eServerOrigin)}
 name = "Real local worker"
 max_concurrent = 1
 data_directory = ${JSON.stringify(workerData)}
@@ -319,7 +329,7 @@ path = ${JSON.stringify(handbookRepository)}
 
 const server = spawn(
   serverBinary,
-  ["-listen", "127.0.0.1:17437", "-database", database],
+  ["-listen", e2eServerAddress, "-database", database],
   {
     cwd: root,
     env: {
