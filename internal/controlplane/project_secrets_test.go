@@ -28,16 +28,17 @@ func provisionTestProjectSecrets(t *testing.T, store *Store, project protocol.Pr
 	return path
 }
 
-func allPassingGates() protocol.ProjectGateResultRequest {
-	return protocol.ProjectGateResultRequest{CommitSHA: projectSHA, BranchAccess: true, ExecutorReady: true, Checks: map[string]bool{"secret-scan": true, "static-typecheck": true, "tests": true, "build": true}}
+func allPassingGates() trustedProjectGateResults {
+	return trustedProjectGateResults{commitSHA: projectSHA, checks: map[string]bool{"secret-scan": true, "static-typecheck": true, "tests": true, "build": true}}
 }
 
 func TestProjectReadinessRequiresSecretsAndEveryGateOnOneSHA(t *testing.T) {
 	store := newTestStore(t)
 	project := createFactoryProject(t, store)
-	if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 		t.Fatal(err)
 	}
+	registerReadyProjectWorker(t, store, project)
 	path := provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=super-secret-value\n")
 	readiness, err := store.ProjectReadiness(context.Background(), project.ID, "staging")
 	if err != nil || !readiness.Ready {
@@ -72,12 +73,33 @@ func TestProjectReadinessExpiresFailClosed(t *testing.T) {
 	store.now = func() time.Time { return now }
 	project := createFactoryProject(t, store)
 	provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=value\n")
-	if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 		t.Fatal(err)
 	}
+	registerReadyProjectWorker(t, store, project)
 	now = now.Add(25 * time.Hour)
 	readiness, err := store.ProjectReadiness(context.Background(), project.ID, "staging")
 	if err != nil || readiness.Ready {
 		t.Fatalf("stale readiness = %+v, %v", readiness, err)
+	}
+}
+
+func TestTrustedChecksCannotReplaceActualWorkerReadiness(t *testing.T) {
+	store := newTestStore(t)
+	project := createFactoryProject(t, store)
+	provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=value\n")
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := store.ProjectReadiness(context.Background(), project.ID, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Ready || readiness.RoutingReason == "" {
+		t.Fatalf("stored check results replaced server worker readiness: %+v", readiness)
+	}
+	_, err = store.RunProjectOperation(context.Background(), &fakeProjectRunner{}, fakeHealth{}, project.ID, "staging", "release", structProjectOperationRequest())
+	if errorCode(err) != "project_not_ready" {
+		t.Fatalf("release was not blocked without an actually ready worker: %v", err)
 	}
 }

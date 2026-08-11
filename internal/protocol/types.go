@@ -241,13 +241,6 @@ type SecureProjectReadiness struct {
 	RoutingReason string                `json:"routing_reason,omitempty"`
 }
 
-type ProjectGateResultRequest struct {
-	CommitSHA     string          `json:"commit_sha"`
-	BranchAccess  bool            `json:"branch_access"`
-	ExecutorReady bool            `json:"executor_ready"`
-	Checks        map[string]bool `json:"checks"`
-}
-
 type ProjectOperationRequest struct {
 	CommitSHA      string `json:"commit_sha"`
 	OwnerConfirmed bool   `json:"owner_confirmed,omitempty"`

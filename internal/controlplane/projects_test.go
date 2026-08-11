@@ -45,6 +45,23 @@ func createFactoryProject(t *testing.T, store *Store) protocol.Project {
 	return project
 }
 
+func registerReadyProjectWorker(t *testing.T, store *Store, project protocol.Project) {
+	t.Helper()
+	_, err := store.RegisterWorker(context.Background(), "project-ready-worker", protocol.WorkerRegistration{
+		Name:                       "project-ready-worker",
+		WorkerVersion:              "test",
+		RuntimeVersion:             "test",
+		Capacity:                   1,
+		Health:                     "healthy",
+		SourceAccess:               []protocol.SourceAccess{{Provider: "github", Hostname: "github.com"}},
+		AcceptsManagedRepositories: true,
+		ManagedRepositoryIDs:       []string{project.RepositoryID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectCreateUsesServerAllowlistAndIsIdempotent(t *testing.T) {
 	store := newTestStore(t)
 	project := createFactoryProject(t, store)

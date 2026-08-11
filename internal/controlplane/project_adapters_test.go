@@ -62,6 +62,23 @@ func TestProjectAdapterRegistryUsesFixedArgvWithoutShell(t *testing.T) {
 	}
 }
 
+func TestProjectAdapterProcessDoesNotInheritControlPlaneSecrets(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_SECRET_SHOULD_NOT_LEAK", "control-plane-secret")
+	output, err := (execProjectCommandRunner{}).Output(context.Background(), "/usr/bin/env", nil, []string{"GITHUB_TOKEN=project-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := string(output)
+	if strings.Contains(environment, "CONTROL_PLANE_SECRET_SHOULD_NOT_LEAK") || strings.Contains(environment, "control-plane-secret") {
+		t.Fatal("adapter inherited an unrelated control-plane secret")
+	}
+	for _, expected := range []string{"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GITHUB_TOKEN=project-secret"} {
+		if !strings.Contains(environment, expected) {
+			t.Fatalf("adapter environment is missing %q: %s", expected, environment)
+		}
+	}
+}
+
 func createTarserProject(t *testing.T, store *Store) protocol.Project {
 	t.Helper()
 	input := factoryProjectRequest()
@@ -84,9 +101,10 @@ func readyTarserProject(t *testing.T) (*Store, protocol.Project) {
 	t.Helper()
 	store := newTestStore(t)
 	project := createTarserProject(t, store)
-	if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 		t.Fatal(err)
 	}
+	registerReadyProjectWorker(t, store, project)
 	provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=tarser-secret\n")
 	return store, project
 }
@@ -149,9 +167,10 @@ func TestTarserNeverClaimsAnUnverifiedRollback(t *testing.T) {
 func TestProjectSecretsReachOnlyTheAllowedProcess(t *testing.T) {
 	store := newTestStore(t)
 	project := createFactoryProject(t, store)
-	if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 		t.Fatal(err)
 	}
+	registerReadyProjectWorker(t, store, project)
 	const secret = "super-secret-value"
 	provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN="+secret+"\nUNDECLARED_SECRET=must-not-pass\n")
 	runner := &fakeProjectRunner{}
@@ -178,9 +197,10 @@ func TestProjectSecretsReachOnlyTheAllowedProcess(t *testing.T) {
 func TestFailedReleaseInvokesNamedRollbackAndPersistsStatus(t *testing.T) {
 	store := newTestStore(t)
 	project := createFactoryProject(t, store)
-	if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+	if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 		t.Fatal(err)
 	}
+	registerReadyProjectWorker(t, store, project)
 	provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=value\n")
 	runner := &fakeProjectRunner{failFirst: true}
 	operation, err := store.RunProjectOperation(context.Background(), runner, fakeHealth{}, project.ID, "staging", "release", structProjectOperationRequest())
@@ -202,9 +222,10 @@ func TestHealthFailureRollsBackAndHealthyReleaseSucceeds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := newTestStore(t)
 			project := createFactoryProject(t, store)
-			if err := store.RecordProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
+			if err := store.recordTrustedProjectGateResults(context.Background(), project.ID, allPassingGates()); err != nil {
 				t.Fatal(err)
 			}
+			registerReadyProjectWorker(t, store, project)
 			provisionTestProjectSecrets(t, store, project, "GITHUB_TOKEN=value\n")
 			runner := &fakeProjectRunner{}
 			operation, err := store.RunProjectOperation(context.Background(), runner, fakeHealth{err: test.health}, project.ID, "staging", "release", structProjectOperationRequest())

@@ -103,7 +103,6 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/projects", api.createProject)
 	mux.HandleFunc("GET /api/v1/projects/{project_id}", api.getProject)
 	mux.HandleFunc("GET /api/v1/projects/{project_id}/environments/{environment}/readiness", api.getProjectReadiness)
-	mux.HandleFunc("PUT /api/v1/projects/{project_id}/gate-results", api.putProjectGateResults)
 	mux.HandleFunc("POST /api/v1/projects/{project_id}/environments/{environment}/{operation}", api.runProjectOperation)
 	mux.HandleFunc("GET /api/v1/pipeline", api.getPipeline)
 	mux.HandleFunc("PUT /api/v1/pipeline", api.putPipeline)
@@ -694,26 +693,6 @@ func (a *API) getProject(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getProjectReadiness(w http.ResponseWriter, r *http.Request) {
 	readiness, err := a.store.ProjectReadiness(r.Context(), r.PathValue("project_id"), r.PathValue("environment"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, readiness)
-}
-
-func (a *API) putProjectGateResults(w http.ResponseWriter, r *http.Request) {
-	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
-		return
-	}
-	var input protocol.ProjectGateResultRequest
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	if err := a.store.RecordProjectGateResults(r.Context(), r.PathValue("project_id"), input); err != nil {
-		writeError(w, err)
-		return
-	}
-	readiness, err := a.store.ProjectReadiness(r.Context(), r.PathValue("project_id"), "staging")
 	if err != nil {
 		writeError(w, err)
 		return

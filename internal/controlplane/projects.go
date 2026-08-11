@@ -336,15 +336,22 @@ func validCommitSHA(value string) bool {
 	return err == nil && strings.ToLower(value) == value
 }
 
-func (s *Store) RecordProjectGateResults(ctx context.Context, projectID string, input protocol.ProjectGateResultRequest) error {
-	if !validCommitSHA(input.CommitSHA) {
+// trustedProjectGateResults is deliberately package-private: check results may
+// only enter readiness from a server-controlled verifier, never from project API input.
+type trustedProjectGateResults struct {
+	commitSHA string
+	checks    map[string]bool
+}
+
+func (s *Store) recordTrustedProjectGateResults(ctx context.Context, projectID string, input trustedProjectGateResults) error {
+	if !validCommitSHA(input.commitSHA) {
 		return invalid("invalid_commit_sha", "commit_sha must be a lowercase 40 or 64 character hexadecimal SHA")
 	}
-	if len(input.Checks) != len(requiredProjectChecks) {
+	if len(input.checks) != len(requiredProjectChecks) {
 		return invalid("invalid_project_checks", "all four required checks must be reported together")
 	}
 	for _, gate := range requiredProjectChecks {
-		if _, ok := input.Checks[gate]; !ok {
+		if _, ok := input.checks[gate]; !ok {
 			return invalid("invalid_project_checks", "all four required checks must be reported together")
 		}
 	}
@@ -354,7 +361,7 @@ func (s *Store) RecordProjectGateResults(ctx context.Context, projectID string, 
 	}
 	defer tx.Rollback()
 	now := s.now().UnixMilli()
-	result, err := tx.ExecContext(ctx, `UPDATE project_runtime_readiness SET commit_sha=?,branch_access=?,executor_ready=?,updated_at=? WHERE project_id=?`, input.CommitSHA, boolInt(input.BranchAccess), boolInt(input.ExecutorReady), now, projectID)
+	result, err := tx.ExecContext(ctx, `UPDATE project_runtime_readiness SET commit_sha=?,updated_at=? WHERE project_id=?`, input.commitSHA, now, projectID)
 	if err != nil {
 		return unavailable(err)
 	}
@@ -362,7 +369,7 @@ func (s *Store) RecordProjectGateResults(ctx context.Context, projectID string, 
 		return ErrNotFound
 	}
 	for _, gate := range requiredProjectChecks {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO project_gate_results(project_id,gate,commit_sha,passed,checked_at) VALUES(?,?,?,?,?) ON CONFLICT(project_id,gate) DO UPDATE SET commit_sha=excluded.commit_sha,passed=excluded.passed,checked_at=excluded.checked_at`, projectID, gate, input.CommitSHA, boolInt(input.Checks[gate]), now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO project_gate_results(project_id,gate,commit_sha,passed,checked_at) VALUES(?,?,?,?,?) ON CONFLICT(project_id,gate) DO UPDATE SET commit_sha=excluded.commit_sha,passed=excluded.passed,checked_at=excluded.checked_at`, projectID, gate, input.commitSHA, boolInt(input.checks[gate]), now); err != nil {
 			return unavailable(err)
 		}
 	}
@@ -382,13 +389,11 @@ func gate(name string, ready bool, reason, sha string, checked int64) protocol.P
 
 func (s *Store) projectDatabaseReadiness(ctx context.Context, project protocol.Project) (protocol.SecureProjectReadiness, error) {
 	var sha string
-	var branch, executor int
 	var updated int64
-	if err := s.db.QueryRowContext(ctx, `SELECT commit_sha,branch_access,executor_ready,updated_at FROM project_runtime_readiness WHERE project_id=?`, project.ID).Scan(&sha, &branch, &executor, &updated); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT commit_sha,updated_at FROM project_runtime_readiness WHERE project_id=?`, project.ID).Scan(&sha, &updated); err != nil {
 		return protocol.SecureProjectReadiness{}, unavailable(err)
 	}
-	fresh := projectCheckFresh(fromMillis(updated), s.now())
-	result := protocol.SecureProjectReadiness{Ready: true, CommitSHA: sha, Gates: []protocol.ProjectGate{gate("branch-access", branch != 0 && fresh, "main branch access is missing or stale", sha, updated), gate("executor", executor != 0 && fresh, "server-selected executor readiness is missing or stale", sha, updated)}}
+	result := protocol.SecureProjectReadiness{Ready: true, CommitSHA: sha}
 	rows, err := s.db.QueryContext(ctx, `SELECT gate,commit_sha,passed,checked_at FROM project_gate_results WHERE project_id=?`, project.ID)
 	if err != nil {
 		return result, unavailable(err)
@@ -445,6 +450,32 @@ func (s *Store) ProjectReadiness(ctx context.Context, projectID, environment str
 	result, err := s.projectDatabaseReadiness(ctx, project)
 	if err != nil {
 		return result, err
+	}
+	managed, err := s.ManagedRepositoryReadiness(ctx, project.RepositoryID)
+	if err != nil {
+		return result, err
+	}
+	workerReason := "no healthy online worker has server-verified access to this managed repository"
+	branchReason := "managed repository access is not verified by a ready worker"
+	for _, worker := range managed.Workers {
+		if worker.Ready {
+			workerReason = "a healthy online worker is ready for this managed repository"
+			branchReason = "managed repository access is verified by a ready worker"
+			break
+		}
+		if worker.Reason != "" {
+			workerReason = worker.Reason
+		}
+	}
+	checked := s.now().UnixMilli()
+	serverGates := []protocol.ProjectGate{
+		gate("branch-access", managed.RoutingReady, branchReason, result.CommitSHA, checked),
+		gate("executor", managed.RoutingReady, workerReason, result.CommitSHA, checked),
+	}
+	result.Gates = append(serverGates, result.Gates...)
+	if !managed.RoutingReady {
+		result.Ready = false
+		result.RoutingReason = workerReason
 	}
 	statuses, secretErr := s.ResolveProjectSecrets(project, environment)
 	result.Secrets = statuses

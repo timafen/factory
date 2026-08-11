@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
 	"time"
 
@@ -19,15 +18,23 @@ type projectCommandRunner interface {
 }
 type execProjectCommandRunner struct{}
 
+func projectAdapterBaselineEnvironment() []string {
+	return []string{
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+}
+
 func (execProjectCommandRunner) Run(ctx context.Context, executable string, args, environment []string) error {
 	command := exec.CommandContext(ctx, executable, args...)
-	command.Env = append(os.Environ(), environment...)
+	command.Env = append(projectAdapterBaselineEnvironment(), environment...)
 	return command.Run()
 }
 
 func (execProjectCommandRunner) Output(ctx context.Context, executable string, args, environment []string) ([]byte, error) {
 	command := exec.CommandContext(ctx, executable, args...)
-	command.Env = append(os.Environ(), environment...)
+	command.Env = append(projectAdapterBaselineEnvironment(), environment...)
 	return command.Output()
 }
 
