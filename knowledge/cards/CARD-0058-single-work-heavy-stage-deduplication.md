@@ -26,3 +26,5 @@ Implementation commit: 6fc0c023d044017381928f5193bca6f140def00d — устран
 | Независимые работы сохраняют параллелизм | `test_four_parallel_handoffs_create_each_next_stage_once` | Четыре разные работы создали по одной следующей стадии; 4 задачи. |
 | Регрессии Python-оркестратора | `python3 -m unittest pilot.test_pilot` | 103 tests OK. |
 | Регрессии Go-контролплейна | `go test -timeout 5m ./...` | Все пакеты прошли. |
+| Регрессии UI | `just ui-check` | 13 файлов, 134 теста прошли. |
+| Браузерный набор | `just test-browser` | Вне области ветки: первый тест не нашёл ожидаемый заголовок «Обзор»; 17 тестов не запущены. |
