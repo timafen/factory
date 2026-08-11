@@ -65,7 +65,7 @@ func projectAdapterInvocation(adapter, sha string) (adapterInvocation, error) {
 	case "fx-factory-rollback":
 		return adapterInvocation{executable: "/usr/local/bin/fx", args: []string{"factory", "rollback"}}, nil
 	case "tarser-staging-deploy-release":
-		return adapterInvocation{executable: "/srv/automation-ebay-operations/staging/current/deploy/staging/scripts/deploy-release", args: []string{sha}, automaticRollback: true}, nil
+		return adapterInvocation{executable: "/usr/local/bin/fx", args: []string{"staging", "release", sha}, automaticRollback: true}, nil
 	case "tarser-staging-auto-rollback":
 		return adapterInvocation{executable: "/usr/local/bin/fx", args: []string{"staging", "rollback"}}, nil
 	default:

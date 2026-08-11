@@ -101,8 +101,9 @@ func TestTarserReleaseFailureVerifiesAutomaticRollback(t *testing.T) {
 	if operation.Status != "release_failed_rolled_back" || len(runner.calls) != 3 {
 		t.Fatalf("status=%q call count=%d", operation.Status, len(runner.calls))
 	}
-	if runner.calls[1].executable != "/srv/automation-ebay-operations/staging/current/deploy/staging/scripts/deploy-release" {
-		t.Fatalf("release call=%+v", runner.calls[1])
+	wantRelease := recordedProjectCommand{executable: "/usr/local/bin/fx", args: []string{"staging", "release", projectSHA}, environment: []string{"GITHUB_TOKEN=tarser-secret"}}
+	if !reflect.DeepEqual(runner.calls[1], wantRelease) {
+		t.Fatal("Tarser release did not invoke the fixed staging release operation with the allowed environment")
 	}
 }
 

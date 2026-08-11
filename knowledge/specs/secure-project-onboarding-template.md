@@ -65,10 +65,10 @@ SHA, секреты) и исполняет фиксированную опера
 `tarser-operations-staging` допускает только
 `github.com/timafen/tarser-operations`, группу `automation-ebay-staging` и
 адаптеры `tarser-staging-deploy-release` /
-`tarser-staging-auto-rollback`, использующие штатный
-`deploy/staging/scripts/deploy-release`. Его автоматический возврат принимается
-за успешный только после сравнения фактической цели `staging/current` с целью до
-выпуска; ошибка внешнего health-check запускает фиксированный
+`tarser-staging-auto-rollback`, использующие фиксированные серверные операции
+`fx staging release <SHA>` и `fx staging rollback`. Автоматический возврат
+release-операции принимается за успешный только после сравнения фактической цели
+`staging/current` с целью до выпуска; ошибка внешнего health-check запускает фиксированный
 `fx staging rollback` и такое же сравнение. Production Tarser, универсальные
 shell/SSH-адаптеры и клиентский выбор группы в v1 отсутствуют.
 
