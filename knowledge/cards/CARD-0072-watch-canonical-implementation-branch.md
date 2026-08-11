@@ -3,14 +3,14 @@
 ## HEAD
 
 - Status: Implemented and targeted tests pass — awaiting Review.
-- Branch: `factory/7341e44a-675-b7e7c7ff-d0a`.
-- Implementation commit: a1d91bcca6c11a9df71767ae9a05c7d689c1feb6 — пересобранная delivery-ветка сохраняется до Verify и auto-merge.
-- What changed: выбранная `review_gate` ветка хранится отдельно от canonical
-  implementation artifact и проходит через Review → Verify → merge; новая
-  реализация и новое поколение сбрасывают прежний выбор.
-- Evidence: 22/22 связанных теста OK; `py_compile` и `git diff --check` — OK.
-- One next action: Review подтверждает, что delivery-ветка не подменяется
-  canonical fallback после перехода Review → Verify.
+- Branch: `factory/1793a475-d50-d94bf866-fa6`.
+- Implementation commit: 55fb2e163e4ad8686f97db1f863a62a860e72d31 — повторная обработка той же реализации сохраняет пересобранную delivery-ветку.
+- What changed: `delivery_artifact` сбрасывается только при новой identity
+  реализации или поколении; повтор terminal-задачи после restart сохраняет
+  ветку, выбранную `review_gate`, до Review → Verify → merge.
+- Evidence: 6/6 связанных тестов OK; `py_compile` и `git diff --check` — OK.
+- One next action: Review подтверждает повторную обработку Implement после
+  rebuild без возврата к canonical fallback.
 
 ## LOG
 
@@ -45,3 +45,13 @@ Review: чистая ветка, пересобранная `review_gate`, те�
 Verify, вопросов, resume и auto-merge; canonical branch/head сохранены как
 fallback. Сквозной тест воспроизвёл rebuild → Review → Verify → merge, все 22
 связанных теста, `py_compile` и `git diff --check` прошли.
+
+### 2026-08-11 — Implement
+
+Коммит `55fb2e163e4ad8686f97db1f863a62a860e72d31` устранил второй блокер Review:
+повторная обработка уже успешной terminal-задачи Implement + Test теперь
+сохраняет rebuilt `delivery_artifact`, если branch/head/task_id/generation не
+изменились. Сквозной тест запускает restart/reprocess после `review_gate`
+rebuild без подмены `record_implementation_artifact`, затем подтверждает
+единую ветку в Review, Verify и merge; 6/6 тестов, `py_compile` и
+`git diff --check` прошли.
