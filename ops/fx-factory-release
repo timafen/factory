@@ -12,6 +12,7 @@ AS="${FACTORY_RELEASE_AS-sudo -H -u factory}"
 OWNER="${FACTORY_RELEASE_OWNER-factory:factory}"
 SERVER_SERVICE="${FACTORY_SERVER_SERVICE:-factory-server.service}"
 WORKER_SERVICE="${FACTORY_WORKER_SERVICE:-factory-worker.service}"
+WORKER_SERVICES="${FACTORY_WORKER_SERVICES:-$WORKER_SERVICE}"
 WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
 PILOT_SERVICE="${FACTORY_PILOT_SERVICE:-factory-pilot.service}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
@@ -23,6 +24,10 @@ step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
+worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
+stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
+start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
+restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
 
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
@@ -221,7 +226,7 @@ rollback() {
   cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
     && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
   systemctl restart "$SERVER_SERVICE" || true
-  systemctl restart "$WORKER_SERVICE" || true
+  restart_workers || true
   cleanup
   exit "$2"
 }
@@ -254,7 +259,7 @@ sleep 5
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
 [ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
 
-systemctl stop "$WORKER_SERVICE" || rollback "воркер не остановился" 6
+stop_workers || rollback "воркеры не остановились" 6
 worker_id=''
 identity_error="$work/worker-identity-error"
 identity_attempt=1
@@ -277,7 +282,7 @@ previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
   'import json,sys
 try: print(json.load(sys.stdin).get("last_heartbeat", ""))
 except Exception: print("")' 2>/dev/null)
-systemctl start "$WORKER_SERVICE" || rollback "воркер не запустился" 6
+start_workers || rollback "воркеры не запустились" 6
 
 step "жду здоровую регистрацию воркера $worker_id"
 registered=0
