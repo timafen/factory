@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/owainlewis/factory/internal/protocol"
+	"github.com/owainlewis/factory/internal/securetoken"
 )
 
 func (manager *Manager) setHealth(value health) {
@@ -113,10 +114,23 @@ func (manager *Manager) register(ctx context.Context) {
 }
 
 func (manager *Manager) registerLocked(ctx context.Context) {
+	if manager.client.workerCredential() == "" && manager.workerBootstrapCredentialPath != "" {
+		credential, err := securetoken.Read(manager.workerBootstrapCredentialPath)
+		if err != nil {
+			manager.stateMutex.Lock()
+			manager.registered = false
+			manager.cancelPendingClaimsLocked()
+			manager.stateMutex.Unlock()
+			manager.logger.Warn("worker_registration_failed", "error_class", "worker_bootstrap_credential")
+			return
+		}
+		manager.client.setWorkerBootstrapCredential(credential)
+	}
 	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	registration := manager.registration()
-	if _, err := manager.client.register(requestContext, manager.id, registration); err != nil {
+	_, credential, err := manager.client.register(requestContext, manager.id, registration)
+	if err != nil {
 		manager.stateMutex.Lock()
 		manager.registered = false
 		manager.cancelPendingClaimsLocked()
@@ -127,6 +141,18 @@ func (manager *Manager) registerLocked(ctx context.Context) {
 		}
 		manager.logger.Warn("worker_registration_failed", "error_class", apiErrorClass(err))
 		return
+	}
+	if credential != "" {
+		if err := saveWorkerCredential(manager.dataDirectory, credential); err != nil {
+			manager.stateMutex.Lock()
+			manager.registered = false
+			manager.cancelPendingClaimsLocked()
+			manager.stateMutex.Unlock()
+			manager.logger.Error("worker_credential_persistence_failed", "error_class", "local_worker_state")
+			return
+		}
+		manager.client.setWorkerCredential(credential)
+		manager.client.setWorkerBootstrapCredential("")
 	}
 	if err := manager.manifests.removeDisposedManifests(registration.DisposedAttemptIDs); err != nil {
 		manager.markUnhealthy("attempt_manifest", err)

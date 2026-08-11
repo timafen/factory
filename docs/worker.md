@@ -57,8 +57,16 @@ requires a worker restart; an unexpected change fails before agent launch.
 ## Identity and registration
 
 The first start creates a protected `worker-id` file in the worker data
-directory. The worker reuses that ID on every restart. The local API does not
-authenticate workers, so the ID is identity, not a credential.
+directory. The worker reuses that ID on every restart, but the ID alone is not a
+credential. On startup the control plane creates a separate protected
+`server/worker-bootstrap-credential` below `FACTORY_DATA_HOME`. A new worker must
+read and present that `0600` file before registration can create its record or
+issue its per-worker credential. The worker then keeps the issued credential in
+its own protected `worker-credential` file for later registrations and project
+attestations. If the initial response was lost or its atomic credential write
+failed, the worker may present the bootstrap credential again for a recoverable
+replacement. A loopback request without either credential cannot register or
+rotate an existing worker.
 
 Registration advertises:
 

@@ -28,6 +28,8 @@ type httpFixture struct {
 	logs   *bytes.Buffer
 }
 
+const testWorkerBootstrapCredential = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 func TestDashboardSerializesManagedRepositoryReadiness(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("FACTORY_DATA_HOME", home)
@@ -78,7 +80,7 @@ func newHTTPFixture(t *testing.T) *httpFixture {
 	t.Helper()
 	store := newTestStore(t)
 	logs := &bytes.Buffer{}
-	server := httptest.NewServer(NewHandler(store, slog.New(slog.NewJSONHandler(logs, nil))))
+	server := httptest.NewServer(NewHandlerWithWorkerBootstrapCredential(store, slog.New(slog.NewJSONHandler(logs, nil)), testWorkerBootstrapCredential))
 	t.Cleanup(server.Close)
 	return &httpFixture{t: t, store: store, server: server, logs: logs}
 }
@@ -109,6 +111,9 @@ func (f *httpFixture) request(method, path, contentType, origin string, body any
 	}
 	if origin != "" {
 		request.Header.Set("Origin", origin)
+	}
+	if method == http.MethodPut && strings.HasPrefix(path, "/api/v1/workers/") {
+		request.Header.Set(protocol.WorkerBootstrapCredentialHeader, testWorkerBootstrapCredential)
 	}
 	response, err := f.server.Client().Do(request)
 	if err != nil {

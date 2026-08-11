@@ -28,35 +28,37 @@ const (
 )
 
 type Options struct {
-	GitExecutable        string
-	GitHubExecutable     string
-	RuntimeExecutable    string
-	SupervisorCommand    []string
-	HTTPClient           *http.Client
-	Random               io.Reader
-	WorkerVersion        string
-	PollInterval         time.Duration
-	HealthInterval       time.Duration
-	RegistrationInterval time.Duration
-	LeaseRenewInterval   time.Duration
-	LeaseRetryInterval   time.Duration
-	TransportBackoffMin  time.Duration
-	TransportBackoffMax  time.Duration
-	ShutdownTimeout      time.Duration
+	GitExecutable                 string
+	GitHubExecutable              string
+	RuntimeExecutable             string
+	SupervisorCommand             []string
+	HTTPClient                    *http.Client
+	Random                        io.Reader
+	WorkerVersion                 string
+	PollInterval                  time.Duration
+	HealthInterval                time.Duration
+	RegistrationInterval          time.Duration
+	LeaseRenewInterval            time.Duration
+	LeaseRetryInterval            time.Duration
+	TransportBackoffMin           time.Duration
+	TransportBackoffMax           time.Duration
+	ShutdownTimeout               time.Duration
+	WorkerBootstrapCredentialPath string
 }
 
 type Manager struct {
-	config            Config
-	options           Options
-	logger            *slog.Logger
-	id                string
-	dataDirectory     string
-	lock              *dataLock
-	repositories      []Repository
-	repositoriesByKey map[string]Repository
-	client            *client
-	manifests         *manifestStore
-	slots             chan struct{}
+	config                        Config
+	options                       Options
+	logger                        *slog.Logger
+	id                            string
+	dataDirectory                 string
+	lock                          *dataLock
+	repositories                  []Repository
+	repositoriesByKey             map[string]Repository
+	client                        *client
+	workerBootstrapCredentialPath string
+	manifests                     *manifestStore
+	slots                         chan struct{}
 
 	stateMutex                    sync.Mutex
 	health                        health
@@ -123,12 +125,22 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 	if err != nil {
 		return nil, err
 	}
+	credential, err := loadWorkerCredential(dataDirectory)
+	if err != nil {
+		return nil, err
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	byKey := make(map[string]Repository, len(repositories))
 	for _, repository := range repositories {
 		byKey[repository.Key] = repository
+	}
+	apiClient := newClient(config.Server, options.HTTPClient)
+	apiClient.setWorkerCredential(credential)
+	bootstrapCredentialPath, err := workerBootstrapCredentialPath(options)
+	if err != nil {
+		return nil, err
 	}
 	cleanupLock = false
 	return &Manager{
@@ -140,7 +152,8 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 		lock:                          lock,
 		repositories:                  repositories,
 		repositoriesByKey:             byKey,
-		client:                        newClient(config.Server, options.HTTPClient),
+		client:                        apiClient,
+		workerBootstrapCredentialPath: bootstrapCredentialPath,
 		manifests:                     newManifestStore(dataDirectory, id),
 		slots:                         make(chan struct{}, config.MaxConcurrent),
 		health:                        health{State: "unhealthy"},
@@ -153,6 +166,21 @@ func New(config Config, options Options, logger *slog.Logger) (*Manager, error) 
 		disposed:                      make(map[string]bool),
 		pending:                       make(map[string]context.CancelFunc),
 	}, nil
+}
+
+func workerBootstrapCredentialPath(options Options) (string, error) {
+	if options.WorkerBootstrapCredentialPath != "" {
+		return options.WorkerBootstrapCredentialPath, nil
+	}
+	root := dataHomeEnvironment()
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve worker bootstrap credential path: %w", err)
+		}
+		root = filepath.Join(home, ".factory")
+	}
+	return filepath.Join(root, "server", protocol.WorkerBootstrapCredentialFile), nil
 }
 
 func (options Options) withDefaults(runtime string) Options {

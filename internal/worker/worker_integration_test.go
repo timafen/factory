@@ -26,6 +26,7 @@ import (
 
 	"github.com/owainlewis/factory/internal/controlplane"
 	"github.com/owainlewis/factory/internal/protocol"
+	"github.com/owainlewis/factory/internal/securetoken"
 	"golang.org/x/sys/unix"
 )
 
@@ -228,12 +229,22 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func newServerFixture(t *testing.T, wrap func(http.Handler) http.Handler) *serverFixture {
 	t.Helper()
+	dataRoot := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", dataRoot)
+	serverDirectory := filepath.Join(dataRoot, "server")
+	if err := os.MkdirAll(serverDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bootstrapCredential, err := securetoken.LoadOrCreate(filepath.Join(serverDirectory, protocol.WorkerBootstrapCredentialFile))
+	if err != nil {
+		t.Fatal(err)
+	}
 	databasePath := filepath.Join(t.TempDir(), "factory.sqlite3")
 	store, err := controlplane.Open(context.Background(), databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := controlplane.NewHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler := controlplane.NewHandlerWithWorkerBootstrapCredential(store, slog.New(slog.NewTextHandler(io.Discard, nil)), bootstrapCredential)
 	if wrap != nil {
 		handler = wrap(handler)
 	}

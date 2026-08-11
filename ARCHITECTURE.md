@@ -544,7 +544,10 @@ worker data directory.
 The current trust boundary is one trusted user on one host:
 
 - the server binds only to loopback and validates request host resolution;
-- there is no login, authorization, worker credential, TLS, or tenant boundary;
+- there is no general login, authorization, TLS, or tenant boundary; worker
+  registration requires either the protected host bootstrap credential or an
+  existing server-issued per-worker credential, and project verification
+  requires the latter;
 - worker IDs identify local state but are not secrets;
 - the agent process has the worker OS user's permissions and can access anything
   available to that user;
