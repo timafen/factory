@@ -42,7 +42,10 @@ func TestWorkerCredentialRejectsSymlinkAndOpenPermissions(t *testing.T) {
 			return os.Symlink(target, path)
 		},
 		"open permissions": func(path string) error {
-			return os.WriteFile(path, []byte(strings.Repeat("c", 43)+"\n"), 0o644)
+			if err := os.WriteFile(path, []byte(strings.Repeat("c", 43)+"\n"), 0o600); err != nil {
+				return err
+			}
+			return os.Chmod(path, 0o644)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

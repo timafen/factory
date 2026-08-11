@@ -479,5 +479,22 @@ func runGitCommand(
 ) ([]byte, []byte, error) {
 	commandContext, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
-	return runCommand(commandContext, gitExecutable, directory, outputLimit, arguments...)
+	for {
+		stdout, stderr, err := runCommand(commandContext, gitExecutable, directory, outputLimit, arguments...)
+		if !errors.Is(err, ErrCommandAlreadyRunning) {
+			return stdout, stderr, err
+		}
+		// Repository coordination already serializes mutating work. A second
+		// identical short Git probe can nevertheless overlap at the command
+		// boundary; wait for the first one instead of failing the whole task.
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-commandContext.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, nil, commandContext.Err()
+		case <-timer.C:
+		}
+	}
 }

@@ -5,7 +5,7 @@ Before=factory-server.service
 [Service]
 Type=simple
 User=root
-Group=factory
+Group=factory-release
 RuntimeDirectory=factory
 RuntimeDirectoryMode=0750
 UMask=0007

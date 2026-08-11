@@ -13,6 +13,16 @@ printf '%s\n' "$*" >>"$FACTORY_BROKER_SYSTEMCTL_LOG"
 if [ "$1" = is-active ]; then exit 3; fi
 EOF
 chmod +x "$temporary/bin/systemctl"
+cat >"$temporary/bin/getent" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$temporary/bin/getent"
+cat >"$temporary/bin/groupadd" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FACTORY_BROKER_GROUPADD_LOG"
+EOF
+chmod +x "$temporary/bin/groupadd"
 cat >"$temporary/broker" <<'EOF'
 #!/bin/sh
 exit 0
@@ -21,15 +31,21 @@ chmod +x "$temporary/broker"
 
 FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
 FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
+FACTORY_RELEASE_BROKER_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
 FACTORY_RELEASE_BROKER_OWNER= \
 FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
+FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
+FACTORY_RELEASE_BROKER_GROUPADD="$temporary/bin/groupadd" \
 FACTORY_BROKER_SYSTEMCTL_LOG="$temporary/systemctl.log" \
+FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
   "$root/ops/install-project-release-broker.sh" \
     "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
 
 test -x "$temporary/out/factory-release-broker"
 grep -qx 'User=root' "$temporary/systemd/factory-release-broker.service"
-grep -qx 'Group=factory' "$temporary/systemd/factory-release-broker.service"
+grep -qx 'Group=factory-release' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'NoNewPrivileges=true' "$temporary/systemd/factory-release-broker.service"
+grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
+grep -qx -- '--system factory-release' "$temporary/groupadd.log"
 grep -qx 'daemon-reload' "$temporary/systemctl.log"
 grep -qx 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
