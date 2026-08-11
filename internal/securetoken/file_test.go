@@ -31,6 +31,11 @@ func TestReadRejectsUnsafeCredentialFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile applies the process umask. The release gate intentionally uses
+	// umask 077, so make the unsafe fixture explicit before testing rejection.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Read(path); err == nil {
 		t.Fatal("credential with broad permissions was accepted")
 	}

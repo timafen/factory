@@ -25,6 +25,11 @@ func provisionTestProjectSecrets(t *testing.T, store *Store, project protocol.Pr
 	if err := os.WriteFile(path, []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	// The production release gate runs with umask 077. Secret fixtures must
+	// still model the required root:worker 0640 file exactly.
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 
