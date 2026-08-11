@@ -123,11 +123,27 @@ describe("Overview Factory efficiency", () => {
     const efficiency = {
       generated_at: "2026-08-10T12:00:00Z", minimum_sample: 5,
       periods: {
-        "24h": { assessment: "low_data", current: period(), previous: period({ completed_works: 1 }) },
+        "24h": {
+          assessment: "low_data",
+          current: period({
+            lead_time_seconds: { sample: 2, median: 3600, p90: null },
+          }),
+          previous: period({
+            completed_works: 1,
+            rounds: { sample: 2, median: 1.5, p90: null },
+          }),
+        },
         "7d": {
           assessment: "degraded",
           stage_handoff_wait_target: { maximum_share: 0.1, current_share: 0.08, previous_share: 0.25, met: true },
-          current: period({ completed_works: 8 }), previous: period({ completed_works: 10 }),
+          current: period({
+            completed_works: 8,
+            rounds: { sample: 2, median: 1.5, p90: null },
+          }),
+          previous: period({
+            completed_works: 10,
+            lead_time_seconds: { sample: 2, median: 3600, p90: null },
+          }),
         },
       },
     };
@@ -143,6 +159,9 @@ describe("Overview Factory efficiency", () => {
     const section = await screen.findByRole("region", { name: "Эффективность Factory" });
     expect(within(section).getByText("данных мало")).toBeVisible();
     expect(within(section).getByText("выборка: 2 влитых работ · минимум для оценки 5")).toBeVisible();
+    const leadTime = within(section).getByText("медиана до слияния").parentElement;
+    expect(leadTime).toHaveTextContent("данных нет · n=2");
+    expect(leadTime).toHaveTextContent("ранее: медиана 1.0 ч · 90% — не дольше чем за 2.0 ч · n=2");
     expect(within(section).getByRole("alert")).toHaveTextContent("unclassified 25% превышает порог 20%");
     expect(within(section).queryByText("есть улучшение")).not.toBeInTheDocument();
     fireEvent.click(within(section).getByText("Показать детали и знаменатели"));
@@ -151,7 +170,11 @@ describe("Overview Factory efficiency", () => {
     expect(within(section).getByText("Определение owner_decision_wait")).toBeVisible();
     expect(within(section).getAllByText("360 сек · 5%")).toHaveLength(3);
     expect(within(section).getByText(/n=3 интервалов/)).toBeVisible();
+    const rounds = within(section).getByText("Круги").parentElement;
+    expect(rounds).toHaveTextContent("медиана 1.5 · 90% влитых работ прошли не больше 2 кругов · n=2");
+    expect(rounds).toHaveTextContent("ранее: медиана 1.5 · данных нет · n=2");
     expect(within(section).getByText(/Служебные отдельно: патруль 3, по расписанию 2, helper 1, прочие 4/)).toBeVisible();
+    expect(section).not.toHaveTextContent(/p90/i);
 
     fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
     expect(within(section).getByText("есть деградация")).toBeVisible();
@@ -160,6 +183,10 @@ describe("Overview Factory efficiency", () => {
     expect(within(target).getByText(/цель ≤10% · текущие 7 дней 8% · предыдущие 7 дней 25%/)).toBeVisible();
     expect(within(section).getByText("выборка: 8 влитых работ · минимум для оценки 5")).toBeVisible();
     expect(within(section).getByText("предыдущий период: 10")).toBeVisible();
+    expect(leadTime).toHaveTextContent("90% влитых работ дошли до слияния не дольше чем за 2.0 ч · n=2");
+    expect(leadTime).toHaveTextContent("ранее: медиана 1.0 ч · данных нет · n=2");
+    expect(rounds).toHaveTextContent("медиана 1.5 · данных нет · n=2");
+    expect(rounds).toHaveTextContent("ранее: медиана 1.5 · 90% — не больше 2 кругов · n=2");
   });
 });
 
@@ -191,7 +218,7 @@ describe("Overview product capacity", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      const body = path === "/api/v1/metrics/product-capacity" ? { generated_at: "2026-08-10T12:00:00Z", capacity: 4, periods: { "24h": period, "7d": period } }
+      const body = path === "/api/v1/metrics/product-capacity" ? { generated_at: "2026-08-10T12:00:00Z", capacity: 4, periods: { "24h": period, "7d": { ...period, queue_p90: null } } }
         : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
       return { ok: true, json: async () => body } as Response;
     }));
@@ -199,12 +226,16 @@ describe("Overview product capacity", () => {
     const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
     expect(within(section).getByText("данных мало")).toBeVisible();
     expect(within(section).getByText("0.0 / 4")).toBeVisible();
-    expect(within(section).getByText("p90 очереди")).toBeVisible();
+    expect(within(section).getByText("очередь в 90% замеров")).toBeVisible();
+    expect(within(section).getByText("не больше 2 продуктовых работ")).toBeVisible();
+    expect(section).not.toHaveTextContent(/p90/i);
     fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
     expect(within(section).getByText(/unknown:/)).toBeVisible();
     expect(within(section).queryByText(/лимит провайдера:/)).not.toBeInTheDocument();
     fireEvent.click(within(section).getByRole("button", { name: "7 дней" }));
     expect(within(section).getByText("сэмплов: 2")).toBeVisible();
+    expect(within(section).getByText("—")).toBeVisible();
+    expect(within(section).getByText("данных нет")).toBeVisible();
   });
 });
 
