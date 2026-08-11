@@ -52,6 +52,9 @@ func invalid(code, message string) error {
 type Store struct {
 	db                    *sql.DB
 	attachmentRoot        string
+	projectSecretRoot     string
+	projectSecretOwnerUID uint32
+	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
 	sweepEvery            time.Duration
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
@@ -113,7 +116,7 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	attachmentRoot := "/opt/factory-data/attachments"
-	store := &Store{db: db, attachmentRoot: attachmentRoot, now: time.Now, sweepEvery: 5 * time.Second}
+	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create attachment directory: %w", err)
@@ -2159,6 +2162,42 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		}
 		if err := normalizeTaskRoute(input.Route); err != nil {
 			return protocol.TaskDetail{}, false, err
+		}
+	}
+	// Project readiness performs several server-owned reads (worker state,
+	// gates, branch attestation, and secret-file checks). Do this before the
+	// SQLite write transaction so stores configured with one connection cannot
+	// deadlock waiting for their own transaction.
+	var replayID string
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE request_key=?`, input.RequestKey).Scan(&replayID); err == nil {
+		detail, err := s.Task(ctx, replayID)
+		return detail, false, err
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return protocol.TaskDetail{}, false, unavailable(err)
+	}
+	if input.Route == nil {
+		if err := s.requireProjectRoutingReady(ctx, input.RepositoryID, input.WorkerID); err != nil {
+			return protocol.TaskDetail{}, false, err
+		}
+	} else {
+		var routedRepositoryID string
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM repositories WHERE remote_identity=?`, input.Route.RepositoryRemoteIdentity).Scan(&routedRepositoryID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+		if err == nil {
+			verifiedWorkerID, project, err := s.verifiedProjectWorker(ctx, routedRepositoryID)
+			if err != nil {
+				return protocol.TaskDetail{}, false, err
+			}
+			if project {
+				if input.WorkerID == "" {
+					input.WorkerID = verifiedWorkerID
+				}
+				if err := s.requireProjectRoutingReady(ctx, routedRepositoryID, input.WorkerID); err != nil {
+					return protocol.TaskDetail{}, false, err
+				}
+			}
 		}
 	}
 	now := s.now().UnixMilli()

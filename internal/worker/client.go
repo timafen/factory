@@ -45,6 +45,17 @@ func (client *client) register(ctx context.Context, workerID string, input proto
 	return worker, err
 }
 
+func (client *client) project(ctx context.Context, projectID string) (protocol.Project, error) {
+	var project protocol.Project
+	_, err := client.request(ctx, http.MethodGet, "/api/v1/projects/"+url.PathEscape(projectID), nil, &project)
+	return project, err
+}
+
+func (client *client) verifyProject(ctx context.Context, workerID, projectID string, input protocol.ProjectVerificationRequest) error {
+	_, err := client.request(ctx, http.MethodPost, "/api/v1/workers/"+url.PathEscape(workerID)+"/projects/"+url.PathEscape(projectID)+"/verification", input, nil)
+	return err
+}
+
 func (client *client) claim(ctx context.Context, workerID string, input protocol.ClaimRequest, minimumBackoff, maximumBackoff time.Duration) (*protocol.Claim, error) {
 	var claim protocol.Claim
 	status, err := client.retry(ctx, http.MethodPost,

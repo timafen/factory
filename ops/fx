@@ -73,6 +73,15 @@ require() {
   }
 }
 
+valid_factory_release_job() {
+  case "$1" in
+    factory-project-release-*) suffix=${1#factory-project-release-} ;;
+    *) return 1 ;;
+  esac
+  [ "${#suffix}" -eq 32 ] || return 1
+  case "$suffix" in *[!0-9a-f]*) return 1 ;; esac
+}
+
 
 # Голый код ответа агенты читают неправильно: 302 — это обычное
 # перенаправление на страницу входа, то есть приложение живо, а не «сервер
@@ -122,6 +131,9 @@ fx — разрешённые операции:
                                   точки) и выкатить: проверка типов, сборка интерфейса
                                   и сервера, установка, перезапуск, проверка здоровья,
                                   автоматический откат при неудаче
+
+  release-job и release-job-status — внутренние операции control-plane для
+  долговечного self-release; вручную их использовать не нужно
   fx factory rollback             вернуть предыдущую версию Фабрики
   fx factory release-info [--technical]
                                   что изменилось в текущей версии; служебный код
@@ -142,7 +154,7 @@ staging_units=(automation-ebay-staging-gunicorn.service
                automation-ebay-staging-notifications.timer
                automation-ebay-staging-order-reconcile.timer)
 
-scope="${1:-help}"; verb="${2:-}"; arg="${3:-}"
+scope="${1:-help}"; verb="${2:-}"; arg="${3:-}"; job="${4:-}"
 
 case "$scope" in
   help|-h|--help|"") usage; exit 0 ;;
@@ -571,6 +583,31 @@ case "$scope" in
         case "$ref" in *' '*|*'`'*|*'$'*|*';'*|*'&'*|*'|'*) die "недопустимая точка сборки" ;; esac
         say factory release "$ref"
         /usr/local/lib/fx-factory-release "$ref"
+        ;;
+      release-job)
+        ref="$arg"
+        case "$ref" in
+          ''|*[!0-9a-f]* ) die "для release-job нужен полный SHA" ;;
+        esac
+        [ "${#ref}" -eq 40 ] || [ "${#ref}" -eq 64 ] || die "для release-job нужен полный SHA"
+        valid_factory_release_job "$job" || die "недопустимое имя долговечной операции"
+        say factory release-job "$ref $job"
+        systemd-run --quiet --no-block --unit="$job" \
+          --property=Type=oneshot --property=RemainAfterExit=yes \
+          /usr/local/bin/fx factory release "$ref"
+        ;;
+      release-job-status)
+        valid_factory_release_job "$arg" || die "недопустимое имя долговечной операции"
+        values=$(systemctl show "$arg" --property=LoadState --property=ActiveState --property=Result --property=ExecMainStatus) \
+          || die "статус долговечной операции недоступен"
+        active=$(printf '%s\n' "$values" | sed -n 's/^ActiveState=//p')
+        result=$(printf '%s\n' "$values" | sed -n 's/^Result=//p')
+        exit_status=$(printf '%s\n' "$values" | sed -n 's/^ExecMainStatus=//p')
+        case "$active:$result:$exit_status" in
+          activating:*:*) echo running ;;
+          active:success:0) echo succeeded ;;
+          *) echo failed ;;
+        esac
         ;;
       rollback)
         say factory rollback OK
