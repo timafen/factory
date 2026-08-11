@@ -52,6 +52,9 @@ func invalid(code, message string) error {
 type Store struct {
 	db                    *sql.DB
 	attachmentRoot        string
+	projectSecretRoot     string
+	projectSecretOwnerUID uint32
+	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
 	sweepEvery            time.Duration
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
@@ -113,7 +116,7 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	attachmentRoot := "/opt/factory-data/attachments"
-	store := &Store{db: db, attachmentRoot: attachmentRoot, now: time.Now, sweepEvery: 5 * time.Second}
+	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create attachment directory: %w", err)
@@ -2238,6 +2241,9 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		}
 	}
 	var repositoryRemoteIdentity string
+	if err := s.requireProjectRoutingReady(ctx, input.RepositoryID); err != nil {
+		return protocol.TaskDetail{}, false, err
+	}
 	err = tx.QueryRowContext(ctx, `
 		SELECT COALESCE(NULLIF(worker_repository.worker_remote_identity, ''), repository.remote_identity)
 		FROM repositories repository

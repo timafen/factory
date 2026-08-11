@@ -131,6 +131,14 @@ export interface ManagedRepositoryReadiness {
   workers: ManagedRepositoryWorkerReadiness[];
 }
 
+export type ProjectType = "factory-single-instance" | "tarser-operations-staging";
+export interface ProjectEnvironmentInput { name: "staging" | "production"; url: string; health_url: string; blocked: boolean; release_adapter: string; rollback_adapter: string; required_secrets: string[]; web_hosts: string[]; }
+export interface CreateProjectInput { name: string; remote_identity: string; main_branch: string; project_type: ProjectType; required_checks: ["secret-scan", "static-typecheck", "tests", "build"]; environments: ProjectEnvironmentInput[]; }
+export interface Project extends Omit<CreateProjectInput, "environments"> { id: string; repository_id: string; executor_group: string; environments: ProjectEnvironmentInput[]; created_at: string; updated_at: string; }
+export interface ProjectReadinessGate { name: string; ready: boolean; reason: string; commit_sha?: string; checked_at?: string; }
+export interface ProjectReadiness { ready: boolean; commit_sha?: string; gates: ProjectReadinessGate[]; secrets: Array<{ name: string; present: boolean }>; routing_reason?: string; }
+export interface ProjectOperation { id: string; project_id: string; environment: string; kind: "release" | "rollback"; commit_sha: string; status: "running" | "succeeded" | "release_failed_rolled_back" | "health_failed_rolled_back" | "rollback_failed"; message: string; owner_confirmed: boolean; created_at: string; updated_at: string; }
+
 export interface WorkerRepositoryOption {
   id: string;
   key?: string;
