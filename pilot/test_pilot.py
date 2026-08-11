@@ -2081,6 +2081,19 @@ class PlanAutostartTest(unittest.TestCase):
                                                self.workers))
         create.assert_not_called()
 
+    @mock.patch.object(pilot, "create_task")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    def test_owner_paused_planned_card_is_not_started(self, _questions, ideas,
+                                                       create):
+        paused = self.cards[1]
+        ideas.return_value = [paused]
+        conf = dict(self.conf, stopped_pipelines=[paused["title"]])
+
+        self.assertIsNone(pilot.autostart_plan(
+            conf, [], self.workflows, self.workers))
+        create.assert_not_called()
+
     @mock.patch.object(pilot, "notify")
     @mock.patch.object(pilot, "note_work")
     @mock.patch.object(pilot, "set_idea")
