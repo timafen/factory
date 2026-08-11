@@ -283,6 +283,8 @@ run_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_DELIVERY_ID="${FACTORY_DELIVERY_ID:-}" \
+    FACTORY_DELIVERY_STATE_DIR="$case_dir/delivery-state" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
@@ -386,6 +388,21 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
 ! grep -F '1234567890abcdef' "$success/output" >/dev/null \
   || fail "release exposed a bare technical version in owner-facing output"
+
+# A broker retry carries the same immutable generation key. The second driver
+# invocation must return the durable accepted status before cloning, testing or
+# touching a service again.
+idempotent="$temporary/idempotent-delivery"
+make_fixture "$idempotent" parallel-success
+FACTORY_DELIVERY_ID=factory-1-0123456789abcdef0123456789abcdef run_release "$idempotent" parallel-success \
+  || { cat "$idempotent/output" >&2; fail "generation fixture release failed"; }
+restarts=$(grep -Fxc 'restart factory-server.service' "$idempotent/events")
+FACTORY_DELIVERY_ID=factory-1-0123456789abcdef0123456789abcdef run_release "$idempotent" parallel-success \
+  || { cat "$idempotent/output" >&2; fail "idempotent generation retry failed"; }
+[ "$(grep -Fxc 'restart factory-server.service' "$idempotent/events")" -eq "$restarts" ] \
+  || fail "same delivery id physically released Factory twice"
+[ "$(tr -d '\r\n' <"$idempotent/delivery-state/factory-1-0123456789abcdef0123456789abcdef.status")" = succeeded ] \
+  || fail "generation fixture did not keep accepted durable status"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
