@@ -2576,7 +2576,8 @@ class PlanAutostartTest(unittest.TestCase):
 
 
 class PlanManualTaskTest(unittest.TestCase):
-    def test_task_action_promotes_card_and_creates_task(self):
+    @classmethod
+    def setUpClass(cls):
         fastapi = types.ModuleType("fastapi")
         responses = types.ModuleType("fastapi.responses")
 
@@ -2586,16 +2587,101 @@ class PlanManualTaskTest(unittest.TestCase):
 
             post = get
 
+        class HTMLResponse:
+            def __init__(self, content, *_args, **_kwargs):
+                self.body = content.encode("utf-8")
+
+        class RedirectResponse:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
         fastapi.APIRouter = Router
         fastapi.Form = lambda default, **_kwargs: default
         fastapi.HTTPException = RuntimeError
-        responses.HTMLResponse = object
-        responses.RedirectResponse = object
+        responses.HTMLResponse = HTMLResponse
+        responses.RedirectResponse = RedirectResponse
+        sys.modules.pop("intake.plan", None)
         with mock.patch.dict(sys.modules, {
                 "pilot": pilot, "fastapi": fastapi,
                 "fastapi.responses": responses}):
-            plan = importlib.import_module("intake.plan")
+            cls.plan = importlib.import_module("intake.plan")
 
+    def html(self, response):
+        return response.body.decode("utf-8")
+
+    def with_alert_log(self, records):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = os.path.join(temporary.name, "notifications.jsonl")
+        with open(path, "w", encoding="utf-8") as stream:
+            for record in records:
+                if isinstance(record, str):
+                    stream.write(record + "\n")
+                else:
+                    stream.write(json.dumps(record) + "\n")
+        return mock.patch.dict(self.plan.os.environ, {"FACTORY_INTAKE_ALERTS_PATH": path})
+
+    def test_plan_card_keeps_why_hidden_until_its_disclosure_opens(self):
+        markup = self.plan.card_html({
+            "id": "idea-1", "title": "Убрать лишнее", "why": "<полное обоснование>",
+            "kind": "idea", "state": "new", "origin": "owner", "created": "сегодня",
+        }, "/plan")
+
+        self.assertIn('<details class="why-details">', markup)
+        self.assertIn("Показать обоснование", markup)
+        self.assertIn("&lt;полное обоснование&gt;", markup)
+        self.assertNotIn('<details class="why-details" open>', markup)
+        self.assertIn("В план", markup)
+        self.assertIn("Завести задачу", markup)
+
+    def test_plan_actions_keep_the_real_intake_route(self):
+        with mock.patch.object(self.plan.pilot, "ideas_all", return_value=[]), \
+                mock.patch.object(self.plan, "repos_map", return_value={}):
+            markup = self.html(self.plan.plan_page())
+
+        self.assertIn('name="back" value="/plan?repo=&amp;show=open"', markup)
+        self.assertNotIn("/intake/plan", markup)
+
+    def test_alerts_default_limit_groups_filters_and_keeps_newest_first(self):
+        records = []
+        for index in range(320):
+            records.append({
+                "title": f"Событие {index}", "message": f"Текст {index}",
+                "at": f"2026-08-11T12:{index:03d}Z",
+                "group": "questions" if index % 2 == 0 else "stuck",
+                "delivered": index != 319, "click": f"/work/{index}",
+            })
+        records.insert(3, "не JSON")
+        records.insert(4, ["не запись"])
+
+        with self.with_alert_log(records):
+            default = self.html(self.plan.alerts_page())
+            capped = self.html(self.plan.alerts_page(n=1000))
+            minimum = self.html(self.plan.alerts_page(n=1))
+            filtered = self.html(self.plan.alerts_page(group="stuck"))
+
+        self.assertEqual(default.count('class="card alert-event'), 30)
+        self.assertLess(default.index("Событие 319"), default.index("Событие 318"))
+        self.assertNotIn("Событие 289", default)
+        self.assertIn("вопрос ко мне · 15", default)
+        self.assertIn("работа встала · 15", default)
+        self.assertNotIn('<details class="alert-group" open>', default)
+        self.assertEqual(capped.count('class="card alert-event'), 300)
+        self.assertEqual(minimum.count('class="card alert-event'), 10)
+        self.assertIn('<details class="alert-group" open>', filtered)
+        self.assertIn("Событие 319", filtered)
+        self.assertNotIn("Событие 318", filtered)
+        self.assertIn("тихое: группа выключена", filtered)
+        self.assertIn('href="/work/319"', filtered)
+
+    def test_alerts_safely_ignores_an_empty_or_malformed_log(self):
+        with self.with_alert_log(["не JSON", [], "42"]):
+            markup = self.html(self.plan.alerts_page())
+
+        self.assertIn("Уведомлений пока нет.", markup)
+
+    def test_task_action_promotes_card_and_creates_task(self):
+        plan = self.plan
         card = {
             "id": "manual-card",
             "title": "Запустить вручную",

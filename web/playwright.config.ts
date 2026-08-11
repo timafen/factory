@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 const defaultBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox";
+const intakePython = process.env.FACTORY_INTAKE_PYTHON ?? "/opt/factory-data/intake/venv/bin/python";
 export const testWorkerBootstrapCredential =
   process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL ??
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -34,13 +35,21 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } },
     },
   ],
-  webServer: {
-    command: "node e2e/server.mjs",
-    url: "http://127.0.0.1:17437/healthz",
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
+  webServer: [
+    {
+      command: "node e2e/server.mjs",
+      url: "http://127.0.0.1:17437/healthz",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
+      },
     },
-  },
+    {
+      command: `${intakePython} e2e/intake-fixture.py`,
+      url: "http://127.0.0.1:17438/healthz",
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+  ],
 });
