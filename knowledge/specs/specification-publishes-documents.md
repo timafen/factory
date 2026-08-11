@@ -20,7 +20,7 @@
   immutable revision только для включённого workflow с title `Specification`;
 - в ревизии явно запретить реализацию пользовательского/продуктового кода и
   изменение UI, а разрешить только спецификацию и отдельную карточку
-  `knowledge/cards/CARD-0070-specification-publishes-documents.md`;
+  `knowledge/cards/CARD-0074-specification-publishes-documents.md`;
 - обязать агента работать в назначенной ветке, не делать checkout другой ветки,
   проверить `git diff --name-only origin/main...HEAD`, закоммитить документы
   русским человеческим заголовком, выполнить `git push -u origin HEAD` и
@@ -113,7 +113,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0070-specification-publishes-documents.md`
+`knowledge/cards/CARD-0074-specification-publishes-documents.md`
 
 ГОТОВО-КОГДА: файл migrations/023_specification_publishes_documents.sql
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
