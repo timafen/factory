@@ -8,40 +8,43 @@ import (
 )
 
 const (
-	RuntimeCodex              = "codex"
-	RuntimeClaudeCode         = "claude-code"
-	MaxBodyBytes              = 1 << 20
-	MaxDescriptionBytes       = 64 << 10
-	MaxEventBatchBytes        = 256 << 10
-	MaxEventBytes             = 64 << 10
-	MaxEventsPerBatch         = 100
-	MaxAttemptEventBytes      = 10 << 20
-	MaxResultBytes            = 256 << 10
-	MaxErrorBytes             = 64 << 10
-	DefaultTimeout            = 2 * time.Hour
-	MaxTimeout                = 8 * time.Hour
-	LeaseDuration             = 30 * time.Second
-	EmptyClaimTTL             = 5 * time.Minute
-	WorkerOnlineWindow        = 30 * time.Second
-	MaxRetainedPerRepo        = 10
-	MaxManagedRepositories    = 1000
-	MaxRepositoryCacheEntries = 100
-	DefaultTaskPageSize       = 50
-	MaxTaskPageSize           = 200
-	DefaultEventPageSize      = 100
-	MaxEventPageSize          = 500
-	DefaultWorkflowPageSize   = 50
-	MaxWorkflowPageSize       = 200
-	MaxWorkflows              = 500
-	MaxWorkflowRevisions      = 100
-	DefaultAutomationPageSize = 50
-	MaxAutomationPageSize     = 200
-	MaxAutomations            = 500
-	MaxAutomationOccurrences  = 100000
-	MaxAutomationContextBytes = 8 << 10
-	MaxAutomationMatches      = 100
-	MinWorkerCapacity         = 1
-	MaxWorkerCapacity         = 100
+	WorkerCredentialHeader          = "X-Factory-Worker-Credential"
+	WorkerBootstrapCredentialHeader = "X-Factory-Worker-Bootstrap-Credential"
+	WorkerBootstrapCredentialFile   = "worker-bootstrap-credential"
+	RuntimeCodex                    = "codex"
+	RuntimeClaudeCode               = "claude-code"
+	MaxBodyBytes                    = 1 << 20
+	MaxDescriptionBytes             = 64 << 10
+	MaxEventBatchBytes              = 256 << 10
+	MaxEventBytes                   = 64 << 10
+	MaxEventsPerBatch               = 100
+	MaxAttemptEventBytes            = 10 << 20
+	MaxResultBytes                  = 256 << 10
+	MaxErrorBytes                   = 64 << 10
+	DefaultTimeout                  = 2 * time.Hour
+	MaxTimeout                      = 8 * time.Hour
+	LeaseDuration                   = 30 * time.Second
+	EmptyClaimTTL                   = 5 * time.Minute
+	WorkerOnlineWindow              = 30 * time.Second
+	MaxRetainedPerRepo              = 10
+	MaxManagedRepositories          = 1000
+	MaxRepositoryCacheEntries       = 100
+	DefaultTaskPageSize             = 50
+	MaxTaskPageSize                 = 200
+	DefaultEventPageSize            = 100
+	MaxEventPageSize                = 500
+	DefaultWorkflowPageSize         = 50
+	MaxWorkflowPageSize             = 200
+	MaxWorkflows                    = 500
+	MaxWorkflowRevisions            = 100
+	DefaultAutomationPageSize       = 50
+	MaxAutomationPageSize           = 200
+	MaxAutomations                  = 500
+	MaxAutomationOccurrences        = 100000
+	MaxAutomationContextBytes       = 8 << 10
+	MaxAutomationMatches            = 100
+	MinWorkerCapacity               = 1
+	MaxWorkerCapacity               = 100
 )
 
 func SupportedRuntime(value string) bool {
@@ -168,6 +171,106 @@ type CreateManagedRepositoryRequest struct {
 
 type SetManagedRepositoryEnabledRequest struct {
 	Enabled bool `json:"enabled"`
+}
+
+const (
+	ProjectTypeFactorySingleInstance   = "factory-single-instance"
+	ProjectTypeTarserOperationsStaging = "tarser-operations-staging"
+)
+
+type ProjectEnvironmentInput struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	HealthURL       string   `json:"health_url"`
+	Blocked         bool     `json:"blocked"`
+	ReleaseAdapter  string   `json:"release_adapter"`
+	RollbackAdapter string   `json:"rollback_adapter"`
+	RequiredSecrets []string `json:"required_secrets"`
+	WebHosts        []string `json:"web_hosts"`
+}
+
+type CreateProjectRequest struct {
+	Name           string                    `json:"name"`
+	RemoteIdentity string                    `json:"remote_identity"`
+	MainBranch     string                    `json:"main_branch"`
+	ProjectType    string                    `json:"project_type"`
+	RequiredChecks []string                  `json:"required_checks"`
+	Environments   []ProjectEnvironmentInput `json:"environments"`
+}
+
+type ProjectEnvironment struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	HealthURL       string   `json:"health_url"`
+	Blocked         bool     `json:"blocked"`
+	ReleaseAdapter  string   `json:"release_adapter"`
+	RollbackAdapter string   `json:"rollback_adapter"`
+	RequiredSecrets []string `json:"required_secrets"`
+	WebHosts        []string `json:"web_hosts"`
+}
+
+type Project struct {
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	RepositoryID   string               `json:"repository_id"`
+	RemoteIdentity string               `json:"remote_identity"`
+	MainBranch     string               `json:"main_branch"`
+	ProjectType    string               `json:"project_type"`
+	ExecutorGroup  string               `json:"executor_group"`
+	RequiredChecks []string             `json:"required_checks"`
+	Environments   []ProjectEnvironment `json:"environments"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
+}
+
+type ProjectGate struct {
+	Name      string    `json:"name"`
+	Ready     bool      `json:"ready"`
+	Reason    string    `json:"reason"`
+	CommitSHA string    `json:"commit_sha,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+}
+
+type ProjectSecretStatus struct {
+	Name    string `json:"name"`
+	Present bool   `json:"present"`
+}
+
+type SecureProjectReadiness struct {
+	Ready         bool                  `json:"ready"`
+	CommitSHA     string                `json:"commit_sha,omitempty"`
+	Gates         []ProjectGate         `json:"gates"`
+	Secrets       []ProjectSecretStatus `json:"secrets"`
+	RoutingReason string                `json:"routing_reason,omitempty"`
+}
+
+// ProjectVerificationRequest is an atomic worker attestation. The control
+// plane accepts it only for the worker that actually advertises the project
+// repository and never exposes a project-facing gate mutation endpoint.
+type ProjectVerificationRequest struct {
+	Environment   string          `json:"environment"`
+	MainBranch    string          `json:"main_branch"`
+	BranchHeadSHA string          `json:"branch_head_sha"`
+	CommitSHA     string          `json:"commit_sha"`
+	Checks        map[string]bool `json:"checks"`
+	WebHosts      []string        `json:"web_hosts"`
+}
+
+type ProjectOperationRequest struct {
+	CommitSHA string `json:"commit_sha"`
+}
+
+type ProjectOperation struct {
+	ID             string    `json:"id"`
+	ProjectID      string    `json:"project_id"`
+	Environment    string    `json:"environment"`
+	Kind           string    `json:"kind"`
+	CommitSHA      string    `json:"commit_sha"`
+	Status         string    `json:"status"`
+	Message        string    `json:"message"`
+	OwnerConfirmed bool      `json:"owner_confirmed"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Worker struct {
