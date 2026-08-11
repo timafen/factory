@@ -4591,6 +4591,18 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.broker_build = tempfile.TemporaryDirectory()
+        cls.broker_executable = os.path.join(cls.broker_build.name, "factory-release-broker")
+        subprocess.run(["go", "build", "-o", cls.broker_executable,
+                        "./cmd/factory-release-broker"], check=True,
+                       cwd=os.path.dirname(os.path.dirname(__file__)))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.broker_build.cleanup()
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -4603,38 +4615,58 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         return {"task_id": task, "base": "Единый выпуск", "link": "",
                 "merge_receipt": {"task_id": task, "base": "Единый выпуск"}}
 
-    def _start_process_broker(self, locked=False):
-        """Build the production broker; the fixture never replaces its socket."""
+    def _stop_process(self, process):
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+
+    def _start_process_broker(self, locked=False, outcome="succeeded"):
+        """Run the real Go Unix broker against a blocking physical FX fixture."""
         socket_path = os.path.join(self.temporary.name, uuid.uuid4().hex + ".sock")
         state_dir = os.path.join(self.temporary.name, uuid.uuid4().hex + "-broker")
-        executable = os.path.join(self.temporary.name, uuid.uuid4().hex + "-broker-bin")
         fx = os.path.join(self.temporary.name, uuid.uuid4().hex + "-fx")
         attempts = fx + ".attempts"
+        success = fx + ".success"
+        started = fx + ".started"
+        pid = fx + ".pid"
+        release_gate = fx + ".release"
         lock_once = fx + ".lock-once"
         with open(fx, "w", encoding="utf-8") as stream:
-            stream.write("#!/bin/sh\nprintf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + "\"\n"
+            stream.write("#!/bin/sh\nset -eu\n"
+                         "printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + "\"\n"
                          "if [ -f \"" + lock_once + "\" ]; then rm -f \"" + lock_once + "\"; exit 8; fi\n"
-                         "printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + ".success\"\n")
+                         "printf '%s\\n' \"$$\" > \"" + pid + "\"\n"
+                         ": > \"" + started + "\"\n"
+                         "while [ ! -f \"" + release_gate + "\" ]; do sleep 0.01; done\n"
+                         "case \"" + outcome + "\" in\n"
+                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
+                         "  rollback_failed) exit 1 ;;\n"
+                         "  *) exit 7 ;;\n"
+                         "esac\n")
         os.chmod(fx, 0o700)
         if locked:
             with open(lock_once, "w", encoding="utf-8") as stream:
                 stream.write("locked once\n")
-        subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
-                       check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
-        broker = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
-                                   "-fx-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: (broker.terminate() if broker.poll() is None else None,
-                                 broker.wait(timeout=2) if broker.poll() is None else None))
+        broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
+                                   "-state-dir", state_dir, "-fx-executable", fx],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(self._stop_process, broker)
         for _ in range(100):
             if os.path.exists(socket_path):
-                return socket_path, state_dir, attempts
+                return {"socket": socket_path, "broker_state": state_dir,
+                        "attempts": attempts, "success": success, "fx_started": started,
+                        "fx_pid": pid, "release_gate": release_gate}
             if broker.poll() is not None:
                 self.fail("built release broker stopped before opening its Unix socket")
             time.sleep(.02)
         self.fail("built release broker did not open its Unix socket")
 
     def _pilot_process(self, action, paths, boundary="", now=0, sha=""):
-        """One independent Pilot interpreter: process lifetime is the crash boundary."""
+        """Run or abruptly stop an independent real Pilot interpreter."""
         invocation = {"action": action, "boundary": boundary, "now": now, "sha": sha,
                       **paths}
         config = os.path.join(self.temporary.name, uuid.uuid4().hex + ".json")
@@ -4649,62 +4681,81 @@ for name, key in (("STATE_PATH", "state"), ("MERGES_PATH", "merges"),
                   ("NOTIFY_LOG_PATH", "notifications")):
     setattr(pilot, name, d[key])
 def event(name, *values):
-    with open(d["events"], "a", encoding="utf-8") as f:
-        f.write(json.dumps([name, *values]) + "\n")
-pilot.gh_json = lambda _args: None
-pilot.gh_merge = lambda *_args: (event("gh_merge"), (True, "merged"))[1]
+    with open(d["events"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps([name, *values]) + "\n")
+def generation(state):
+    target = state.get(pilot.DELIVERY_STATE_KEY, {}).get("targets", {}).get("factory", {})
+    return target.get("generations", {}).get(target.get("current_generation"), {})
+original_save = pilot.save
+def save_then_crash(path, state):
+    original_save(path, state)
+    if d["action"] != "crash":
+        return
+    phase = generation(state).get("phase")
+    boundary = d["boundary"]
+    if ((boundary in ("post", "wrapper_status") and phase == "launching") or
+            (boundary == "running" and phase == "running") or
+            (boundary == "terminal" and phase == "completed")):
+        event("crash", boundary, phase)
+        os._exit(0)
+pilot.save = save_then_crash
 pilot.mark_final = lambda *args: event("mark_final", *args)
 pilot.notify = lambda _conf, title, *_args, **_kw: event("owner_done", title)
 conf = {"release_broker_socket": d["socket"]}
 def wait(task, sha):
     return {"task_id": task, "base": "Единый выпуск", "link": "",
             "merge_receipt": {"task_id": task, "base": "Единый выпуск", "sha": sha}}
-if d["action"] == "seed":
-    intent = {"phase": "intent" if d["boundary"] == "intent" else "merged",
-              "base": "Единый выпуск", "branch": "topic", "repository": "github.com/timafen/factory",
-              "commit_sha": d["sha"], "link": ""}
+state = pilot.load(pilot.STATE_PATH, {})
+if not generation(state):
+    intent = {"phase": "merged", "base": "Единый выпуск", "branch": "topic",
+              "repository": "github.com/timafen/factory", "commit_sha": d["sha"], "link": ""}
     state = {"merge_intents": {"verify-1": intent}}
     pilot.save(pilot.STATE_PATH, state)
-    if d["boundary"] not in ("intent", "after_merge"):
-        with open(pilot.MERGES_PATH, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"task_id": "verify-1"}) + "\n")
-    if d["boundary"] not in ("intent", "after_merge", "after_journal"):
-        pilot.recover_merge_intents(conf, state)
-    if d["boundary"] in ("post", "wrapper_status", "pid", "running", "terminal", "outbox_before", "outbox_after"):
-        generation = next(iter(state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]["generations"].values()))
-        pilot.broker_operation(d["socket"], "POST", generation["id"],
-            {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
-        for _ in range(100):
-            status = pilot.broker_operation(d["socket"], "GET", generation["id"])
-            if status and status.get("status") == "succeeded": break
-            time.sleep(.02)
-        generation["phase"] = "completed" if d["boundary"] in ("terminal", "outbox_before", "outbox_after") else "running"
-        if d["boundary"] in ("outbox_before", "outbox_after"):
-            pilot._complete_generation(conf, state, generation)
-        if d["boundary"] == "outbox_after":
-            pilot.dispatch_delivery_outbox(conf, state)
-        pilot.save(pilot.STATE_PATH, state)
-elif d["action"] == "join":
-    state = pilot.load(pilot.STATE_PATH, {})
-    pilot.deploy_after_merge(conf, "github.com/timafen/factory", state, d["sha"], wait("verify-2", d["sha"]))
-else:
-    state = pilot.load(pilot.STATE_PATH, {})
     pilot.recover_merge_intents(conf, state)
-    for _ in range(100):
-        pilot.poll_delivery_state(conf, state, now=d["now"])
-        target = state.get(pilot.DELIVERY_STATE_KEY, {}).get("targets", {}).get("factory", {})
-        generation = target.get("generations", {}).get(target.get("current_generation"), {})
-        if generation.get("phase") in ("completed", "failed", "reserved"):
-            break
+if d["action"] == "seed":
+    raise SystemExit(0)
+if d["action"] == "join":
+    pilot.deploy_after_merge(conf, "github.com/timafen/factory", state, d["sha"], wait("verify-2", d["sha"]))
+    raise SystemExit(0)
+pilot.recover_merge_intents(conf, state)
+if d["action"] == "recover":
+    with open(d["release_gate"], "w", encoding="utf-8"):
+        pass
+if d["action"] == "crash" and d["boundary"] == "pid":
+    pilot.poll_delivery_state(conf, state, now=d["now"])
+    operation = generation(state)
+    path = os.path.join(d["broker_state"], operation["id"] + ".json")
+    for _ in range(250):
+        try:
+            with open(path, encoding="utf-8") as stream:
+                if json.load(stream).get("pid"):
+                    event("crash", "pid", operation["id"])
+                    os._exit(0)
+        except (OSError, ValueError):
+            pass
         time.sleep(.02)
-    pilot.save(pilot.STATE_PATH, state)
+    raise SystemExit("physical FX PID was not persisted")
+released = d["action"] == "recover"
+for _ in range(250):
+    pilot.poll_delivery_state(conf, state, now=d["now"])
+    phase = generation(state).get("phase")
+    if d["action"] == "crash" and d["boundary"] == "terminal" and phase == "running" and not released:
+        with open(d["release_gate"], "w", encoding="utf-8"):
+            pass
+        released = True
+    if d["action"] != "crash" and phase in ("completed", "failed", "reserved"):
+        break
+    time.sleep(.02)
+if d["action"] == "crash":
+    raise SystemExit("crash boundary was not reached: " + d["boundary"])
+pilot.save(pilot.STATE_PATH, state)
 '''
         subprocess.run([sys.executable, "-c", script, config], check=True,
                        cwd=os.path.dirname(os.path.dirname(__file__)))
 
-    def _process_paths(self, socket_path):
+    def _process_paths(self, broker):
         prefix = os.path.join(self.temporary.name, uuid.uuid4().hex)
-        return {"socket": socket_path, "state": prefix + ".state.json", "merges": prefix + ".merges.jsonl",
+        return {**broker, "state": prefix + ".state.json", "merges": prefix + ".merges.jsonl",
                 "receipts": prefix + ".receipts.jsonl", "outbox": prefix + ".outbox.jsonl",
                 "notifications": prefix + ".notifications.jsonl", "events": prefix + ".events.jsonl"}
 
@@ -4719,28 +4770,85 @@ else:
             return json.load(stream)
 
     def test_state_file_crash_boundaries_recover_in_fresh_pilot_processes(self):
-        boundaries = ("intent", "after_merge", "after_journal", "after_wait", "reserved",
-                      "post", "wrapper_status", "pid", "running", "terminal",
-                      "outbox_before", "outbox_after")
+        boundaries = ("post", "wrapper_status", "pid", "running", "terminal")
         for boundary in boundaries:
             with self.subTest(boundary=boundary):
-                socket_path, state_dir, attempts = self._start_process_broker()
-                paths = self._process_paths(socket_path)
-                self._pilot_process("seed", paths, boundary, sha=self.sha)  # process which crashes at this durable boundary
-                self._pilot_process("recover", paths, boundary, sha=self.sha)  # fresh Pilot process
+                paths = self._process_paths(self._start_process_broker())
+                # The subprocess calls production recovery/polling and exits
+                # with os._exit immediately after its actual durable boundary.
+                self._pilot_process("crash", paths, boundary, sha=self.sha)
+                self.assertEqual(len(self._events(paths["events"], "crash")), 1)
+                crashed = self._read_json(paths["state"])
+                crashed_target = crashed[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+                crashed_generation = crashed_target["generations"][crashed_target["current_generation"]]
+                if boundary in ("post", "wrapper_status"):
+                    self.assertEqual(crashed_generation["phase"], "launching")
+                elif boundary == "running":
+                    self.assertEqual(crashed_generation["phase"], "running")
+                elif boundary == "terminal":
+                    self.assertEqual(crashed_generation["phase"], "completed")
+                    self.assertFalse(os.path.exists(paths["receipts"]))
+                    self.assertFalse(os.path.exists(paths["outbox"]))
+                    self.assertEqual(self._events(paths["events"], "mark_final"), [])
+                    self.assertEqual(self._events(paths["events"], "owner_done"), [])
+                else:
+                    broker_before_recovery = self._read_json(os.path.join(
+                        paths["broker_state"], crashed_generation["id"] + ".json"))
+                    self.assertGreater(broker_before_recovery.get("pid", 0), 0)
+                self._pilot_process("recover", paths, boundary, sha=self.sha)
                 state = self._read_json(paths["state"])
                 target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
                 generation = target["generations"][target["current_generation"]]
-                broker_state = self._read_json(os.path.join(state_dir, generation["id"] + ".json"))
-                with open(attempts, encoding="utf-8") as stream:
+                broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
+                with open(paths["attempts"], encoding="utf-8") as stream:
                     physical = [line.strip() for line in stream if line.strip()]
-                self.assertEqual(len(self._events(paths["events"], "gh_merge")), 1 if boundary == "intent" else 0)
                 self.assertEqual(broker_state["posts"], 1)
+                self.assertGreater(broker_state.get("pid", 0), 0)
                 self.assertEqual(physical, [generation["id"]])
+                with open(paths["success"], encoding="utf-8") as stream:
+                    self.assertEqual([line.strip() for line in stream if line.strip()], [generation["id"]])
                 self.assertEqual(len(self._events(paths["events"], "mark_final")), 1)
                 self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
+                with open(paths["receipts"], encoding="utf-8") as stream:
+                    self.assertEqual(len(stream.readlines()), 1)
+                with open(paths["outbox"], encoding="utf-8") as stream:
+                    self.assertEqual(len(stream.readlines()), 1)
                 self.assertEqual(generation["phase"], "completed")
                 self.assertEqual(generation["waits"]["verify-1"]["task_id"], "verify-1")
+
+    def test_real_rollback_failure_never_completes_waits(self):
+        paths = self._process_paths(self._start_process_broker(outcome="rollback_failed"))
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("recover", paths, sha=self.sha)
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
+        self.assertEqual(broker_state["status"], "rollback_failed")
+        self.assertEqual(generation["phase"], "failed")
+        self.assertFalse(os.path.exists(paths["receipts"]))
+        self.assertFalse(os.path.exists(paths["outbox"]))
+        self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+
+    def test_failed_broker_terminal_never_completes_waits(self):
+        state = {}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "notifications.jsonl")), \
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "failed"}), \
+                mock.patch.object(pilot, "mark_final") as mark_final, \
+                mock.patch.object(pilot, "notify") as owner_done:
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
+            pilot.poll_delivery_state({}, state)
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        self.assertEqual(generation["phase"], "failed")
+        self.assertFalse(os.path.exists(self.receipts))
+        self.assertFalse(os.path.exists(self.outbox))
+        mark_final.assert_not_called()
+        owner_done.assert_not_called()
 
     def test_lock_join_and_successor_are_distinct(self):
         state = {}
@@ -4761,20 +4869,19 @@ else:
         self.assertEqual(len(target["generations"]), 2)
 
     def test_locked_retry_uses_same_real_broker_operation_after_second_merge(self):
-        socket_path, state_dir, attempts = self._start_process_broker(locked=True)
-        paths = self._process_paths(socket_path)
-        self._pilot_process("seed", paths, "reserved", sha=self.sha)
-        self._pilot_process("recover", paths, now=0, sha=self.sha)  # first physical FX exits rc=8
+        paths = self._process_paths(self._start_process_broker(locked=True))
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("poll", paths, now=0, sha=self.sha)  # first physical FX exits rc=8
         self._pilot_process("join", paths, sha="b" * 40)  # second merge arrives in another Pilot process
         self._pilot_process("recover", paths, now=pilot.DELIVERY_RETRY_DELAY, sha="b" * 40)
         state = self._read_json(paths["state"])
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         self.assertEqual(len(target["generations"]), 1, "reserved N must not create N+1")
         generation = target["generations"][target["current_generation"]]
-        broker_state = self._read_json(os.path.join(state_dir, generation["id"] + ".json"))
-        with open(attempts, encoding="utf-8") as stream:
+        broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
+        with open(paths["attempts"], encoding="utf-8") as stream:
             physical = [line.strip() for line in stream if line.strip()]
-        with open(attempts + ".success", encoding="utf-8") as stream:
+        with open(paths["success"], encoding="utf-8") as stream:
             successful = [line.strip() for line in stream if line.strip()]
         self.assertEqual(generation["commit_sha"], "b" * 40)
         self.assertEqual(set(generation["waits"]), {"verify-1", "verify-2"})
