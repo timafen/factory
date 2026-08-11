@@ -22,11 +22,14 @@ import (
 )
 
 type httpFixture struct {
-	t      *testing.T
-	store  *Store
-	server *httptest.Server
-	logs   *bytes.Buffer
+	t                 *testing.T
+	store             *Store
+	server            *httptest.Server
+	logs              *bytes.Buffer
+	workerCredentials map[string]string
 }
+
+const testWorkerBootstrapCredential = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func TestDashboardSerializesManagedRepositoryReadiness(t *testing.T) {
 	home := t.TempDir()
@@ -78,9 +81,30 @@ func newHTTPFixture(t *testing.T) *httpFixture {
 	t.Helper()
 	store := newTestStore(t)
 	logs := &bytes.Buffer{}
-	server := httptest.NewServer(NewHandler(store, slog.New(slog.NewJSONHandler(logs, nil))))
+	server := httptest.NewServer(NewHandlerWithWorkerBootstrapCredential(store, slog.New(slog.NewJSONHandler(logs, nil)), testWorkerBootstrapCredential))
 	t.Cleanup(server.Close)
-	return &httpFixture{t: t, store: store, server: server, logs: logs}
+	return &httpFixture{t: t, store: store, server: server, logs: logs, workerCredentials: make(map[string]string)}
+}
+
+func (f *httpFixture) requestWithWorkerCredential(method, path, credential string, body any) *http.Response {
+	f.t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	request, err := http.NewRequest(method, f.server.URL+path, bytes.NewReader(encoded))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if credential != "" {
+		request.Header.Set(protocol.WorkerCredentialHeader, credential)
+	}
+	response, err := f.server.Client().Do(request)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return response
 }
 
 func (f *httpFixture) request(method, path, contentType, origin string, body any) *http.Response {
@@ -109,6 +133,9 @@ func (f *httpFixture) request(method, path, contentType, origin string, body any
 	}
 	if origin != "" {
 		request.Header.Set("Origin", origin)
+	}
+	if method == http.MethodPut && strings.HasPrefix(path, "/api/v1/workers/") {
+		request.Header.Set(protocol.WorkerBootstrapCredentialHeader, testWorkerBootstrapCredential)
 	}
 	response, err := f.server.Client().Do(request)
 	if err != nil {
@@ -143,6 +170,11 @@ func registerHTTPWorker(t *testing.T, fixture *httpFixture, id, key, remote stri
 		Repositories: []protocol.RepositoryRegistration{{Key: key, RemoteIdentity: remote}},
 	})
 	requireStatus(t, response, http.StatusOK)
+	credential := response.Header.Get(protocol.WorkerCredentialHeader)
+	if credential == "" {
+		t.Fatalf("worker %s registration did not return a credential", id)
+	}
+	fixture.workerCredentials[id] = credential
 	return decodeResponse[protocol.Worker](t, response)
 }
 
@@ -498,12 +530,22 @@ func TestHTTPContractLifecycleAndIdempotency(t *testing.T) {
 		t.Fatal("duplicate request key returned another task")
 	}
 
-	response = fixture.request(http.MethodPost, "/api/v1/workers/"+workerB+"/claims", "application/json", "", protocol.ClaimRequest{
+	response = fixture.request(http.MethodPost, "/api/v1/workers/"+workerA+"/claims", "application/json", "", protocol.ClaimRequest{
+		RequestID: "missing-credential", LeaseToken: tokenB,
+	})
+	requireStatus(t, response, http.StatusUnauthorized)
+	response.Body.Close()
+	response = fixture.requestWithWorkerCredential(http.MethodPost, "/api/v1/workers/"+workerA+"/claims", fixture.workerCredentials[workerB], protocol.ClaimRequest{
+		RequestID: "foreign-credential", LeaseToken: tokenB,
+	})
+	requireStatus(t, response, http.StatusUnauthorized)
+	response.Body.Close()
+	response = fixture.requestWithWorkerCredential(http.MethodPost, "/api/v1/workers/"+workerB+"/claims", fixture.workerCredentials[workerB], protocol.ClaimRequest{
 		RequestID: "wrong-worker", LeaseToken: tokenB,
 	})
 	requireStatus(t, response, http.StatusNoContent)
 	response.Body.Close()
-	response = fixture.request(http.MethodPost, "/api/v1/workers/"+workerA+"/claims", "application/json", "", protocol.ClaimRequest{
+	response = fixture.requestWithWorkerCredential(http.MethodPost, "/api/v1/workers/"+workerA+"/claims", fixture.workerCredentials[workerA], protocol.ClaimRequest{
 		RequestID: "right-worker", LeaseToken: tokenA,
 	})
 	requireStatus(t, response, http.StatusOK)

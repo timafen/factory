@@ -34,6 +34,10 @@ import type {
 	TaskAttachment,
 	EbayConsent,
 	EbayConsentStatus,
+	Project,
+	ProjectReadiness,
+	CreateProjectInput,
+	ProjectOperation,
 } from "./types";
 
 export class APIError extends Error {
@@ -138,6 +142,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
+  projects: async () =>
+    (await request<{ projects: Project[] | null }>("/api/v1/projects")).projects ?? [],
+  createProject: async (input: CreateProjectInput) => {
+    const response = await requestWithStatus<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(input) });
+    return { project: response.data, created: response.status === 201 };
+  },
+  projectReadiness: (id: string, environment = "staging") =>
+    request<ProjectReadiness>(`/api/v1/projects/${encodeURIComponent(id)}/environments/${encodeURIComponent(environment)}/readiness`),
+  runProjectOperation: (id: string, environment: string, operation: "release" | "rollback", commitSHA: string) =>
+    request<ProjectOperation>(`/api/v1/projects/${encodeURIComponent(id)}/environments/${encodeURIComponent(environment)}/${operation}`, { method: "POST", body: JSON.stringify({ commit_sha: commitSHA }) }),
+  projectOperation: (projectID: string, operationID: string) =>
+    request<ProjectOperation>(`/api/v1/projects/${encodeURIComponent(projectID)}/operations/${encodeURIComponent(operationID)}`),
   workflows: async (cursor = "", enabled?: boolean) => {
     const query = new URLSearchParams({ limit: "200" });
     if (cursor) query.set("cursor", cursor);

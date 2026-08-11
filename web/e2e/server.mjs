@@ -22,6 +22,11 @@ const legacyRoot = resolve(import.meta.dirname, "../test-results/legacy-poller")
 const legacyConfig = join(legacyRoot, "poller.toml");
 const legacyLedger = join(legacyRoot, "poller", "poller.sqlite3");
 const workerID = "11111111-1111-4111-8111-111111111111";
+const workerBootstrapCredential = process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL;
+
+if (!workerBootstrapCredential) {
+  throw new Error("FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL is required");
+}
 
 function run(command, args, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
@@ -229,6 +234,12 @@ const [factoryRepository, handbookRepository] = await Promise.all([
 ]);
 
 await mkdir(workerData, { recursive: true });
+await mkdir(join(temporary, "server"), { recursive: true });
+await writeFile(
+  join(temporary, "server", "worker-bootstrap-credential"),
+  `${workerBootstrapCredential}\n`,
+  { mode: 0o600 },
+);
 await mkdir(join(temporary, "pilot"), { recursive: true });
 await writeFile(join(temporary, "pilot", "dashboard.json"), JSON.stringify({
   updated_at: "2026-08-09T12:00:00Z",

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -28,8 +29,11 @@ func (err *APIError) Error() string {
 }
 
 type client struct {
-	baseURL string
-	http    *http.Client
+	baseURL             string
+	http                *http.Client
+	credentialMu        sync.RWMutex
+	credential          string
+	bootstrapCredential string
 }
 
 func newClient(server string, httpClient *http.Client) *client {
@@ -39,16 +43,55 @@ func newClient(server string, httpClient *http.Client) *client {
 	return &client{baseURL: strings.TrimRight(server, "/"), http: httpClient}
 }
 
-func (client *client) register(ctx context.Context, workerID string, input protocol.WorkerRegistration) (protocol.Worker, error) {
+func (client *client) register(ctx context.Context, workerID string, input protocol.WorkerRegistration) (protocol.Worker, string, error) {
 	var worker protocol.Worker
-	_, err := client.request(ctx, http.MethodPut, "/api/v1/workers/"+url.PathEscape(workerID), input, &worker)
-	return worker, err
+	_, headers, err := client.requestWithResponse(ctx, http.MethodPut, "/api/v1/workers/"+url.PathEscape(workerID), input, &worker, true)
+	if err != nil {
+		return worker, "", err
+	}
+	credential := headers.Get(protocol.WorkerCredentialHeader)
+	return worker, credential, nil
+}
+
+func (client *client) setWorkerCredential(credential string) {
+	client.credentialMu.Lock()
+	client.credential = credential
+	client.credentialMu.Unlock()
+}
+
+func (client *client) setWorkerBootstrapCredential(credential string) {
+	client.credentialMu.Lock()
+	client.bootstrapCredential = credential
+	client.credentialMu.Unlock()
+}
+
+func (client *client) workerCredential() string {
+	client.credentialMu.RLock()
+	defer client.credentialMu.RUnlock()
+	return client.credential
+}
+
+func (client *client) workerBootstrapCredential() string {
+	client.credentialMu.RLock()
+	defer client.credentialMu.RUnlock()
+	return client.bootstrapCredential
+}
+
+func (client *client) project(ctx context.Context, projectID string) (protocol.Project, error) {
+	var project protocol.Project
+	_, err := client.request(ctx, http.MethodGet, "/api/v1/projects/"+url.PathEscape(projectID), nil, &project)
+	return project, err
+}
+
+func (client *client) verifyProject(ctx context.Context, workerID, projectID string, input protocol.ProjectVerificationRequest) error {
+	_, _, err := client.requestWithResponse(ctx, http.MethodPost, "/api/v1/workers/"+url.PathEscape(workerID)+"/projects/"+url.PathEscape(projectID)+"/verification", input, nil, true)
+	return err
 }
 
 func (client *client) claim(ctx context.Context, workerID string, input protocol.ClaimRequest, minimumBackoff, maximumBackoff time.Duration) (*protocol.Claim, error) {
 	var claim protocol.Claim
 	status, err := client.retry(ctx, http.MethodPost,
-		"/api/v1/workers/"+url.PathEscape(workerID)+"/claims", input, &claim, minimumBackoff, maximumBackoff)
+		"/api/v1/workers/"+url.PathEscape(workerID)+"/claims", input, &claim, minimumBackoff, maximumBackoff, true)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +104,7 @@ func (client *client) claim(ctx context.Context, workerID string, input protocol
 func (client *client) start(ctx context.Context, attemptID string, input protocol.StartAttemptRequest) (protocol.Attempt, error) {
 	var attempt protocol.Attempt
 	_, err := client.retry(ctx, http.MethodPost, "/api/v1/attempts/"+url.PathEscape(attemptID)+"/start",
-		input, &attempt, time.Second, 5*time.Second)
+		input, &attempt, time.Second, 5*time.Second, false)
 	return attempt, err
 }
 
@@ -87,7 +130,7 @@ func (client *client) complete(ctx context.Context, attemptID string, input prot
 	input = boundedCompletionRequest(input)
 	var attempt protocol.Attempt
 	_, err := client.retry(ctx, http.MethodPost, "/api/v1/attempts/"+url.PathEscape(attemptID)+"/complete",
-		input, &attempt, time.Second, 5*time.Second)
+		input, &attempt, time.Second, 5*time.Second, false)
 	return attempt, err
 }
 
@@ -165,10 +208,11 @@ func (client *client) retry(
 	output any,
 	minimumBackoff time.Duration,
 	maximumBackoff time.Duration,
+	authenticated bool,
 ) (int, error) {
 	backoff := minimumBackoff
 	for {
-		status, err := client.request(ctx, method, path, input, output)
+		status, _, err := client.requestWithResponse(ctx, method, path, input, output, authenticated)
 		if err == nil {
 			return status, nil
 		}
@@ -191,48 +235,60 @@ func (client *client) retry(
 }
 
 func (client *client) request(ctx context.Context, method, path string, input any, output any) (int, error) {
+	status, _, err := client.requestWithResponse(ctx, method, path, input, output, false)
+	return status, err
+}
+
+func (client *client) requestWithResponse(ctx context.Context, method, path string, input any, output any, authenticated bool) (int, http.Header, error) {
 	body, err := json.Marshal(input)
 	if err != nil {
-		return 0, fmt.Errorf("encode request: %w", err)
+		return 0, nil, fmt.Errorf("encode request: %w", err)
 	}
 	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, method, client.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
+		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	if authenticated {
+		if credential := client.workerCredential(); credential != "" {
+			request.Header.Set(protocol.WorkerCredentialHeader, credential)
+		} else if credential := client.workerBootstrapCredential(); credential != "" {
+			request.Header.Set(protocol.WorkerBootstrapCredentialHeader, credential)
+		}
+	}
 	response, err := client.http.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("send request: %w", err)
+		return 0, nil, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, protocol.MaxBodyBytes+1))
 	if err != nil {
-		return response.StatusCode, fmt.Errorf("read response: %w", err)
+		return response.StatusCode, response.Header, fmt.Errorf("read response: %w", err)
 	}
 	if len(responseBody) > protocol.MaxBodyBytes {
-		return response.StatusCode, errors.New("control-plane response exceeds 1 MiB")
+		return response.StatusCode, response.Header, errors.New("control-plane response exceeds 1 MiB")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var errorBody protocol.ErrorBody
 		if err := json.Unmarshal(responseBody, &errorBody); err != nil {
-			return response.StatusCode, &APIError{
+			return response.StatusCode, response.Header, &APIError{
 				Status: response.StatusCode, Code: "invalid_error_response", Message: strings.TrimSpace(string(responseBody)),
 			}
 		}
-		return response.StatusCode, &APIError{
+		return response.StatusCode, response.Header, &APIError{
 			Status: response.StatusCode, Code: errorBody.Error.Code, Message: errorBody.Error.Message,
 		}
 	}
 	if response.StatusCode == http.StatusNoContent || output == nil {
-		return response.StatusCode, nil
+		return response.StatusCode, response.Header, nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(responseBody))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
-		return response.StatusCode, fmt.Errorf("decode response: %w", err)
+		return response.StatusCode, response.Header, fmt.Errorf("decode response: %w", err)
 	}
-	return response.StatusCode, nil
+	return response.StatusCode, response.Header, nil
 }
