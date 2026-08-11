@@ -47,3 +47,16 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-11 — Implement
+
+Strict Review corrections landed in
+`aa05c7eb3c01e665609bc847b0f493f35edd10f9`. Migration 027 now fails before
+ALTER and without ledger advance on a 025 database, then upgrades/reopens after
+the exact 026 schema is present. Parameterized Review/Verify tests use the real
+answer-resume and cycle paths across persisted state recreation, ending in one
+root/work/pipeline, merge and owner completion. Crash-boundary tests prove one
+durable outbox event. Full Go tests passed with the exact pending 026 migration
+fixture; all 204 Pilot tests and the final-tree build passed. This branch is
+intentionally unmergeable/unreleasable until CARD-0085/026 reaches `main`, and
+Pilot remains disabled.
