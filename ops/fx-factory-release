@@ -2,6 +2,19 @@
 # Собирает Фабрику из git и выкатывает сервер и воркер одной ревизией.
 set -uo pipefail
 
+# Bash, запущенный как фоновый job, может войти сюда с навсегда ignored SIGINT:
+# shell уже не разрешит trap вернуть такой сигнал. Один ранний exec сохраняет PID
+# supervisor, но запускает Bash с обычными dispositions HUP/INT/TERM.
+if [ "${FACTORY_RELEASE_SIGNALS_RESET:-0}" != 1 ]; then
+  export FACTORY_RELEASE_SIGNALS_RESET=1
+  exec python3 -c '
+import os, signal, sys
+for name in ("SIGHUP", "SIGINT", "SIGTERM"):
+    signal.signal(getattr(signal, name), signal.SIG_DFL)
+os.execv("/bin/bash", ["bash", *sys.argv[1:]])
+' "$0" "$@"
+fi
+
 ref="${1:-main}"
 REPO="${FACTORY_RELEASE_REPO:-https://github.com/timafen/factory.git}"
 SERVER_BIN="${FACTORY_SERVER_BIN:-/opt/factory-data/bin/factory-server}"
@@ -42,6 +55,7 @@ gate_pids=()
 gate_pid_files=()
 gate_logs=()
 gate_names=()
+release_stopping=0
 cleanup() {
   stop_test_gates
   wait_for_test_gates
@@ -95,10 +109,26 @@ stop_test_gates() {
 }
 
 wait_for_test_gates() {
-  local pid
-  for pid in "${gate_pids[@]}"; do
-    wait "$pid" 2>/dev/null || true
+  local pid pid_file group_pid i all_stopped
+  # Никогда не ждём тестовый раннер без верхней границы: сначала даём TERM
+  # короткое время, затем гарантированно убираем всю process group через KILL.
+  for ((i = 0; i < 200; i++)); do
+    all_stopped=1
+    for pid in "${gate_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && all_stopped=0
+    done
+    [ "$all_stopped" = 0 ] || break
+    sleep 0.01
   done
+  if [ "$all_stopped" = 0 ]; then
+    for pid_file in "${gate_pid_files[@]}"; do
+      group_pid=''
+      [ ! -s "$pid_file" ] || read -r group_pid <"$pid_file" || true
+      case "$group_pid" in ''|*[!0-9]*) ;; *) kill -KILL -- "-$group_pid" 2>/dev/null || true ;; esac
+    done
+    for pid in "${gate_pids[@]}"; do kill -KILL "$pid" 2>/dev/null || true; done
+  fi
+  for pid in "${gate_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
 
 print_test_gate_logs() {
@@ -111,6 +141,7 @@ print_test_gate_logs() {
 
 on_test_gate_signal() {
   local signal=$1
+  release_stopping=1
   trap - HUP INT TERM
   stop_test_gates
   wait_for_test_gates
@@ -120,7 +151,7 @@ on_test_gate_signal() {
 }
 
 run_parallel_test_gates() {
-  local completed status failed_name
+  local status failed_name remaining i pid
   gate_pids=()
   gate_pid_files=()
   gate_logs=()
@@ -140,33 +171,37 @@ run_parallel_test_gates() {
     bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
     bash "$work/src"
 
-  wait -n -p completed "${gate_pids[@]}"
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    failed_name="параллельная группа проверок"
-    if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
-    if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
-    stop_test_gates
-    wait_for_test_gates
-    trap - HUP INT TERM
-    print_test_gate_logs
-    fail "$failed_name завершилась с кодом $status"
-    return 1
-  fi
-
-  if [ "$completed" = "${gate_pids[0]}" ]; then
-    wait "${gate_pids[1]}"
-  else
-    wait "${gate_pids[0]}"
-  fi
-  status=$?
+  # Не входим в wait -n: bash может отложить trap до завершения дочернего
+  # процесса. Короткий polling оставляет supervisor отзывчивым к HUP/INT/TERM.
+  remaining=${#gate_pids[@]}
+  status=0
+  while [ "$remaining" -gt 0 ]; do
+    for i in "${!gate_pids[@]}"; do
+      pid=${gate_pids[$i]}
+      [ -n "$pid" ] || continue
+      if ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" || status=$?
+        gate_pids[$i]=''
+        remaining=$((remaining - 1))
+        if [ "$status" -ne 0 ]; then
+          failed_name=${gate_names[$i]}
+          break 2
+        fi
+      fi
+    done
+    sleep 0.02
+  done
   if [ "$status" -ne 0 ]; then
     stop_test_gates
     wait_for_test_gates
   fi
   trap - HUP INT TERM
   print_test_gate_logs
-  [ "$status" -eq 0 ]
+  if [ "$status" -ne 0 ]; then
+    fail "$failed_name завершилась с кодом $status"
+    return 1
+  fi
+  [ "$release_stopping" = 0 ]
 }
 
 step "беру исходники: $ref"
@@ -194,6 +229,8 @@ as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
 step "параллельно проверяю интерфейс, Go и сценарий выката"
 run_parallel_test_gates \
   || { fail "одна из обязательных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+[ "$release_stopping" = 0 ] \
+  || { fail "выпуск остановлен до production install"; cleanup; exit 130; }
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }

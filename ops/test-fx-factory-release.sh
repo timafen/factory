@@ -16,6 +16,24 @@ wait_for_file() {
   done
   fail "timed out waiting for $file"
 }
+wait_for_release_exit() {
+  local pid=$1 watchdog marker=$2
+  (
+    /bin/sleep 5
+    if kill -0 "$pid" 2>/dev/null; then
+      : >"$marker"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) &
+  watchdog=$!
+  set +e
+  wait "$pid"
+  RELEASE_STATUS=$?
+  set -e
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  [ ! -e "$marker" ] || fail "release supervisor did not stop within five seconds"
+}
 line_of() { grep -nF "$2" "$1" | head -n 1 | cut -d: -f1; }
 assert_before() {
   local first second
@@ -489,10 +507,8 @@ for signal in HUP INT TERM; do
     wait_for_file "$signaled/ui-running"
     wait_for_file "$signaled/go-running"
     kill -"$signal" "$release_pid"
-    set +e
-    wait "$release_pid"
-    status=$?
-    set -e
+    wait_for_release_exit "$release_pid" "$signaled/supervisor-timeout"
+    status=$RELEASE_STATUS
     [ "$status" -eq 130 ] || fail "signal $signal attempt $attempt returned $status instead of 130"
     assert_file "$signaled/install/factory-server" old-server
     assert_file "$signaled/install/factory-worker" old-worker
