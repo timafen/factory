@@ -119,6 +119,38 @@ type ManagedRepositoryWorkerReadiness struct {
 	Reason     string `json:"reason"`
 }
 
+type ProjectReadinessCheck struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
+type ProjectReadiness struct {
+	Verdict   string                  `json:"verdict"`
+	CheckedAt string                  `json:"checked_at"`
+	Checks    []ProjectReadinessCheck `json:"checks"`
+}
+
+type ProductEnvironment struct {
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	ReleaseLabel string `json:"release_label,omitempty"`
+	Health       string `json:"health,omitempty"`
+}
+
+// ProductProject is the durable dashboard contract produced by pilot.py.
+// The control plane serves it as a snapshot and does not run probes on reads.
+type ProductProject struct {
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	RemoteIdentity string               `json:"remote_identity"`
+	MainSubject    string               `json:"main_subject,omitempty"`
+	ProviderStatus string               `json:"provider_status"`
+	Environments   []ProductEnvironment `json:"environments"`
+	Readiness      ProjectReadiness     `json:"readiness"`
+}
+
 type WorkerRepositoryOption struct {
 	ID             string `json:"id"`
 	Key            string `json:"key,omitempty"`

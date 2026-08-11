@@ -22,6 +22,7 @@ import (
 const maxPilotConfigBytes = 1 << 20
 
 var pilotStages = []string{"Triage", "Specification", "Implement + Test", "Review", "Verify"}
+var projectProviderTypes = map[string]struct{}{"trade": {}, "factory": {}}
 
 type PilotConfigStore struct {
 	path      string
@@ -257,7 +258,10 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 		if identity == "" {
 			return nil, invalid("invalid_pilot_settings", "each project provider requires remote_identity")
 		}
-		if provider.Type != "trade" && provider.Type != "factory" {
+		if provider.Type != strings.TrimSpace(provider.Type) {
+			return nil, invalid("invalid_pilot_settings", "project provider type cannot contain surrounding whitespace")
+		}
+		if _, ok := projectProviderTypes[provider.Type]; !ok {
 			return nil, invalid("unknown_project_provider", "unknown project provider type: "+provider.Type)
 		}
 		if providers[identity] {
