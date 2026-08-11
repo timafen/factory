@@ -1,0 +1,23 @@
+# Передача ревизии Specification в Implement
+
+## HEAD
+
+Status: реализовано
+Branch: factory/8ecbb0e0-cbc-bdea3e55-5a3
+Implementation commit: 8eb83e2b14225c40e76f4e9913afb4173ecb288a — уточнена обязательность отдельной карточки знаний
+What changed: Pilot теперь явно требует отдельную карточку знаний при передаче Specification → Implement.
+Evidence: `python3 -m unittest pilot.test_pilot.SpecificationBranchHandoffTests` → 20 тестов, `OK`; missing/short/malformed HEAD возвращаются в Specification.
+One next action: передать ветку в Review после push.
+
+## LOG
+
+### 2026-08-11 — Implement
+
+Добавлена стабильная строка `Specification head` при переходе Specification → Implement.
+Целевой набор `SpecificationBranchHandoffTests` подтвердил точное совпадение полного SHA.
+
+### 2026-08-11 — Implement
+
+Карточка переименована в CARD-0082 из-за занятого номера.
+Коммит реализации `8eb83e2b14225c40e76f4e9913afb4173ecb288a` сохранён в ветке;
+изменён только `pilot/pilot.py`, карточка обновлена для текущей поставки.
