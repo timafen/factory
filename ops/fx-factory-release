@@ -195,7 +195,13 @@ as_user bash -c "cd '$work/src/web' && npx vite build" \
 step "собираю сервер и воркер"
 as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
   && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
-  || { fail "сборка сервера или воркера не прошла"; cleanup; exit 5; }
+  && as_user bash -c "cd '$work/src' && go build -o '$work/factory-release-broker' ./cmd/factory-release-broker" \
+  || { fail "сборка сервера, воркера или release-broker не прошла"; cleanup; exit 5; }
+
+step "ставлю привилегированный broker выпусков"
+bash "$work/src/ops/install-project-release-broker.sh" \
+  "$work/factory-release-broker" "$work/src/ops/systemd/factory-release-broker.service" \
+  || { fail "release-broker не установлен безопасно"; cleanup; exit 5; }
 
 step "проверяю и обновляю ссылки авторизации Codex"
 env -u CODEX_HOME bash "$work/src/ops/provision-codex-auth.sh" \

@@ -1,0 +1,84 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/owainlewis/factory/internal/releasebroker"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "factory-release-broker:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	socket := flag.String("socket", "/run/factory/project-release-broker.sock", "Unix socket path")
+	flag.Parse()
+	if os.Geteuid() != 0 {
+		return errors.New("must run as root")
+	}
+	if err := prepareSocket(*socket); err != nil {
+		return err
+	}
+	oldMask := syscall.Umask(0o007)
+	listener, err := net.Listen("unix", *socket)
+	syscall.Umask(oldMask)
+	if err != nil {
+		return fmt.Errorf("listen on Unix socket: %w", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(*socket)
+	}()
+	if err := os.Chmod(*socket, 0o660); err != nil {
+		return fmt.Errorf("secure Unix socket permissions: %w", err)
+	}
+
+	server := &http.Server{
+		Handler:           releasebroker.New(releasebroker.FXExecutor{}).Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-shutdown.Done()
+		_ = server.Close()
+	}()
+	err = server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func prepareSocket(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return errors.New("socket path must be absolute and clean")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("refusing to replace a non-socket broker path")
+	}
+	return os.Remove(path)
+}

@@ -259,12 +259,13 @@ func TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts(t *testing.T) {
 	settings.AllowedWorkers = nil
 	pilot, _ := writePilotFixture(t, settings)
 	store := newTestStore(t)
-	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot))
+	server := httptest.NewServer(NewHandlerWithPilotConfig(store, slog.Default(), NewAutomationService(store, slog.Default()), pilot, testWorkerBootstrapCredential))
 	defer server.Close()
 	register := protocol.WorkerRegistration{Name: "Known", WorkerVersion: "test", RuntimeVersion: "test", Capacity: 1, Health: "healthy"}
 	body, _ := json.Marshal(register)
 	request, _ := http.NewRequest(http.MethodPut, server.URL+"/api/v1/workers/worker-1", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(protocol.WorkerBootstrapCredentialHeader, testWorkerBootstrapCredential)
 	response, err := server.Client().Do(request)
 	if err != nil {
 		t.Fatal(err)

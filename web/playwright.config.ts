@@ -2,6 +2,9 @@ import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 const defaultBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox";
+export const testWorkerBootstrapCredential =
+  process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL ??
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 export function serverBrowserLaunchOptions(
   launcher = process.env.FACTORY_BROWSER_LAUNCHER ?? defaultBrowserLauncher,
@@ -36,5 +39,8 @@ export default defineConfig({
     url: "http://127.0.0.1:17437/healthz",
     reuseExistingServer: false,
     timeout: 120_000,
+    env: {
+      FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
+    },
   },
 });

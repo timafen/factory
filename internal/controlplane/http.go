@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,13 +23,16 @@ import (
 )
 
 type API struct {
-	store        *Store
-	logger       *slog.Logger
-	automations  *AutomationService
-	pilotConfig  *PilotConfigStore
-	dialogRunner dialogRunner
-	sandboxKeys  sandboxKeysRunner
-	resumeMu     sync.Mutex
+	store                     *Store
+	logger                    *slog.Logger
+	automations               *AutomationService
+	pilotConfig               *PilotConfigStore
+	dialogRunner              dialogRunner
+	sandboxKeys               sandboxKeysRunner
+	projectRunner             projectCommandRunner
+	projectHealth             projectHealthChecker
+	workerBootstrapCredential string
+	resumeMu                  sync.Mutex
 }
 
 type workerRegistrationRequest struct {
@@ -75,19 +79,28 @@ func NewHandler(store *Store, logger *slog.Logger) http.Handler {
 	return NewHandlerWithAutomation(store, logger, NewAutomationService(store, logger))
 }
 
+func NewHandlerWithWorkerBootstrapCredential(store *Store, logger *slog.Logger, credential string) http.Handler {
+	return NewHandlerWithPilotConfig(store, logger, NewAutomationService(store, logger), nil, credential)
+}
+
 func NewHandlerWithAutomation(store *Store, logger *slog.Logger, automations *AutomationService) http.Handler {
 	return NewHandlerWithPilotConfig(store, logger, automations, nil)
 }
 
-func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *AutomationService, pilotConfig *PilotConfigStore) http.Handler {
+func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *AutomationService, pilotConfig *PilotConfigStore, workerBootstrapCredential ...string) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}}
+	bootstrapCredential := ""
+	if len(workerBootstrapCredential) != 0 {
+		bootstrapCredential = workerBootstrapCredential[0]
+	}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, projectRunner: execProjectCommandRunner{}, projectHealth: defaultProjectHealthChecker(), workerBootstrapCredential: bootstrapCredential}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
 	mux.HandleFunc("POST /api/v1/workers/{worker_id}/retained-worktrees/clear", api.clearRetainedWorktrees)
+	mux.HandleFunc("POST /api/v1/workers/{worker_id}/projects/{project_id}/verification", api.recordProjectVerification)
 	mux.HandleFunc("POST /api/v1/workers/{worker_id}/claims", api.claim)
 	mux.HandleFunc("GET /api/v1/workers", api.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{worker_id}", api.getWorker)
@@ -97,6 +110,12 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}", api.getManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}/readiness", api.getManagedRepositoryReadiness)
 	mux.HandleFunc("PUT /api/v1/repositories/{repository_id}/enabled", api.setManagedRepositoryEnabled)
+	mux.HandleFunc("GET /api/v1/projects", api.listProjects)
+	mux.HandleFunc("POST /api/v1/projects", api.createProject)
+	mux.HandleFunc("GET /api/v1/projects/{project_id}", api.getProject)
+	mux.HandleFunc("GET /api/v1/projects/{project_id}/environments/{environment}/readiness", api.getProjectReadiness)
+	mux.HandleFunc("GET /api/v1/projects/{project_id}/operations/{operation_id}", api.getProjectOperation)
+	mux.HandleFunc("POST /api/v1/projects/{project_id}/environments/{environment}/{operation}", api.runProjectOperation)
 	mux.HandleFunc("GET /api/v1/pipeline", api.getPipeline)
 	mux.HandleFunc("PUT /api/v1/pipeline", api.putPipeline)
 	mux.HandleFunc("GET /api/v1/cards", api.listCards)
@@ -469,6 +488,15 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) registerWorker(w http.ResponseWriter, r *http.Request) {
+	if err := requireDirectWorkerRegistration(r); err != nil {
+		writeError(w, err)
+		return
+	}
+	bootstrap, err := a.authorizeWorkerRegistration(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
 		return
 	}
@@ -493,6 +521,14 @@ func (a *API) registerWorker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if bootstrap {
+		credential, err := a.store.IssueWorkerCredential(r.Context(), worker.ID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.Header().Set(protocol.WorkerCredentialHeader, credential)
+	}
 	if legacyRequest {
 		writeJSON(w, http.StatusOK, legacyWorkerResponse{
 			ID: worker.ID, Name: worker.Name, WorkerVersion: worker.WorkerVersion,
@@ -505,6 +541,44 @@ func (a *API) registerWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, worker)
+}
+
+func (a *API) authorizeWorkerRegistration(r *http.Request) (bool, error) {
+	workerID := r.PathValue("worker_id")
+	if credential := r.Header.Get(protocol.WorkerCredentialHeader); credential != "" {
+		if err := a.store.AuthenticateWorkerCredential(r.Context(), workerID, credential); err == nil {
+			return false, nil
+		} else {
+			var service *ServiceError
+			if !errors.As(err, &service) || service.Status != http.StatusUnauthorized {
+				return false, err
+			}
+		}
+	}
+	presented := r.Header.Get(protocol.WorkerBootstrapCredentialHeader)
+	if a.workerBootstrapCredential != "" && presented != "" {
+		expectedDigest := digestToken(a.workerBootstrapCredential)
+		presentedDigest := digestToken(presented)
+		if subtle.ConstantTimeCompare(expectedDigest, presentedDigest) == 1 {
+			return true, nil
+		}
+	}
+	return false, unauthorized("worker_registration_authentication_failed", "a worker credential or protected bootstrap credential is required")
+}
+
+func requireDirectWorkerRegistration(r *http.Request) error {
+	if r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
+		return forbidden("worker_registration_forbidden", "workers must register through a direct loopback connection")
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return forbidden("worker_registration_forbidden", "workers must register through a direct loopback connection")
+	}
+	address := net.ParseIP(host)
+	if address == nil || !address.IsLoopback() {
+		return forbidden("worker_registration_forbidden", "workers must register through a direct loopback connection")
+	}
+	return nil
 }
 
 func (a *API) clearRetainedWorktrees(w http.ResponseWriter, r *http.Request) {
@@ -523,7 +597,34 @@ func (a *API) clearRetainedWorktrees(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, worker)
 }
 
+func (a *API) recordProjectVerification(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.AuthenticateWorkerCredential(
+		r.Context(), r.PathValue("worker_id"), r.Header.Get(protocol.WorkerCredentialHeader),
+	); err != nil {
+		writeError(w, err)
+		return
+	}
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.ProjectVerificationRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := a.store.RecordProjectVerification(r.Context(), r.PathValue("worker_id"), r.PathValue("project_id"), input); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) claim(w http.ResponseWriter, r *http.Request) {
+	if err := a.store.AuthenticateWorkerCredential(
+		r.Context(), r.PathValue("worker_id"), r.Header.Get(protocol.WorkerCredentialHeader),
+	); err != nil {
+		writeError(w, err)
+		return
+	}
 	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
 		return
 	}
@@ -644,6 +745,78 @@ func (a *API) setManagedRepositoryEnabled(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, repository)
+}
+
+func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := a.store.Projects(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.CreateProjectRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	project, created, err := a.store.CreateProject(r.Context(), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, project)
+}
+
+func (a *API) getProject(w http.ResponseWriter, r *http.Request) {
+	project, err := a.store.Project(r.Context(), r.PathValue("project_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (a *API) getProjectReadiness(w http.ResponseWriter, r *http.Request) {
+	readiness, err := a.store.ProjectReadiness(r.Context(), r.PathValue("project_id"), r.PathValue("environment"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, readiness)
+}
+
+func (a *API) runProjectOperation(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.ProjectOperationRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	operation, err := a.store.RunProjectOperation(r.Context(), a.projectRunner, a.projectHealth, r.PathValue("project_id"), r.PathValue("environment"), r.PathValue("operation"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, operation)
+}
+
+func (a *API) getProjectOperation(w http.ResponseWriter, r *http.Request) {
+	operation, err := a.store.ProjectOperation(r.Context(), a.projectRunner, a.projectHealth, r.PathValue("project_id"), r.PathValue("operation_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, operation)
 }
 
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
