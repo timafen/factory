@@ -1,16 +1,20 @@
 # CARD-0048 — Санитар убирает фантомные worktree остановленного Claude-воркера
 
+Implementation commit: dd4990781ac69cf867eed7d159278e4248a3b51f — внутреннее подтверждение очистки retained worktree принимает запросы только с loopback.
+
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge
-- Branch: `factory/55529d04-53b-d876a132-bb3`
-- Head commit: `fb85141` — доказаны очистка истории и сбой подтверждения санитара
+- Branch: `factory/47f4cd8b-10f-cac304a5-7fd`
+- Implementation commit: dd4990781ac69cf867eed7d159278e4248a3b51f — внутреннее
+  подтверждение очистки retained worktree принимает запросы только с loopback.
 - Specification: `knowledge/specs/offline-claude-haiku-retained-worktree.md`
-- What changed: control plane идемпотентно удаляет только точный подтверждённый
-  снимок retained worktree; санитар посылает подтверждение только после успешного
-  переноса соответствующей директории в карантин.
-- Evidence: сборка, UI, release, Go, race, vulnerability scan и целевые
-  сценарии PASS; два общих сбоя локализованы вне diff задачи.
+- What changed: control plane по-прежнему снимает только точные подтверждённые
+  снимки после карантина; новый маршрут теперь защищён прямым loopback-доступом,
+  поэтому внешний запрос не может снять retained worktree.
+- Evidence: `go test ./internal/controlplane` — PASS; `bash
+  ops/test-factory-janitor.sh` — PASS. Полный `just check` дошёл до Go-тестов;
+  единственный сбой — несвязанный `internal/worker.TestLostClaimAndCompletionResponsesAreIdempotent`.
 - Next action: человеку влить ветку в `main`.
 
 ## LOG
@@ -48,3 +52,32 @@
 Все прошло, кроме уже существующих ошибок `staticcheck` в
 `cards_http.go:37`/`pilot_config.go:136` и несвязанного browser-таймаута в
 `control-plane.spec.ts:421`; все три файла вне diff задачи.
+
+### 2026-08-11 — Implement
+
+Маршрут подтверждения очистки retained worktree теперь отклоняет forwarded и
+внешние запросы той же loopback-проверкой, что и регистрация воркера. Тест
+`TestHTTPClearRetainedWorktreesRequiresDirectLoopback` подтверждает ответ 403;
+`go test ./internal/controlplane` и `bash ops/test-factory-janitor.sh` проходят.
+
+### 2026-08-11 — Card repair
+
+Исправлена ссылка на реализацию: прежний хеш был из эквивалентной, но другой
+ветки. В этой ветке loopback-защиту маршрута добавляет
+`dd4990781ac69cf867eed7d159278e4248a3b51f`; хеш является предком ветки и меняет
+`internal/controlplane/http.go` вместе с его тестом.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Forwarded-запрос не очищает запись | `TestHTTPClearRetainedWorktreesRequiresDirectLoopback` | PASS: ответ 403 до обработки payload. |
+| Прямой loopback сохраняет очистку | `go test ./internal/controlplane`; `bash ops/test-factory-janitor.sh` | PASS: точный snapshot снимается после карантина. |
+| Санитар использует внутренний маршрут | `bash ops/test-factory-janitor.sh` | PASS: POST идёт на `/api/v1/workers/worker-1/retained-worktrees/clear`. |
+| Смежные гарантии очистки | целевые `TestClearRetainedWorktrees…` | PASS: terminal task разблокируется, несовпавший snapshot сохранён. |
+
+Полный запуск с чистыми UI-зависимостями: `just ui-install`, `just ui-build 0`,
+`just build`, `just test-tooling`, `just test-release`, `just check`. Он остановился
+на ранее существующем несвязанном флапе
+`internal/worker.TestLostClaimAndCompletionResponsesAreIdempotent`; целевые проверки
+данного изменения прошли.
