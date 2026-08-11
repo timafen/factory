@@ -3,8 +3,8 @@
 ## HEAD
 
 - Status: Implemented — awaiting human merge
-- Branch: `factory/043d00f7-93e-1bf83e08-ef9`
-- Implementation commit: 1734a5efa237bab4c1cd63221070a6d6d7991c30 — внутреннее
+- Branch: `factory/47f4cd8b-10f-cac304a5-7fd`
+- Implementation commit: dd4990781ac69cf867eed7d159278e4248a3b51f — внутреннее
   подтверждение очистки retained worktree принимает запросы только с loopback.
 - Specification: `knowledge/specs/offline-claude-haiku-retained-worktree.md`
 - What changed: control plane по-прежнему снимает только точные подтверждённые
@@ -56,3 +56,10 @@
 внешние запросы той же loopback-проверкой, что и регистрация воркера. Тест
 `TestHTTPClearRetainedWorktreesRequiresDirectLoopback` подтверждает ответ 403;
 `go test ./internal/controlplane` и `bash ops/test-factory-janitor.sh` проходят.
+
+### 2026-08-11 — Card repair
+
+Исправлена ссылка на реализацию: прежний хеш был из эквивалентной, но другой
+ветки. В этой ветке loopback-защиту маршрута добавляет
+`dd4990781ac69cf867eed7d159278e4248a3b51f`; хеш является предком ветки и меняет
+`internal/controlplane/http.go` вместе с его тестом.
