@@ -3583,6 +3583,31 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_excludes_successful_progress_and_unmerged_verify(self):
+        tasks = [
+            {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",
+             "state": "succeeded", "updated_at": "2026-08-10T14:00:00Z"},
+            {"id": "unmerged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "state": "succeeded", "updated_at": "2026-08-10T13:00:00Z"},
+            {"id": "merged", "title": "[auto] [5/5 Verify] Поиск товаров",
+             "state": "succeeded", "updated_at": "2026-08-10T12:00:00Z"},
+            {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "state": "failed", "updated_at": "2026-08-10T11:00:00Z"},
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        merges = os.path.join(temporary.name, "merges.jsonl")
+        with open(merges, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"task_id": "merged"}) + "\n")
+
+        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual([item["title"] for item in recent],
+                         ["Поиск товаров", "Оплата картой"])
+        self.assertEqual([item["status"] for item in recent], ["merged", "failed"])
+
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
             {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",
