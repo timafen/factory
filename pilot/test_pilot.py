@@ -2782,6 +2782,129 @@ class AdaptivePollingTests(unittest.TestCase):
             "seconds": 30, "reason": "idle", "chosen_at": 102.0,
         })
 
+    def test_overlap_wait_reuses_decision_across_poll_cycles(self):
+        conf = {
+            "stages": [
+                {"workflow": "Implement + Test"},
+                {"workflow": "Review"},
+            ],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        task = {
+            "id": "implementation-done",
+            "title": "[auto] [1/2 Implement + Test] Пересекающаяся работа",
+            "state": "succeeded",
+            "created_at": "2026-08-10T10:00:00Z",
+            "repository_id": "repo-id",
+        }
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [task]}
+            if path == "/tasks/implementation-done":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Implement + Test"},
+                    "context": "Branch: factory/overlap",
+                    "attempts": [{"result": "BRANCH: factory/overlap"}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "review", "enabled": True,
+                    "current_revision": {"id": "rev-review", "title": "Review"},
+                }]}
+            if path == "/tasks" and body is not None:
+                created.append(body)
+                return {"task": {"id": "review-created"}}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas", "save_stage_verdict", "all_tasks",
+        )
+        verdict = {
+            "action": "advance", "next_complexity": "high",
+            "handoff": "Сохранённое решение",
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            decide = stack.enter_context(mock.patch.object(
+                pilot, "decide", return_value=verdict))
+            gate = stack.enter_context(mock.patch.object(
+                pilot, "review_gate", side_effect=[
+                    {"wait": True}, {"wait": True}, None,
+                ]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+            state = json.loads(json.dumps(state))
+            pilot.cycle(conf, state)
+            self.assertEqual(created, [])
+            pilot.cycle(conf, state)
+
+        decide.assert_called_once()
+        self.assertEqual(gate.call_count, 3)
+        self.assertEqual(len(created), 1)
+        self.assertIn("Orchestrator handoff: Сохранённое решение", created[0]["context"])
+        self.assertEqual(state["processed"], ["implementation-done"])
+
+    def test_decision_cache_recovers_from_old_state_and_is_bounded(self):
+        old_state = {"processed": []}
+        self.assertEqual(pilot.decision_cache(old_state), {})
+
+        damaged_state = {"task_decisions": ["not", "a", "mapping"]}
+        self.assertEqual(pilot.decision_cache(damaged_state), {})
+
+        state = {
+            "processed": [],
+            "task_decisions": {str(i): {"action": "advance"} for i in range(2001)},
+        }
+        conf = {"enabled": True, "poll_seconds": 30}
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "cycle", return_value={
+                    "seconds": 30, "reason": "idle",
+                }):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertEqual(len(state["task_decisions"]), 2000)
+        self.assertNotIn("0", state["task_decisions"])
+
     def test_network_errors_back_off_and_success_resets_interval(self):
         conf = {"enabled": True, "poll_seconds": 30}
         state = {"processed": []}

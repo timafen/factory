@@ -5850,6 +5850,15 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None):
     return None
 
 
+def decision_cache(state):
+    """Return the durable per-terminal-task decision cache."""
+    cached = state.get("task_decisions")
+    if not isinstance(cached, dict):
+        cached = {}
+        state["task_decisions"] = cached
+    return cached
+
+
 def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
     activity = {"task_created": False, "answer_applied": False}
@@ -6103,8 +6112,12 @@ def cycle(conf, state):
                 save_promises(base_title(title), result)
             except Exception as e:
                 log("promises_error", repr(e))
-        verdict = decide(conf, wf, next_stage, title, result,
-                         detail["task"].get("repository_id") or "")
+        decisions = decision_cache(state)
+        verdict = decisions.get(tid)
+        if not isinstance(verdict, dict):
+            verdict = decide(conf, wf, next_stage, title, result,
+                             detail["task"].get("repository_id") or "")
+            decisions[tid] = verdict
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
         if verdict.get("verdict_ru"):
             try:
@@ -6455,6 +6468,8 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
             state["epics_processed"] = state.get("epics_processed", [])[-2000:]
             state["epic_starts_processed"] = state.get("epic_starts_processed", [])[-2000:]
             state["poll_terminal_seen"] = state.get("poll_terminal_seen", [])[-2000:]
+            decisions = decision_cache(state)
+            state["task_decisions"] = dict(list(decisions.items())[-2000:])
             record_poll_hint(state, hint, clock_fn())
             save(STATE_PATH, state)
         elif conf:
