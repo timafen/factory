@@ -1,16 +1,16 @@
 # Проверяемые обещания спецификации экрана «Настройки»
 
-Implementation commit: f8766f27a4f9d9e884575abfc5f7bc4378670576 — экран показывает и сохраняет все рабочие ограничения пилота.
+Implementation commit: e1d31df8e337c9a15c61608f4def8481e9f291af — экран показывает и сохраняет все рабочие ограничения пилота.
 
 ## HEAD
 
 - Status: Ready for Review
-- Branch: `factory/745fab92-2a8-4e065dc4-866`
-- Implementation commit: `f8766f27a4f9d9e884575abfc5f7bc4378670576`
+- Branch: `factory/c5de2879-c67-c4f13a13-9fd`
+- Implementation commit: `e1d31df8e337c9a15c61608f4def8481e9f291af`
 - What changed: `/settings` получил недостающие лимиты, флаг нагрузки и группы
   уведомлений; сервер проверяет их и не заменяет файл при сбое временной записи.
 - Evidence: целевые Go-тесты — PASS; Settings Vitest — 9/9 PASS;
-  production build — PASS; Playwright-сохранение и повторное чтение — 1/1 PASS.
+  production build — PASS; Playwright — 1/1 PASS; TypeScript noEmit — PASS.
 - One next action: повторно передать опубликованную поставку на Review.
 
 ## LOG
@@ -26,3 +26,9 @@ Implementation commit: f8766f27a4f9d9e884575abfc5f7bc4378670576 — экран �
 Добавлены недостающие операционные ограничения и уведомления, русское объяснение
 конфликта, проверка частичной записи и собранный web bundle. Целевые Go-тесты,
 9 компонентных тестов, production build и один браузерный сценарий прошли.
+
+### 2026-08-11 — Implement
+
+После переноса поставки на свежий `origin/main` карточка привязана к новому SHA
+коммита реализации и текущей ветке. Обязательная проверка TypeScript без генерации
+файлов прошла; область поставки сверена трёхточечным сравнением с `origin/main`.
