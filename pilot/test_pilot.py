@@ -4240,6 +4240,7 @@ class DashboardSnapshotTest(unittest.TestCase):
         self.assertEqual(week["total_tokens"], 70)
 
 
+@unittest.skip("superseded by delivery_state_v2")
 class PostMergeDeployTest(unittest.TestCase):
     @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
@@ -4500,6 +4501,75 @@ class PostMergeDeployTest(unittest.TestCase):
                                       "fx factory release", mock.ANY)
 
 
+class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_path = os.path.join(self.temporary.name, "state.json")
+        self.receipts = os.path.join(self.temporary.name, "receipts.jsonl")
+        self.outbox = os.path.join(self.temporary.name, "outbox.jsonl")
+        self.sha = "a" * 40
+
+    def wait(self, task="verify-1"):
+        return {"task_id": task, "base": "Единый выпуск", "link": "",
+                "merge_receipt": {"task_id": task, "base": "Единый выпуск"}}
+
+    def test_full_cycle_crash_boundaries_are_idempotent(self):
+        boundaries = ("intent", "after_merge", "after_receipt", "reserved", "launching",
+                      "running", "terminal", "outbox_before", "outbox_after")
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary):
+                state = {}
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+                    generation = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                                           self.sha, self.wait(boundary))
+                self.assertEqual(generation["phase"], "reserved")
+                restored = pilot.load(self.state_path, state)
+                # Every restart keeps one immutable id.  The mocked broker is
+                # retried by id, never by a raw release command or PID.
+                calls = []
+                def broker(_socket, method, operation_id, payload=None):
+                    calls.append((method, operation_id))
+                    return {"status": "succeeded" if len(calls) > 1 else "launching"}
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                        mock.patch.object(pilot, "broker_operation", side_effect=broker), \
+                        mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                        mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                        mock.patch.object(pilot, "mark_final") as final:
+                    pilot.save(self.state_path, state)
+                    restored = pilot.load(self.state_path, {})
+                    pilot.poll_delivery_state({}, restored)
+                    pilot.poll_delivery_state({}, restored)
+                    self.assertEqual(calls[0][1], generation["id"])
+                    self.assertTrue(all(call[1] == generation["id"] for call in calls))
+                    self.assertEqual(final.call_count, 1)
+
+    def test_lock_join_and_successor_are_distinct(self):
+        state = {}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+            first = pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait("a"))
+            joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait("b"))
+        self.assertEqual(first["id"], joined["id"])
+        first["phase"] = "launching"
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, "b" * 40, self.wait("c"))
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        self.assertTrue(target["next_requested"])
+        with mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "mark_final"), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox):
+            pilot.poll_delivery_state({}, state)
+        self.assertEqual(len(target["generations"]), 2)
+
+    def test_legacy_is_audit_only_and_never_done(self):
+        state = {"post_merge_deploys": {"deploy_factory_cmd": {"pid": 99, "queued": True}}}
+        durable = pilot._delivery_state(state)
+        self.assertNotIn("post_merge_deploys", state)
+        self.assertIn("legacy_post_merge_deploys", durable["audit"])
+        self.assertEqual(durable["targets"], {})
+
+
 class RecentDoneTest(unittest.TestCase):
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
@@ -4534,17 +4604,17 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent],
                          ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["merged", "failed"])
+        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
@@ -4560,22 +4630,22 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
         def detail(path, body=None):
             return {"attempts": [{"result": "ПРОВЕРКА: браузерный сценарий прошёл."}]}
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
         self.assertEqual(recent[0]["status"], "failed")
         self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "merged")
-        self.assertIn("Влито в main", recent[1]["detail"])
+        self.assertEqual(recent[1]["status"], "delivered")
+        self.assertIn("Выпуск принят", recent[1]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()

@@ -5671,9 +5671,9 @@ def recent_done_block(tasks, n=5):
     pipeline progress.  Old notification-only records remain a small fallback
     while the task history ages in.
     """
-    merged = set()
+    delivered = set()
     try:
-        with io.open(MERGES_PATH, encoding="utf-8") as stream:
+        with io.open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as stream:
             lines = stream.readlines()[-400:]
         for line in reversed(lines):
             try:
@@ -5681,7 +5681,7 @@ def recent_done_block(tasks, n=5):
             except Exception:
                 continue
             if r.get("task_id"):
-                merged.add(r["task_id"])
+                delivered.add(r["task_id"])
     except Exception:
         pass
 
@@ -5690,7 +5690,7 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
-        if task.get("state") == "succeeded" and task.get("id") not in merged:
+        if task.get("state") == "succeeded" and task.get("id") not in delivered:
             continue
         title, stage = parsed
         if not title or is_service_work(title):
@@ -5703,8 +5703,8 @@ def recent_done_block(tasks, n=5):
     out = []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
-        if task.get("id") in merged:
-            status, detail = "merged", "Влито в main."
+        if task.get("id") in delivered:
+            status, detail = "delivered", "Выпуск принят и проверен."
         elif state == "succeeded":
             status, detail = "passed", "Проверка прошла; слияние не подтверждено."
         else:
@@ -6064,232 +6064,206 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
                     make_epic_from(tid, title, detail)
 
 
-DEPLOY_STATE_KEY = "post_merge_deploys"
-DEPLOY_DIR = f"{HOME}/pilot/releases"
-RELEASE_EVENTS_PATH = f"{HOME}/pilot/release-events.jsonl"
-FACTORY_DEPLOY_RETRY_DELAY = 60
-RELEASE_OUTPUT_LIMIT = 12000
-RELEASE_SAFE_DIAGNOSTICS = frozenset({
-    "apparmor_parser is required for the Chromium user namespace sandbox",
-    "Playwright full Chromium was not installed",
-    "Playwright returned a non-absolute Chromium path",
-    "Chromium path cannot be represented safely in AppArmor",
-    "Chromium sandbox smoke failed",
-    "Chromium sandbox smoke failed: No usable sandbox",
-})
-RELEASE_DIAGNOSTICS_OMITTED = "diagnostic output omitted: no allowlisted lines"
-ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+DELIVERY_STATE_KEY = "delivery_state_v2"
+DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/delivery-receipts.jsonl"
+DELIVERY_OUTBOX_PATH = f"{HOME}/pilot/delivery-outbox.jsonl"
+DELIVERY_BROKER_SOCKET = "/run/factory/project-release-broker.sock"
+DELIVERY_RETRY_DELAY = 60
+DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
 
 
-def _release_running(pid):
-    """Whether the child recorded in state is still alive.
-
-    Completion is determined by the durable status file, rather than this
-    probe: after a Pilot restart the child has a different parent.
-    """
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
-
-
-def _release_output(release):
-    try:
-        with open(release["output"], encoding="utf-8", errors="replace") as out:
-            value = out.read()
-    except (OSError, KeyError):
-        return ""
-    # Release output can contain arbitrary subprocess environment and command
-    # lines. Publish only exact, static diagnostics owned by our installer: a
-    # blacklist cannot enumerate every credential shape safely.
-    value = ANSI_ESCAPE.sub("", value[-RELEASE_OUTPUT_LIMIT:])
-    safe = [line for line in value.splitlines()
-            if line in RELEASE_SAFE_DIAGNOSTICS]
-    return "\n".join(safe) if safe else RELEASE_DIAGNOSTICS_OMITTED
+def _delivery_state(state):
+    """Return the only active delivery model and audit old, unsafe state once."""
+    current = state.get(DELIVERY_STATE_KEY)
+    if not isinstance(current, dict) or current.get("version") != 2:
+        current = {"version": 2, "targets": {}, "outbox": {}, "audit": {}}
+        legacy = state.pop("post_merge_deploys", None)
+        if legacy is not None:
+            current["audit"]["legacy_post_merge_deploys"] = legacy
+        state.pop("pending_factory_deploy", None)
+        state[DELIVERY_STATE_KEY] = current
+    return current
 
 
-def _release_rolled_back(release, preview=""):
-    """Detect an actual rollback from the tail of the release runner output."""
-    text = str(preview or "")
-    try:
-        with open(release["output"], "rb") as output_file:
-            output_file.seek(0, os.SEEK_END)
-            size = output_file.tell()
-            output_file.seek(max(0, size - 65536), os.SEEK_SET)
-            text += " " + output_file.read().decode("utf-8", errors="replace")
-    except (OSError, KeyError):
-        pass
-    lowered = text.lower()
-    return any(marker in lowered for marker in (
-        "откат", "rollback", "откатыва", "возвращаю предыдущ",
-    ))
-
-
-def _record_release_failure(command_key, release, output):
-    """Append one durable, deduplicated release incident for honest metrics."""
-    generation = release.get("generation")
-    event_id = f"{command_key}:{generation}"
-    try:
-        try:
-            with open(RELEASE_EVENTS_PATH, encoding="utf-8") as events:
-                for line in events:
-                    try:
-                        if json.loads(line).get("id") == event_id:
-                            return
-                    except (TypeError, ValueError):
-                        continue
-        except OSError:
-            pass
-        os.makedirs(os.path.dirname(RELEASE_EVENTS_PATH), exist_ok=True)
-        event = {
-            "id": event_id,
-            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "kind": "failed_release",
-            "target": command_key,
-            "generation": generation,
-            "rollback": _release_rolled_back(release, output),
-        }
-        with open(RELEASE_EVENTS_PATH, "a", encoding="utf-8") as events:
-            events.write(json.dumps(event, ensure_ascii=False) + chr(10))
-    except Exception as exc:
-        log("release_event_error", repr(exc))
-
-
-def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):
-    """Persist one delayed retry after the external Factory release lock wins."""
-    releases = state.setdefault(DEPLOY_STATE_KEY, {})
-    generation = int(releases.get("generation", 0)) + 1
-    releases["generation"] = generation
-    os.makedirs(DEPLOY_DIR, exist_ok=True)
-    stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
-    releases[command_key] = {
-        "command": command,
-        "label": label,
-        "generation": generation,
-        "output": stem + ".log",
-        "status": stem + ".status",
-        "queued": True,
-        "due": (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY,
-    }
-    save(STATE_PATH, state)
-    log(f"{label} busy: queued delayed retry generation={generation}")
-
-
-def _start_post_merge_deploy(command_key, label, command, state):
-    releases = state.setdefault(DEPLOY_STATE_KEY, {})
-    release = releases.get(command_key)
-    if not (isinstance(release, dict) and release.get("queued") and
-            not release.get("pid") and release.get("status")):
-        generation = int(releases.get("generation", 0)) + 1
-        releases["generation"] = generation
-        os.makedirs(DEPLOY_DIR, exist_ok=True)
-        stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
-        release = {"command": command, "label": label, "generation": generation,
-                   "output": stem + ".log", "status": stem + ".status", "queued": True}
-        releases[command_key] = release
-    else:
-        generation = release["generation"]
-
-    # This atomic reservation must reach disk before Popen. If Pilot stops at
-    # the next instruction, the next process sees queued=True and resumes it.
-    save(STATE_PATH, state)
-    script = (f"{command} >{shlex.quote(release['output'])} 2>&1; rc=$?; "
-              f"printf '%s\\n' \"$rc\" >{shlex.quote(release['status'])}; exit \"$rc\"")
-    child = subprocess.Popen(script, shell=True, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True, env=dict(os.environ, HOME=HOME))
-    release["pid"] = child.pid
-    release["queued"] = False
-    save(STATE_PATH, state)
-    log(f"{label} started generation={generation} pid={child.pid}")
-
-
-def poll_post_merge_deploys(conf, state, now=None):
-    """Collect finished releases and start one coalesced successor per target."""
-    releases = state.setdefault(DEPLOY_STATE_KEY, {})
-    # Compatibility with the short-lived retry marker used by older Pilots.
-    if state.pop("pending_factory_deploy", None):
-        releases.setdefault("deploy_factory_cmd", {"queued": True})
-    for command_key, release in list(releases.items()):
-        if command_key == "generation" or not isinstance(release, dict):
-            continue
-        label = release.get("label") or ("FACTORY-DEPLOY" if command_key == "deploy_factory_cmd"
-                                           else "AUTOMATION-STAGING-DEPLOY")
-        status = release.get("status")
-        rc = None
-        if status:
-            try:
-                with open(status, encoding="utf-8") as f:
-                    rc = int(f.read().strip())
-            except (OSError, ValueError):
-                pass
-        if rc is not None:
-            queued = release.get("queued", False)
-            output = _release_output(release)
-            log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
-                f"{output}")
-            # rc=8 is only the external release lock; it is retried and is not
-            # a failed release. Every other non-zero result is an incident.
-            if rc not in (0, 8):
-                _record_release_failure(command_key, release, output)
-            releases.pop(command_key, None)
-            if rc == 8 and command_key == "deploy_factory_cmd" and conf.get(command_key):
-                # An independently started release owns the lock.  This must
-                # survive even when no later merge had set queued=True.
-                _queue_post_merge_deploy_retry(
-                    command_key, label, conf[command_key], state, now)
-            elif queued and conf.get(command_key):
-                _start_post_merge_deploy(command_key, label, conf[command_key], state)
-        elif release.get("pid") and not _release_running(release["pid"]):
-            # The runner disappeared before it could write a result. Retrying
-            # one latest release is safe and prevents a restart from losing it.
-            log(f"{label} lost generation={release.get('generation')}; retrying latest main")
-            releases.pop(command_key, None)
-            if conf.get(command_key):
-                _start_post_merge_deploy(command_key, label, conf[command_key], state)
-        elif release.get("queued") and not release.get("pid") and conf.get(command_key):
-            due = release.get("due")
-            current = time.time() if now is None else now
-            if due is None or current >= float(due):
-                _start_post_merge_deploy(command_key, label, conf[command_key], state)
-
-
-def retry_pending_factory_deploy(conf, state, now=None):
-    """Compatibility name for the cycle hook; releases are now all polled."""
-    poll_post_merge_deploys(conf, state, now)
-
-
-def deploy_after_merge(conf, repo_identity, state=None, now=None):
-    """Queue a durable background release for the repository that was merged."""
-    identity = (repo_identity or "").lower()
-    if identity.endswith(".git"):
-        identity = identity[:-4]
+def _delivery_target(repo_identity):
+    identity = (repo_identity or "").lower().removesuffix(".git")
+    if identity.endswith("timafen/factory"):
+        return "factory", "fx-factory-release"
     if identity.endswith("timafen/tarser-operations"):
-        command_key = "deploy_staging_cmd"
-        label = "AUTOMATION-STAGING-DEPLOY"
-    elif identity.endswith("timafen/factory"):
-        command_key = "deploy_factory_cmd"
-        label = "FACTORY-DEPLOY"
-    else:
-        log(f"POST-MERGE-DEPLOY skipped: unknown repository {repo_identity!r}")
+        return "tarser-staging", "tarser-staging-deploy-release"
+    return "", ""
+
+
+def _delivery_generation(state, repo_identity, commit_sha, wait):
+    durable = _delivery_state(state)
+    target_key, adapter = _delivery_target(repo_identity)
+    if not target_key or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha or ""):
+        return None
+    target = durable["targets"].setdefault(target_key, {"id": target_key, "last_generation": 0,
+        "current_generation": None, "next_requested": False, "generations": {}})
+    current = target.get("current_generation")
+    if current:
+        generation = target["generations"].get(current)
+        if generation and generation["phase"] == "reserved":
+            generation["waits"][wait["task_id"]] = wait
+            return generation
+        if generation and generation["phase"] in ("launching", "running"):
+            target["next_requested"] = True
+            target.setdefault("next_waits", {})[wait["task_id"]] = wait
+            target["next_input"] = {"adapter": adapter, "commit_sha": commit_sha}
+            return generation
+    target["last_generation"] += 1
+    sequence = target["last_generation"]
+    gid = f"{target_key}-{sequence}-{uuid.uuid4().hex}"
+    generation = {"id": gid, "sequence": sequence, "phase": "reserved",
+        "adapter": adapter, "commit_sha": commit_sha, "waits": {wait["task_id"]: wait},
+        "merge_receipts": [wait["merge_receipt"]]}
+    target["current_generation"] = gid
+    target["generations"][gid] = generation
+    return generation
+
+
+def broker_operation(socket_path, method, operation_id, payload=None):
+    """Small Unix-socket client; unknown I/O is deliberately not success."""
+    args = ["curl", "--silent", "--show-error", "--unix-socket", socket_path,
+            "--max-time", "10", "-X", method, "http://release-broker/v1/operations/" + operation_id]
+    if payload is not None:
+        args[args.index("-X"):args.index("-X")] = ["-H", "Content-Type: application/json", "--data", json.dumps(payload)]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            return None
+        return json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
 
-    command = conf.get(command_key)
-    if not command:
-        log(f"{label} skipped: {command_key} is not configured")
-        return None
-    if state is None:
-        state = {}
-    releases = state.setdefault(DEPLOY_STATE_KEY, {})
-    running = releases.get(command_key)
-    if running:
-        running["queued"] = True
+
+def _delivery_record(path, record):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + chr(10))
+
+
+def _complete_generation(conf, state, generation):
+    durable = _delivery_state(state)
+    for task_id, wait in generation["waits"].items():
+        receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
+                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        _delivery_record(DELIVERY_RECEIPTS_PATH, receipt)
+        mark_final(task_id, "Verify", True)
+    durable["outbox"].setdefault(generation["id"] + ":done", {"id": generation["id"] + ":done",
+        "generation_id": generation["id"], "status": "pending", "waits": list(generation["waits"].values())})
+
+
+def dispatch_delivery_outbox(conf, state):
+    durable = _delivery_state(state)
+    for item in durable["outbox"].values():
+        if item.get("status") == "sent":
+            continue
+        # Journal first: local owner history is deduplicated even if the
+        # process dies while the best-effort push transport is in flight.
+        _delivery_record(DELIVERY_OUTBOX_PATH, {"id": item["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        wait = item["waits"][0] if item["waits"] else {}
+        notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
+               click=wait.get("link") or f"{UI_BASE}/work")
+        item["status"] = "sent"
+
+
+def poll_delivery_state(conf, state, now=None):
+    current_time = time.time() if now is None else now
+    durable = _delivery_state(state)
+    for target in durable["targets"].values():
+        for generation in list(target["generations"].values()):
+            if generation.get("phase") not in DELIVERY_PHASES:
+                generation["phase"] = "failed"
+            if generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
+                response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST", generation["id"],
+                    {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
+            elif generation["phase"] in ("launching", "running"):
+                response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "GET", generation["id"])
+            else:
+                response = None
+            status = (response or {}).get("status")
+            if status in ("launching", "running"):
+                generation["phase"] = status
+            elif status == "succeeded":
+                generation["phase"] = "completed"; _complete_generation(conf, state, generation)
+            elif status == "locked":
+                generation["phase"] = "reserved"; generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
+            elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
+                generation["phase"] = "failed"
+            elif response is None and generation["phase"] in ("launching", "running"):
+                generation["phase"] = "failed"  # status is authoritative; unknown fails closed
+        current = target.get("current_generation")
+        active = target["generations"].get(current) if current else None
+        if active and active["phase"] in ("completed", "failed") and target.get("next_requested"):
+            pending = target.pop("next_waits", {})
+            source = target.pop("next_input", {})
+            target["next_requested"] = False
+            target["last_generation"] += 1
+            sequence = target["last_generation"]
+            gid = f"{target.get('id', active['id'].rsplit('-', 2)[0])}-{sequence}-{uuid.uuid4().hex}"
+            target["generations"][gid] = {"id": gid, "sequence": sequence, "phase": "reserved",
+                "adapter": source.get("adapter", active["adapter"]),
+                "commit_sha": source.get("commit_sha", active["commit_sha"]), "waits": pending,
+                "merge_receipts": [w["merge_receipt"] for w in pending.values()]}
+            target["current_generation"] = gid
+    dispatch_delivery_outbox(conf, state)
+
+
+def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None, now=None):
+    """Create/join a generation; it never launches raw release commands."""
+    state = state if state is not None else {}
+    wait = wait or {"task_id": "manual-" + uuid.uuid4().hex, "base": "", "merge_receipt": {}}
+    generation = _delivery_generation(state, repo_identity, commit_sha, wait)
+    if generation:
         save(STATE_PATH, state)
-        log(f"{label} queued after generation={running.get('generation')}")
-        return None
-    _start_post_merge_deploy(command_key, label, command, state)
-    return None
+    return generation
+
+
+def _intent_has_wait(state, task_id):
+    for target in _delivery_state(state)["targets"].values():
+        for generation in target["generations"].values():
+            if task_id in generation.get("waits", {}):
+                return True
+    return False
+
+
+def recover_merge_intents(conf, state):
+    """Resume merge → receipt → delivery in that order before `processed`.
+
+    The intent is enough to ask GitHub whether its branch is already in main;
+    a crash after a successful external merge therefore cannot create a second
+    merge merely because the task cursor was saved first.
+    """
+    for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
+        if _intent_has_wait(state, task_id):
+            continue
+        repo, branch = intent.get("repository", ""), intent.get("branch", "")
+        if not repo or not branch:
+            intent["phase"] = "failed"
+            continue
+        merged = intent.get("phase") == "merged"
+        if not merged:
+            compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
+            if compare is not None and compare.get("ahead_by") == 0:
+                merged = True
+            else:
+                ok, output = gh_merge(repo, branch, intent.get("base", branch))
+                log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
+                if not ok:
+                    continue
+                merged = True
+            intent["phase"] = "merged"
+        if merged:
+            receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            wait = {"task_id": task_id, "base": intent.get("base", ""),
+                    "link": intent.get("link", ""), "merge_receipt": receipt}
+            generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
+            if generation:
+                intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
+                _delivery_record(MERGES_PATH, receipt)
 
 
 def cycle(conf, state):
@@ -6323,6 +6297,11 @@ def cycle(conf, state):
         rev = w.get("current_revision") or {}
         workflows[rev.get("title")] = {"workflow_id": w["id"], "revision_id": rev.get("id"),
                                        "enabled": w.get("enabled")}
+
+    # These recoveries deliberately precede the task cursor below.  A Verify
+    # task may already be in `processed` when a process stops after gh_merge.
+    recover_merge_intents(conf, state)
+    poll_delivery_state(conf, state)
 
     today = time.strftime("%Y-%m-%d", time.gmtime())
     day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
@@ -6583,95 +6562,24 @@ def cycle(conf, state):
         if not next_stage:
             # end of pipeline (Verify): auto-merge on PASS, then optional staging deploy
             if conf.get("auto_merge", True) and verify_passed(result):
-                if merge_recorded(tid):
-                    log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
+                if _intent_has_wait(state, tid):
+                    log(f"MERGE SKIP '{base_title(title)}': delivery wait already exists")
                     continue
-                mark_final(tid, wf, True)
                 branch, implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
-                if branch and repo_identity:
-                    # Замок: если ветка уже в main (второй PASS той же работы),
-                    # второй PR не открываем — «Обзор» так влился дважды.
-                    repo_short = repo_identity.split("github.com/")[-1]
-                    cmp_ = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
-                    if cmp_ is not None and cmp_.get("ahead_by") == 0:
-                        log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
-                        continue
-                    ok, out = gh_merge(repo_identity, branch, base_title(title))
-                    log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
-                    if ok:
-                        try:
-                            with open(MERGES_PATH, "a", encoding="utf-8") as mf:
-                                mf.write(json.dumps({"task_id": tid,
-                                    "base": base_title(title),
-                                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                    ensure_ascii=False) + chr(10))
-                        except Exception as e:
-                            log("merge_journal_error", repr(e))
-                        # Хозяину не нужно знать про main — это кухня. Ему нужно:
-                        # задача выполнена, и вот дверь, где потрогать результат.
-                        link = try_url(result, rid)
-                        if link and any(u in link for u in TRY_USELESS):
-                            link = ""
-                        pf = proof_of(result)
-                        if link:
-                            body_txt = "\nПосмотреть: " + link
-                        elif pf:
-                            body_txt = "\nРезультат не визуальный. Проверено: " + pf
-                        else:
-                            body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
-                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
-                               tags="white_check_mark",
-                               click=link or f"{UI_BASE}/tasks/{tid}")
-                    else:
-                        # Конфликт слияния — рабочий случай, а не тупик: пока эта
-                        # работа шла, в main влилась соседняя. Возвращаем в
-                        # разработку с прямым наказом перебазироваться. Один раз:
-                        # если и после этого не влилось — зовём хозяина.
-                        if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
-                            try:
-                                card = extract_card(result, detail.get("context", ""))
-                                card_line = f"Card: {card}\n" if card else ""
-                                head_line = (f"Implementation head: {implementation_head}\n"
-                                             if implementation_head else "")
-                                stages_all = [x["workflow"] for x in conf["stages"]]
-                                back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
-                                bidx = stages_all.index(back_st)
-                                bw = workers.get(stage_worker(conf, back_st, "medium", workers))
-                                bnw = workflows.get(back_st)
-                                if bw and bnw and bnw.get("enabled"):
-                                    create_cap_rescue(base_title(title), "MERGE", {
-                                        "request_key": str(uuid.uuid4()),
-                                        "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
-                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n"
-                                            f"{head_line}{card_line}\n"
-                                            "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
-                                            "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
-                                            "оставайся на своей. Сделай ровно это: "
-                                            f"git fetch origin {branch} && git reset --hard FETCH_HEAD; "
-                                            "git rebase origin/main; разреши конфликты, сохранив и свою "
-                                            "работу, и то, что уже в main; git push -u origin HEAD; "
-                                            "больше ничего не меняй.")[:20000],
-                                        "worker_id": bw["id"], "repository_id": rid,
-                                        "timeout_seconds": conf.get("timeout_seconds", 7200),
-                                        "workflow_revision_id": bnw["revision_id"]}, conf)
-                                    notify(conf, "Мёрж-конфликт: отправил на перебазирование",
-                                           base_title(title), tags="wrench")
-                                else:
-                                    raise RuntimeError("нет воркера/сценария")
-                            except Exception as e:
-                                if tid in state["processed"]:
-                                    state["processed"].remove(tid)
-                                log("merge_conflict_return_error", repr(e))
-                        else:
-                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
-                                   priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
-                    if ok:
-                        deploy_after_merge(conf, repo_identity, state)
-                else:
-                    log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
+                if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
+                    link = try_url(result, rid)
+                    state.setdefault("merge_intents", {})[tid] = {
+                        "phase": "intent", "base": base_title(title), "branch": branch,
+                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
+                    save(STATE_PATH, state)  # intent must precede external gh_merge
+                    recover_merge_intents(conf, state)
+                    poll_delivery_state(conf, state)
+                    continue
+                log(f"auto-merge skipped: missing branch/repo/immutable head (branch={branch!r}, repo={repo_identity!r})")
+                continue
             else:
                 log(f"pipeline end task={tid}: verify not PASS or auto_merge disabled -> stopped for human")
                 # Подзадача эпика НЕ считается сделанной: проверка не прошла.

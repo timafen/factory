@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -120,5 +121,65 @@ func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 	}
 	if result.Status != "succeeded" {
 		t.Fatalf("status=%q", result.Status)
+	}
+}
+
+func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	blocked := make(chan struct{})
+	executor := &recordingExecutor{done: blocked}
+	broker, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"delivery-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if _, err := os.Stat(filepath.Join(dir, "delivery-1.json")); err != nil {
+		t.Fatal(err)
+	}
+	// A restart cannot safely infer whether an old runner is still alive.  It
+	// records failure rather than executing the release a second time.
+	restarted, err := NewAt(dir, &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := restarted.items["delivery-1"]
+	if item == nil || item.Status != "failed" {
+		t.Fatalf("recovered item=%+v", item)
+	}
+	close(blocked)
+	for i := 0; i < 100 && broker.items["delivery-1"].Status != "succeeded"; i++ {
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
+	dir := t.TempDir()
+	broker, err := NewAt(dir, &recordingExecutor{done: make(chan struct{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	post := func(body string) int {
+		response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	body := `{"operation_id":"delivery-2","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := post(body); got != http.StatusAccepted {
+		t.Fatalf("first=%d", got)
+	}
+	if got := post(`{"operation_id":"delivery-2","adapter":"fx-factory-rollback","commit_sha":"` + testSHA + `"}`); got != http.StatusConflict {
+		t.Fatalf("changed=%d", got)
 	}
 }
