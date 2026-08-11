@@ -115,8 +115,7 @@ except Exception:
     raise SystemExit
 for worker in data.get("workers", []):
     retained = worker.get("retained_worktrees") or []
-    if worker.get("online") and not worker.get("active_count") and (
-            worker.get("health") != "healthy" or retained):
+    if not worker.get("online") and not worker.get("active_count") and retained:
         print(worker["name"], worker["id"], b64encode(json.dumps(retained).encode()).decode(), sep="\t")
 PY
 )

@@ -24,7 +24,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 requests, request_path = sys.argv[1:3]
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = {"workers": [{"id": "worker-1", "name": "claude-haiku", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]}]}
+        retained = [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]
+        body = {"workers": [
+            {"id": "worker-1", "name": "claude-haiku", "online": False, "active_count": 0, "health": "unhealthy", "retained_worktrees": retained},
+            {"id": "worker-active", "name": "active", "online": False, "active_count": 1, "health": "unhealthy", "retained_worktrees": retained},
+            {"id": "worker-online", "name": "online", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": retained},
+            {"id": "worker-empty", "name": "empty", "online": False, "active_count": 0, "health": "unhealthy", "retained_worktrees": []},
+        ]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
     def do_POST(self):
@@ -65,6 +71,7 @@ test ! -e "$TMP/worker/worktrees/retained"
 test -e "$TMP/worker/worktrees/unmoved"
 test -e "$TMP/quarantine/worker-retained."* 2>/dev/null
 grep -q 'подтверждена очистка retained worktree: claude-haiku' "$TMP/janitor.log"
+! grep -Eq 'воркер (active|online|empty) требует освобождения' "$TMP/janitor.log"
 
 mkdir -p "$TMP/worker/worktrees/missing"
 printf '#!/usr/bin/env bash\necho "confirmation unavailable" >&2\nexit 22\n' >"$TMP/bin/curl"
