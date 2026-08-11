@@ -1174,9 +1174,14 @@ test("edits pilot settings from the Settings screen", async ({ page }) => {
   await expect(page.getByText("Цепочка моделей")).toBeVisible();
   await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
   await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
+  await expect(page.getByLabel("Учитывать нагрузку хоста")).toBeChecked();
+  await expect(page.getByLabel("Максимум кругов работы")).toHaveValue("8");
+  await expect(page.getByLabel("Диагностика остановок")).toBeChecked();
+  await expect(page.getByLabel("Новые работы в Плане")).toBeChecked();
   const poll = page.getByLabel("Интервал проверки, секунд");
   await expect(poll).toHaveValue("10");
   await poll.fill("15");
+  await page.getByLabel("Максимум кругов работы").fill("9");
   const response = page.waitForResponse((result) =>
     result.url().endsWith("/api/v1/settings/pilot") && result.request().method() === "PUT",
   );
@@ -1185,6 +1190,7 @@ test("edits pilot settings from the Settings screen", async ({ page }) => {
   await expect(page.getByText(/Настройки сохранены/)).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Интервал проверки, секунд")).toHaveValue("15");
+  await expect(page.getByLabel("Максимум кругов работы")).toHaveValue("9");
   await expect(page.getByLabel("Репозиторий продукта")).toHaveValue("github.com/example/factory");
   await expect(page.getByLabel("Тип источника")).toHaveValue("factory");
   browser.assertClean();

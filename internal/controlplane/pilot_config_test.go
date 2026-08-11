@@ -3,7 +3,9 @@ package controlplane
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,12 +24,39 @@ func validPilotSettings() protocol.PilotSettings {
 	}
 	return protocol.PilotSettings{
 		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true,
-		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2, MaxParallelWorks: 4,
+		MaxStageAttempts: 2, AllowAnyWorker: false, RespectHostLoad: true, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2, MaxParallelWorks: 4,
+		MaxWorkRounds: 8, MaxCapRescues: 2, MaxLoopRescues: 2, WorkDayCap: 12, DayTaskCap: 120, DeepDiagRounds: 5, DayPctCap: 90,
 		DayCapUSD: 20, DeployStagingCmd: "deploy staging", DeployFactoryCmd: "deploy factory", OwnerChatURL: "https://example.test/chat", OwnerUIURL: "https://example.test/ui",
 		Stages: stages, SkipStagesForLow: []string{}, StoppedPipelines: []string{}, StageBaseUSD: costs,
 		ComplexityFactor: map[string]float64{"low": 1, "medium": 2, "high": 3}, WorkCapUSD: map[string]float64{"low": 2, "medium": 4, "high": 8},
 		NtfyTopic: "factory", NtfyServer: "https://ntfy.sh", NtfyOwnerTopic: "owner",
 		BrainChain: []protocol.PilotBrain{{CLI: "codex", Model: "gpt", Provider: "openai", Note: "preserve"}},
+	}
+}
+
+func TestPilotConfigStoreWriteFailureKeepsOriginalFile(t *testing.T) {
+	store, path := writePilotFixture(t, validPilotSettings())
+	current, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.writeTemp = func([]byte) (int, error) {
+		return 0, errors.New("disk write failed")
+	}
+	current.Settings.PollSeconds = 15
+	if _, err := store.Write(current.Version, current.Settings); err == nil {
+		t.Fatal("temporary-file write failure was ignored")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("failed atomic write changed the original config")
 	}
 }
 
@@ -81,6 +110,19 @@ func TestPilotConfigValidationWorkerPolicy(t *testing.T) {
 	}
 	if len(warnings) != 1 || warnings[0] != "Unknown worker: unknown" {
 		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestPilotConfigValidationRejectsInvalidOperationalLimits(t *testing.T) {
+	settings := validPilotSettings()
+	settings.MaxWorkRounds = -1
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("negative max_work_rounds was accepted")
+	}
+	settings = validPilotSettings()
+	settings.DayPctCap = math.Inf(1)
+	if _, err := validatePilotSettings(settings); err == nil {
+		t.Fatal("infinite day_pct_cap was accepted")
 	}
 }
 
