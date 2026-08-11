@@ -209,7 +209,15 @@ echo "$*" >>"$TEST_BROKER_EVENTS"
 EOF
   cat >"$case_dir/bin/systemd-run" <<'EOF'
 #!/bin/bash
+[ -r "$FACTORY_RELEASE_INFO" ] || exit 9
+echo 'release-info ready' >>"$TEST_EVENTS"
 echo "systemd-run $*" >>"$TEST_EVENTS"
+[ "$TEST_MODE" != systemd-run-fail ] || exit 1
+capture=0
+for arg in "$@"; do
+  [ "$arg" != /usr/bin/flock ] || capture=1
+  [ "$capture" = 0 ] || printf '%q ' "$arg"
+done >"$TEST_DEFERRED_COMMAND"
 exit 0
 EOF
   cat >"$case_dir/bin/mv" <<'EOF'
@@ -267,6 +275,7 @@ run_release() {
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
+    TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -297,6 +306,7 @@ start_release() {
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
+    TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -350,9 +360,23 @@ assert_file "$success/broker-events" 'enable --now factory-release-broker.servic
   || fail "worker was not started after taking the heartbeat baseline"
 [ "$(sed -n '5p' "$success/events")" = 'start factory-worker-2.service' ] \
   || fail "second worker was not started after taking the heartbeat baseline"
-grep -E '^systemd-run .*--on-active=30s /bin/systemctl restart factory-pilot.service$' \
+assert_before "$success/events" 'release-info ready' 'systemd-run '
+grep -E "^systemd-run .*--on-active=30s /usr/bin/flock -n $success/release.lock /bin/systemctl restart factory-pilot.service$" \
   "$success/events" >/dev/null \
-  || fail "Pilot restart was not detached until after release metadata"
+  || fail "Pilot restart did not use the release lock after release metadata"
+exec 8>"$success/release.lock"
+flock -n 8 || fail "could not acquire successful fixture release lock"
+deferred_command=$(sed "s|/bin/systemctl|$success/bin/systemctl|" "$success/deferred-pilot-restart")
+if TEST_EVENTS="$success/events" /bin/bash -c "$deferred_command"; then
+  fail "outdated Pilot restart ran while a newer release held the lock"
+fi
+! grep -Fx 'restart factory-pilot.service' "$success/events" >/dev/null \
+  || fail "outdated Pilot restart reached systemctl while the lock was held"
+flock -u 8
+TEST_EVENTS="$success/events" /bin/bash -c "$deferred_command" \
+  || fail "current Pilot restart did not run after the release lock was freed"
+[ "$(grep -Fxc 'restart factory-pilot.service' "$success/events")" -eq 1 ] \
+  || fail "Pilot restart did not run exactly once after the release lock was freed"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release did not explain the deployed change"
@@ -399,6 +423,37 @@ tail -n 3 "$brain_failed/events" | diff -u - <(printf '%s\n' \
 ! grep -F 'systemd-run ' "$brain_failed/events" >/dev/null \
   || fail "failed brain install scheduled a Pilot restart"
 assert_no_fixture_processes "$brain_failed"
+
+brain_failed_with_info="$temporary/brain-install-fail-with-info"
+make_fixture "$brain_failed_with_info" brain-install-fail
+printf 'previous-release-info\n' >"$brain_failed_with_info/current.json"
+if run_release "$brain_failed_with_info" brain-install-fail; then
+  fail "brain-install-fail with previous info unexpectedly succeeded"
+fi
+assert_file "$brain_failed_with_info/current.json" previous-release-info
+assert_no_fixture_processes "$brain_failed_with_info"
+
+systemd_failed="$temporary/systemd-run-fail"
+make_fixture "$systemd_failed" systemd-run-fail
+printf 'previous-release-info\n' >"$systemd_failed/current.json"
+if run_release "$systemd_failed" systemd-run-fail; then
+  fail "systemd-run-fail unexpectedly succeeded"
+fi
+assert_file "$systemd_failed/install/factory-server" old-server
+assert_file "$systemd_failed/install/factory-worker" old-worker
+assert_file "$systemd_failed/current.json" previous-release-info
+assert_no_fixture_processes "$systemd_failed"
+
+systemd_failed_without_info="$temporary/systemd-run-fail-without-info"
+make_fixture "$systemd_failed_without_info" systemd-run-fail
+if run_release "$systemd_failed_without_info" systemd-run-fail; then
+  fail "systemd-run-fail without previous info unexpectedly succeeded"
+fi
+assert_file "$systemd_failed_without_info/install/factory-server" old-server
+assert_file "$systemd_failed_without_info/install/factory-worker" old-worker
+[ ! -e "$systemd_failed_without_info/current.json" ] \
+  || fail "failed systemd-run left newly written release-info"
+assert_no_fixture_processes "$systemd_failed_without_info"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
