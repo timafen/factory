@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -104,6 +104,38 @@ def pipeline_title(task):
     if not match:
         return None
     return match.group(4).strip(), match.group(3).strip()
+
+
+def has_task_provenance(task):
+    """Whether control-plane provenance, rather than a legacy title, exists."""
+    return any((task or {}).get(field) for field in (
+        "work_id", "parent_task_id", "correction_kind"))
+
+
+def task_work_id(task):
+    """Durable work identity for new rows, title identity only for legacy rows."""
+    task = task or {}
+    return task.get("work_id") or base_title(task.get("title") or "")
+
+
+def task_is_root(task):
+    task = task or {}
+    return bool(task.get("work_id") and task.get("work_id") == task.get("id")
+                and not task.get("parent_task_id")
+                and not task.get("correction_kind"))
+
+
+def same_task_work(task, reference):
+    """Compare durable work IDs when present; use titles only for legacy rows."""
+    if isinstance(reference, dict):
+        if (task or {}).get("work_id") or reference.get("work_id"):
+            return bool((task or {}).get("work_id")
+                        and (task or {}).get("work_id") == reference.get("work_id"))
+        reference = base_title(reference.get("title") or "")
+    if (task or {}).get("work_id"):
+        return (task or {}).get("work_id") == reference
+    return base_title((task or {}).get("title") or "").strip() == str(
+        reference or "").strip()
 
 
 def is_service_work(title):
@@ -188,36 +220,27 @@ def no_bare_hashes(text):
 NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"
 
 
-def _notify_journal(title, message, group, delivered, click, journal_id=""):
+def _notify_journal(title, message, group, delivered, click):
     """Каждое уведомление остаётся в журнале — экран «Уведомления» читает его.
     Тихие (выключенная группа) тоже пишутся, с пометкой."""
     try:
-        if journal_id and os.path.exists(NOTIFY_LOG_PATH):
-            with open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
-                if any(json.loads(line).get("id") == journal_id
-                       for line in stream if line.strip()):
-                    return False
         rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
                "title": title, "message": message[:1500],
                "group": group, "delivered": bool(delivered), "click": click}
-        if journal_id:
-            rec["id"] = journal_id
         with open(NOTIFY_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         if os.path.getsize(NOTIFY_LOG_PATH) > 1_500_000:
             lines = io.open(NOTIFY_LOG_PATH, encoding="utf-8").readlines()[-800:]
             io.open(NOTIFY_LOG_PATH, "w", encoding="utf-8").writelines(lines)
-        return True
     except Exception as e:
         log("notify_journal_error", repr(e))
-        return False
 
 
-def notify(conf, title, message, priority="default", tags="", click="", journal_id=""):
+def notify(conf, title, message, priority="default", tags="", click=""):
     title = no_bare_hashes(title)
     message = no_bare_hashes(message)
     _notify_journal(title, message, notify_group(title),
-                    notify_allowed(conf, title), click, journal_id)
+                    notify_allowed(conf, title), click)
     if not notify_allowed(conf, title):
         log("QUIET[" + notify_group(title) + "] " + str(title)
             + " :: " + str(message)[:80].replace("\n", " "))
@@ -337,20 +360,12 @@ AGENT_RULES = """
 1. Ветка: режь от свежего origin/main (git fetch origin). НИКОГДА не делай
    checkout другой ветки в рабочей копии — это ломает воркера. Чужую работу
    забирай так: git fetch origin <ветка> && git reset --hard FETCH_HEAD.
-2. Review и Verify: ДО ЛЮБОГО diff, log, merge-base или решения о пустой
-   поставке получи default branch именно remote (`git ls-remote --symref origin
-   HEAD`), fetch-ни только этот ref и рабочую ветку в отдельный read-only
-   каталог, зафиксируй полные `base_sha` и `candidate_sha`. Все сравнения
-   делай только как `<base_sha>...<candidate_sha>`; cached `origin/main`
-   запрещён. Ошибка resolution/fetch — это `BLOCKED: review infrastructure`,
-   никогда не REQUEST CHANGES. В финальном отчёте укажи обе SHA и причину,
-   если инфраструктура заблокировала проверку.
-3. Сдача: сначала перебазируй на свежий main (git fetch origin main,
+2. Сдача: сначала перебазируй на свежий main (git fetch origin main,
    затем git rebase origin/main), потом проверь список файлов командой
    git diff --name-only origin/main...HEAD — именно ТРИ точки, сравнение от
    точки ветвления. В списке ТОЛЬКО твои файлы. Запушь:
    git push --force-with-lease -u origin HEAD. Непушенная работа не существует.
-4. Отчёт заканчивай строками:
+3. Отчёт заканчивай строками:
    ОБЛАСТЬ: <файлы через запятую, ровно как в git>
    TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
    страницы (health, login, «ok») — НЕ результат. Если работа невидимая
@@ -362,10 +377,10 @@ AGENT_RULES = """
    одной командой (проверено 25 целевыми проверками)». Голые «тесты
    зелёные», «diff чистый», «коммит запушен» доказательством НЕ считаются
    и будут возвращены>
-5. Пиши для человека: первая строка коммита — по-русски, что и зачем.
+4. Пиши для человека: первая строка коммита — по-русски, что и зачем.
    Голые хеши/ID на экранах и в текстах для владельца запрещены — только
    со словесной подписью. Ревью возвращает работу за голый хеш на экране.
-6. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
+5. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
    только как `knowledge/cards/<выданный Card>-<slug>.md`. Не ищи следующий
    номер в файлах и не выбирай его самостоятельно. В общие файлы-журналы
    (CARD-0030 и подобные) НЕ дописывай ни строки: общий файл — магнит для
@@ -377,7 +392,7 @@ AGENT_RULES = """
    изменения вне `knowledge/cards/`. Не пиши `Head commit` и не сверяй это
    поле с текущим `git HEAD`: запись карточки закономерно создаёт следующий
    документационный коммит.
-7. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
+6. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
    только целевые тесты своей области (и новые). Ревью тесты не запускает —
    читает дифф, максимум целевые при сомнении. Полный набор — ровно ОДИН раз,
    на Проверке, перед вливанием. Итерации должны быть минутами, не десятками.
@@ -490,6 +505,18 @@ def create_task(body, conf=None):
     return out
 
 
+def create_child_task(body, parent, conf=None, correction_kind=None):
+    """The only Pilot builder for a continuation or correction task."""
+    parent_id = (parent or {}).get("id")
+    if not parent_id:
+        raise RuntimeError("child task requires a source task id")
+    body = dict(body)
+    body["parent_task_id"] = parent_id
+    if correction_kind:
+        body["correction_kind"] = correction_kind
+    return create_task(body, conf)
+
+
 def _note_admitted_task(conf, response, body):
     """Keep the cycle snapshot honest after a successful create."""
     activity = (conf or {}).get("_cycle_activity")
@@ -600,6 +627,7 @@ def first_stage(conf):
 
 
 WORKS_PATH = f"{HOME}/pilot/works.json"
+DUPLICATE_ROOT_EVENTS_PATH = f"{HOME}/pilot/duplicate_root_prevented.json"
 WORK_ARCHIVE_DAYS = 90
 WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 
@@ -607,21 +635,39 @@ WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 ORIGIN_OWNER = "owner"              # завёл человек: голосом или кнопкой
 ORIGIN_ASSISTANT = "assistant"      # завёл помощник из переписки
 ORIGIN_ORCHESTRATOR = "orchestrator"  # развернулось из эпика само
-WORK_ORIGINS = frozenset((
-    ORIGIN_OWNER, ORIGIN_ASSISTANT, ORIGIN_ORCHESTRATOR,
-    "worker", "agent", "patrol",
-))
 
 
-def note_work(base, origin, start_stage="", skipped=None, reason=""):
+def note_duplicate_root_prevented(task):
+    """Persist and journal a correction that a title-only Pilot would adopt."""
+    task_id = (task or {}).get("id") or ""
+    if not task_id:
+        return
+    seen = load(DUPLICATE_ROOT_EVENTS_PATH, {}) or {}
+    if task_id in seen:
+        return
+    event = {
+        "task_id": task_id,
+        "work_id": (task or {}).get("work_id") or "",
+        "parent_task_id": (task or {}).get("parent_task_id") or "",
+        "correction_kind": (task or {}).get("correction_kind") or "",
+    }
+    seen[task_id] = event
+    save(DUPLICATE_ROOT_EVENTS_PATH, seen)
+    log("pilot_duplicate_root_prevented", json.dumps(
+        event, ensure_ascii=False, sort_keys=True))
+
+
+def note_work(base, origin, start_stage="", skipped=None, reason="", work_id=""):
     """Запись о происхождении работы. Пишется один раз, при заведении:
     повторные стадии её не трогают."""
     try:
         rec = load(WORKS_PATH, {})
-        if base in rec:
+        key = work_id or base
+        if key in rec:
             return
-        rec[base] = {
+        rec[key] = {
             "origin": origin,
+            "base_title": base,
             "start_stage": start_stage or "",
             "skipped": list(skipped or []),
             "reason": reason or "",
@@ -826,21 +872,24 @@ def cleanup_work_archive(conf, tasks):
     for task in tasks or []:
         base = base_title(task.get("title", ""))
         if base:
-            grouped.setdefault(base, []).append(task)
+            grouped.setdefault(task_work_id(task), {"base": base, "tasks": []})[
+                "tasks"].append(task)
 
     closed_at, retention_until = _archive_dates()
     works_changed = False
     statuses_changed = False
-    for base, group in grouped.items():
+    for work_key, grouped_work in grouped.items():
+        base, group = grouped_work["base"], grouped_work["tasks"]
         group.sort(key=lambda task: (
             _work_time(task.get("created_at"))
             or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc),
             task.get("id") or "",
         ))
-        new_meta = base not in works
-        meta = works.setdefault(base, {
+        new_meta = work_key not in works
+        meta = works.setdefault(work_key, {
             "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
-            "reason": "", "at": group[0].get("created_at") or closed_at,
+            "reason": "", "base_title": base,
+            "at": group[0].get("created_at") or closed_at,
         })
         if new_meta:
             works_changed = True
@@ -1320,7 +1369,8 @@ def stage_attempts(tasks, stage, base):
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if m and m.group(1).strip() == stage and m.group(2).strip() == base.strip():
+        if (m and m.group(1).strip() == stage
+                and same_task_work(t, base)):
             n += 1
     return n
 
@@ -1337,10 +1387,9 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     конвейеру, и при возобновлении после ответа владельца.
     since — момент, начиная с которого задача считается «новой»: старый хвост от
     прошлого прогона дублем не считается и не мешает доработке."""
-    base = (base or "").strip()
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or m.group(2).strip() != base:
+        if not m or not same_task_work(t, base):
             continue
         if since and (t.get("created_at") or "") <= since:
             continue
@@ -1424,7 +1473,7 @@ def supersede_stale_questions(tasks):
         m = STAGE_TITLE_RE.match(t.get("title", ""))
         if not m:
             continue
-        newer = live_or_done_at(tasks, m.group(2).strip(), stage_no_of(t.get("title")),
+        newer = live_or_done_at(tasks, t, stage_no_of(t.get("title")),
                                 since=t.get("created_at"))
         if not newer or newer["id"] == t["id"]:
             continue
@@ -1507,9 +1556,10 @@ def note_cap_rescue(base, stage):
     save(RESCUE_PATH, rec)
 
 
-def create_cap_rescue(base, stage, body, conf=None):
+def create_cap_rescue(base, stage, body, conf=None, parent=None,
+                      correction_kind="execution_retry"):
     """Create a return task before consuming its durable rescue allowance."""
-    created = create_task(body, conf)
+    created = create_child_task(body, parent, conf, correction_kind)
     task = created.get("task") if isinstance(created, dict) else None
     if not isinstance(task, dict) or not task.get("id"):
         raise RuntimeError(f"{stage} return: create_task returned no task")
@@ -1997,13 +2047,13 @@ def active_auto_works(tasks):
     for task in tasks:
         match = STAGE_TITLE_RE.match(task.get("title", "") or "")
         if match and task.get("state") in PLAN_ACTIVE_STATES:
-            active.add(match.group(2).strip())
+            active.add(task_work_id(task))
     open_questions = {q.get("task_id") for q in load_questions()
                       if q.get("status") == "open"}
     for task in tasks:
         match = STAGE_TITLE_RE.match(task.get("title", "") or "")
         if match and task.get("id") in open_questions:
-            active.add(match.group(2).strip())
+            active.add(task_work_id(task))
     return active
 
 
@@ -2171,10 +2221,13 @@ def pipeline_watch(conf, tasks, workflows, workers):
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", "") or "")
         if m:
-            groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
+            key = task_work_id(t)
+            groups.setdefault(key, {"base": m.group(2).strip(), "tasks": []})[
+                "tasks"].append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
-    for base, lst in groups.items():
+    for work_key, group in groups.items():
+        base, lst = group["base"], group["tasks"]
         allowed = []
         blocked = []
         for stage, task in lst:
@@ -2186,20 +2239,20 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if not allowed:
             if any("закрыт" in reason or "завершена" in reason
                    or "отклонена" in reason for reason in blocked):
-                mem[base] = {"why": "closed", "reason": blocked[-1],
+                mem[work_key] = {"why": "closed", "reason": blocked[-1],
                              "since": now}
             else:
-                mem.pop(base, None)
+                mem.pop(work_key, None)
             continue
         lst = allowed
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
-            mem.pop(base, None)
+            mem.pop(work_key, None)
             continue
         if base in stopped:
-            rec = mem.get(base) or {}
+            rec = mem.get(work_key) or {}
             rec["why"] = "owner"
             rec.setdefault("since", now)
-            mem[base] = rec
+            mem[work_key] = rec
             continue
         idx = [stages.index(st) for st, t in lst
                if t.get("state") == "succeeded" and st in stages]
@@ -2207,12 +2260,12 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         far = max(idx)
         if far >= len(stages) - 1:
-            mem.pop(base, None)          # дошли до конца конвейера
+            mem.pop(work_key, None)          # дошли до конца конвейера
             continue
-        rec = mem.get(base) or {}
+        rec = mem.get(work_key) or {}
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
-        mem[base] = rec
+        mem[work_key] = rec
         if now - int(rec["since"]) < STALL_WAIT:
             continue
         if int(rec["nudges"]) >= STALL_NUDGES:
@@ -2235,7 +2288,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         fallback_branch = branch_from_history(tasks, base)
         identity_lines = implementation_context_lines(base, fallback_branch)
         try:
-            created = create_task({"request_key": str(uuid.uuid4()), "title": title,
+            created = create_child_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
@@ -2244,7 +2297,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
                                      identity_lines)[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
-                         "workflow_revision_id": nw["revision_id"]}, conf)
+                         "workflow_revision_id": nw["revision_id"]}, src, conf)
             created_task = created.get("task") if isinstance(created, dict) else None
             created_task = dict(created_task) if isinstance(created_task, dict) else {}
             created_task.setdefault("title", title)
@@ -2324,102 +2377,8 @@ def save_promises(base, text):
     log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
 
 
-GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _remote_url(repo_identity):
-    """Return the canonical read-only URL without looking at a worker checkout."""
-    if str(repo_identity or "").startswith(("file://", "http://", "https://", "ssh://")):
-        return str(repo_identity)
-    short = (repo_identity or "").split("github.com/")[-1].strip("/")
-    return f"https://github.com/{short}.git" if short and "/" in short else ""
-
-
-def _default_branch(url):
-    """Resolve the remote's symbolic HEAD; never assume that it is `main`."""
-    rc, out = _git(None, "ls-remote", "--symref", url, "HEAD")
-    if rc:
-        return "", "cannot resolve remote default branch: " + out.strip()[:240]
-    match = re.search(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", out, re.M)
-    if not match:
-        return "", "remote did not advertise a default branch"
-    return match.group(1), ""
-
-
-def fresh_branch_snapshot(repo_identity, branch):
-    """Fetch and pin the exact remote base and candidate in an isolated repo.
-
-    This is deliberately independent of a retained worker worktree: cached
-    refs can be stale and a review must never checkout, switch, or reset the
-    branch that belongs to the worker.  A caller may only use the returned
-    immutable SHA values for ancestry and diff decisions.
-    """
-    url = _remote_url(repo_identity)
-    if not url or not branch:
-        return {"state": "blocked", "reason": "missing repository or candidate branch"}
-    default, error = _default_branch(url)
-    if error:
-        return {"state": "blocked", "reason": error}
-    try:
-        with tempfile.TemporaryDirectory(prefix="factory-review-") as work:
-            rc, out = _git(work, "init", "-q")
-            if rc:
-                return {"state": "blocked", "reason": "cannot create review repository: " + out[:180]}
-            rc, out = _git(work, "remote", "add", "origin", url)
-            if rc:
-                return {"state": "blocked", "reason": "cannot configure review remote: " + out[:180]}
-            # A separate ls-remote lets a genuinely missing delivery remain a
-            # delivery issue while every resolution/fetch failure is BLOCKED.
-            rc, heads = _git(work, "ls-remote", "--heads", "origin", "refs/heads/" + branch)
-            if rc:
-                return {"state": "blocked", "reason": "cannot resolve candidate branch: " + heads[:180]}
-            if not heads.strip():
-                return {"state": "missing", "default_branch": default}
-            refs = ["+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
-            if branch != default:
-                refs.append("+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch))
-            rc, out = _git(work, "fetch", "--prune", "origin", *refs)
-            if rc:
-                return {"state": "blocked", "reason": "cannot fetch authoritative refs: " + out[:240]}
-            rc, base_sha = _git(work, "rev-parse", "refs/remotes/origin/" + default)
-            if rc:
-                return {"state": "blocked", "reason": "cannot pin fetched base: " + base_sha[:180]}
-            rc, candidate_sha = _git(work, "rev-parse", "refs/remotes/origin/" + branch)
-            if rc:
-                return {"state": "blocked", "reason": "cannot pin fetched candidate: " + candidate_sha[:180]}
-            base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
-            if not GIT_SHA.fullmatch(base_sha) or not GIT_SHA.fullmatch(candidate_sha):
-                return {"state": "blocked", "reason": "remote returned an invalid commit SHA"}
-            # A published candidate can legitimately have been cut before the
-            # default branch advanced.  It is still reviewable from their
-            # shared merge-base; only genuinely unrelated histories block it.
-            rc, merge_base_sha = _git(work, "merge-base", base_sha, candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "base and candidate have unrelated history"}
-            merge_base_sha = merge_base_sha.strip()
-            if not GIT_SHA.fullmatch(merge_base_sha):
-                return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
-            rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot calculate pinned delivery distance: " + ahead[:180]}
-            rc, base_ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + base_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot classify default branch advancement: " + base_ahead[:180]}
-            return {"state": "ok", "default_branch": default, "base_sha": base_sha,
-                    "candidate_sha": candidate_sha, "merge_base_sha": merge_base_sha,
-                    "base_advanced": merge_base_sha != base_sha,
-                    "base_ahead_by": int(base_ahead.strip()),
-                    "files": [p for p in out.splitlines() if p][:80],
-                    "ahead_by": int(ahead.strip())}
-    except Exception as e:
-        return {"state": "blocked", "reason": "review snapshot failed: " + str(e)[:240]}
-
-
 def branch_report(repo_identity, branch):
-    """Legacy GitHub reporting seam used outside the authoritative Review path."""
+    """Что реально лежит в хранилище: ('нет'|'есть', [файлы диффа])."""
     repo = repo_identity.split("github.com/")[-1]
     if not repo or not branch:
         return "", []
@@ -2649,26 +2608,14 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
                 expected_card=""):
-    """Create Review context only from a freshly fetched, pinned snapshot."""
-    snapshot = fresh_branch_snapshot(repo_identity, branch)
-    # Test-only/legacy callers without a remote identity retain the small
-    # branch_report seam. Every real repository enters the pinned path above.
-    if not _remote_url(repo_identity):
+    """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
+    Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
+    не блокируют конвейер: тогда ворота просто молчат."""
+    try:
         state_, files = branch_report(repo_identity, branch)
-        snapshot = {"state": "ok", "default_branch": "unavailable",
-                    "base_sha": "unavailable", "candidate_sha": "unavailable",
-                    "merge_base_sha": "unavailable", "base_advanced": False,
-                    "base_ahead_by": "unavailable", "ahead_by": "unavailable", "files": files}
-    elif snapshot.get("state") == "blocked":
-        reason = snapshot.get("reason") or "unknown review infrastructure failure"
-        log("REVIEW BLOCKED " + repr(reason))
-        return {"blocked": True, "note": (
-            "BLOCKED: review infrastructure. Невозможно получить свежую основную "
-            "ветку или зафиксировать SHA до проверки; возврат на доработку не создавался. "
-            "Причина: " + reason)}
-    else:
-        state_ = "нет" if snapshot.get("state") == "missing" else "есть"
-    files = snapshot.get("files") or []
+    except Exception as e:
+        log("gate_error", repr(e))
+        return None
     if state_ == "нет":
         note_cap = cap_rescues(base, "GATE")
         if note_cap >= 2:
@@ -2791,18 +2738,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 prom_note += ("\nОбещанные, но не тронутые файлы — повод вернуть работу, "
                               "если в отчёте нет внятного объяснения.")
 
-        base_status = ("Основная ветка продвинулась после публикации кандидата "
-                       f"на {snapshot['base_ahead_by']} коммит(а); область остаётся "
-                       "вычисленной от общего merge-base. "
-                       if snapshot.get("base_advanced") else "")
         return {"back": False,
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
-                         "Проверяется свежая remote-основа "
-                         f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
-                         f"candidate_sha={snapshot['candidate_sha']}, "
-                         f"merge_base_sha={snapshot['merge_base_sha']}, ahead_by={snapshot['ahead_by']}). "
-                         + base_status
-                         + f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
+                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}"
                          + prom_note + "\n"
                          "Сверяй записку с этим списком, а не с памятью. "
                          "Возвращай работу только по правилам из инструкций: чужие файлы, "
@@ -3238,7 +3176,7 @@ def reconcile_diag_repairs(conf, tasks):
             repair["status"] = "resume_pending"
             _save_diag_repair(base, repair)
         try:
-            result = create_task(body, conf)
+            result = create_child_task(body, source, conf, "diagnostic_repair")
         except Exception as e:
             _fail_diag_repair(conf, base, repair,
                               f"одноразовое продолжение не удалось: {e}")
@@ -3652,6 +3590,19 @@ def load_questions():
     return out
 
 
+def attach_question_work_id(task):
+    """Bind a freshly written question to the same durable work as its task."""
+    work_id = (task or {}).get("work_id") or ""
+    task_id = (task or {}).get("id") or ""
+    if not work_id or not task_id:
+        return
+    path = f"{QUESTION_DIR}/{task_id}.json"
+    question = load(path, None)
+    if isinstance(question, dict) and question.get("work_id") != work_id:
+        question["work_id"] = work_id
+        save(path, question)
+
+
 def subtask_state(tasks, open_q, last_stage, base, since=""):
     """Что сейчас с подзадачей: 'none' — конвейер не начинался, 'working' —
     что-то выполняется, 'waiting' — ждёт ответа владельца, 'done' — прошла
@@ -3910,14 +3861,6 @@ def record_new_works(conf, tasks, max_age_min=180):
     if not stages:
         return
     known = load(WORKS_PATH, {})
-    # A Plan card already has the trustworthy author.  Do not overwrite it
-    # with "owner" merely because Pilot noticed the created task one tick
-    # before the normal note_work call completed.
-    planned_origins = {
-        base_title(item.get("title") or "").strip().casefold(): item.get("origin")
-        for item in ideas_all()
-        if item.get("origin") in WORK_ORIGINS and item.get("title")
-    }
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            time.gmtime(time.time() - max_age_min * 60))
     # Явно созданная владельцем новая live-задача после durable close — это
@@ -3927,7 +3870,13 @@ def record_new_works(conf, tasks, max_age_min=180):
     for task in tasks:
         title = task.get("title") or ""
         base = base_title(title)
-        meta = known.get(base) or {}
+        if has_task_provenance(task) and not task_is_root(task):
+            if (task.get("correction_kind") and title.startswith(PREFIX)
+                    and (task.get("created_at") or "") >= cutoff):
+                note_duplicate_root_prevented(task)
+            continue
+        key = task_work_id(task)
+        meta = known.get(key) or {}
         if (not title.startswith(PREFIX) or base in reopened or not meta.get("closed")
                 or task.get("state") not in PIPELINE_LIVE_STATES):
             continue
@@ -3958,29 +3907,25 @@ def record_new_works(conf, tasks, max_age_min=180):
             continue
         if (t.get("created_at") or "") < cutoff:
             continue
-        base = base_title(title)
-        n = stage_no_of(title)
-        if not base or not n or base in known:
+        if has_task_provenance(t) and not task_is_root(t):
+            if t.get("correction_kind"):
+                note_duplicate_root_prevented(t)
             continue
-        if base not in first or n < first[base][0]:
-            first[base] = (n, t.get("created_at") or "", t)
-    for base, (n, _at, task) in first.items():
+        base = base_title(title)
+        key = task_work_id(t)
+        n = stage_no_of(title)
+        if not base or not n or key in known:
+            continue
+        if key not in first or n < first[key][0]:
+            first[key] = (n, t.get("created_at") or "", base, t.get("work_id") or "")
+    for _key, (n, _at, base, work_id) in first.items():
         skipped = stages[: n - 1]
-        origin = planned_origins.get(base.strip().casefold())
-        if not origin and str(task.get("request_key") or "").startswith("automation:"):
-            origin = ORIGIN_ORCHESTRATOR
-        origin = origin or ORIGIN_OWNER
-        skipped_reason = {
-            ORIGIN_OWNER: "владелец завёл работу сразу с этого шага",
-            ORIGIN_ASSISTANT: "помощник завёл работу сразу с этого шага",
-            ORIGIN_ORCHESTRATOR: "Factory запустила работу сразу с этого шага",
-        }.get(origin, "Factory запустила работу по находке сразу с этого шага")
-        note_work(base, origin,
-                  stages[n - 1] if n <= len(stages) else "",
+        note_work(base, ORIGIN_OWNER, stages[n - 1] if n <= len(stages) else "",
                   skipped,
-                  skipped_reason if skipped else "")
+                  "владелец завёл работу сразу с этого шага" if skipped else "",
+                  work_id=work_id)
         if skipped:
-            log(f"WORK ORIGIN base={base!r} origin={origin} начал с {stages[n - 1]}, "
+            log(f"WORK ORIGIN base={base!r} владелец начал с {stages[n - 1]}, "
                 f"пропущено: {', '.join(skipped)}")
 
 
@@ -4016,7 +3961,8 @@ def handle_answers(conf, workflows, workers, tasks):
         # Модель, которая дважды не справилась с этапом, третий раз денег
         # не заслужила: третий заход отдаём исполнителю уровнем выше.
         try:
-            rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")))
+            rounds = stage_attempts(
+                tasks, stage, src_task or base_title(q.get("title", "")))
         except Exception:
             rounds = 0
         selected_worker = stage_worker(conf, stage, cx_hint, workers)
@@ -4077,7 +4023,7 @@ def handle_answers(conf, workflows, workers, tasks):
             log(f"answer: '{q.get('title','')[:40]}' остановлена владельцем — не возобновляю")
             continue
 
-        dup = live_or_done_at(tasks, q["title"], idx + 1,
+        dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
                               since=(src_task or {}).get("created_at"))
         if dup:
             q["status"] = "resolved"
@@ -4119,7 +4065,13 @@ def handle_answers(conf, workflows, workers, tasks):
             q["last_resume_try"] = time.time()
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
         try:
-            r = create_task(body, conf)
+            correction_kind = {
+                "Review": "review_return",
+                "Verify": "verify_return",
+            }.get(q.get("stage"), "answer_resume")
+            r = create_child_task(
+                body, src_task or {"id": q.get("task_id")}, conf,
+                correction_kind)
             tid = r.get("task", {}).get("id")
             q["status"] = "resolved"
             q["resumed_task_id"] = tid
@@ -5825,9 +5777,9 @@ def recent_done_block(tasks, n=5):
     pipeline progress.  Old notification-only records remain a small fallback
     while the task history ages in.
     """
-    delivered = set()
+    merged = set()
     try:
-        with io.open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as stream:
+        with io.open(MERGES_PATH, encoding="utf-8") as stream:
             lines = stream.readlines()[-400:]
         for line in reversed(lines):
             try:
@@ -5835,7 +5787,7 @@ def recent_done_block(tasks, n=5):
             except Exception:
                 continue
             if r.get("task_id"):
-                delivered.add(r["task_id"])
+                merged.add(r["task_id"])
     except Exception:
         pass
 
@@ -5844,7 +5796,7 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
-        if task.get("state") == "succeeded" and task.get("id") not in delivered:
+        if task.get("state") == "succeeded" and task.get("id") not in merged:
             continue
         title, stage = parsed
         if not title or is_service_work(title):
@@ -5857,8 +5809,8 @@ def recent_done_block(tasks, n=5):
     out = []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
-        if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
+        if task.get("id") in merged:
+            status, detail = "merged", "Влито в main."
         elif state == "succeeded":
             status, detail = "passed", "Проверка прошла; слияние не подтверждено."
         else:
@@ -6040,7 +5992,8 @@ def rescue_queued(conf, tasks, workflows, workers):
                 "timeout_seconds": conf.get("timeout_seconds", 7200),
                 "workflow_revision_id": nw["revision_id"],
             }
-            created = create_task(body, conf)
+            created = create_child_task(body, t, conf,
+                                        "execution_retry")
             log(f"QUEUE RESCUE task={t['id'][:8]} {stage} "
                 f"{(sick or {}).get('name', '?')} "
                 f"({'нет места для сохранённых работ' if retention_full else 'нездоров'}) -> {name} "
@@ -6218,281 +6171,232 @@ def handle_epics(conf, state, tasks, workflows, workers, repo_identity_by_id):
                     make_epic_from(tid, title, detail)
 
 
-DELIVERY_STATE_KEY = "delivery_state_v2"
-DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/delivery-receipts.jsonl"
-DELIVERY_OUTBOX_PATH = f"{HOME}/pilot/delivery-outbox.jsonl"
-DELIVERY_BROKER_SOCKET = "/run/factory/project-release-broker.sock"
-DELIVERY_RETRY_DELAY = 60
-DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
+DEPLOY_STATE_KEY = "post_merge_deploys"
+DEPLOY_DIR = f"{HOME}/pilot/releases"
+RELEASE_EVENTS_PATH = f"{HOME}/pilot/release-events.jsonl"
+FACTORY_DEPLOY_RETRY_DELAY = 60
+RELEASE_OUTPUT_LIMIT = 12000
+RELEASE_SAFE_DIAGNOSTICS = frozenset({
+    "apparmor_parser is required for the Chromium user namespace sandbox",
+    "Playwright full Chromium was not installed",
+    "Playwright returned a non-absolute Chromium path",
+    "Chromium path cannot be represented safely in AppArmor",
+    "Chromium sandbox smoke failed",
+    "Chromium sandbox smoke failed: No usable sandbox",
+})
+RELEASE_DIAGNOSTICS_OMITTED = "diagnostic output omitted: no allowlisted lines"
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
-def retry_pending_factory_deploy(_conf, _state):
-    """Compatibility seam for older callers; V2 polling is the only runner."""
-    return None
+def _release_running(pid):
+    """Whether the child recorded in state is still alive.
 
-
-def _delivery_state(state):
-    """Return the only active delivery model and audit old, unsafe state once."""
-    current = state.get(DELIVERY_STATE_KEY)
-    if not isinstance(current, dict) or current.get("version") != 2:
-        current = {"version": 2, "targets": {}, "outbox": {}, "audit": {}}
-        legacy = state.pop("post_merge_deploys", None)
-        if legacy is not None:
-            current["audit"]["legacy_post_merge_deploys"] = legacy
-        state.pop("pending_factory_deploy", None)
-        state[DELIVERY_STATE_KEY] = current
-    return current
-
-
-def _delivery_target(repo_identity):
-    identity = (repo_identity or "").lower().removesuffix(".git")
-    if identity.endswith("timafen/factory"):
-        return "factory", "fx-factory-release"
-    if identity.endswith("timafen/tarser-operations"):
-        return "tarser-staging", "tarser-staging-deploy-release"
-    return "", ""
-
-
-def _delivery_generation(state, repo_identity, commit_sha, wait):
-    durable = _delivery_state(state)
-    target_key, adapter = _delivery_target(repo_identity)
-    if not target_key or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha or ""):
-        return None
-    target = durable["targets"].setdefault(target_key, {"id": target_key, "last_generation": 0,
-        "current_generation": None, "next_requested": False, "generations": {}})
-    current = target.get("current_generation")
-    if current:
-        generation = target["generations"].get(current)
-        if generation and generation["phase"] == "reserved":
-            # Reserved N has not been accepted by the broker.  Its source
-            # snapshot is therefore intentionally mutable: a merge arriving
-            # during lock retry is released once, from the newest main head.
-            generation["adapter"] = adapter
-            generation["commit_sha"] = commit_sha
-            generation["waits"][wait["task_id"]] = wait
-            generation.setdefault("merge_receipts", []).append(wait["merge_receipt"])
-            return generation
-        if generation and generation["phase"] in ("launching", "running"):
-            target["next_requested"] = True
-            target.setdefault("next_waits", {})[wait["task_id"]] = wait
-            target["next_input"] = {"adapter": adapter, "commit_sha": commit_sha}
-            return generation
-    target["last_generation"] += 1
-    sequence = target["last_generation"]
-    gid = f"{target_key}-{sequence}-{uuid.uuid4().hex}"
-    generation = {"id": gid, "sequence": sequence, "phase": "reserved",
-        "adapter": adapter, "commit_sha": commit_sha, "waits": {wait["task_id"]: wait},
-        "merge_receipts": [wait["merge_receipt"]]}
-    target["current_generation"] = gid
-    target["generations"][gid] = generation
-    return generation
-
-
-def broker_operation(socket_path, method, operation_id, payload=None):
-    """Small Unix-socket client; unknown I/O is deliberately not success."""
-    endpoint = "http://release-broker/v1/operations"
-    if method == "GET":
-        endpoint += "/" + operation_id
-    args = ["curl", "--silent", "--show-error", "--unix-socket", socket_path,
-            "--max-time", "10", "-X", method, endpoint]
-    if payload is not None:
-        args[args.index("-X"):args.index("-X")] = ["-H", "Content-Type: application/json", "--data", json.dumps(payload)]
+    Completion is determined by the durable status file, rather than this
+    probe: after a Pilot restart the child has a different parent.
+    """
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
-        if result.returncode:
-            return None
-        return json.loads(result.stdout)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-
-
-def _delivery_record(path, record):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + chr(10))
-
-
-def _delivery_record_once(path, record):
-    """Append immutable journal records at most once across process restarts."""
-    record_id = record.get("id")
-    if record_id and os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as stream:
-                for line in stream:
-                    if line.strip() and json.loads(line).get("id") == record_id:
-                        return False
-        except (OSError, ValueError):
-            pass
-    _delivery_record(path, record)
-    return True
-
-
-def _complete_generation(conf, state, generation):
-    durable = _delivery_state(state)
-    completed = generation.setdefault("completed_waits", {})
-    for task_id, wait in generation["waits"].items():
-        if task_id in completed:
-            continue
-        receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
-                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
-        completed[task_id] = receipt["id"]
-        mark_final(task_id, "Verify", True)
-    durable["outbox"].setdefault(generation["id"] + ":done", {"id": generation["id"] + ":done",
-        "generation_id": generation["id"], "status": "pending", "waits": list(generation["waits"].values())})
-
-
-def dispatch_delivery_outbox(conf, state):
-    durable = _delivery_state(state)
-    for item in durable["outbox"].values():
-        if item.get("status") == "sent":
-            continue
-        # Journal first: local owner history is deduplicated even if the
-        # process dies while the best-effort push transport is in flight.
-        _delivery_record_once(DELIVERY_OUTBOX_PATH, {"id": item["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        item["status"] = "journaled"
-        save(STATE_PATH, state)
-        wait = item["waits"][0] if item["waits"] else {}
-        notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
-               click=wait.get("link") or f"{UI_BASE}/work", journal_id=item["id"])
-        item["status"] = "sent"
-        save(STATE_PATH, state)
-
-
-def poll_delivery_state(conf, state, now=None):
-    current_time = time.time() if now is None else now
-    durable = _delivery_state(state)
-    for target in durable["targets"].values():
-        for generation in list(target["generations"].values()):
-            if generation.get("phase") not in DELIVERY_PHASES:
-                generation["phase"] = "failed"
-            if generation["phase"] == "completed":
-                # A process can die after the broker's terminal status was
-                # durably observed but before receipts/outbox were written.
-                # Completed is authoritative, so recovery must finish this
-                # local transaction without a new broker call.
-                _complete_generation(conf, state, generation)
-                response = None
-            elif generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
-                response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST", generation["id"],
-                    {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
-            elif generation["phase"] in ("launching", "running"):
-                response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "GET", generation["id"])
-            else:
-                response = None
-            status = (response or {}).get("status")
-            if status in ("launching", "running"):
-                generation["phase"] = status
-                # The broker has durably accepted this boundary; persist the
-                # matching Pilot phase before a process can disappear.
-                save(STATE_PATH, state)
-            elif status == "succeeded":
-                # Terminal broker proof must survive before receipts/outbox.
-                # A restart from this exact point only finishes the local
-                # transaction and never POSTs a second physical release.
-                generation["phase"] = "completed"
-                save(STATE_PATH, state)
-                _complete_generation(conf, state, generation)
-            elif status == "locked":
-                generation["phase"] = "reserved"
-                generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
-                save(STATE_PATH, state)
-            elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
-                generation["phase"] = "failed"
-                save(STATE_PATH, state)
-            elif response is None and generation["phase"] in ("launching", "running"):
-                generation["phase"] = "failed"  # status is authoritative; unknown fails closed
-                save(STATE_PATH, state)
-        save(STATE_PATH, state)
-        current = target.get("current_generation")
-        active = target["generations"].get(current) if current else None
-        if active and active["phase"] in ("completed", "failed") and target.get("next_requested"):
-            pending = target.pop("next_waits", {})
-            source = target.pop("next_input", {})
-            target["next_requested"] = False
-            target["last_generation"] += 1
-            sequence = target["last_generation"]
-            gid = f"{target.get('id', active['id'].rsplit('-', 2)[0])}-{sequence}-{uuid.uuid4().hex}"
-            target["generations"][gid] = {"id": gid, "sequence": sequence, "phase": "reserved",
-                "adapter": source.get("adapter", active["adapter"]),
-                "commit_sha": source.get("commit_sha", active["commit_sha"]), "waits": pending,
-                "merge_receipts": [w["merge_receipt"] for w in pending.values()]}
-            target["current_generation"] = gid
-        # This also makes a just-created N+1 survive before its first POST.
-        save(STATE_PATH, state)
-    dispatch_delivery_outbox(conf, state)
-
-
-def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None, now=None):
-    """Create/join a generation; it never launches raw release commands."""
-    state = state if state is not None else {}
-    wait = wait or {"task_id": "manual-" + uuid.uuid4().hex, "base": "", "merge_receipt": {}}
-    generation = _delivery_generation(state, repo_identity, commit_sha, wait)
-    if generation:
-        save(STATE_PATH, state)
-    return generation
-
-
-def _intent_has_wait(state, task_id):
-    for target in _delivery_state(state)["targets"].values():
-        for generation in target["generations"].values():
-            if task_id in generation.get("waits", {}):
-                return True
-    return False
-
-
-def _merge_journaled(task_id):
-    try:
-        with open(MERGES_PATH, encoding="utf-8") as stream:
-            return any(json.loads(line).get("task_id") == task_id
-                       for line in stream if line.strip())
-    except (OSError, ValueError):
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
         return False
 
 
-def recover_merge_intents(conf, state):
-    """Resume merge → receipt → delivery in that order before `processed`.
+def _release_output(release):
+    try:
+        with open(release["output"], encoding="utf-8", errors="replace") as out:
+            value = out.read()
+    except (OSError, KeyError):
+        return ""
+    # Release output can contain arbitrary subprocess environment and command
+    # lines. Publish only exact, static diagnostics owned by our installer: a
+    # blacklist cannot enumerate every credential shape safely.
+    value = ANSI_ESCAPE.sub("", value[-RELEASE_OUTPUT_LIMIT:])
+    safe = [line for line in value.splitlines()
+            if line in RELEASE_SAFE_DIAGNOSTICS]
+    return "\n".join(safe) if safe else RELEASE_DIAGNOSTICS_OMITTED
 
-    The intent is enough to ask GitHub whether its branch is already in main;
-    a crash after a successful external merge therefore cannot create a second
-    merge merely because the task cursor was saved first.
-    """
-    for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
-        if _intent_has_wait(state, task_id):
+
+def _release_rolled_back(release, preview=""):
+    """Detect an actual rollback from the tail of the release runner output."""
+    text = str(preview or "")
+    try:
+        with open(release["output"], "rb") as output_file:
+            output_file.seek(0, os.SEEK_END)
+            size = output_file.tell()
+            output_file.seek(max(0, size - 65536), os.SEEK_SET)
+            text += " " + output_file.read().decode("utf-8", errors="replace")
+    except (OSError, KeyError):
+        pass
+    lowered = text.lower()
+    return any(marker in lowered for marker in (
+        "откат", "rollback", "откатыва", "возвращаю предыдущ",
+    ))
+
+
+def _record_release_failure(command_key, release, output):
+    """Append one durable, deduplicated release incident for honest metrics."""
+    generation = release.get("generation")
+    event_id = f"{command_key}:{generation}"
+    try:
+        try:
+            with open(RELEASE_EVENTS_PATH, encoding="utf-8") as events:
+                for line in events:
+                    try:
+                        if json.loads(line).get("id") == event_id:
+                            return
+                    except (TypeError, ValueError):
+                        continue
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(RELEASE_EVENTS_PATH), exist_ok=True)
+        event = {
+            "id": event_id,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": "failed_release",
+            "target": command_key,
+            "generation": generation,
+            "rollback": _release_rolled_back(release, output),
+        }
+        with open(RELEASE_EVENTS_PATH, "a", encoding="utf-8") as events:
+            events.write(json.dumps(event, ensure_ascii=False) + chr(10))
+    except Exception as exc:
+        log("release_event_error", repr(exc))
+
+
+def _queue_post_merge_deploy_retry(command_key, label, command, state, now=None):
+    """Persist one delayed retry after the external Factory release lock wins."""
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    generation = int(releases.get("generation", 0)) + 1
+    releases["generation"] = generation
+    os.makedirs(DEPLOY_DIR, exist_ok=True)
+    stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
+    releases[command_key] = {
+        "command": command,
+        "label": label,
+        "generation": generation,
+        "output": stem + ".log",
+        "status": stem + ".status",
+        "queued": True,
+        "due": (time.time() if now is None else now) + FACTORY_DEPLOY_RETRY_DELAY,
+    }
+    save(STATE_PATH, state)
+    log(f"{label} busy: queued delayed retry generation={generation}")
+
+
+def _start_post_merge_deploy(command_key, label, command, state):
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    release = releases.get(command_key)
+    if not (isinstance(release, dict) and release.get("queued") and
+            not release.get("pid") and release.get("status")):
+        generation = int(releases.get("generation", 0)) + 1
+        releases["generation"] = generation
+        os.makedirs(DEPLOY_DIR, exist_ok=True)
+        stem = os.path.join(DEPLOY_DIR, f"{command_key}-{generation}")
+        release = {"command": command, "label": label, "generation": generation,
+                   "output": stem + ".log", "status": stem + ".status", "queued": True}
+        releases[command_key] = release
+    else:
+        generation = release["generation"]
+
+    # This atomic reservation must reach disk before Popen. If Pilot stops at
+    # the next instruction, the next process sees queued=True and resumes it.
+    save(STATE_PATH, state)
+    script = (f"{command} >{shlex.quote(release['output'])} 2>&1; rc=$?; "
+              f"printf '%s\\n' \"$rc\" >{shlex.quote(release['status'])}; exit \"$rc\"")
+    child = subprocess.Popen(script, shell=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, env=dict(os.environ, HOME=HOME))
+    release["pid"] = child.pid
+    release["queued"] = False
+    save(STATE_PATH, state)
+    log(f"{label} started generation={generation} pid={child.pid}")
+
+
+def poll_post_merge_deploys(conf, state, now=None):
+    """Collect finished releases and start one coalesced successor per target."""
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    # Compatibility with the short-lived retry marker used by older Pilots.
+    if state.pop("pending_factory_deploy", None):
+        releases.setdefault("deploy_factory_cmd", {"queued": True})
+    for command_key, release in list(releases.items()):
+        if command_key == "generation" or not isinstance(release, dict):
             continue
-        repo, branch = intent.get("repository", ""), intent.get("branch", "")
-        if not repo or not branch:
-            intent["phase"] = "failed"
-            continue
-        merged = intent.get("phase") in ("merged", "journaled", "waiting")
-        if not merged:
-            compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
-            if compare is not None and compare.get("ahead_by") == 0:
-                merged = True
-            else:
-                ok, output = gh_merge(repo, branch, intent.get("base", branch))
-                log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
-                if not ok:
-                    continue
-                merged = True
-            intent["phase"] = "merged"
-            save(STATE_PATH, state)
-        if merged:
-            receipt = {"task_id": task_id, "base": intent.get("base", ""),
-                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-            # The physical journal is the boundary before a delivery wait.
-            # A restart after this append recognizes it by task id and cannot
-            # let an already-processed Verify task suppress its missing wait.
-            if not _merge_journaled(task_id):
-                _delivery_record(MERGES_PATH, receipt)
-            intent["phase"] = "journaled"
-            save(STATE_PATH, state)
-            wait = {"task_id": task_id, "base": intent.get("base", ""),
-                    "link": intent.get("link", ""), "merge_receipt": receipt}
-            generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
-            if generation:
-                intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
-                save(STATE_PATH, state)
+        label = release.get("label") or ("FACTORY-DEPLOY" if command_key == "deploy_factory_cmd"
+                                           else "AUTOMATION-STAGING-DEPLOY")
+        status = release.get("status")
+        rc = None
+        if status:
+            try:
+                with open(status, encoding="utf-8") as f:
+                    rc = int(f.read().strip())
+            except (OSError, ValueError):
+                pass
+        if rc is not None:
+            queued = release.get("queued", False)
+            output = _release_output(release)
+            log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
+                f"{output}")
+            # rc=8 is only the external release lock; it is retried and is not
+            # a failed release. Every other non-zero result is an incident.
+            if rc not in (0, 8):
+                _record_release_failure(command_key, release, output)
+            releases.pop(command_key, None)
+            if rc == 8 and command_key == "deploy_factory_cmd" and conf.get(command_key):
+                # An independently started release owns the lock.  This must
+                # survive even when no later merge had set queued=True.
+                _queue_post_merge_deploy_retry(
+                    command_key, label, conf[command_key], state, now)
+            elif queued and conf.get(command_key):
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
+        elif release.get("pid") and not _release_running(release["pid"]):
+            # The runner disappeared before it could write a result. Retrying
+            # one latest release is safe and prevents a restart from losing it.
+            log(f"{label} lost generation={release.get('generation')}; retrying latest main")
+            releases.pop(command_key, None)
+            if conf.get(command_key):
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
+        elif release.get("queued") and not release.get("pid") and conf.get(command_key):
+            due = release.get("due")
+            current = time.time() if now is None else now
+            if due is None or current >= float(due):
+                _start_post_merge_deploy(command_key, label, conf[command_key], state)
+
+
+def retry_pending_factory_deploy(conf, state, now=None):
+    """Compatibility name for the cycle hook; releases are now all polled."""
+    poll_post_merge_deploys(conf, state, now)
+
+
+def deploy_after_merge(conf, repo_identity, state=None, now=None):
+    """Queue a durable background release for the repository that was merged."""
+    identity = (repo_identity or "").lower()
+    if identity.endswith(".git"):
+        identity = identity[:-4]
+    if identity.endswith("timafen/tarser-operations"):
+        command_key = "deploy_staging_cmd"
+        label = "AUTOMATION-STAGING-DEPLOY"
+    elif identity.endswith("timafen/factory"):
+        command_key = "deploy_factory_cmd"
+        label = "FACTORY-DEPLOY"
+    else:
+        log(f"POST-MERGE-DEPLOY skipped: unknown repository {repo_identity!r}")
+        return None
+
+    command = conf.get(command_key)
+    if not command:
+        log(f"{label} skipped: {command_key} is not configured")
+        return None
+    if state is None:
+        state = {}
+    releases = state.setdefault(DEPLOY_STATE_KEY, {})
+    running = releases.get(command_key)
+    if running:
+        running["queued"] = True
+        save(STATE_PATH, state)
+        log(f"{label} queued after generation={running.get('generation')}")
+        return None
+    _start_post_merge_deploy(command_key, label, command, state)
+    return None
 
 
 def cycle(conf, state):
@@ -6526,11 +6430,6 @@ def cycle(conf, state):
         rev = w.get("current_revision") or {}
         workflows[rev.get("title")] = {"workflow_id": w["id"], "revision_id": rev.get("id"),
                                        "enabled": w.get("enabled")}
-
-    # These recoveries deliberately precede the task cursor below.  A Verify
-    # task may already be in `processed` when a process stops after gh_merge.
-    recover_merge_intents(conf, state)
-    poll_delivery_state(conf, state)
 
     today = time.strftime("%Y-%m-%d", time.gmtime())
     day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
@@ -6690,7 +6589,7 @@ def cycle(conf, state):
             if is_stopped(conf, base):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, base, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(tasks, t, stage_no_of(title), since=t.get("created_at"))
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
@@ -6708,7 +6607,8 @@ def cycle(conf, state):
                                  "repository_id": rid,
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
-                                     or (workflows.get(wf, {}) or {}).get("revision_id")}, conf)
+                                     or (workflows.get(wf, {}) or {}).get("revision_id")},
+                                      conf, t, "execution_retry")
                     log(f"INFRA RETRY task={tid} stage={wf}: сбой окружения, повторяю этап")
                     notify(conf, "Повторяю этап: сбой окружения",
                            base + chr(10) + "Вход в модель или сеть подвели — это не ошибка работы. "
@@ -6721,7 +6621,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(tasks, wf, base)
+            done = stage_attempts(tasks, wf, t)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -6735,6 +6635,7 @@ def cycle(conf, state):
                            expl.get("options_ru", []),
                            f"ОШИБКА:\n{squeeze(err, 4000)}\n\nПОСЛЕДНИЙ ВЫВОД:\n{squeeze(res, 8000)}",
                            attempts_so_far=done, repair_task=t)
+            attach_question_work_id(t)
             log(f"stage_ended state={tstate} task={tid} stage={wf}")
             continue
         if wf not in stages:
@@ -6791,24 +6692,96 @@ def cycle(conf, state):
         if not next_stage:
             # end of pipeline (Verify): auto-merge on PASS, then optional staging deploy
             if conf.get("auto_merge", True) and verify_passed(result):
-                if _intent_has_wait(state, tid):
-                    log(f"MERGE SKIP '{base_title(title)}': delivery wait already exists")
+                if merge_recorded(tid):
+                    log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
                     continue
+                mark_final(tid, wf, True)
                 branch, implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
-                if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
-                    link = try_url(result, rid)
-                    state.setdefault("merge_intents", {})[tid] = {
-                        "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
-                    save(STATE_PATH, state)  # intent must precede external gh_merge
-                    recover_merge_intents(conf, state)
-                    poll_delivery_state(conf, state)
-                    continue
-                log(f"auto-merge skipped: missing branch/repo/immutable head (branch={branch!r}, repo={repo_identity!r})")
-                continue
+                if branch and repo_identity:
+                    # Замок: если ветка уже в main (второй PASS той же работы),
+                    # второй PR не открываем — «Обзор» так влился дважды.
+                    repo_short = repo_identity.split("github.com/")[-1]
+                    cmp_ = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
+                    if cmp_ is not None and cmp_.get("ahead_by") == 0:
+                        log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
+                        continue
+                    ok, out = gh_merge(repo_identity, branch, base_title(title))
+                    log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
+                    if ok:
+                        try:
+                            with open(MERGES_PATH, "a", encoding="utf-8") as mf:
+                                mf.write(json.dumps({"task_id": tid,
+                                    "base": base_title(title),
+                                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                                    ensure_ascii=False) + chr(10))
+                        except Exception as e:
+                            log("merge_journal_error", repr(e))
+                        # Хозяину не нужно знать про main — это кухня. Ему нужно:
+                        # задача выполнена, и вот дверь, где потрогать результат.
+                        link = try_url(result, rid)
+                        if link and any(u in link for u in TRY_USELESS):
+                            link = ""
+                        pf = proof_of(result)
+                        if link:
+                            body_txt = "\nПосмотреть: " + link
+                        elif pf:
+                            body_txt = "\nРезультат не визуальный. Проверено: " + pf
+                        else:
+                            body_txt = "\nСсылку или доказательство стадия не назвала — открой карточку."
+                        notify(conf, "Задача выполнена", base_title(title) + body_txt,
+                               tags="white_check_mark",
+                               click=link or f"{UI_BASE}/tasks/{tid}")
+                    else:
+                        # Конфликт слияния — рабочий случай, а не тупик: пока эта
+                        # работа шла, в main влилась соседняя. Возвращаем в
+                        # разработку с прямым наказом перебазироваться. Один раз:
+                        # если и после этого не влилось — зовём хозяина.
+                        if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
+                            try:
+                                card = extract_card(result, detail.get("context", ""))
+                                card_line = f"Card: {card}\n" if card else ""
+                                head_line = (f"Implementation head: {implementation_head}\n"
+                                             if implementation_head else "")
+                                stages_all = [x["workflow"] for x in conf["stages"]]
+                                back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
+                                bidx = stages_all.index(back_st)
+                                bw = workers.get(stage_worker(conf, back_st, "medium", workers))
+                                bnw = workflows.get(back_st)
+                                if bw and bnw and bnw.get("enabled"):
+                                    create_cap_rescue(base_title(title), "MERGE", {
+                                        "request_key": str(uuid.uuid4()),
+                                        "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
+                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n"
+                                            f"{head_line}{card_line}\n"
+                                            "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
+                                            "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
+                                            "оставайся на своей. Сделай ровно это: "
+                                            f"git fetch origin {branch} && git reset --hard FETCH_HEAD; "
+                                            "git rebase origin/main; разреши конфликты, сохранив и свою "
+                                            "работу, и то, что уже в main; git push -u origin HEAD; "
+                                            "больше ничего не меняй.")[:20000],
+                                        "worker_id": bw["id"], "repository_id": rid,
+                                        "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                        "workflow_revision_id": bnw["revision_id"]},
+                                        conf, t, "merge_conflict_return")
+                                    notify(conf, "Мёрж-конфликт: отправил на перебазирование",
+                                           base_title(title), tags="wrench")
+                                else:
+                                    raise RuntimeError("нет воркера/сценария")
+                            except Exception as e:
+                                if tid in state["processed"]:
+                                    state["processed"].remove(tid)
+                                log("merge_conflict_return_error", repr(e))
+                        else:
+                            notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
+                                   priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
+                    if ok:
+                        deploy_after_merge(conf, repo_identity, state)
+                else:
+                    log(f"auto-merge skipped: missing branch/repo (branch={branch!r}, repo={repo_identity!r})")
             else:
                 log(f"pipeline end task={tid}: verify not PASS or auto_merge disabled -> stopped for human")
                 # Подзадача эпика НЕ считается сделанной: проверка не прошла.
@@ -6826,9 +6799,10 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
+                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, t),
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
+                attach_question_work_id(t)
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
                            f"{base_title(title)}\nПроверка не подтвердила результат, "
@@ -6845,9 +6819,10 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, base),
+                           attempts_so_far=stage_attempts(tasks, back, t),
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
+            attach_question_work_id(t)
             continue
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
@@ -6881,7 +6856,7 @@ def cycle(conf, state):
         if is_stopped(conf, base):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
-        dup = live_or_done_at(tasks, base, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -6956,7 +6931,8 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get(
                                      "revision_id") or workflows.get(wf, {}).get("revision_id")
-                                     or nw["revision_id"]}, conf)
+                                     or nw["revision_id"]}, conf, t,
+                                      "machine_gate_return")
                     log(f"SPEC BRANCH GATE {base[:40]!r}: {reason} — вернул сохранить")
                     notify(conf, "Вернул сам: спецификация не сохранена",
                            base + chr(10) + reason.capitalize() +
@@ -6996,7 +6972,8 @@ def cycle(conf, state):
                              "repository_id": detail["task"].get("repository_id") or "",
                              "timeout_seconds": conf.get("timeout_seconds", 7200),
                              "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                                 or nw["revision_id"]}, conf)
+                                 or nw["revision_id"]}, conf, t,
+                                  "machine_gate_return")
                 log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
                 notify(conf, "Вернул сам: спецификация без обещаний",
                        base + chr(10) + "Спецификация не назвала проверяемые признаки "
@@ -7029,7 +7006,8 @@ def cycle(conf, state):
                         "repository_id": detail["task"].get("repository_id") or "",
                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                         "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                            or nw["revision_id"]}, conf)
+                            or nw["revision_id"]}, conf, t,
+                        "machine_gate_return")
                     log(f"SPEC HEAD GATE {base[:40]!r}: {head_reason}")
                     continue
                 except Exception as e:
@@ -7062,16 +7040,6 @@ def cycle(conf, state):
                 if tid in state["processed"]:
                     state["processed"].remove(tid)
                 continue
-            if g and g.get("blocked"):
-                # A failed authoritative fetch is an infrastructure verdict,
-                # not a code defect and never a synthetic REQUEST CHANGES.
-                route_question(
-                    conf, tid, "Review", "Review", base, rid_g,
-                    "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
-                    "Повторить проверку после восстановления доступа к репозиторию?",
-                    ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
-                continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
@@ -7085,9 +7053,12 @@ def cycle(conf, state):
                                      or nw["revision_id"]}
                     if g.get("cap_stage"):
                         created_g = create_cap_rescue(
-                            base, g["cap_stage"], return_body, conf)
+                            base, g["cap_stage"], return_body, conf,
+                            t, "machine_gate_return")
                     else:
-                        created_g = create_task(return_body, conf)
+                        created_g = create_child_task(
+                            return_body, t, conf,
+                            "machine_gate_return")
                     new_tid = (created_g.get("task") or {}).get("id", "") if isinstance(created_g, dict) else ""
                     notify(conf, g.get("alert") or "Вернул сам: поставка не прошла машинную проверку",
                            base + chr(10) + (g.get("alert_msg") or ""),
@@ -7121,7 +7092,7 @@ def cycle(conf, state):
             "workflow_revision_id": nw["revision_id"],
         }
         try:
-            created = create_task(body, conf)
+            created = create_child_task(body, t, conf)
         except Exception as e:
             # do NOT swallow this task: drop it from 'processed' so the next
             # cycle tries again once a healthy worker is back.
@@ -7139,8 +7110,8 @@ def cycle(conf, state):
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
 
-    # V2 release state was polled before task processing and is the only
-    # active delivery mechanism.  Legacy retry flags are audit-only.
+    # Releases are polled after pipeline work, never awaited in this cycle.
+    retry_pending_factory_deploy(conf, state)
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
