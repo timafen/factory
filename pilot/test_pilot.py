@@ -4500,6 +4500,42 @@ class PostMergeDeployTest(unittest.TestCase):
                                       "fx factory release", mock.ANY)
 
 
+class PostMergeDeliveryCompletionTests(unittest.TestCase):
+    def test_only_the_successful_promised_release_completes_verify_once(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        status = os.path.join(temporary.name, "release.status")
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("0\n")
+        state_path = os.path.join(temporary.name, "state.json")
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        verdict_dir = os.path.join(temporary.name, "verdicts")
+        state = {
+            pilot.DELIVERY_WAIT_KEY: [{"task_id": "verify-1", "stage": "Verify",
+                "base": "Оплата", "command_key": "deploy_factory_cmd", "generation": 2}],
+            pilot.DEPLOY_STATE_KEY: {"deploy_factory_cmd": {"generation": 1,
+                "status": status, "output": "/missing", "queued": False}},
+        }
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries), \
+                mock.patch.object(pilot, "VERDICT_DIR", verdict_dir), \
+                mock.patch.object(pilot, "notify") as notify:
+            # The older, already-running release cannot close a coalesced wait.
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+            self.assertFalse(os.path.exists(os.path.join(verdict_dir, "verify-1.json")))
+            self.assertEqual(len(state[pilot.DELIVERY_WAIT_KEY]), 1)
+
+            state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"] = {"generation": 2,
+                "status": status, "output": "/missing", "queued": False}
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+
+            self.assertTrue(pilot.final_ok("verify-1", strict=True))
+        with open(deliveries, encoding="utf-8") as recorded:
+            self.assertEqual(len(recorded.readlines()), 1)
+        notify.assert_called_once()
+
+
 class RecentDoneTest(unittest.TestCase):
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
@@ -4534,17 +4570,17 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        with open(deliveries, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries), \
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent],
                          ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["merged", "failed"])
+        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
@@ -4560,22 +4596,22 @@ class RecentDoneTest(unittest.TestCase):
         ]
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        merges = os.path.join(temporary.name, "merges.jsonl")
-        with open(merges, "w", encoding="utf-8") as stream:
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        with open(deliveries, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({"task_id": "merged"}) + "\n")
 
         def detail(path, body=None):
             return {"attempts": [{"result": "ПРОВЕРКА: браузерный сценарий прошёл."}]}
 
-        with mock.patch.object(pilot, "MERGES_PATH", merges), \
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries), \
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
         self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
         self.assertEqual(recent[0]["status"], "failed")
         self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "merged")
-        self.assertIn("Влито в main", recent[1]["detail"])
+        self.assertEqual(recent[1]["status"], "delivered")
+        self.assertIn("Влито в main и выпущено", recent[1]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
@@ -4805,9 +4841,11 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         self.epic_dir = os.path.join(self.temp.name, "epics")
         os.makedirs(self.epic_dir)
         self.merges_path = os.path.join(self.temp.name, "merges.jsonl")
+        self.deliveries_path = os.path.join(self.temp.name, "deliveries.jsonl")
         self.patches = [
             mock.patch.object(pilot, "EPIC_DIR", self.epic_dir),
             mock.patch.object(pilot, "MERGES_PATH", self.merges_path),
+            mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.deliveries_path),
             mock.patch.object(pilot, "load_questions", return_value=[]),
         ]
         for patch in self.patches:
@@ -4854,23 +4892,23 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         self.advance([])
         self.assertEqual(self.read_epic()["subtasks"][0], saved)
 
-    def test_running_subtask_recovers_only_from_matching_new_merge_receipt(self):
+    def test_running_subtask_recovers_only_from_matching_new_delivery_receipt(self):
         self.write_epic([
             {"title": "Подготовить sandbox", "status": "running",
              "started_at": "2026-08-10T10:00:00Z"},
             {"title": "Купить ключ", "status": "pending", "hold_reason": "ждём ключ владельца"},
         ])
-        with open(self.merges_path, "w", encoding="utf-8") as merges:
-            merges.write(json.dumps({"task_id": "near-match", "base": "Подготовить sandbox extra",
+        with open(self.deliveries_path, "w", encoding="utf-8") as deliveries:
+            deliveries.write(json.dumps({"task_id": "near-match", "base": "Подготовить sandbox extra",
                                      "at": "2026-08-10T10:03:00Z"}) + "\n")
-            merges.write(json.dumps({"task_id": "verify-1", "base": "Подготовить sandbox",
+            deliveries.write(json.dumps({"task_id": "verify-1", "base": "Подготовить sandbox",
                                      "at": "2026-08-10T10:02:00Z"}) + "\n")
 
         self.advance([])
         saved = self.read_epic()["subtasks"][0]
         self.assertEqual(saved["status"], "done")
         self.assertEqual(saved["completed_at"], "2026-08-10T10:02:00Z")
-        self.assertEqual(saved["completion_source"], "merge_journal")
+        self.assertEqual(saved["completion_source"], "delivery_receipt")
         self.assertEqual(saved["completion_receipt"], {
             "task_id": "verify-1", "base": "Подготовить sandbox", "at": "2026-08-10T10:02:00Z"})
 

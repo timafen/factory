@@ -143,4 +143,13 @@ describe("build", () => {
     expect(pipeline.status).toMatchObject({ kind: "done", label: "работа принята" });
     expect(sectionOf(failedLastAttempt)).toBe("archive");
   });
+
+  it("waits for a post-merge delivery before completing Verify", () => {
+    const waiting = build([task("verify", "Verify", "succeeded", 1)], {}, [])[0];
+
+    expect(waiting.status).toMatchObject({
+      kind: "active", label: "Ожидает слияния и выпуска",
+    });
+    expect(sectionOf(waiting)).not.toBe("done");
+  });
 });
