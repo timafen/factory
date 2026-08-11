@@ -294,7 +294,7 @@ EOF
 #!/bin/bash
 if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
   echo "bash $1" >>"$TEST_GATES"
-  [ "$TEST_MODE" != release-test-fail ]
+  [ "$TEST_MODE" != release-test-fail ] && [ "$TEST_MODE" != forked-gate-fail ]
   exit
 fi
 if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
@@ -318,7 +318,7 @@ EOF
 #!/bin/bash
 [ "${1:-}" != --wait ] || shift
 case "$TEST_MODE" in
-  signal-forked-gates)
+  forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates)
     printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
     /usr/bin/setsid --fork --wait "$@" &
     wait "$!"
@@ -339,9 +339,13 @@ esac
 EOF
   cat >"$case_dir/bin/as-fork" <<'EOF'
 #!/bin/bash
-printf 'as-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
-"$@" &
-exit 0
+if [[ "${5:-}" = *.session.result ]]; then
+  printf 'as-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
+  [ "$TEST_MODE" != forked-gate-no-result ] || exit 0
+  "$@" &
+  exit 0
+fi
+exec "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
@@ -441,12 +445,16 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
   esac
-  [ "$mode" != signal-forked-gates ] || fixture_release_as="$case_dir/bin/as-fork"
+  case "$mode" in
+    forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates)
+      fixture_release_as="$case_dir/bin/as-fork"
+      ;;
+  esac
 }
 
 run_release() {
@@ -595,6 +603,16 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
 
+forked_success="$temporary/forked-gates-success"
+make_fixture "$forked_success" forked-gates-success
+run_release "$forked_success" forked-gates-success \
+  || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
+[ "$(grep -Fxc 'as-forked' "$forked_success/handshake-events")" -eq 2 ] \
+  || fail "successful fork scenario did not fork both gate launchers"
+assert_file "$forked_success/install/factory-server" '#!/bin/bash'
+assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
+assert_no_fixture_processes "$forked_success"
+
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
 run_release "$identity_retry" identity-transient \
@@ -663,6 +681,39 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
 done
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
+
+forked_failed="$temporary/forked-gate-fail"
+make_fixture "$forked_failed" forked-gate-fail
+set +e
+run_release "$forked_failed" forked-gate-fail
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "forked failing gate returned $status instead of build error 5"
+[ "$(grep -Fxc 'as-forked' "$forked_failed/handshake-events")" -eq 2 ] \
+  || fail "failing fork scenario did not fork both gate launchers"
+grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
+  || fail "forked failure did not reach the actual release gate"
+grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \
+  || fail "release did not preserve the actual forked gate status"
+assert_file "$forked_failed/install/factory-server" old-server
+assert_file "$forked_failed/install/factory-worker" old-worker
+[ ! -s "$forked_failed/events" ] || fail "installation ran after a forked gate failure"
+! grep -F 'go build ' "$forked_failed/gates" >/dev/null \
+  || fail "binaries were built after a forked gate failure"
+assert_no_fixture_processes "$forked_failed"
+
+forked_without_result="$temporary/forked-gate-no-result"
+make_fixture "$forked_without_result" forked-gate-no-result
+SECONDS=0
+set +e
+run_release "$forked_without_result" forked-gate-no-result
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "missing forked result returned $status instead of build error 5"
+[ "$SECONDS" -lt 3 ] || fail "missing forked result did not fail in bounded time"
+[ ! -s "$forked_without_result/events" ] \
+  || fail "installation ran without an authoritative gate result"
+assert_no_fixture_processes "$forked_without_result"
 
 for signal in HUP INT TERM; do
   signaled="$temporary/signal-forked-$signal"
