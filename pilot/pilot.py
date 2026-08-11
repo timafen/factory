@@ -6238,14 +6238,26 @@ def poll_delivery_state(conf, state, now=None):
             status = (response or {}).get("status")
             if status in ("launching", "running"):
                 generation["phase"] = status
+                # The broker has durably accepted this boundary; persist the
+                # matching Pilot phase before a process can disappear.
+                save(STATE_PATH, state)
             elif status == "succeeded":
-                generation["phase"] = "completed"; _complete_generation(conf, state, generation)
+                # Terminal broker proof must survive before receipts/outbox.
+                # A restart from this exact point only finishes the local
+                # transaction and never POSTs a second physical release.
+                generation["phase"] = "completed"
+                save(STATE_PATH, state)
+                _complete_generation(conf, state, generation)
             elif status == "locked":
-                generation["phase"] = "reserved"; generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
+                generation["phase"] = "reserved"
+                generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
+                save(STATE_PATH, state)
             elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
                 generation["phase"] = "failed"
+                save(STATE_PATH, state)
             elif response is None and generation["phase"] in ("launching", "running"):
                 generation["phase"] = "failed"  # status is authoritative; unknown fails closed
+                save(STATE_PATH, state)
         save(STATE_PATH, state)
         current = target.get("current_generation")
         active = target["generations"].get(current) if current else None
