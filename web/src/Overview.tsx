@@ -237,7 +237,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
 
       <div className="efficiency-primary">
         <div><strong>{current.completed_works}</strong><span>влито</span><small>предыдущий период: {previous.completed_works}</small></div>
-        <div><strong>{formatDuration(current.lead_time_seconds.median)}</strong><span>медиана до слияния</span><small>90% влитых работ дошли до слияния не дольше чем за {formatDuration(current.lead_time_seconds.p90)} · n={current.lead_time_seconds.sample}<br />ранее: медиана {formatDuration(previous.lead_time_seconds.median)} · 90% — не дольше чем за {formatDuration(previous.lead_time_seconds.p90)} · n={previous.lead_time_seconds.sample}</small></div>
+        <div><strong>{formatDuration(current.lead_time_seconds.median)}</strong><span>медиана до слияния</span><small>{current.lead_time_seconds.p90 == null ? "данных нет" : `90% влитых работ дошли до слияния не дольше чем за ${formatDuration(current.lead_time_seconds.p90)}`} · n={current.lead_time_seconds.sample}<br />ранее: медиана {formatDuration(previous.lead_time_seconds.median)} · {previous.lead_time_seconds.p90 == null ? "данных нет" : `90% — не дольше чем за ${formatDuration(previous.lead_time_seconds.p90)}`} · n={previous.lead_time_seconds.sample}</small></div>
         <div><strong>{formatRate(current.final_dead_ends)}</strong><span>окончательные тупики</span><small>ранее {formatRate(previous.final_dead_ends)}<br />знаменатель: слияния + тупики</small></div>
       </div>
 
@@ -249,7 +249,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
             <dl className="efficiency-facts">
               <div><dt>Review с первого раза</dt><dd>{formatRate(current.review_first_pass)}<br /><small>ранее {formatRate(previous.review_first_pass)}</small></dd></div>
               <div><dt>Verify с первого раза</dt><dd>{formatRate(current.verify_first_pass)}<br /><small>ранее {formatRate(previous.verify_first_pass)}</small></dd></div>
-              <div><dt>Круги</dt><dd>медиана {current.rounds.median ?? "—"} · 90% влитых работ прошли не больше {current.rounds.p90 ?? "—"} кругов · n={current.rounds.sample}<br /><small>ранее: медиана {previous.rounds.median ?? "—"} · 90% — не больше {previous.rounds.p90 ?? "—"} кругов · n={previous.rounds.sample}</small></dd></div>
+              <div><dt>Круги</dt><dd>медиана {current.rounds.median ?? "—"} · {current.rounds.p90 == null ? "данных нет" : `90% влитых работ прошли не больше ${current.rounds.p90} кругов`} · n={current.rounds.sample}<br /><small>ранее: медиана {previous.rounds.median ?? "—"} · {previous.rounds.p90 == null ? "данных нет" : `90% — не больше ${previous.rounds.p90} кругов`} · n={previous.rounds.sample}</small></dd></div>
               <div><dt>Автовосстановления</dt><dd>{current.automatic_recoveries} (ранее {previous.automatic_recoveries})</dd></div>
               <div><dt>Неуспешные выпуски / откаты</dt><dd>{current.release_failures} / {current.rollbacks}<br /><small>ранее {previous.release_failures} / {previous.rollbacks}</small></dd></div>
             </dl>
