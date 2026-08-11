@@ -26,8 +26,12 @@ func main() {
 func run() error {
 	socket := flag.String("socket", "/run/factory/project-release-broker.sock", "Unix socket path")
 	stateDir := flag.String("state-dir", "/var/lib/factory/release-broker", "durable operation state directory")
+	fxExecutable := flag.String("fx-executable", "", "path to the fixed fx release driver")
 	flag.Parse()
-	if os.Geteuid() != 0 {
+	// The installed broker owns privileged paths and must remain root-only.
+	// An explicitly isolated socket and state directory are safe for the
+	// integration fixture, which executes no privileged release driver.
+	if os.Geteuid() != 0 && (*socket == "/run/factory/project-release-broker.sock" || *stateDir == "/var/lib/factory/release-broker") {
 		return errors.New("must run as root")
 	}
 	if err := prepareSocket(*socket); err != nil {
@@ -47,7 +51,7 @@ func run() error {
 		return fmt.Errorf("secure Unix socket permissions: %w", err)
 	}
 
-	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{})
+	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{Executable: *fxExecutable})
 	if err != nil {
 		return fmt.Errorf("prepare durable state: %w", err)
 	}

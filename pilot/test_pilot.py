@@ -5,6 +5,7 @@ import importlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -4528,15 +4529,30 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                     "base": "Единый выпуск", "branch": "topic",
                     "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
                 journal = os.path.join(self.temporary.name, boundary + "-merges.jsonl")
-                calls = []
+                calls = {"gh_merge": 0, "post": 0, "physical": 0, "owner_done": 0}
 
                 def merge(*_args):
-                    calls.append("merge")
+                    calls["gh_merge"] += 1
                     return True, "merged"
+
+                def broker(_socket, method, _operation_id, _payload=None):
+                    if method == "POST":
+                        calls["post"] += 1
+                        calls["physical"] += 1
+                        return {"status": "succeeded"}
+                    return {"status": "succeeded"}
+
+                def owner_done(*_args):
+                    calls["owner_done"] += 1
 
                 with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                         mock.patch.object(pilot, "MERGES_PATH", journal), \
-                        mock.patch.object(pilot, "gh_merge", side_effect=merge):
+                        mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                        mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                        mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, boundary + "-notify.jsonl")), \
+                        mock.patch.object(pilot, "gh_merge", side_effect=merge), \
+                        mock.patch.object(pilot, "broker_operation", side_effect=broker), \
+                        mock.patch.object(pilot, "mark_final", side_effect=owner_done):
                     pilot.save(self.state_path, state)
                     # A restart always reconstructs journal and wait before
                     # any broker contact, even when `processed` is irrelevant.
@@ -4548,7 +4564,14 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                     pilot.save(self.state_path, restored)
                     restored = pilot.load(self.state_path, {})
                     pilot.recover_merge_intents({}, restored)
-                self.assertLessEqual(len(calls), 1)
+                    # This is the restarted state machine, not a state-shape
+                    # check: it performs its broker POST and owner completion.
+                    pilot.poll_delivery_state({}, restored)
+                self.assertLessEqual(calls["gh_merge"], 1)
+                self.assertEqual(calls["gh_merge"], 1 if boundary == "intent" else 0)
+                self.assertEqual(calls["post"], 1)
+                self.assertEqual(calls["physical"], 1)
+                self.assertEqual(calls["owner_done"], 1)
                 self.assertTrue(pilot._intent_has_wait(restored, "verify-1"))
                 target = restored[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
                 generation = target["generations"][target["current_generation"]]
@@ -4574,57 +4597,88 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
 
     def test_locked_join_uses_latest_snapshot_and_one_physical_retry(self):
         state = {}
-        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+        calls = {"post": 0, "successful_physical": 0, "owner_done": 0}
+
+        def broker(_socket, method, _operation_id, _payload=None):
+            if method == "GET":
+                return {"status": "locked"}
+            calls["post"] += 1
+            if calls["post"] == 1:
+                return {"status": "locked"}
+            calls["successful_physical"] += 1
+            return {"status": "succeeded"}
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "locked-notify.jsonl")), \
+                mock.patch.object(pilot, "mark_final", side_effect=lambda *_args: calls.__setitem__("owner_done", calls["owner_done"] + 1)):
             first = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
                                                self.sha, self.wait("a"))
-            with mock.patch.object(pilot, "broker_operation", return_value={"status": "locked"}):
+            with mock.patch.object(pilot, "broker_operation", side_effect=broker):
                 pilot.poll_delivery_state({}, state, now=0)
-            joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
-                                                "b" * 40, self.wait("b"))
+                joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                                    "b" * 40, self.wait("b"))
+                pilot.poll_delivery_state({}, state, now=pilot.DELIVERY_RETRY_DELAY)
         self.assertEqual(first["id"], joined["id"])
         self.assertEqual(joined["commit_sha"], "b" * 40)
         self.assertEqual(set(joined["waits"]), {"a", "b"})
+        self.assertEqual(joined["phase"], "completed")
+        self.assertEqual(calls, {"post": 2, "successful_physical": 1, "owner_done": 2})
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        self.assertEqual(len(target["generations"]), 1)
 
     def test_pilot_uses_real_unix_broker_routes(self):
-        """The curl client talks POST /v1/operations then GET /{id}, not a mock."""
+        """A built Go broker receives the Unix API request and runs fixed FX once."""
         socket_path = os.path.join(self.temporary.name, "broker.sock")
-        requests, ready, stop = [], threading.Event(), threading.Event()
-
-        def serve():
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            listener.bind(socket_path); listener.listen(); listener.settimeout(.05); ready.set()
-            try:
-                while not stop.is_set():
-                    try:
-                        connection, _ = listener.accept()
-                    except TimeoutError:
-                        continue
-                    with connection:
-                        raw = connection.recv(8192).decode()
-                        line = raw.split("\r\n", 1)[0]
-                        requests.append(line)
-                        status = "launching" if line.startswith("POST ") else "succeeded"
-                        body = json.dumps({"status": status}).encode()
-                        connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
-                                           str(len(body)).encode() + b"\r\n\r\n" + body)
-            finally:
-                listener.close()
-
-        thread = threading.Thread(target=serve, daemon=True); thread.start(); ready.wait(1)
-        self.addCleanup(lambda: (stop.set(), thread.join(1)))
+        state_dir = os.path.join(self.temporary.name, "broker-state")
+        executable = os.path.join(self.temporary.name, "factory-release-broker")
+        fx = os.path.join(self.temporary.name, "fx")
+        calls = os.path.join(self.temporary.name, "fx-calls")
+        with open(fx, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\n")
+        os.chmod(fx, 0o700)
+        subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
+                       check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
+        process = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
+                                    "-fx-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (process.terminate() if process.poll() is None else None, process.wait(timeout=2) if process.poll() is None else None))
+        for _ in range(100):
+            if os.path.exists(socket_path):
+                break
+            if process.poll() is not None:
+                self.fail("built release broker stopped before opening its Unix socket")
+            time.sleep(.02)
+        self.assertTrue(os.path.exists(socket_path))
         state = {}
+        broker_calls = []
+        real_broker_operation = pilot.broker_operation
+
+        def counting_broker(*args, **kwargs):
+            broker_calls.append(args[1])
+            return real_broker_operation(*args, **kwargs)
+
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "notifications.jsonl")), \
-                mock.patch.object(pilot, "mark_final"):
+                mock.patch.object(pilot, "mark_final") as owner_done, \
+                mock.patch.object(pilot, "broker_operation", side_effect=counting_broker):
             pilot.deploy_after_merge({"release_broker_socket": socket_path}, "github.com/timafen/factory",
                                      state, self.sha, self.wait())
-            pilot.poll_delivery_state({"release_broker_socket": socket_path}, state)
-            pilot.poll_delivery_state({"release_broker_socket": socket_path}, state)
-        self.assertEqual(requests[0].split()[0:2], ["POST", "/v1/operations"])
-        self.assertEqual(requests[1].split()[0], "GET")
-        self.assertIn("/v1/operations/factory-1-", requests[1])
+            for _ in range(100):
+                pilot.poll_delivery_state({"release_broker_socket": socket_path}, state)
+                if state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]["generations"][
+                        state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]["current_generation"]]["phase"] == "completed":
+                    break
+                time.sleep(.02)
+        self.assertEqual(broker_calls.count("POST"), 1)
+        self.assertGreaterEqual(broker_calls.count("GET"), 1)
+        with open(calls, encoding="utf-8") as stream:
+            physical = stream.readlines()
+        self.assertEqual(len(physical), 1)
+        self.assertIn("factory release " + self.sha, physical[0])
+        owner_done.assert_called_once_with("verify-1", "Verify", True)
 
     def test_recovery_journals_before_wait_without_second_merge(self):
         state = {"merge_intents": {"verify-1": {
