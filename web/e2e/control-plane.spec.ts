@@ -595,9 +595,9 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   await expect(page.getByText("Не вышло / остановлено")).toHaveCount(0);
   const doneSection = page.getByRole("heading", { name: "Сделано" }).locator("..").locator("..");
-  await expect(doneSection.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
+  await expect(doneSection.getByText("Ship the stable API client", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Архив/ }).click();
-  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
+  await expect(page.getByText("Ship the stable API client", { exact: true })).toBeVisible();
   await expect(page.getByText("Cancelled queue cleanup", { exact: true })).toBeVisible();
   await expect(page.getByText("Long operational title", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/work-desktop.png", fullPage: true });
