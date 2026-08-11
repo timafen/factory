@@ -1416,10 +1416,11 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 			INSERT INTO tasks(
 				id, request_key, title, description, repository_id, timeout_seconds,
 				created_at, workflow_id, workflow_revision_id, workflow_title,
-				workflow_revision_number, context
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				workflow_revision_number, context, work_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, taskID, requestKey, title, prompt, repositoryID, timeoutSeconds, now,
-			workflowID, workflowRevisionID, workflowTitle, workflowRevisionNumber, contextValue); err != nil {
+			workflowID, workflowRevisionID, workflowTitle, workflowRevisionNumber, contextValue,
+			taskID); err != nil {
 			return unavailable(err)
 		}
 		if _, err := tx.ExecContext(ctx, `

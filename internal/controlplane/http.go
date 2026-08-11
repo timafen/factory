@@ -867,7 +867,11 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		a.logStateChange("execution", task.Execution.ID, task.Execution.State, "task_id", task.Task.ID)
+		a.logStateChange("execution", task.Execution.ID, task.Execution.State,
+			"task_id", task.Task.ID,
+			"work_id", task.Task.WorkID,
+			"parent_task_id", task.Task.ParentTaskID,
+			"correction_kind", task.Task.CorrectionKind)
 	}
 	writeJSON(w, status, task)
 }
