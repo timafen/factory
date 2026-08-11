@@ -4,7 +4,7 @@
 
 - Status: IMPLEMENTED — целевые проверки и обе сборки зелёные.
 - Branch: `factory/2b4dbde2-7be-4e0c9a76-9da`.
-Implementation commit: 904ffa0a804642b5cde31d982e2ee2e81d7e0b4b — завершены безопасные шаблоны Factory и staging Tarser со строгим FQDN и защитой secret-файла от подмены.
+Implementation commit: 30ee5ad45fc69ed88bb4e309d299dbe17d6540e5 — завершены безопасные шаблоны Factory и staging Tarser, совместимые с обзорной готовностью из свежего main.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
 - What changed: сервер принимает только два утверждённых типа, сам выбирает
   группу и фиксированные release/rollback; точный allowlist отклоняет локальные
@@ -45,3 +45,9 @@ rollback и экран `/projects`. Целевые Go-тесты, 2 Vitest-те�
 После самостоятельной проверки точный allowlist усилен полноценной валидацией
 FQDN, а чтение secret-файла защищено от подмены после `Lstat`. Целевые Go-тесты,
 2 Vitest-теста, TypeScript-check, Go vet/build и Web lint/build прошли.
+
+### 2026-08-10 — Implement
+
+После rebase обзорная и безопасная готовность получили разные Go-типы без
+изменения JSON API. Конфликт собранных Web-артефактов разрешён пересборкой;
+целевые Go-тесты и 2 Vitest-теста на итоговом дереве прошли.
