@@ -89,7 +89,9 @@ it("keeps the paused card and shows the resume error", async () => {
   view(tasks, { onResume: () => Promise.reject(new Error("Нет доступного исполнителя")) });
 
   fireEvent.click(await screen.findByRole("button", { name: "Продолжить" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Нет доступного исполнителя");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Продолжение не выполнено. Проверь состояние Factory и повтори попытку.");
+  expect(screen.queryByText("Нет доступного исполнителя")).not.toBeInTheDocument();
+  expect(screen.queryByText(/same-origin|cross_origin_request/i)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Продолжить" })).toBeVisible();
 });
 
