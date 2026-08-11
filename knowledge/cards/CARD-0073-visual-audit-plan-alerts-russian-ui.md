@@ -13,6 +13,12 @@ Implementation commit: aad2e2236733c6faf9d7395a6bc86f59e78ccf17 — усилен
 
 ### 2026-08-11 — Implement
 
+Добавлены реальные router-backed browser-проверки Плана и Уведомлений со
+снимками для 1440 px и 390 px. План скрывает обоснование до раскрытия, а
+Уведомления показывают до 30 свежих событий в сворачиваемых группах. Русские
+labels и responsive-правила проверены Vitest, Playwright, lint, typecheck,
+сборкой и `go test ./...`; полный browser suite оставлен этапу Verify.
+
 После review исправлен ослабленный locator около `control-plane.spec.ts:1502`:
 тест ограничен Settings-контейнером и использует `getByRole("button", { name: "Сохранить настройки", exact: true })`.
 Убран `.first()`, поэтому дубликат кнопки или неверная область теперь ломают сценарий.
