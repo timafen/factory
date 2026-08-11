@@ -38,6 +38,9 @@ func TestPipelinePatrolProvisionUsesExistingScheduleAndPreservesRuns(t *testing.
 	if !stringsContain(provisioned.Automation.Context, PipelinePatrolInstruction) {
 		t.Fatalf("patrol context = %q", provisioned.Automation.Context)
 	}
+	if !stringsContain(provisioned.Automation.Context, "wait 450 seconds") {
+		t.Fatalf("patrol context does not contain the reduced wait: %q", provisioned.Automation.Context)
+	}
 	if provisioned.Automation.Version != detail.Automation.Version+1 {
 		t.Fatalf("provisioned version = %d, want %d", provisioned.Automation.Version, detail.Automation.Version+1)
 	}
@@ -76,6 +79,35 @@ func TestPipelinePatrolProvisionDoesNotInventSchedule(t *testing.T) {
 	store := newTestStore(t)
 	_, err := store.ProvisionPipelinePatrol(context.Background(), "")
 	assertErrorCode(t, err, "pipeline_patrol_automation_required")
+}
+
+func TestPipelinePatrolProvisionReplacesLegacyWait(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, false)
+	updated, err := store.UpdateAutomation(context.Background(), detail.Automation.ID, protocol.UpdateAutomationRequest{
+		ExpectedVersion: detail.Automation.Version,
+		Title:           detail.Automation.Title,
+		WorkflowID:      detail.Automation.WorkflowID,
+		Context:         "Keep this owner context.\n\n" + legacyPipelinePatrolInstruction,
+		TimeoutSeconds:  detail.Automation.TimeoutSeconds,
+		Trigger:         detail.Automation.Trigger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provisioned, err := store.ProvisionPipelinePatrol(context.Background(), detail.Automation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stringsContain(provisioned.Automation.Context, "wait 600 seconds") ||
+		!stringsContain(provisioned.Automation.Context, "wait 450 seconds") ||
+		!stringsContain(provisioned.Automation.Context, "Keep this owner context.") {
+		t.Fatalf("upgraded patrol context = %q", provisioned.Automation.Context)
+	}
+	if provisioned.Automation.Version != updated.Automation.Version+1 {
+		t.Fatalf("provisioned version = %d, want %d", provisioned.Automation.Version, updated.Automation.Version+1)
+	}
 }
 
 func TestPipelinePatrolProvisionMakesPriorVersionStale(t *testing.T) {

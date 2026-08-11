@@ -930,7 +930,7 @@ describe("App", () => {
 
     await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-offline");
     expect(within(dialog).getByText(/task will queue until it returns/i)).toBeVisible();
-    expect(within(repository).getByRole("option", { name: /archive/ })).toBeInTheDocument();
+    expect(within(repository).getByRole("option", { name: /archive/ })).toBeEnabled();
     expect(within(repository).getByRole("option", { name: /github.com\/example\/factory/ })).toBeDisabled();
   });
 
