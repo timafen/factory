@@ -461,7 +461,10 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
 
     def test_published_nonempty_branch_starts_implementation(self):
         report = self.run_cycle(
-            "BRANCH: factory/published\nГОТОВО-КОГДА: файл pilot/pilot.py")
+            "BRANCH: factory/published\n"
+            "HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "PUSHED: yes\n"
+            "ГОТОВО-КОГДА: файл pilot/pilot.py")
 
         report.assert_called_once_with("github.com/acme/repo", "factory/published")
         self.assertEqual(len(self.created), 1)

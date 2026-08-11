@@ -275,6 +275,110 @@ func TestKnowledgeCardImplementationCommitMigrationRevisesAllLiveLegacyRules(t *
 	}
 }
 
+func TestSpecificationPublishesDocumentsMigrationInstallsExactRevision(t *testing.T) {
+	path := t.TempDir() + "/specification-publishes-documents.sqlite3"
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for version, name := range []string{
+		"001_controlplane.sql", "002_attempt_capacity_handoff.sql", "003_task_list_pagination.sql",
+		"004_worker_runtime.sql", "005_metrics_indexes.sql", "006_execution_retries.sql",
+		"007_worker_source_access.sql", "008_managed_repositories.sql", "009_workflows.sql",
+		"010_github_issue_automations.sql", "011_github_pull_request_automations.sql",
+		"012_schedule_automations.sql", "013_legacy_poller_migration.sql",
+		"014_workflow_automation_titles.sql", "015_codex_weekly_limit.sql",
+		"016_worker_capacity.sql", "017_task_attachments.sql", "018_efficiency_metrics.sql",
+		"019_knowledge_card_implementation_commit.sql", "020_product_capacity_samples.sql",
+		"021_projects.sql", "022_worker_credentials.sql",
+	} {
+		body, readErr := migrations.Files.ReadFile(name)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := database.Exec(string(body)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+		if _, execErr := database.Exec(
+			`INSERT INTO schema_migrations(version, applied_at) VALUES (?, 1)`, version+1,
+		); execErr != nil {
+			t.Fatalf("record %s: %v", name, execErr)
+		}
+	}
+	if _, err := database.Exec(`
+		INSERT INTO workflows(id, enabled, current_revision_id, current_title_key, created_at, updated_at)
+		VALUES
+			('specification', 1, 'specification-v1', 'specification', 1, 1),
+			('disabled-specification', 0, 'disabled-specification-v1', 'disabled specification', 1, 1),
+			('implement', 1, 'implement-v1', 'implement + test', 1, 1);
+		INSERT INTO workflow_revisions(id, workflow_id, revision_number, request_key, request_digest, title, summary, instructions, created_at)
+		VALUES
+			('specification-v1', 'specification', 1, 'specification-v1-request', X'01', 'Specification', 'Подготовить контракт', 'Не публикуй документы.', 1),
+			('disabled-specification-v1', 'disabled-specification', 1, 'disabled-specification-v1-request', X'02', 'Specification', 'Отключено', 'Старое правило.', 1),
+			('implement-v1', 'implement', 1, 'implement-v1-request', X'03', 'Implement + Test', 'Реализовать', 'Не меняй.', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := createDatabaseMarker(path + ".v2-control-plane"); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrade database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	installed, err := store.Workflow(context.Background(), "specification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const instructions = "Ты выполняешь только этап Specification. Не реализуй продуктовый код, не\n" +
+		"меняй UI и не исправляй исходники приложения. Подготовь спецификацию в\n" +
+		"`knowledge/specs/` и отдельную карточку\n" +
+		"`knowledge/cards/CARD-0074-specification-publishes-documents.md`; область\n" +
+		"должна содержать только документы, необходимые для этой спецификации.\n" +
+		"Работай в назначенной рабочей ветке и не переключай её. Перед сдачей\n" +
+		"выполни `git fetch origin main`, при необходимости `git rebase origin/main`,\n" +
+		"затем проверь `git diff --name-only origin/main...HEAD` — diff должен быть\n" +
+		"непустым и содержать только документы этой задачи. Обязательно выполни\n" +
+		"commit с русским человеческим заголовком и\n" +
+		"`git push -u origin HEAD`. Отчёт закончи отдельными строками:\n" +
+		"`BRANCH: <имя назначенной ветки>`, `HEAD: <полный SHA последнего коммита>` и\n" +
+		"`PUSHED: yes`. Без commit и push этап не считается завершённым."
+	if installed.Workflow.CurrentRevision.ID != "migration-023-specification-publishes-documents-specification" ||
+		installed.Workflow.CurrentRevision.RevisionNumber != 2 ||
+		installed.Workflow.CurrentRevision.Title != "Specification" ||
+		installed.Workflow.CurrentRevision.Summary != "Подготовить контракт" ||
+		installed.Workflow.CurrentRevision.Instructions != instructions {
+		t.Fatalf("installed Specification revision = %#v", installed.Workflow.CurrentRevision)
+	}
+	var requestKey string
+	if err := store.db.QueryRow(`SELECT request_key FROM workflow_revisions WHERE id = ?`, installed.Workflow.CurrentRevision.ID).Scan(&requestKey); err != nil {
+		t.Fatal(err)
+	}
+	if requestKey != "migration:023:specification-publishes-documents:specification" {
+		t.Fatalf("request key = %q", requestKey)
+	}
+	if len(installed.Revisions) != 2 || installed.Revisions[1].ID != "specification-v1" {
+		t.Fatalf("Specification history = %#v", installed.Revisions)
+	}
+	disabled, err := store.Workflow(context.Background(), "disabled-specification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Workflow.CurrentRevision.ID != "disabled-specification-v1" || len(disabled.Revisions) != 1 {
+		t.Fatalf("disabled Specification changed: %#v", disabled)
+	}
+}
+
 func TestPullRequestAutomationMigrationPreservesGitHubIssueAutomations(t *testing.T) {
 	database, err := sql.Open("sqlite", t.TempDir()+"/pull-request-automation-migration.sqlite3")
 	if err != nil {
