@@ -88,7 +88,7 @@ it("shows every notification group in Russian with a hint and saves the changed 
     return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
   });
   renderSettings(fetchMock); const user=userEvent.setup();
-  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
+  for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Исполнитель повышен","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
   expect(screen.getByText("Присылать уведомление, если задача остановилась и требует вмешательства.")).toBeVisible();
   expect(screen.getByLabelText("Работа встала")).not.toBeChecked();
   await user.click(screen.getByLabelText("Работа встала")); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
