@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Implementation commit: e1d50162290f72b3156503a40b0476a36b94df15 — реализована полная карточка готовности проекта из девяти безопасных проверок.
+Implementation commit: cc353fbd76a1fc370f75f74e92ec3bed6d500838 — реализована полная карточка готовности проекта из девяти безопасных проверок.
 
 - Status: Verified PASS — awaiting human merge.
 - Branch: `factory/e810f198-b10-8f930792-64b`.
@@ -83,5 +83,5 @@ PASS; рабочее дерево чисто. Верификация забло�
 | Свежий browser marker | `bash ops/test-install-server-browser.sh`; `pilot.test_pilot::test_browser_readiness_requires_fresh_valid_smoke_marker` | PASS: marker появляется только после sandbox smoke; устаревший/невалидный остаётся unknown. |
 
 Смежные проверки: `git diff --check origin/main...HEAD` — PASS; реализационный
-commit `e1d50162290f72b3156503a40b0476a36b94df15` является предком ветки и меняет
+commit `cc353fbd76a1fc370f75f74e92ec3bed6d500838` является предком ветки и меняет
 код вне `knowledge/cards/`; рабочее дерево чисто.
