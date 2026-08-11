@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — ожидает review/verify.
-- Branch: `factory/95bac4a0-123-9e15e522-9f1`.
-- Implementation commit: cdd6f5ae9ab2d7ed0087514c31dcbe7751719d1b — рестарт после merge journal восстанавливает единственное ожидание выпуска.
-- What changed: Pilot не пропускает выпуск, если остановился между durable merge receipt и `deploy_after_merge`; receipt и `release_failed` не перезапускаются.
-- What changed: Сквозная регрессия доказывает один запуск выпуска, PASS только после `rc=0` и отсутствие дублей уведомлений.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.PipelineWatchMergeTests pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests pilot.test_pilot.EpicCompletionReceiptTests` → 27 OK.
-- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 12 passed; `npm run lint` → passed; `npm run build` → passed.
-- Next action: Review проверить restart между merge journal и `deploy_after_merge` на полном цикле Pilot.
+- Status: Implemented — три crash/queue blocker исправлены, ожидает review/verify.
+- Branch: `factory/bb135866-e32-dae98b77-a5d`.
+- Implementation commit: 402bbdc59a33d18bb9d2a1f5063cc21d793c60a0 — retry-поколение и доставка итогов устойчивы к рестарту.
+- What changed: Новый merge присоединяется к зарезервированному retry после `rc=8`; один успешный запуск закрывает оба ожидания.
+- What changed: Receipt, PASS и уведомления разделены; durable outbox с одним ntfy `sequence_id` продолжает успех и ошибку после каждого crash boundary.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.PipelineWatchMergeTests pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests pilot.test_pilot.EpicCompletionReceiptTests` → 33 OK.
+- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 12 passed; `npm run build` → passed.
+- Next action: Review подтвердить три restart-сценария по новым регрессиям.
 
 ## LOG
 
@@ -55,3 +55,11 @@ restart; Work UI и production build прошли.
 окне: выпуск стартует один раз, `final_pass` появляется только после `rc=0`, а
 delivery receipt и уведомление не дублируются. Проверены 27 Python-регрессий,
 12 Work UI-тестов, ESLint и production build.
+
+### 2026-08-11 — Implement
+
+Новый merge после `rc=8` привязывается к уже зарезервированному retry, поэтому
+его запуск не теряет successor. Receipt, финальный PASS и уведомления стали
+отдельными устойчивыми шагами; pending/delivered outbox и стабильный ntfy
+`sequence_id` безопасно продолжают успех и ошибку после рестарта. Проверены 33
+целевые Python-регрессии и 12 Work UI-тестов.
