@@ -799,6 +799,31 @@ func TestHTTPRejectsMalformedOversizedAndCrossOriginMutations(t *testing.T) {
 	}
 }
 
+func TestPrepareMutationAllowsSameOriginHTTPS(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://factory.timafen.com/api/v1/works/resume", strings.NewReader(`{}`))
+	request.Host = "factory.timafen.com"
+	request.Header.Set("Origin", "https://factory.timafen.com")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	if !prepareMutation(response, request, protocol.MaxBodyBytes) {
+		t.Fatalf("same-origin HTTPS mutation was rejected: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPrepareMutationRejectsNonWebSameAuthorityOrigin(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://factory.timafen.com/api/v1/works/resume", strings.NewReader(`{}`))
+	request.Host = "factory.timafen.com"
+	request.Header.Set("Origin", "ftp://factory.timafen.com")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	if prepareMutation(response, request, protocol.MaxBodyBytes) {
+		t.Fatal("non-web same-authority mutation was accepted")
+	}
+	requireStatus(t, response.Result(), http.StatusForbidden)
+}
+
 func TestHTTPReadsDoNotEmitFalseStateChanges(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	registerHTTPWorker(t, fixture, workerA, "factory", "github.com/owainlewis/factory", 1)

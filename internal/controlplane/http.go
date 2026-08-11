@@ -1083,7 +1083,8 @@ func (a *API) completeAttempt(w http.ResponseWriter, r *http.Request) {
 func prepareMutation(w http.ResponseWriter, r *http.Request, limit int64) bool {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Scheme != "http" || !sameAuthority(parsed.Host, r.Host) {
+		webScheme := parsed.Scheme == "http" || parsed.Scheme == "https"
+		if err != nil || !webScheme || !sameAuthority(parsed.Host, r.Host) {
 			writeError(w, &ServiceError{Code: "cross_origin_request", Message: "browser mutations must be same-origin", Status: 403})
 			return false
 		}
