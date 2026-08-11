@@ -19,6 +19,16 @@ Implementation commit: aad2e2236733c6faf9d7395a6bc86f59e78ccf17 — усилен
 labels и responsive-правила проверены Vitest, Playwright, lint, typecheck,
 сборкой и `go test ./...`; полный browser suite оставлен этапу Verify.
 
+### 2026-08-11 — Implement
+
+Исправлены четыре замечания Review: внешний redirect Плана, русские TaskDetail
+и DelegateModal, а также общий словарь состояния, обновления, ошибок и повторов.
+Проверены `Location`, role/name selectors и сохранение ID/SHA; intake-аудит прошёл
+на 1440/390, как и общий control-plane аудит. После ребейза intake fixture также
+получил отдельный свободный порт; полный browser suite остаётся этапу Verify.
+
+### 2026-08-11 — Implement
+
 После review исправлен ослабленный locator около `control-plane.spec.ts:1502`:
 тест ограничен Settings-контейнером и использует `getByRole("button", { name: "Сохранить настройки", exact: true })`.
 Убран `.first()`, поэтому дубликат кнопки или неверная область теперь ломают сценарий.
