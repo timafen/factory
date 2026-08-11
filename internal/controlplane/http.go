@@ -22,13 +22,15 @@ import (
 )
 
 type API struct {
-	store        *Store
-	logger       *slog.Logger
-	automations  *AutomationService
-	pilotConfig  *PilotConfigStore
-	dialogRunner dialogRunner
-	sandboxKeys  sandboxKeysRunner
-	resumeMu     sync.Mutex
+	store         *Store
+	logger        *slog.Logger
+	automations   *AutomationService
+	pilotConfig   *PilotConfigStore
+	dialogRunner  dialogRunner
+	sandboxKeys   sandboxKeysRunner
+	projectRunner projectCommandRunner
+	projectHealth projectHealthChecker
+	resumeMu      sync.Mutex
 }
 
 type workerRegistrationRequest struct {
@@ -83,7 +85,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}}
+	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, projectRunner: execProjectCommandRunner{}, projectHealth: defaultProjectHealthChecker()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -97,6 +99,12 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}", api.getManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}/readiness", api.getManagedRepositoryReadiness)
 	mux.HandleFunc("PUT /api/v1/repositories/{repository_id}/enabled", api.setManagedRepositoryEnabled)
+	mux.HandleFunc("GET /api/v1/projects", api.listProjects)
+	mux.HandleFunc("POST /api/v1/projects", api.createProject)
+	mux.HandleFunc("GET /api/v1/projects/{project_id}", api.getProject)
+	mux.HandleFunc("GET /api/v1/projects/{project_id}/environments/{environment}/readiness", api.getProjectReadiness)
+	mux.HandleFunc("PUT /api/v1/projects/{project_id}/gate-results", api.putProjectGateResults)
+	mux.HandleFunc("POST /api/v1/projects/{project_id}/environments/{environment}/{operation}", api.runProjectOperation)
 	mux.HandleFunc("GET /api/v1/pipeline", api.getPipeline)
 	mux.HandleFunc("PUT /api/v1/pipeline", api.putPipeline)
 	mux.HandleFunc("GET /api/v1/cards", api.listCards)
@@ -644,6 +652,89 @@ func (a *API) setManagedRepositoryEnabled(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, repository)
+}
+
+func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := a.store.Projects(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.CreateProjectRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	project, created, err := a.store.CreateProject(r.Context(), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, project)
+}
+
+func (a *API) getProject(w http.ResponseWriter, r *http.Request) {
+	project, err := a.store.Project(r.Context(), r.PathValue("project_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (a *API) getProjectReadiness(w http.ResponseWriter, r *http.Request) {
+	readiness, err := a.store.ProjectReadiness(r.Context(), r.PathValue("project_id"), r.PathValue("environment"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, readiness)
+}
+
+func (a *API) putProjectGateResults(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.ProjectGateResultRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := a.store.RecordProjectGateResults(r.Context(), r.PathValue("project_id"), input); err != nil {
+		writeError(w, err)
+		return
+	}
+	readiness, err := a.store.ProjectReadiness(r.Context(), r.PathValue("project_id"), "staging")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, readiness)
+}
+
+func (a *API) runProjectOperation(w http.ResponseWriter, r *http.Request) {
+	if !prepareMutation(w, r, protocol.MaxBodyBytes) {
+		return
+	}
+	var input protocol.ProjectOperationRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	operation, err := a.store.RunProjectOperation(r.Context(), a.projectRunner, a.projectHealth, r.PathValue("project_id"), r.PathValue("environment"), r.PathValue("operation"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, operation)
 }
 
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
