@@ -16,6 +16,24 @@ wait_for_file() {
   done
   fail "timed out waiting for $file"
 }
+wait_for_release_exit() {
+  local pid=$1 watchdog marker=$2
+  (
+    /bin/sleep 5
+    if kill -0 "$pid" 2>/dev/null; then
+      : >"$marker"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) &
+  watchdog=$!
+  set +e
+  wait "$pid"
+  RELEASE_STATUS=$?
+  set -e
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  [ ! -e "$marker" ] || fail "release supervisor did not stop within five seconds"
+}
 line_of() { grep -nF "$2" "$1" | head -n 1 | cut -d: -f1; }
 assert_before() {
   local first second
@@ -147,6 +165,17 @@ case "$TEST_MODE:${1:-}" in
     trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
     while :; do /bin/sleep 0.01; done
     ;;
+  signal-gates-term-ignoring-child:tsc)
+    (
+      trap 'echo ui-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
+      : >"$TEST_UI_TERM_CHILD"
+      while :; do /bin/sleep 0.01; done
+    ) &
+    wait_for_file "$TEST_UI_TERM_CHILD"
+    : >"$TEST_UI_RUNNING"
+    trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+    while :; do /bin/sleep 0.01; done
+    ;;
 esac
 exit 0
 EOF
@@ -175,6 +204,17 @@ if [ "${1:-}" = test ]; then
       while :; do /bin/sleep 0.01; done
       ;;
     signal-gates)
+      : >"$TEST_GO_RUNNING"
+      trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+      while :; do /bin/sleep 0.01; done
+      ;;
+    signal-gates-term-ignoring-child)
+      (
+        trap 'echo go-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
+        : >"$TEST_GO_TERM_CHILD"
+        while :; do /bin/sleep 0.01; done
+      ) &
+      wait_for_file "$TEST_GO_TERM_CHILD"
       : >"$TEST_GO_RUNNING"
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
@@ -346,6 +386,7 @@ run_release() {
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_UI_TERM_CHILD="$case_dir/ui-term-child" TEST_GO_TERM_CHILD="$case_dir/go-term-child" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
@@ -397,6 +438,7 @@ start_release() {
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_UI_TERM_CHILD="$case_dir/ui-term-child" TEST_GO_TERM_CHILD="$case_dir/go-term-child" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
@@ -545,10 +587,8 @@ for signal in HUP TERM; do
     wait_for_file "$signaled/ui-running"
     wait_for_file "$signaled/go-running"
     kill -"$signal" "$release_pid"
-    set +e
-    wait "$release_pid"
-    status=$?
-    set -e
+    wait_for_release_exit "$release_pid" "$signaled/supervisor-timeout"
+    status=$RELEASE_STATUS
     [ "$status" -eq 130 ] || fail "signal $signal attempt $attempt returned $status instead of 130"
     assert_file "$signaled/install/factory-server" old-server
     assert_file "$signaled/install/factory-worker" old-worker
@@ -560,6 +600,32 @@ for signal in HUP TERM; do
     assert_no_fixture_processes "$signaled"
   done
 done
+
+term_ignoring="$temporary/term-ignoring-children"
+make_fixture "$term_ignoring" signal-gates-term-ignoring-child
+start_release "$term_ignoring" signal-gates-term-ignoring-child
+wait_for_file "$term_ignoring/ui-running"
+wait_for_file "$term_ignoring/go-running"
+wait_for_file "$term_ignoring/ui-term-child"
+wait_for_file "$term_ignoring/go-term-child"
+kill -TERM "$release_pid"
+wait_for_release_exit "$release_pid" "$term_ignoring/supervisor-timeout"
+[ "$RELEASE_STATUS" -eq 130 ] \
+  || fail "TERM with ignoring children returned $RELEASE_STATUS instead of 130"
+grep -Fx 'ui-term-ignored' "$term_ignoring/gate-children" >/dev/null \
+  || fail "TERM did not reach the UI child that ignores it"
+grep -Fx 'go-term-ignored' "$term_ignoring/gate-children" >/dev/null \
+  || fail "TERM did not reach the Go child that ignores it"
+[ "$(grep -Fc 'TERM не остановил process group' "$term_ignoring/output")" -ge 2 ] \
+  || fail "TERM did not escalate to KILL for both test groups"
+assert_file "$term_ignoring/install/factory-server" old-server
+assert_file "$term_ignoring/install/factory-worker" old-worker
+[ ! -s "$term_ignoring/events" ] || fail "TERM with ignoring children touched services"
+! grep -F 'npx vite build' "$term_ignoring/gates" >/dev/null \
+  || fail "TERM with ignoring children reached the UI build"
+! grep -F 'go build ' "$term_ignoring/gates" >/dev/null \
+  || fail "TERM with ignoring children reached production install"
+assert_no_fixture_processes "$term_ignoring"
 
 missing="$temporary/missing-artifact"
 make_fixture "$missing" missing-artifact
