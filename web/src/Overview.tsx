@@ -3,6 +3,7 @@ import {
   KeyRound, Loader2, MessageCircleQuestion, RefreshCw, Server, Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { stageHandoffTargetStatus } from "./efficiency";
 
 type Dash = {
   updated_at?: string;
@@ -42,6 +43,7 @@ type Dash = {
 type EfficiencyDistribution = { sample: number; median: number | null; p90: number | null };
 type EfficiencyRate = { count: number; total: number; rate: number | null };
 type EfficiencyTimeShare = { key: string; definition: string; sample: number; seconds: number; denominator_seconds: number; share: number | null };
+type EfficiencyTarget = { maximum_share: number; current_share: number | null; previous_share: number | null; met: boolean | null };
 type EfficiencyPeriod = {
   started_at: string; ended_at: string; completed_works: number; product_stage_tasks: number;
   lead_time_seconds: EfficiencyDistribution; time_shares: EfficiencyTimeShare[];
@@ -51,13 +53,13 @@ type EfficiencyPeriod = {
   automatic_recoveries: number; release_failures: number; rollbacks: number;
   excluded: { patrol: number; scheduled: number; helper: number; other: number; total: number };
 };
-type EfficiencyComparison = { assessment: "low_data" | "degraded" | "mixed" | "improved" | "stable"; current: EfficiencyPeriod; previous: EfficiencyPeriod };
+type EfficiencyComparison = { assessment: "low_data" | "degraded" | "mixed" | "improved" | "stable"; stage_handoff_wait_target?: EfficiencyTarget; current: EfficiencyPeriod; previous: EfficiencyPeriod };
 type EfficiencySummary = { generated_at: string; minimum_sample: number; release_observation_started_at?: string; periods: Record<"24h" | "7d", EfficiencyComparison> };
 type ProductCapacityPeriod = {
   started_at: string; ended_at: string; observation_from?: string; samples: number; low_data: boolean;
   active_time: { active: number; seconds: number; share: number | null }[];
   average_busy: number | null; queue_p90: number | null;
-  underload: { reason: string; seconds: number; share: number | null }[];
+  underload: { reason: string; seconds: number; share: number | null }[] | null;
 };
 type ProductCapacitySummary = { generated_at: string; capacity: number; periods: Record<"24h" | "7d", ProductCapacityPeriod> };
 
@@ -201,6 +203,10 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
   const previousShares = new Map(previous.time_shares.map((share) => [share.key, share]));
   const unclassified = current.time_shares.find((share) => share.key === "unclassified");
   const assessment = assessmentView(comparison.assessment);
+  const handoffTarget = comparison.stage_handoff_wait_target;
+  const handoffTargetStatus = handoffTarget
+    ? stageHandoffTargetStatus(current.completed_works, summary.minimum_sample, handoffTarget.met)
+    : null;
   const previousDates = `${new Date(previous.started_at).toLocaleDateString("ru-RU")}–${new Date(previous.ended_at).toLocaleDateString("ru-RU")}`;
   return (
     <section style={card} aria-label="Эффективность Factory">
@@ -219,6 +225,11 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
         <Pill text={assessment.text} tone={assessment.tone} />
         <span>выборка: {current.completed_works} влитых работ · минимум для оценки {summary.minimum_sample}</span>
       </div>
+
+      {window === "7d" && handoffTarget && <div className="efficiency-verdict" aria-label="Цель ожидания между стадиями">
+        <Pill text={handoffTargetStatus!.text} tone={handoffTargetStatus!.tone} />
+        <span>Ожидание между стадиями: цель ≤{Math.round(handoffTarget.maximum_share * 100)}% · текущие 7 дней {handoffTarget.current_share == null ? "—" : `${Math.round(handoffTarget.current_share * 100)}%`} · предыдущие 7 дней {handoffTarget.previous_share == null ? "—" : `${Math.round(handoffTarget.previous_share * 100)}%`}</span>
+      </div>}
 
       {current.unclassified_too_high && <div className="efficiency-alert" role="alert">
         Красный сигнал: unclassified {Math.round((unclassified?.share ?? 0) * 100)}% превышает порог {Math.round(current.unclassified_threshold * 100)}%. Временных меток недостаточно для честной диагностики.
@@ -291,7 +302,7 @@ function ProductCapacityPanel({ summary }: { summary: ProductCapacitySummary }) 
       <div><strong>{period.active_time.map((item) => `${item.active}: ${percentage(item.share)}`).join(" · ")}</strong><span>доля времени 0–4</span><small>в каждом числе — активных работ : доля</small></div>
     </div>
     <details className="efficiency-details"><summary>Показать причины недозагрузки</summary>
-      <div className="efficiency-sources">{period.underload.map((item) => <div key={item.reason}>{UNDERLOAD_RU[item.reason] ?? item.reason}: <strong>{percentage(item.share)}</strong></div>)}
+      <div className="efficiency-sources">{(period.underload ?? []).map((item) => <div key={item.reason}>{UNDERLOAD_RU[item.reason] ?? item.reason}: <strong>{percentage(item.share)}</strong></div>)}
         <br />Причина показывается только по наблюдаемому факту. Если очередь есть, а подтверждения причины нет, это <strong>unknown</strong>; нули не означают, что причина исключена.</div>
     </details>
   </section>;
