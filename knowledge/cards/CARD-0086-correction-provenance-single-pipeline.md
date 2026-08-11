@@ -2,19 +2,20 @@
 
 ## HEAD
 
-- Status: Implemented and tested; BLOCKED from merge/release until
-  CARD-0085 migration 026 is in `main`; Pilot remains operationally disabled.
-- Branch: `factory/4f5b64d8-621-032b06b7-05a`.
-- Implementation commit: aa05c7eb3c01e665609bc847b0f493f35edd10f9 — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
+- Status: Implemented and tested; migration 026 is present in `main`;
+  Pilot remains operationally disabled.
+- Branch: `factory/31b80853-0f0-095f6283-3e1`.
+- Implementation commit: 7cd603288a2e666cb261248649fa3bba871f744a — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
 - What changed: 027 validates the exact 026 reconciliation schema before ALTER,
   and the runner derives ledger versions from migration filenames.
 - What changed: Review/Verify corrections persist across a recreated Pilot
   state and complete one `work_id` through Implement, Review, Verify and merge.
 - What changed: `pilot_duplicate_root_prevented` is a stable-ID durable outbox
   event retained across crashes before/after journal and acknowledgement.
-- Evidence: focused migration test → PASS; full Pilot → PASS (204 tests);
-  `go test ./...` with exact pending 026 dependency → PASS; build/diff → PASS.
-- Next action: merge CARD-0085/026 to `main`, then rebase and rerun release gates.
+- Evidence: focused provenance migration tests → PASS; full Pilot → PASS (204 tests);
+  `go test ./...` → PASS; `go build ./...` and diff check → PASS.
+- Next action: review and merge this correction; keep Pilot disabled until its
+  separate safe release-state-machine decision.
 
 ## LOG
 
@@ -52,3 +53,11 @@ durable outbox event. Full Go tests passed with the exact pending 026 migration
 fixture; all 204 Pilot tests and the final-tree build passed. This branch is
 intentionally unmergeable/unreleasable until CARD-0085/026 reaches `main`, and
 Pilot remains disabled.
+
+### 2026-08-11 — Release-unblock correction
+
+CARD-0085 migration 026 is now in `origin/main` at
+`60cba840f39a453862c1c0f87f261fd453b09688`; the clean CARD-0086 code was
+cherry-picked onto that base. The focused provenance migration tests, all 204
+Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
+passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
