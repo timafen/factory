@@ -6103,8 +6103,14 @@ def cycle(conf, state):
                 save_promises(base_title(title), result)
             except Exception as e:
                 log("promises_error", repr(e))
-        verdict = decide(conf, wf, next_stage, title, result,
-                         detail["task"].get("repository_id") or "")
+
+        waiting_decisions = state.setdefault("area_wait_decisions", {})
+        verdict = waiting_decisions.get(tid)
+        if verdict:
+            log(f"AREA WAIT {base_title(title)!r}: использую сохранённое решение модели")
+        else:
+            verdict = decide(conf, wf, next_stage, title, result,
+                             detail["task"].get("repository_id") or "")
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
         if verdict.get("verdict_ru"):
             try:
@@ -6226,6 +6232,7 @@ def cycle(conf, state):
                            priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
             continue
         if verdict["action"] != "advance":
+            waiting_decisions.pop(tid, None)
             base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             situation = verdict.get("situation_ru") or ""
@@ -6239,14 +6246,19 @@ def cycle(conf, state):
                            branch=extract_branch(result, detail.get("context", "")))
             continue
 
-        # Замок: не запускаем этап, если тот же файл уже правит другая работа.
+        # Ожидающая работа остаётся непомеченной, чтобы следующий цикл заметил
+        # освобождение области. Решение модели сохраняем: повторная проверка
+        # файлового замка не должна заново оплачивать то же решение.
         holder = area_busy(tasks, base_title(title), detail.get("context", ""),
                            (detail.get("task") or {}).get("repository_id", ""))
         if holder:
+            waiting_decisions[tid] = verdict
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
             if tid in state["processed"]:
                 state["processed"].remove(tid)
             continue
+        waiting_decisions.pop(tid, None)
+
         nw = workflows.get(next_stage)
         complexity = verdict.get("next_complexity", "medium")
         if complexity not in ("low", "medium", "high"):
@@ -6332,6 +6344,7 @@ def cycle(conf, state):
             g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
                             area_repo=rid_g)
             if g and g.get("wait"):
+                waiting_decisions[tid] = verdict
                 if tid in state["processed"]:
                     state["processed"].remove(tid)
                 continue

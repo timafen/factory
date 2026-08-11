@@ -2828,6 +2828,99 @@ class AdaptivePollingTests(unittest.TestCase):
         })
         self.assertEqual(state["poll_terminal_seen"], ["stopped"])
 
+    def test_area_wait_rechecks_lock_without_repeating_model_decision(self):
+        conf = {
+            "stages": [{"workflow": "Implement + Test"}, {"workflow": "Review"}],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        tasks = [
+            {
+                "id": "implement-done",
+                "title": "[auto] [1/2 Implement + Test] Ожидающая работа",
+                "state": "succeeded", "created_at": "2026-08-10T10:00:00Z",
+                "repository_id": "repo-id",
+            },
+            {
+                "id": "neighbour-live",
+                "title": "[auto] [1/2 Implement + Test] Соседняя работа",
+                "state": "running", "created_at": "2026-08-10T10:01:00Z",
+                "repository_id": "repo-id",
+            },
+        ]
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path == "/tasks?limit=200":
+                return {"tasks": list(tasks)}
+            if path == "/tasks/implement-done":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Implement + Test"},
+                    "context": "",
+                    "attempts": [{"result":
+                                  "READY\nBRANCH: factory/waiting-overlap"}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 4, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "review", "enabled": True,
+                    "current_revision": {"id": "rev-review", "title": "Review"},
+                }]}
+            raise AssertionError((path, body))
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block",
+                                                  return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker",
+                                                  return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "pushed_branch", return_value="factory/waiting-overlap"))
+            gate = stack.enter_context(mock.patch.object(
+                pilot, "review_gate", return_value={"wait": True}))
+            decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+            pilot.cycle(conf, state)
+
+        decide.assert_called_once()
+        self.assertEqual(gate.call_count, 2)
+        self.assertEqual(state["processed"], [])
+        self.assertEqual(state["poll_terminal_seen"], ["implement-done"])
+        self.assertEqual(state["area_wait_decisions"]["implement-done"]["action"],
+                         "advance")
+
     def test_poll_choice_is_logged_only_when_choice_changes(self):
         state = {}
         with mock.patch.object(pilot, "log") as log:
