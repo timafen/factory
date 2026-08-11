@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os
 
 API = "http://127.0.0.1:7337/api/v1"
 HOME = "/opt/factory-data"
@@ -104,38 +104,6 @@ def pipeline_title(task):
     if not match:
         return None
     return match.group(4).strip(), match.group(3).strip()
-
-
-def has_task_provenance(task):
-    """Whether control-plane provenance, rather than a legacy title, exists."""
-    return any((task or {}).get(field) for field in (
-        "work_id", "parent_task_id", "correction_kind"))
-
-
-def task_work_id(task):
-    """Durable work identity for new rows, title identity only for legacy rows."""
-    task = task or {}
-    return task.get("work_id") or base_title(task.get("title") or "")
-
-
-def task_is_root(task):
-    task = task or {}
-    return bool(task.get("work_id") and task.get("work_id") == task.get("id")
-                and not task.get("parent_task_id")
-                and not task.get("correction_kind"))
-
-
-def same_task_work(task, reference):
-    """Compare durable work IDs when present; use titles only for legacy rows."""
-    if isinstance(reference, dict):
-        if (task or {}).get("work_id") or reference.get("work_id"):
-            return bool((task or {}).get("work_id")
-                        and (task or {}).get("work_id") == reference.get("work_id"))
-        reference = base_title(reference.get("title") or "")
-    if (task or {}).get("work_id"):
-        return (task or {}).get("work_id") == reference
-    return base_title((task or {}).get("title") or "").strip() == str(
-        reference or "").strip()
 
 
 def is_service_work(title):
@@ -369,20 +337,12 @@ AGENT_RULES = """
 1. Ветка: режь от свежего origin/main (git fetch origin). НИКОГДА не делай
    checkout другой ветки в рабочей копии — это ломает воркера. Чужую работу
    забирай так: git fetch origin <ветка> && git reset --hard FETCH_HEAD.
-2. Review и Verify: ДО ЛЮБОГО diff, log, merge-base или решения о пустой
-   поставке получи default branch именно remote (`git ls-remote --symref origin
-   HEAD`), fetch-ни только этот ref и рабочую ветку в отдельный read-only
-   каталог, зафиксируй полные `base_sha` и `candidate_sha`. Все сравнения
-   делай только как `<base_sha>...<candidate_sha>`; cached `origin/main`
-   запрещён. Ошибка resolution/fetch — это `BLOCKED: review infrastructure`,
-   никогда не REQUEST CHANGES. В финальном отчёте укажи обе SHA и причину,
-   если инфраструктура заблокировала проверку.
-3. Сдача: сначала перебазируй на свежий main (git fetch origin main,
+2. Сдача: сначала перебазируй на свежий main (git fetch origin main,
    затем git rebase origin/main), потом проверь список файлов командой
    git diff --name-only origin/main...HEAD — именно ТРИ точки, сравнение от
    точки ветвления. В списке ТОЛЬКО твои файлы. Запушь:
    git push --force-with-lease -u origin HEAD. Непушенная работа не существует.
-4. Отчёт заканчивай строками:
+3. Отчёт заканчивай строками:
    ОБЛАСТЬ: <файлы через запятую, ровно как в git>
    TRY: <ссылка на экран, где человек ГЛАЗАМИ видит результат. Служебные
    страницы (health, login, «ok») — НЕ результат. Если работа невидимая
@@ -394,10 +354,10 @@ AGENT_RULES = """
    одной командой (проверено 25 целевыми проверками)». Голые «тесты
    зелёные», «diff чистый», «коммит запушен» доказательством НЕ считаются
    и будут возвращены>
-5. Пиши для человека: первая строка коммита — по-русски, что и зачем.
+4. Пиши для человека: первая строка коммита — по-русски, что и зачем.
    Голые хеши/ID на экранах и в текстах для владельца запрещены — только
    со словесной подписью. Ревью возвращает работу за голый хеш на экране.
-6. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
+5. Знания: заводи ОТДЕЛЬНУЮ карточку. Если в контексте выдана строка `Card: CARD-…`, заводи карточку
    только как `knowledge/cards/<выданный Card>-<slug>.md`. Не ищи следующий
    номер в файлах и не выбирай его самостоятельно. В общие файлы-журналы
    (CARD-0030 и подобные) НЕ дописывай ни строки: общий файл — магнит для
@@ -409,7 +369,7 @@ AGENT_RULES = """
    изменения вне `knowledge/cards/`. Не пиши `Head commit` и не сверяй это
    поле с текущим `git HEAD`: запись карточки закономерно создаёт следующий
    документационный коммит.
-7. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
+6. Скорость: НЕ гоняй полный набор тестов на каждом шаге. Разработка гоняет
    только целевые тесты своей области (и новые). Ревью тесты не запускает —
    читает дифф, максимум целевые при сомнении. Полный набор — ровно ОДИН раз,
    на Проверке, перед вливанием. Итерации должны быть минутами, не десятками.
@@ -522,18 +482,6 @@ def create_task(body, conf=None):
     return out
 
 
-def create_child_task(body, parent, conf=None, correction_kind=None):
-    """The only Pilot builder for a continuation or correction task."""
-    parent_id = (parent or {}).get("id")
-    if not parent_id:
-        raise RuntimeError("child task requires a source task id")
-    body = dict(body)
-    body["parent_task_id"] = parent_id
-    if correction_kind:
-        body["correction_kind"] = correction_kind
-    return create_task(body, conf)
-
-
 def _note_admitted_task(conf, response, body):
     """Keep the cycle snapshot honest after a successful create."""
     activity = (conf or {}).get("_cycle_activity")
@@ -644,7 +592,6 @@ def first_stage(conf):
 
 
 WORKS_PATH = f"{HOME}/pilot/works.json"
-DUPLICATE_ROOT_EVENTS_PATH = f"{HOME}/pilot/duplicate_root_prevented.json"
 WORK_ARCHIVE_DAYS = 90
 WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 
@@ -652,43 +599,17 @@ WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 ORIGIN_OWNER = "owner"              # завёл человек: голосом или кнопкой
 ORIGIN_ASSISTANT = "assistant"      # завёл помощник из переписки
 ORIGIN_ORCHESTRATOR = "orchestrator"  # развернулось из эпика само
-WORK_ORIGINS = frozenset((
-    ORIGIN_OWNER, ORIGIN_ASSISTANT, ORIGIN_ORCHESTRATOR,
-    "worker", "agent", "patrol",
-))
 
 
-def note_duplicate_root_prevented(task):
-    """Persist and journal a correction that a title-only Pilot would adopt."""
-    task_id = (task or {}).get("id") or ""
-    if not task_id:
-        return
-    seen = load(DUPLICATE_ROOT_EVENTS_PATH, {}) or {}
-    if task_id in seen:
-        return
-    event = {
-        "task_id": task_id,
-        "work_id": (task or {}).get("work_id") or "",
-        "parent_task_id": (task or {}).get("parent_task_id") or "",
-        "correction_kind": (task or {}).get("correction_kind") or "",
-    }
-    seen[task_id] = event
-    save(DUPLICATE_ROOT_EVENTS_PATH, seen)
-    log("pilot_duplicate_root_prevented", json.dumps(
-        event, ensure_ascii=False, sort_keys=True))
-
-
-def note_work(base, origin, start_stage="", skipped=None, reason="", work_id=""):
+def note_work(base, origin, start_stage="", skipped=None, reason=""):
     """Запись о происхождении работы. Пишется один раз, при заведении:
     повторные стадии её не трогают."""
     try:
         rec = load(WORKS_PATH, {})
-        key = work_id or base
-        if key in rec:
+        if base in rec:
             return
-        rec[key] = {
+        rec[base] = {
             "origin": origin,
-            "base_title": base,
             "start_stage": start_stage or "",
             "skipped": list(skipped or []),
             "reason": reason or "",
@@ -893,24 +814,21 @@ def cleanup_work_archive(conf, tasks):
     for task in tasks or []:
         base = base_title(task.get("title", ""))
         if base:
-            grouped.setdefault(task_work_id(task), {"base": base, "tasks": []})[
-                "tasks"].append(task)
+            grouped.setdefault(base, []).append(task)
 
     closed_at, retention_until = _archive_dates()
     works_changed = False
     statuses_changed = False
-    for work_key, grouped_work in grouped.items():
-        base, group = grouped_work["base"], grouped_work["tasks"]
+    for base, group in grouped.items():
         group.sort(key=lambda task: (
             _work_time(task.get("created_at"))
             or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc),
             task.get("id") or "",
         ))
-        new_meta = work_key not in works
-        meta = works.setdefault(work_key, {
+        new_meta = base not in works
+        meta = works.setdefault(base, {
             "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
-            "reason": "", "base_title": base,
-            "at": group[0].get("created_at") or closed_at,
+            "reason": "", "at": group[0].get("created_at") or closed_at,
         })
         if new_meta:
             works_changed = True
@@ -1390,8 +1308,7 @@ def stage_attempts(tasks, stage, base):
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if (m and m.group(1).strip() == stage
-                and same_task_work(t, base)):
+        if m and m.group(1).strip() == stage and m.group(2).strip() == base.strip():
             n += 1
     return n
 
@@ -1408,9 +1325,10 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     конвейеру, и при возобновлении после ответа владельца.
     since — момент, начиная с которого задача считается «новой»: старый хвост от
     прошлого прогона дублем не считается и не мешает доработке."""
+    base = (base or "").strip()
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or not same_task_work(t, base):
+        if not m or m.group(2).strip() != base:
             continue
         if since and (t.get("created_at") or "") <= since:
             continue
@@ -1494,7 +1412,7 @@ def supersede_stale_questions(tasks):
         m = STAGE_TITLE_RE.match(t.get("title", ""))
         if not m:
             continue
-        newer = live_or_done_at(tasks, t, stage_no_of(t.get("title")),
+        newer = live_or_done_at(tasks, m.group(2).strip(), stage_no_of(t.get("title")),
                                 since=t.get("created_at"))
         if not newer or newer["id"] == t["id"]:
             continue
@@ -1577,10 +1495,9 @@ def note_cap_rescue(base, stage):
     save(RESCUE_PATH, rec)
 
 
-def create_cap_rescue(base, stage, body, conf=None, parent=None,
-                      correction_kind="execution_retry"):
+def create_cap_rescue(base, stage, body, conf=None):
     """Create a return task before consuming its durable rescue allowance."""
-    created = create_child_task(body, parent, conf, correction_kind)
+    created = create_task(body, conf)
     task = created.get("task") if isinstance(created, dict) else None
     if not isinstance(task, dict) or not task.get("id"):
         raise RuntimeError(f"{stage} return: create_task returned no task")
@@ -2068,13 +1985,13 @@ def active_auto_works(tasks):
     for task in tasks:
         match = STAGE_TITLE_RE.match(task.get("title", "") or "")
         if match and task.get("state") in PLAN_ACTIVE_STATES:
-            active.add(task_work_id(task))
+            active.add(match.group(2).strip())
     open_questions = {q.get("task_id") for q in load_questions()
                       if q.get("status") == "open"}
     for task in tasks:
         match = STAGE_TITLE_RE.match(task.get("title", "") or "")
         if match and task.get("id") in open_questions:
-            active.add(task_work_id(task))
+            active.add(match.group(2).strip())
     return active
 
 
@@ -2242,13 +2159,10 @@ def pipeline_watch(conf, tasks, workflows, workers):
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", "") or "")
         if m:
-            key = task_work_id(t)
-            groups.setdefault(key, {"base": m.group(2).strip(), "tasks": []})[
-                "tasks"].append((m.group(1).strip(), t))
+            groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
-    for work_key, group in groups.items():
-        base, lst = group["base"], group["tasks"]
+    for base, lst in groups.items():
         allowed = []
         blocked = []
         for stage, task in lst:
@@ -2260,20 +2174,20 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if not allowed:
             if any("закрыт" in reason or "завершена" in reason
                    or "отклонена" in reason for reason in blocked):
-                mem[work_key] = {"why": "closed", "reason": blocked[-1],
+                mem[base] = {"why": "closed", "reason": blocked[-1],
                              "since": now}
             else:
-                mem.pop(work_key, None)
+                mem.pop(base, None)
             continue
         lst = allowed
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
-            mem.pop(work_key, None)
+            mem.pop(base, None)
             continue
         if base in stopped:
-            rec = mem.get(work_key) or {}
+            rec = mem.get(base) or {}
             rec["why"] = "owner"
             rec.setdefault("since", now)
-            mem[work_key] = rec
+            mem[base] = rec
             continue
         idx = [stages.index(st) for st, t in lst
                if t.get("state") == "succeeded" and st in stages]
@@ -2281,12 +2195,12 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         far = max(idx)
         if far >= len(stages) - 1:
-            mem.pop(work_key, None)          # дошли до конца конвейера
+            mem.pop(base, None)          # дошли до конца конвейера
             continue
-        rec = mem.get(work_key) or {}
+        rec = mem.get(base) or {}
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
-        mem[work_key] = rec
+        mem[base] = rec
         if now - int(rec["since"]) < STALL_WAIT:
             continue
         if int(rec["nudges"]) >= STALL_NUDGES:
@@ -2309,7 +2223,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         fallback_branch = branch_from_history(tasks, base)
         identity_lines = implementation_context_lines(base, fallback_branch)
         try:
-            created = create_child_task({"request_key": str(uuid.uuid4()), "title": title,
+            created = create_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
@@ -2318,7 +2232,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
                                      identity_lines)[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
-                         "workflow_revision_id": nw["revision_id"]}, src, conf)
+                         "workflow_revision_id": nw["revision_id"]}, conf)
             created_task = created.get("task") if isinstance(created, dict) else None
             created_task = dict(created_task) if isinstance(created_task, dict) else {}
             created_task.setdefault("title", title)
@@ -2398,102 +2312,8 @@ def save_promises(base, text):
     log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
 
 
-GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _remote_url(repo_identity):
-    """Return the canonical read-only URL without looking at a worker checkout."""
-    if str(repo_identity or "").startswith(("file://", "http://", "https://", "ssh://")):
-        return str(repo_identity)
-    short = (repo_identity or "").split("github.com/")[-1].strip("/")
-    return f"https://github.com/{short}.git" if short and "/" in short else ""
-
-
-def _default_branch(url):
-    """Resolve the remote's symbolic HEAD; never assume that it is `main`."""
-    rc, out = _git(None, "ls-remote", "--symref", url, "HEAD")
-    if rc:
-        return "", "cannot resolve remote default branch: " + out.strip()[:240]
-    match = re.search(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", out, re.M)
-    if not match:
-        return "", "remote did not advertise a default branch"
-    return match.group(1), ""
-
-
-def fresh_branch_snapshot(repo_identity, branch):
-    """Fetch and pin the exact remote base and candidate in an isolated repo.
-
-    This is deliberately independent of a retained worker worktree: cached
-    refs can be stale and a review must never checkout, switch, or reset the
-    branch that belongs to the worker.  A caller may only use the returned
-    immutable SHA values for ancestry and diff decisions.
-    """
-    url = _remote_url(repo_identity)
-    if not url or not branch:
-        return {"state": "blocked", "reason": "missing repository or candidate branch"}
-    default, error = _default_branch(url)
-    if error:
-        return {"state": "blocked", "reason": error}
-    try:
-        with tempfile.TemporaryDirectory(prefix="factory-review-") as work:
-            rc, out = _git(work, "init", "-q")
-            if rc:
-                return {"state": "blocked", "reason": "cannot create review repository: " + out[:180]}
-            rc, out = _git(work, "remote", "add", "origin", url)
-            if rc:
-                return {"state": "blocked", "reason": "cannot configure review remote: " + out[:180]}
-            # A separate ls-remote lets a genuinely missing delivery remain a
-            # delivery issue while every resolution/fetch failure is BLOCKED.
-            rc, heads = _git(work, "ls-remote", "--heads", "origin", "refs/heads/" + branch)
-            if rc:
-                return {"state": "blocked", "reason": "cannot resolve candidate branch: " + heads[:180]}
-            if not heads.strip():
-                return {"state": "missing", "default_branch": default}
-            refs = ["+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
-            if branch != default:
-                refs.append("+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch))
-            rc, out = _git(work, "fetch", "--prune", "origin", *refs)
-            if rc:
-                return {"state": "blocked", "reason": "cannot fetch authoritative refs: " + out[:240]}
-            rc, base_sha = _git(work, "rev-parse", "refs/remotes/origin/" + default)
-            if rc:
-                return {"state": "blocked", "reason": "cannot pin fetched base: " + base_sha[:180]}
-            rc, candidate_sha = _git(work, "rev-parse", "refs/remotes/origin/" + branch)
-            if rc:
-                return {"state": "blocked", "reason": "cannot pin fetched candidate: " + candidate_sha[:180]}
-            base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
-            if not GIT_SHA.fullmatch(base_sha) or not GIT_SHA.fullmatch(candidate_sha):
-                return {"state": "blocked", "reason": "remote returned an invalid commit SHA"}
-            # A published candidate can legitimately have been cut before the
-            # default branch advanced.  It is still reviewable from their
-            # shared merge-base; only genuinely unrelated histories block it.
-            rc, merge_base_sha = _git(work, "merge-base", base_sha, candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "base and candidate have unrelated history"}
-            merge_base_sha = merge_base_sha.strip()
-            if not GIT_SHA.fullmatch(merge_base_sha):
-                return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
-            rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot calculate pinned delivery distance: " + ahead[:180]}
-            rc, base_ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + base_sha)
-            if rc:
-                return {"state": "blocked", "reason": "cannot classify default branch advancement: " + base_ahead[:180]}
-            return {"state": "ok", "default_branch": default, "base_sha": base_sha,
-                    "candidate_sha": candidate_sha, "merge_base_sha": merge_base_sha,
-                    "base_advanced": merge_base_sha != base_sha,
-                    "base_ahead_by": int(base_ahead.strip()),
-                    "files": [p for p in out.splitlines() if p][:80],
-                    "ahead_by": int(ahead.strip())}
-    except Exception as e:
-        return {"state": "blocked", "reason": "review snapshot failed: " + str(e)[:240]}
-
-
 def branch_report(repo_identity, branch):
-    """Legacy GitHub reporting seam used outside the authoritative Review path."""
+    """Что реально лежит в хранилище: ('нет'|'есть', [файлы диффа])."""
     repo = repo_identity.split("github.com/")[-1]
     if not repo or not branch:
         return "", []
@@ -2723,26 +2543,14 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
                 expected_card=""):
-    """Create Review context only from a freshly fetched, pinned snapshot."""
-    snapshot = fresh_branch_snapshot(repo_identity, branch)
-    # Test-only/legacy callers without a remote identity retain the small
-    # branch_report seam. Every real repository enters the pinned path above.
-    if not _remote_url(repo_identity):
+    """Перед Ревью: ветка не запушена -> вернуть в разработку без Ревью.
+    Ветка есть -> отдать Ревью проверенный список файлов. Ошибки сети
+    не блокируют конвейер: тогда ворота просто молчат."""
+    try:
         state_, files = branch_report(repo_identity, branch)
-        snapshot = {"state": "ok", "default_branch": "unavailable",
-                    "base_sha": "unavailable", "candidate_sha": "unavailable",
-                    "merge_base_sha": "unavailable", "base_advanced": False,
-                    "base_ahead_by": "unavailable", "ahead_by": "unavailable", "files": files}
-    elif snapshot.get("state") == "blocked":
-        reason = snapshot.get("reason") or "unknown review infrastructure failure"
-        log("REVIEW BLOCKED " + repr(reason))
-        return {"blocked": True, "note": (
-            "BLOCKED: review infrastructure. Невозможно получить свежую основную "
-            "ветку или зафиксировать SHA до проверки; возврат на доработку не создавался. "
-            "Причина: " + reason)}
-    else:
-        state_ = "нет" if snapshot.get("state") == "missing" else "есть"
-    files = snapshot.get("files") or []
+    except Exception as e:
+        log("gate_error", repr(e))
+        return None
     if state_ == "нет":
         note_cap = cap_rescues(base, "GATE")
         if note_cap >= 2:
@@ -2865,18 +2673,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 prom_note += ("\nОбещанные, но не тронутые файлы — повод вернуть работу, "
                               "если в отчёте нет внятного объяснения.")
 
-        base_status = ("Основная ветка продвинулась после публикации кандидата "
-                       f"на {snapshot['base_ahead_by']} коммит(а); область остаётся "
-                       "вычисленной от общего merge-base. "
-                       if snapshot.get("base_advanced") else "")
         return {"back": False,
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
-                         "Проверяется свежая remote-основа "
-                         f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
-                         f"candidate_sha={snapshot['candidate_sha']}, "
-                         f"merge_base_sha={snapshot['merge_base_sha']}, ahead_by={snapshot['ahead_by']}). "
-                         + base_status
-                         + f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
+                         f"Файлы в поставке по данным GitHub ({len(files)}):\n{listing}"
                          + prom_note + "\n"
                          "Сверяй записку с этим списком, а не с памятью. "
                          "Возвращай работу только по правилам из инструкций: чужие файлы, "
@@ -3312,7 +3111,7 @@ def reconcile_diag_repairs(conf, tasks):
             repair["status"] = "resume_pending"
             _save_diag_repair(base, repair)
         try:
-            result = create_child_task(body, source, conf, "diagnostic_repair")
+            result = create_task(body, conf)
         except Exception as e:
             _fail_diag_repair(conf, base, repair,
                               f"одноразовое продолжение не удалось: {e}")
@@ -3726,19 +3525,6 @@ def load_questions():
     return out
 
 
-def attach_question_work_id(task):
-    """Bind a freshly written question to the same durable work as its task."""
-    work_id = (task or {}).get("work_id") or ""
-    task_id = (task or {}).get("id") or ""
-    if not work_id or not task_id:
-        return
-    path = f"{QUESTION_DIR}/{task_id}.json"
-    question = load(path, None)
-    if isinstance(question, dict) and question.get("work_id") != work_id:
-        question["work_id"] = work_id
-        save(path, question)
-
-
 def subtask_state(tasks, open_q, last_stage, base, since=""):
     """Что сейчас с подзадачей: 'none' — конвейер не начинался, 'working' —
     что-то выполняется, 'waiting' — ждёт ответа владельца, 'done' — прошла
@@ -3997,14 +3783,6 @@ def record_new_works(conf, tasks, max_age_min=180):
     if not stages:
         return
     known = load(WORKS_PATH, {})
-    # A Plan card already has the trustworthy author.  Do not overwrite it
-    # with "owner" merely because Pilot noticed the created task one tick
-    # before the normal note_work call completed.
-    planned_origins = {
-        base_title(item.get("title") or "").strip().casefold(): item.get("origin")
-        for item in ideas_all()
-        if item.get("origin") in WORK_ORIGINS and item.get("title")
-    }
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            time.gmtime(time.time() - max_age_min * 60))
     # Явно созданная владельцем новая live-задача после durable close — это
@@ -4014,13 +3792,7 @@ def record_new_works(conf, tasks, max_age_min=180):
     for task in tasks:
         title = task.get("title") or ""
         base = base_title(title)
-        if has_task_provenance(task) and not task_is_root(task):
-            if (task.get("correction_kind") and title.startswith(PREFIX)
-                    and (task.get("created_at") or "") >= cutoff):
-                note_duplicate_root_prevented(task)
-            continue
-        key = task_work_id(task)
-        meta = known.get(key) or {}
+        meta = known.get(base) or {}
         if (not title.startswith(PREFIX) or base in reopened or not meta.get("closed")
                 or task.get("state") not in PIPELINE_LIVE_STATES):
             continue
@@ -4051,39 +3823,19 @@ def record_new_works(conf, tasks, max_age_min=180):
             continue
         if (t.get("created_at") or "") < cutoff:
             continue
-        if has_task_provenance(t) and not task_is_root(t):
-            if t.get("correction_kind"):
-                note_duplicate_root_prevented(t)
-            continue
         base = base_title(title)
-        key = task_work_id(t)
         n = stage_no_of(title)
-        if not base or not n or key in known:
+        if not base or not n or base in known:
             continue
-        if key not in first or n < first[key][0]:
-            first[key] = (n, t.get("created_at") or "", base,
-                          t.get("work_id") or "", t)
-    for _key, (n, _at, base, work_id, task) in first.items():
+        if base not in first or n < first[base][0]:
+            first[base] = (n, t.get("created_at") or "")
+    for base, (n, _at) in first.items():
         skipped = stages[: n - 1]
-        # The durable request key is the strongest evidence: an Automation ran
-        # the task even if an older Plan card for the same title says "owner".
-        if str(task.get("request_key") or "").startswith("automation:"):
-            origin = ORIGIN_ORCHESTRATOR
-        else:
-            origin = planned_origins.get(base.strip().casefold())
-        origin = origin or ORIGIN_OWNER
-        skipped_reason = {
-            ORIGIN_OWNER: "владелец завёл работу сразу с этого шага",
-            ORIGIN_ASSISTANT: "помощник завёл работу сразу с этого шага",
-            ORIGIN_ORCHESTRATOR: "Factory запустила работу сразу с этого шага",
-        }.get(origin, "Factory запустила работу по находке сразу с этого шага")
-        note_work(base, origin,
-                  stages[n - 1] if n <= len(stages) else "",
+        note_work(base, ORIGIN_OWNER, stages[n - 1] if n <= len(stages) else "",
                   skipped,
-                  skipped_reason if skipped else "",
-                  work_id=work_id)
+                  "владелец завёл работу сразу с этого шага" if skipped else "")
         if skipped:
-            log(f"WORK ORIGIN base={base!r} origin={origin} начал с {stages[n - 1]}, "
+            log(f"WORK ORIGIN base={base!r} владелец начал с {stages[n - 1]}, "
                 f"пропущено: {', '.join(skipped)}")
 
 
@@ -4119,8 +3871,7 @@ def handle_answers(conf, workflows, workers, tasks):
         # Модель, которая дважды не справилась с этапом, третий раз денег
         # не заслужила: третий заход отдаём исполнителю уровнем выше.
         try:
-            rounds = stage_attempts(
-                tasks, stage, src_task or base_title(q.get("title", "")))
+            rounds = stage_attempts(tasks, stage, base_title(q.get("title", "")))
         except Exception:
             rounds = 0
         selected_worker = stage_worker(conf, stage, cx_hint, workers)
@@ -4181,7 +3932,7 @@ def handle_answers(conf, workflows, workers, tasks):
             log(f"answer: '{q.get('title','')[:40]}' остановлена владельцем — не возобновляю")
             continue
 
-        dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
+        dup = live_or_done_at(tasks, q["title"], idx + 1,
                               since=(src_task or {}).get("created_at"))
         if dup:
             q["status"] = "resolved"
@@ -4223,13 +3974,7 @@ def handle_answers(conf, workflows, workers, tasks):
             q["last_resume_try"] = time.time()
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
         try:
-            correction_kind = {
-                "Review": "review_return",
-                "Verify": "verify_return",
-            }.get(q.get("stage"), "answer_resume")
-            r = create_child_task(
-                body, src_task or {"id": q.get("task_id")}, conf,
-                correction_kind)
+            r = create_task(body, conf)
             tid = r.get("task", {}).get("id")
             q["status"] = "resolved"
             q["resumed_task_id"] = tid
@@ -6150,8 +5895,7 @@ def rescue_queued(conf, tasks, workflows, workers):
                 "timeout_seconds": conf.get("timeout_seconds", 7200),
                 "workflow_revision_id": nw["revision_id"],
             }
-            created = create_child_task(body, t, conf,
-                                        "execution_retry")
+            created = create_task(body, conf)
             log(f"QUEUE RESCUE task={t['id'][:8]} {stage} "
                 f"{(sick or {}).get('name', '?')} "
                 f"({'нет места для сохранённых работ' if retention_full else 'нездоров'}) -> {name} "
@@ -6477,14 +6221,7 @@ def poll_delivery_state(conf, state, now=None):
         for generation in list(target["generations"].values()):
             if generation.get("phase") not in DELIVERY_PHASES:
                 generation["phase"] = "failed"
-            if generation["phase"] == "completed":
-                # A process can die after the broker's terminal status was
-                # durably observed but before receipts/outbox were written.
-                # Completed is authoritative, so recovery must finish this
-                # local transaction without a new broker call.
-                _complete_generation(conf, state, generation)
-                response = None
-            elif generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
+            if generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
                 response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST", generation["id"],
                     {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
             elif generation["phase"] in ("launching", "running"):
@@ -6494,26 +6231,14 @@ def poll_delivery_state(conf, state, now=None):
             status = (response or {}).get("status")
             if status in ("launching", "running"):
                 generation["phase"] = status
-                # The broker has durably accepted this boundary; persist the
-                # matching Pilot phase before a process can disappear.
-                save(STATE_PATH, state)
             elif status == "succeeded":
-                # Terminal broker proof must survive before receipts/outbox.
-                # A restart from this exact point only finishes the local
-                # transaction and never POSTs a second physical release.
-                generation["phase"] = "completed"
-                save(STATE_PATH, state)
-                _complete_generation(conf, state, generation)
+                generation["phase"] = "completed"; _complete_generation(conf, state, generation)
             elif status == "locked":
-                generation["phase"] = "reserved"
-                generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
-                save(STATE_PATH, state)
+                generation["phase"] = "reserved"; generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
             elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
                 generation["phase"] = "failed"
-                save(STATE_PATH, state)
             elif response is None and generation["phase"] in ("launching", "running"):
                 generation["phase"] = "failed"  # status is authoritative; unknown fails closed
-                save(STATE_PATH, state)
         save(STATE_PATH, state)
         current = target.get("current_generation")
         active = target["generations"].get(current) if current else None
@@ -6801,7 +6526,7 @@ def cycle(conf, state):
             if is_stopped(conf, base):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, t, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(tasks, base, stage_no_of(title), since=t.get("created_at"))
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
@@ -6819,8 +6544,7 @@ def cycle(conf, state):
                                  "repository_id": rid,
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
-                                     or (workflows.get(wf, {}) or {}).get("revision_id")},
-                                      conf, t, "execution_retry")
+                                     or (workflows.get(wf, {}) or {}).get("revision_id")}, conf)
                     log(f"INFRA RETRY task={tid} stage={wf}: сбой окружения, повторяю этап")
                     notify(conf, "Повторяю этап: сбой окружения",
                            base + chr(10) + "Вход в модель или сеть подвели — это не ошибка работы. "
@@ -6833,7 +6557,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(tasks, wf, t)
+            done = stage_attempts(tasks, wf, base)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -6847,7 +6571,6 @@ def cycle(conf, state):
                            expl.get("options_ru", []),
                            f"ОШИБКА:\n{squeeze(err, 4000)}\n\nПОСЛЕДНИЙ ВЫВОД:\n{squeeze(res, 8000)}",
                            attempts_so_far=done, repair_task=t)
-            attach_question_work_id(t)
             log(f"stage_ended state={tstate} task={tid} stage={wf}")
             continue
         if wf not in stages:
@@ -6939,10 +6662,9 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, t),
+                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
-                attach_question_work_id(t)
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
                            f"{base_title(title)}\nПроверка не подтвердила результат, "
@@ -6959,10 +6681,9 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, t),
+                           attempts_so_far=stage_attempts(tasks, back, base),
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
-            attach_question_work_id(t)
             continue
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
@@ -6996,7 +6717,7 @@ def cycle(conf, state):
         if is_stopped(conf, base):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
-        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(tasks, base, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -7071,8 +6792,7 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get(
                                      "revision_id") or workflows.get(wf, {}).get("revision_id")
-                                     or nw["revision_id"]}, conf, t,
-                                      "machine_gate_return")
+                                     or nw["revision_id"]}, conf)
                     log(f"SPEC BRANCH GATE {base[:40]!r}: {reason} — вернул сохранить")
                     notify(conf, "Вернул сам: спецификация не сохранена",
                            base + chr(10) + reason.capitalize() +
@@ -7112,8 +6832,7 @@ def cycle(conf, state):
                              "repository_id": detail["task"].get("repository_id") or "",
                              "timeout_seconds": conf.get("timeout_seconds", 7200),
                              "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                                 or nw["revision_id"]}, conf, t,
-                                  "machine_gate_return")
+                                 or nw["revision_id"]}, conf)
                 log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
                 notify(conf, "Вернул сам: спецификация без обещаний",
                        base + chr(10) + "Спецификация не назвала проверяемые признаки "
@@ -7146,8 +6865,7 @@ def cycle(conf, state):
                         "repository_id": detail["task"].get("repository_id") or "",
                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                         "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                            or nw["revision_id"]}, conf, t,
-                        "machine_gate_return")
+                            or nw["revision_id"]}, conf)
                     log(f"SPEC HEAD GATE {base[:40]!r}: {head_reason}")
                     continue
                 except Exception as e:
@@ -7180,16 +6898,6 @@ def cycle(conf, state):
                 if tid in state["processed"]:
                     state["processed"].remove(tid)
                 continue
-            if g and g.get("blocked"):
-                # A failed authoritative fetch is an infrastructure verdict,
-                # not a code defect and never a synthetic REQUEST CHANGES.
-                route_question(
-                    conf, tid, "Review", "Review", base, rid_g,
-                    "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
-                    "Повторить проверку после восстановления доступа к репозиторию?",
-                    ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
-                continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
@@ -7203,12 +6911,9 @@ def cycle(conf, state):
                                      or nw["revision_id"]}
                     if g.get("cap_stage"):
                         created_g = create_cap_rescue(
-                            base, g["cap_stage"], return_body, conf,
-                            t, "machine_gate_return")
+                            base, g["cap_stage"], return_body, conf)
                     else:
-                        created_g = create_child_task(
-                            return_body, t, conf,
-                            "machine_gate_return")
+                        created_g = create_task(return_body, conf)
                     new_tid = (created_g.get("task") or {}).get("id", "") if isinstance(created_g, dict) else ""
                     notify(conf, g.get("alert") or "Вернул сам: поставка не прошла машинную проверку",
                            base + chr(10) + (g.get("alert_msg") or ""),
@@ -7242,7 +6947,7 @@ def cycle(conf, state):
             "workflow_revision_id": nw["revision_id"],
         }
         try:
-            created = create_child_task(body, t, conf)
+            created = create_task(body, conf)
         except Exception as e:
             # do NOT swallow this task: drop it from 'processed' so the next
             # cycle tries again once a healthy worker is back.

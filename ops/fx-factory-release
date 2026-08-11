@@ -15,27 +15,37 @@ WORKER_SERVICE="${FACTORY_WORKER_SERVICE:-factory-worker.service}"
 WORKER_SERVICES="${FACTORY_WORKER_SERVICES:-$WORKER_SERVICE}"
 WORKER_CONFIG="${FACTORY_WORKER_CONFIG:-/opt/factory-data/worker.toml}"
 PILOT_SERVICE="${FACTORY_PILOT_SERVICE:-factory-pilot.service}"
-INTAKE_SERVICE="${FACTORY_INTAKE_SERVICE:-factory-intake.service}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
-DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
-FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
-RELEASE_DRIVER="${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}"
-BROKER_BIN="${FACTORY_RELEASE_BROKER_BIN:-/opt/factory-data/bin/factory-release-broker}"
-BROKER_UNIT="${FACTORY_RELEASE_BROKER_UNIT:-/etc/systemd/system/factory-release-broker.service}"
-BROKER_DROPIN="${FACTORY_RELEASE_BROKER_SERVER_DROPIN:-/etc/systemd/system/factory-server.service.d/50-project-release-broker.conf}"
-BROKER_SERVICE="${FACTORY_RELEASE_BROKER_SERVICE:-factory-release-broker.service}"
-BROKER_GROUP="${FACTORY_RELEASE_BROKER_GROUP:-factory-release}"
-BROKER_OWNER="${FACTORY_RELEASE_BROKER_OWNER-root:root}"
-CONTROL_OWNER="${FACTORY_CONTROL_OWNER-root:root}"
-BRAIN_OWNER="${FACTORY_BRAIN_OWNER-factory:factory}"
-BRAIN_LIVE="${FACTORY_BRAIN_LIVE:-/opt/factory-data}"
-GENERATIONS="$REL/generations"
-CURRENT="$REL/current"
-PREVIOUS="$REL/previous"
-JOURNAL="$REL/transaction"
+DELIVERY_ID="${FACTORY_DELIVERY_ID:-}"
+DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}"
+
+# The broker supplies an immutable generation id.  A terminal driver status is
+# checked before the release lock, so a retried broker POST cannot install the
+# same Factory revision twice.
+delivery_status() {
+  [ -n "$DELIVERY_ID" ] || return 0
+  local status=$1 tmp
+  tmp="$DELIVERY_FILE.tmp.$$"
+  umask 077
+  printf '%s\n' "$status" >"$tmp" && mv -f "$tmp" "$DELIVERY_FILE"
+}
+
+if [ -n "$DELIVERY_ID" ]; then
+  case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
+  mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
+  DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
+  if [ -f "$DELIVERY_FILE" ]; then
+    case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
+      succeeded) exit 0 ;;
+      locked) exit 8 ;;
+      failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
+    esac
+  fi
+  delivery_status launching
+fi
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -46,261 +56,13 @@ stop_workers() { local service; while read -r service; do systemctl stop "$servi
 start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
 restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
 
-sync_path() {
-  python3 - "$1" <<'PY'
-import os,sys
-fd=os.open(sys.argv[1], os.O_RDONLY)
-try: os.fsync(fd)
-finally: os.close(fd)
-PY
-}
-
-write_journal() { # phase generation previous
-  local temporary="$JOURNAL.new"
-  umask 077
-  printf 'phase=%q\ngeneration=%q\nprevious=%q\n' "$1" "$2" "$3" >"$temporary" \
-    && sync_path "$temporary" && mv -f "$temporary" "$JOURNAL" && sync_path "$REL" || return
-  if [ "${FACTORY_RELEASE_CRASH_AFTER_PHASE:-}" = "$1" ]; then
-    kill -KILL "$$"
-  fi
-}
-
-read_journal() {
-  phase= generation= previous=
-  [ ! -e "$JOURNAL" ] || . "$JOURNAL"
-}
-
-manifest_hash() { sha256sum "$1/manifest.json" | awk '{print $1}'; }
-
-verify_generation() {
-  local generation=$1
-  [ -d "$generation" ] && [ ! -L "$generation" ] \
-    || { fail "поколение выпуска отсутствует или является ссылкой: $generation"; return 1; }
-  python3 - "$generation" <<'PY'
-import hashlib,json,os,stat,sys
-root=sys.argv[1]
-manifest_path=os.path.join(root,"manifest.json")
-hash_path=os.path.join(root,"manifest.sha256")
-try:
-    raw=open(manifest_path,"rb").read()
-    expected=open(hash_path,encoding="ascii").read().strip()
-    if hashlib.sha256(raw).hexdigest()!=expected: raise ValueError("hash manifest")
-    data=json.loads(raw)
-    if data.get("format")!=1 or not data.get("candidate_sha"): raise ValueError("format manifest")
-    for item in data.get("artifacts",[]):
-        path=os.path.join(root,item["source"])
-        info=os.lstat(path)
-        if not stat.S_ISREG(info.st_mode): raise ValueError("not a regular file: "+path)
-        body=open(path,"rb").read()
-        if len(body)!=item["size"] or hashlib.sha256(body).hexdigest()!=item["sha256"]:
-            raise ValueError("artifact hash: "+path)
-        if stat.S_IMODE(info.st_mode)!=item["mode"]: raise ValueError("artifact mode: "+path)
-    database=data.get("database",{})
-    if database.get("snapshot"):
-        snapshot=os.path.join(root,database["snapshot"]); marker=snapshot+".v2-control-plane"
-        if stat.S_IMODE(os.lstat(snapshot).st_mode)!=0o600 or stat.S_IMODE(os.lstat(marker).st_mode)!=0o600:
-            raise ValueError("snapshot mode")
-        if hashlib.sha256(open(snapshot,"rb").read()).hexdigest()!=database["sha256"]:
-            raise ValueError("snapshot hash")
-        if hashlib.sha256(open(marker,"rb").read()).hexdigest()!=database["marker_sha256"]:
-            raise ValueError("snapshot marker hash")
-except Exception as exc:
-    print("!! manifest поколения не прошёл проверку: %s"%exc,file=sys.stderr)
-    raise SystemExit(1)
-PY
-}
-
-service_state() {
-  local unit=$1 active=inactive enabled=disabled
-  systemctl -q is-active "$unit" 2>/dev/null && active=active || true
-  systemctl -q is-enabled "$unit" 2>/dev/null && enabled=enabled || true
-  printf '%s:%s' "$active" "$enabled"
-}
-
-restore_service_state() {
-  local file=$1 unit state active enabled
-  [ -r "$file" ] || return 1
-  while IFS=$'\t' read -r unit state; do
-    active=${state%%:*}; enabled=${state#*:}
-    [ "$enabled" != enabled ] || systemctl enable "$unit" >/dev/null || return
-    [ "$enabled" != disabled ] || systemctl disable "$unit" >/dev/null || return
-    [ "$active" != active ] || systemctl start "$unit" || return
-    [ "$active" != inactive ] || systemctl stop "$unit" || return
-  done <"$file"
-}
-
-install_generation() {
-  local generation=$1 item source target mode
-  verify_generation "$generation" || return
-  while IFS=$'\t' read -r source target mode owner; do
-    [ -n "$source" ] || continue
-    [ "$target" != - ] || continue
-    mkdir -p "$(dirname "$target")" || return
-    cp -f "$generation/$source" "$target.new" \
-      && { [ -z "$owner" ] || chown "$owner" "$target.new"; } \
-      && chmod "$mode" "$target.new" && sync_path "$target.new" && mv -f "$target.new" "$target" \
-      && sync_path "$(dirname "$target")" || return
-  done < <(python3 - "$generation/manifest.json" <<'PY'
-import json,sys
-for x in json.load(open(sys.argv[1]))["artifacts"]:
- print("%s\t%s\t%o\t%s"%(x["source"],x["target"],x["mode"],x.get("owner","")))
-PY
-  )
-  systemctl daemon-reload || return
-}
-
-stop_factory_units() {
-  local unit
-  while read -r unit; do systemctl stop "$unit" || return; done < <(worker_service_list)
-  systemctl stop "$PILOT_SERVICE" 2>/dev/null || true
-  systemctl stop "$INTAKE_SERVICE" 2>/dev/null || true
-  systemctl stop "$BROKER_SERVICE" 2>/dev/null || true
-  systemctl stop "$SERVER_SERVICE"
-}
-
-verify_generation_runtime() {
-  local selected=$1 unit pid exe worker_id body
-  if systemctl -q is-active "$SERVER_SERVICE" 2>/dev/null; then
-    pid=$(systemctl show -p MainPID --value "$SERVER_SERVICE" 2>/dev/null)
-    exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-    [ "$exe" = "$SERVER_BIN" ] \
-      && [ "$(sha256sum "$exe" | awk '{print $1}')" = "$(sha256sum "$selected/payload/factory-server" | awk '{print $1}')" ] \
-      || { fail "запущенный server не совпадает с выбранным manifest"; return 1; }
-    [ "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)" = 200 ] \
-      || { fail "server выбранного поколения не прошёл health"; return 1; }
-  fi
-  for unit in $(worker_service_list); do
-    systemctl -q is-active "$unit" 2>/dev/null || continue
-    pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
-    exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-    [ "$exe" = "$WORKER_BIN" ] \
-      && [ "$(sha256sum "$exe" | awk '{print $1}')" = "$(sha256sum "$selected/payload/factory-worker" | awk '{print $1}')" ] \
-      || { fail "запущенный $unit не совпадает с выбранным manifest"; return 1; }
-  done
-  if systemctl -q is-active "$WORKER_SERVICE" 2>/dev/null; then
-    worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) || return
-    body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-    printf '%s' "$body" | python3 -c 'import datetime,json,sys
-try:
- w=json.load(sys.stdin); h=datetime.datetime.fromisoformat(w["last_heartbeat"].replace("Z","+00:00")); now=datetime.datetime.now(datetime.timezone.utc)
- ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and 0 <= (now-h).total_seconds() <= 120
-except Exception: ok=False
-raise SystemExit(not ok)' "$worker_id" \
-      || { fail "worker выбранного поколения не зарегистрировался свежим и healthy"; return 1; }
-  fi
-}
-
-database_ledger() {
-  python3 - "$1" <<'PY'
-import sqlite3,sys
-db=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True)
-values=[x[0] for x in db.execute("select version from schema_migrations order by version")]
-if values!=list(range(1,len(values)+1)): raise SystemExit("ledger миграций имеет разрыв")
-print(values[-1] if values else 0)
-PY
-}
-
-rollback_to_generation() { # generation, owner-facing reason
-  local target=$1 reason=$2 live_ledger generation_ledger
-  fail "$reason — возвращаю полный прежний комплект"
-  stop_factory_units || true
-  install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
-  cp -f "$target/release-info.json" "$INFO.new" && mv -f "$INFO.new" "$INFO" || return
-  live_ledger=$(database_ledger "$DATABASE") || return
-  generation_ledger=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("database",{}).get("ledger",-1))' "$target/manifest.json")
-  if [ "$generation_ledger" -ge 0 ] && [ "$live_ledger" -gt "$generation_ledger" ]; then
-    [ -z "${previous:-}" ] || { ln -sfn "$previous" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
-    ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
-    write_journal db_restore_required "$target" "${previous:-}"
-    fail "код возвращён, но база новее ($live_ledger > $generation_ledger); службы остановлены. Выполните отдельный fx factory restore-db"
-    return 9
-  fi
-  restore_service_state "$target/services.tsv" || return
-  verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
-  ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
-  rm -f "$JOURNAL"
-  sync_path "$REL"
-}
-
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 
-umask 077
-mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
-  || { fail "не смог подготовить папку релизов"; exit 4; }
+mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
-
-case "$ref" in
-  --status)
-    read_journal
-    current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
-    previous_path=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
-    current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$current_path/manifest.json" 2>/dev/null || echo '?')
-    previous_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$previous_path/manifest.json" 2>/dev/null || echo '?')
-    echo "Factory: current=$current_sha previous=$previous_sha phase=${phase:-нет}"
-    [ -z "${generation:-}" ] || echo "manifest=$(manifest_hash "$generation" 2>/dev/null || echo '?') snapshot=$generation/database.sqlite3"
-    echo "Pilot остаётся в настроенном состоянии; эта команда ничего не включает"
-    exit 0
-    ;;
-  --rollback)
-    target=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
-    current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
-    [ -n "$target" ] && verify_generation "$target" || { fail "нет проверенного предыдущего поколения"; exit 4; }
-    previous=$current_path
-    write_journal prepared "$target" "$current_path" || exit 4
-    rollback_to_generation "$target" "откат Factory" || exit $?
-    [ -z "$current_path" ] || { ln -sfn "$current_path" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
-    echo "== полный откат к $(basename "$target") завершён; база не изменялась"
-    exit 0
-    ;;
-  --restore-db)
-    snapshot=${2:-}; expected_manifest=${3:-}; confirmation=${4:-}
-    [ -n "$snapshot" ] && [ -n "$expected_manifest" ] \
-      || { fail "нужны точный snapshot и hash manifest"; exit 2; }
-    generation_path=$(dirname "$snapshot")
-    verify_generation "$generation_path" || exit 4
-    [ "$(manifest_hash "$generation_path")" = "$expected_manifest" ] \
-      || { fail "hash manifest не совпадает"; exit 4; }
-    manifest_snapshot=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database"]["snapshot"])' "$generation_path/manifest.json") \
-      || { fail "manifest не содержит snapshot"; exit 4; }
-    manifest_snapshot_hash=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database"]["sha256"])' "$generation_path/manifest.json")
-    [ "$snapshot" = "$generation_path/$manifest_snapshot" ] \
-      && [ "$(sha256sum "$snapshot" | awk '{print $1}')" = "$manifest_snapshot_hash" ] \
-      || { fail "snapshot path/hash не совпадает с manifest"; exit 4; }
-    [ "$confirmation" = "RESTORE-FACTORY-DATABASE" ] \
-      || { fail "восстановление БД — отдельная опасная операция; добавьте точный token RESTORE-FACTORY-DATABASE"; exit 2; }
-    stop_factory_units || { fail "не удалось остановить все Factory-службы"; exit 6; }
-    restored="$DATABASE.restore.$$.new"
-    failed="$DATABASE.failed.$(date +%Y%m%dT%H%M%S)"
-    [ ! -e "$restored" ] && [ ! -e "$failed" ] || { fail "путь восстановления уже существует"; exit 4; }
-    "$generation_path/payload/factory-server" -database "$restored" -restore "$snapshot" \
-      || { fail "выбранный server не подтвердил восстановленную БД"; exit 6; }
-    database_ledger "$restored" >/dev/null || exit 6
-    mv "$DATABASE" "$failed" && mv "$DATABASE.v2-control-plane" "$failed.v2-control-plane" \
-      && mv "$restored" "$DATABASE" && mv "$restored.v2-control-plane" "$DATABASE.v2-control-plane" \
-      || { fail "atomic DB switch не завершён; службы оставлены остановленными"; exit 7; }
-    sync_path "$(dirname "$DATABASE")"
-    read_journal
-    [ "${phase:-}" = db_restore_required ] || { fail "БД восстановлена, но нет ожидающего journal; службы оставлены остановленными"; exit 9; }
-    restore_service_state "$generation/services.tsv" || exit 7
-    verify_generation_runtime "$generation" || exit 7
-    rm -f "$JOURNAL" && sync_path "$REL"
-    echo "== БД проверена и восстановлена; прежняя сохранена неизменяемо: $failed"
-    exit 0
-    ;;
-esac
-
-if [ -e "$JOURNAL" ]; then
-  read_journal
-  case "$phase" in
-    committed) rm -f "$JOURNAL" ;;
-    db_restore_required) fail "ожидается отдельное восстановление БД; новый выпуск запрещён"; exit 9 ;;
-    *) [ -n "$previous" ] || { fail "незавершённый journal без безопасной точки отката"; exit 9; }
-       rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
-  esac
-fi
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_pids=()
@@ -463,284 +225,181 @@ step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
 step "собираю сервер и воркер"
-build_ldflags="-X github.com/owainlewis/factory/internal/buildinfo.Version=candidate -X github.com/owainlewis/factory/internal/buildinfo.Commit=$sha"
-as_user bash -c "cd '$work/src' && go build -ldflags '$build_ldflags' -o '$work/factory-server' ./cmd/factory-server" \
-  && as_user bash -c "cd '$work/src' && go build -ldflags '$build_ldflags' -o '$work/factory-worker' ./cmd/factory-worker" \
-  && as_user bash -c "cd '$work/src' && go build -ldflags '$build_ldflags' -o '$work/factory-release-broker' ./cmd/factory-release-broker" \
+as_user bash -c "cd '$work/src' && go build -o '$work/factory-server' ./cmd/factory-server" \
+  && as_user bash -c "cd '$work/src' && go build -o '$work/factory-worker' ./cmd/factory-worker" \
+  && as_user bash -c "cd '$work/src' && go build -o '$work/factory-release-broker' ./cmd/factory-release-broker" \
   || { fail "сборка сервера, воркера или release-broker не прошла"; cleanup; exit 5; }
 
-step "проверяю работающий выпуск до первой мутации"
-candidate_server_version=$("$work/factory-server" version 2>/dev/null || true)
-candidate_worker_version=$("$work/factory-worker" version 2>/dev/null || true)
-[[ "$candidate_server_version" == *"$sha"* && "$candidate_worker_version" == *"$sha"* ]] \
-  || { fail "собранные server/worker не подтверждают candidate SHA $sha"; cleanup; exit 4; }
-for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN" "$BROKER_UNIT" "$BROKER_DROPIN" \
-  "$BRAIN_LIVE/pilot/pilot.py" "$BRAIN_LIVE/pilot/context.md" \
-  "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py" "$DATABASE" "$INFO"; do
-  [ -f "$path" ] && [ ! -L "$path" ] || { fail "нет полного rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN"; do
-  [ "$(stat -c %a "$path")" = 755 ] || { fail "неверный mode rollback artifact: $path"; cleanup; exit 4; }
-  if [ -n "$OWNER" ] && [ "$path" = "$SERVER_BIN" -o "$path" = "$WORKER_BIN" ]; then
-    [ "$(stat -c %U:%G "$path")" = "$OWNER" ] || { fail "неверный owner rollback artifact: $path"; cleanup; exit 4; }
-  fi
-done
-for expected in \
-  "$SERVER_BIN|$OWNER" "$WORKER_BIN|$OWNER" "$BROKER_BIN|$BROKER_OWNER" \
-  "$BROKER_UNIT|$BROKER_OWNER" "$BROKER_DROPIN|$BROKER_OWNER" \
-  "$FX_BIN|$CONTROL_OWNER" "$RELEASE_DRIVER|$CONTROL_OWNER" \
-  "$BRAIN_LIVE/pilot/pilot.py|$BRAIN_OWNER" "$BRAIN_LIVE/pilot/context.md|$BRAIN_OWNER" \
-  "$BRAIN_LIVE/intake/app.py|$BRAIN_OWNER" "$BRAIN_LIVE/intake/plan.py|$BRAIN_OWNER"; do
-  path=${expected%%|*}; expected_owner=${expected#*|}
-  [ -z "$expected_owner" ] || [ "$(stat -c %U:%G "$path")" = "$expected_owner" ] \
-    || { fail "неверный owner rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$BROKER_UNIT" "$BROKER_DROPIN" "$BRAIN_LIVE/pilot/pilot.py" \
-  "$BRAIN_LIVE/pilot/context.md" "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py"; do
-  [ "$(stat -c %a "$path")" = 644 ] || { fail "неверный mode rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$REL" "$GENERATIONS" "$(dirname "$SERVER_BIN")" "$(dirname "$DATABASE")" \
-  "$(dirname "$FX_BIN")" "$BRAIN_LIVE/pilot" "$BRAIN_LIVE/intake"; do
-  [ -d "$path" ] && [ ! -L "$path" ] \
-    || { fail "release path должен быть реальным каталогом без symlink: $path"; cleanup; exit 4; }
-  [ $((8#$(stat -c %a "$path") & 8#022)) -eq 0 ] \
-    || { fail "release path доступен для записи группе или другим: $path"; cleanup; exit 4; }
-done
-current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha"])' "$INFO" 2>/dev/null) \
-  || { fail "неизвестная версия: release-info не содержит SHA"; cleanup; exit 4; }
-server_version=$("$SERVER_BIN" version 2>/dev/null || true)
-worker_version=$("$WORKER_BIN" version 2>/dev/null || true)
-[[ "$server_version" == *"$current_sha"* && "$worker_version" == *"$current_sha"* ]] \
-  || { fail "неизвестный или смешанный выпуск server/worker"; cleanup; exit 4; }
+step "ставлю привилегированный broker выпусков"
+bash "$work/src/ops/install-project-release-broker.sh" \
+  "$work/factory-release-broker" "$work/src/ops/systemd/factory-release-broker.service" \
+  || { fail "release-broker не установлен безопасно"; cleanup; exit 5; }
 
-processes="$work/processes.tsv"
-: >"$processes"
-for unit in "$SERVER_SERVICE" $(worker_service_list) "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
-  systemctl -q is-active "$unit" 2>/dev/null || continue
-  pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
-  case "$pid" in ''|0|*[!0-9]*) fail "у активной службы $unit нет MainPID"; cleanup; exit 4 ;; esac
-  exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || { fail "не найден executable MainPID $pid ($unit)"; cleanup; exit 4; }
-  case "$exe" in *' (deleted)') fail "процесс $unit использует deleted-inode"; cleanup; exit 4 ;; esac
-  [ -f "$exe" ] || { fail "неизвестный executable $exe у $unit"; cleanup; exit 4; }
-  exec_start=$(systemctl show -p ExecStart --value "$unit" 2>/dev/null)
-  [ -n "$exec_start" ] && [[ "$exec_start" == *"$exe"* || "$unit" = "$PILOT_SERVICE" || "$unit" = "$INTAKE_SERVICE" ]] \
-    || { fail "MainPID и ExecStart расходятся у $unit"; cleanup; exit 4; }
-  printf '%s\t%s\t%s\t%s\n' "$unit" "$pid" "$exe" "$(sha256sum "$exe" | awk '{print $1}')" >>"$processes"
-done
+step "проверяю и обновляю ссылки авторизации Codex"
+env -u CODEX_HOME bash "$work/src/ops/provision-codex-auth.sh" \
+  || { fail "авторизация Codex не прошла безопасную проверку — релиз не поеду"; cleanup; exit 5; }
 
-required_bytes=$(du -cb "$DATABASE" "$SERVER_BIN" "$WORKER_BIN" "$work/factory-server" "$work/factory-worker" 2>/dev/null | tail -1 | awk '{print int($1*2.25)}')
-available_bytes=$(df -Pk "$REL" | awk 'NR==2 {print $4*1024}')
-available_inodes=$(df -Pi "$REL" | awk 'NR==2 {print $4}')
-[ "$available_bytes" -ge "$required_bytes" ] && [ "$available_inodes" -ge 32 ] \
-  || { fail "недостаточно свободного места или inode для snapshot и двух комплектов"; cleanup; exit 4; }
+step "сохраняю работающую пару бинарей"
+cp -f "$SERVER_BIN" "$work/factory-server.prev" \
+  && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
+  || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
-release_id="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}-$$"
-stage="$REL/.generation-$release_id.$$"
-generation_path="$GENERATIONS/$release_id"
-mkdir -m 700 "$stage" "$stage/payload" || { cleanup; exit 4; }
-inventory="$stage/inventory.tsv"
-: >"$inventory"
-printf '[Service]\nSupplementaryGroups=%s\n' "$BROKER_GROUP" >"$work/factory-release-broker-dropin.conf"
-add_artifact() { # source payload-name target mode owner
-  local source=$1 name=$2 target=$3 mode=$4 owner=$5 destination
-  destination="$stage/payload/$name"
-  cp -f "$source" "$destination" && chmod "$mode" "$destination" || return
-  printf 'payload/%s\t%s\t%s\t%s\n' "$name" "$target" "$mode" "$owner" >>"$inventory"
-}
-add_artifact "$work/factory-server" factory-server "$SERVER_BIN" 755 "$OWNER" \
-  && add_artifact "$work/factory-worker" factory-worker "$WORKER_BIN" 755 "$OWNER" \
-  && add_artifact "$work/factory-release-broker" factory-release-broker "$BROKER_BIN" 755 "$BROKER_OWNER" \
-  && add_artifact "$work/src/ops/systemd/factory-release-broker.service" factory-release-broker.service "$BROKER_UNIT" 644 "$BROKER_OWNER" \
-  && add_artifact "$work/factory-release-broker-dropin.conf" factory-release-broker-dropin.conf "$BROKER_DROPIN" 644 "$BROKER_OWNER" \
-  && add_artifact "$work/src/ops/fx" fx "$FX_BIN" 755 "$CONTROL_OWNER" \
-  && add_artifact "$work/src/ops/fx-factory-release" fx-factory-release "$RELEASE_DRIVER" 755 "$CONTROL_OWNER" \
-  && add_artifact "$work/src/pilot/pilot.py" pilot.py "$BRAIN_LIVE/pilot/pilot.py" 644 "$BRAIN_OWNER" \
-  && add_artifact "$work/src/pilot/context.md" context.md "$BRAIN_LIVE/pilot/context.md" 644 "$BRAIN_OWNER" \
-  && add_artifact "$work/src/intake/app.py" intake-app.py "$BRAIN_LIVE/intake/app.py" 644 "$BRAIN_OWNER" \
-  && add_artifact "$work/src/intake/plan.py" intake-plan.py "$BRAIN_LIVE/intake/plan.py" 644 "$BRAIN_OWNER" \
-  || { fail "не удалось собрать полный кандидатный комплект"; cleanup; exit 4; }
-
-services="$stage/services.tsv"
-for unit in "$SERVER_SERVICE" $(worker_service_list) "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
-  printf '%s\t%s\n' "$unit" "$(service_state "$unit")" >>"$services"
-done
-chmod 600 "$services"
-printf 'services.tsv\t-\t600\t\n' >>"$inventory"
-
-step "создаю и повторно проверяю SQLite online snapshot"
-snapshot="$stage/database.sqlite3"
-"$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
-  || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
-[ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
-  || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
-chmod 600 "$snapshot" "$snapshot.v2-control-plane"
-ledger=$(database_ledger "$snapshot") || { cleanup; exit 4; }
-schema_digest=$(python3 - "$snapshot" <<'PY'
-import hashlib,sqlite3,sys
-d=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True)
-rows=d.execute("select type,name,tbl_name,coalesce(sql,'') from sqlite_schema order by type,name").fetchall()
-print(hashlib.sha256(repr(rows).encode()).hexdigest())
-PY
-)
-
-python3 - "$stage/release-info.json" "$sha" "$subject" "$ref" "$release_id" <<'PY'
-import datetime,json,sys
-p,sha,subject,ref,rid=sys.argv[1:]
-at=datetime.datetime.now(datetime.timezone.utc).isoformat()
-json.dump({"name":"согласованный выпуск: "+subject,"sha":sha,"short":sha[:7],"ref":ref,
- "subject":subject,"at":at,"release_id":rid},open(p,"w"),ensure_ascii=False,sort_keys=True,separators=(",",":"))
-PY
-chmod 600 "$stage/release-info.json"
-printf 'release-info.json\t-\t600\t\n' >>"$inventory"
-
-python3 - "$stage" "$release_id" "$sha" "$ref" "$DATABASE" "$snapshot" "$ledger" "$schema_digest" "$inventory" "$processes" "$services" <<'PY'
-import hashlib,json,os,stat,sys
-root,rid,sha,ref,db,snapshot,ledger,schema,inventory,processes,services=sys.argv[1:]
-items=[]
-for line in open(inventory):
- source,target,mode,owner=line.rstrip("\n").split("\t"); path=os.path.join(root,source); body=open(path,"rb").read()
- items.append({"source":source,"target":target,"mode":int(mode,8),"owner":owner,"size":len(body),"sha256":hashlib.sha256(body).hexdigest()})
-proc=[]
-for line in open(processes):
- unit,pid,exe,digest=line.rstrip("\n").split("\t"); proc.append({"unit":unit,"pid":int(pid),"exe":exe,"sha256":digest})
-service_states=[]
-for line in open(services):
- unit,state=line.rstrip("\n").split("\t"); service_states.append({"unit":unit,"state":state})
-body=open(snapshot,"rb").read()
-marker=open(snapshot+".v2-control-plane","rb").read()
-data={"format":1,"release_id":rid,"candidate_sha":sha,"ref":ref,"artifacts":items,"processes":proc,"services":service_states,
- "database":{"live_path":db,"snapshot":"database.sqlite3","sha256":hashlib.sha256(body).hexdigest(),"size":len(body),"marker_sha256":hashlib.sha256(marker).hexdigest(),"ledger":int(ledger),"schema_digest":schema}}
-raw=(json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(",",":"))+"\n").encode()
-open(os.path.join(root,"manifest.json"),"wb").write(raw)
-open(os.path.join(root,"manifest.sha256"),"w").write(hashlib.sha256(raw).hexdigest()+"\n")
-PY
-chmod 600 "$stage/manifest.json" "$stage/manifest.sha256" "$stage/services.tsv"
-sync_path "$snapshot" && sync_path "$snapshot.v2-control-plane" && sync_path "$stage/manifest.json" \
-  && sync_path "$stage" || { cleanup; exit 4; }
-verify_generation "$stage" || { cleanup; exit 4; }
-
-old_generation=''
-[ ! -L "$CURRENT" ] || old_generation=$(readlink -f "$CURRENT" 2>/dev/null || true)
-if [ -z "$old_generation" ]; then
-  bootstrap="$REL/.bootstrap-${current_sha:0:12}.$$"
-  mkdir -m 700 "$bootstrap" "$bootstrap/payload"
-  old_inventory="$bootstrap/inventory.tsv"; : >"$old_inventory"
-  old_add() { local source=$1 name=$2 target=$3 mode=$4 owner=$5; cp -f "$source" "$bootstrap/payload/$name" && chmod "$mode" "$bootstrap/payload/$name" && printf 'payload/%s\t%s\t%s\t%s\n' "$name" "$target" "$mode" "$owner" >>"$old_inventory"; }
-  old_add "$SERVER_BIN" factory-server "$SERVER_BIN" 755 "$OWNER" && old_add "$WORKER_BIN" factory-worker "$WORKER_BIN" 755 "$OWNER" \
-    && old_add "$BROKER_BIN" factory-release-broker "$BROKER_BIN" 755 "$BROKER_OWNER" \
-    && old_add "$BROKER_UNIT" factory-release-broker.service "$BROKER_UNIT" 644 "$BROKER_OWNER" \
-    && old_add "$BROKER_DROPIN" factory-release-broker-dropin.conf "$BROKER_DROPIN" 644 "$BROKER_OWNER" \
-    && old_add "$FX_BIN" fx "$FX_BIN" 755 "$CONTROL_OWNER" \
-    && old_add "$RELEASE_DRIVER" fx-factory-release "$RELEASE_DRIVER" 755 "$CONTROL_OWNER" \
-    && old_add "$BRAIN_LIVE/pilot/pilot.py" pilot.py "$BRAIN_LIVE/pilot/pilot.py" 644 "$BRAIN_OWNER" \
-    && old_add "$BRAIN_LIVE/pilot/context.md" context.md "$BRAIN_LIVE/pilot/context.md" 644 "$BRAIN_OWNER" \
-    && old_add "$BRAIN_LIVE/intake/app.py" intake-app.py "$BRAIN_LIVE/intake/app.py" 644 "$BRAIN_OWNER" \
-    && old_add "$BRAIN_LIVE/intake/plan.py" intake-plan.py "$BRAIN_LIVE/intake/plan.py" 644 "$BRAIN_OWNER" || { cleanup; exit 4; }
-  cp -f "$INFO" "$bootstrap/release-info.json"; chmod 600 "$bootstrap/release-info.json"; printf 'release-info.json\t-\t600\t\n' >>"$old_inventory"
-  cp -f "$services" "$bootstrap/services.tsv"; printf 'services.tsv\t-\t600\t\n' >>"$old_inventory"
-  python3 - "$bootstrap" "$current_sha" "$ledger" "$old_inventory" "$processes" "$services" <<'PY'
-import hashlib,json,os,sys
-root,sha,ledger,inventory,processes,services=sys.argv[1:]; items=[]
-for line in open(inventory):
- s,t,m,o=line.rstrip("\n").split("\t"); b=open(os.path.join(root,s),"rb").read(); items.append({"source":s,"target":t,"mode":int(m,8),"owner":o,"size":len(b),"sha256":hashlib.sha256(b).hexdigest()})
-proc=[]
-for line in open(processes):
- u,p,e,h=line.rstrip("\n").split("\t"); proc.append({"unit":u,"pid":int(p),"exe":e,"sha256":h})
-states=[]
-for line in open(services):
- u,s=line.rstrip("\n").split("\t"); states.append({"unit":u,"state":s})
-d={"format":1,"release_id":"bootstrap-"+sha[:12],"candidate_sha":sha,"ref":"installed","artifacts":items,"processes":proc,"services":states,"database":{"ledger":int(ledger)}}
-r=(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n").encode(); open(root+"/manifest.json","wb").write(r); open(root+"/manifest.sha256","w").write(hashlib.sha256(r).hexdigest()+"\n")
-PY
-  chmod 600 "$bootstrap/manifest.json" "$bootstrap/manifest.sha256" "$bootstrap/services.tsv"
-  old_generation="$GENERATIONS/bootstrap-${current_sha:0:12}"
-  mv "$bootstrap" "$old_generation" && sync_path "$GENERATIONS"
-else
-  verify_generation "$old_generation" || { cleanup; exit 4; }
+# Снимок release-info нужен до первой операции, которая может вызвать rollback:
+# ранний отказ установки сервера, воркера, control-команд или brain не должен
+# потерять корректные сведения о прежнем выпуске.
+info_previous_exists=0
+if [ -e "$INFO" ]; then
+  cp -f "$INFO" "$work/release-info.prev" \
+    || { fail "не смог сохранить прежние сведения о выпуске"; cleanup; exit 4; }
+  info_previous_exists=1
 fi
 
-mv "$stage" "$generation_path" && sync_path "$GENERATIONS" || { cleanup; exit 4; }
-verify_generation "$generation_path" || { cleanup; exit 4; }
-write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
-previous=$old_generation
+rollback() {
+  trap - EXIT HUP INT TERM
+  rollback_armed=0
+  fail "$1 — возвращаю предыдущие сервер и воркер"
+  cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
+    && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
+  cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
+    && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
+  if [ "${info_previous_exists:-0}" = 1 ]; then
+    cp -f "$work/release-info.prev" "$INFO.new" \
+      && mv -f "$INFO.new" "$INFO"
+  else
+    rm -f "$INFO"
+  fi
+  systemctl restart "$SERVER_SERVICE" || true
+  restart_workers || true
+  delivery_status failed
+  cleanup
+  exit "$2"
+}
+
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
-on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
-trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
+on_exit() {
+  status=$?
+  [ "$rollback_armed" = 1 ] || return
+  [ "$status" -ne 0 ] || status=130
+  rollback "выпуск прерван до подтверждения новой пары" "$status"
+}
+on_signal() { rollback "выпуск прерван сигналом $1" 130; }
+trap on_exit EXIT
+trap 'on_signal HUP' HUP
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
-step "останавливаю прежний комплект и атомарно ставлю согласованную пару"
-stop_factory_units || rollback "службы не остановились" 6
-write_journal old-stopped "$generation_path" "$old_generation" || rollback "journal не записан" 4
-install_generation "$generation_path" || rollback "полный комплект не установлен" 4
-write_journal pair-installed "$generation_path" "$old_generation" || rollback "journal не записан" 4
-systemctl start "$SERVER_SERVICE" || rollback "сервер не стартовал" 6
+install_binary() {
+  source=$1 target=$2
+  cp -f "$source" "$target.new" && set_owner "$target.new" \
+    && chmod 755 "$target.new" && mv -f "$target.new" "$target"
+}
+
+step "ставлю новую пару и перезапускаю сервер"
+install_binary "$work/factory-server" "$SERVER_BIN" || rollback "не смог поставить сервер" 4
+install_binary "$work/factory-worker" "$WORKER_BIN" || rollback "не смог поставить воркер" 4
+systemctl restart "$SERVER_SERVICE" || rollback "сервер не перезапустился" 6
 sleep 5
+
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
-[ "$code" = 200 ] || rollback "health нового сервера: HTTP $code" 6
+[ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
+
+stop_workers || rollback "воркеры не остановились" 6
 worker_id=''
-for identity_attempt in 1 2 3 4 5; do
-  worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) && [ -n "$worker_id" ] && break
-  worker_id=''; sleep 1
+identity_error="$work/worker-identity-error"
+identity_attempt=1
+while [ "$identity_attempt" -le 5 ]; do
+  if worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>"$identity_error") \
+    && [ -n "$worker_id" ]; then
+    break
+  fi
+  worker_id=''
+  identity_attempt=$((identity_attempt + 1))
+  [ "$identity_attempt" -gt 5 ] || sleep 1
 done
-[ -n "$worker_id" ] || rollback "не определена identity воркера" 6
+if [ -z "$worker_id" ]; then
+  identity_detail=$(tr '\n' ' ' <"$identity_error" | cut -c1-300)
+  [ -z "$identity_detail" ] || fail "причина identity: $identity_detail"
+  rollback "не удалось определить identity воркера после пяти попыток" 6
+fi
 previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("last_heartbeat",""))' 2>/dev/null || true)
-start_workers || rollback "воркеры не стартовали" 6
+previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
+  'import json,sys
+try: print(json.load(sys.stdin).get("last_heartbeat", ""))
+except Exception: print("")' 2>/dev/null)
+start_workers || rollback "воркеры не запустились" 6
+
+step "жду здоровую регистрацию воркера $worker_id"
 registered=0
-for ((attempt=1; attempt<=REGISTER_ATTEMPTS; attempt++)); do
+attempt=1
+while [ "$attempt" -le "$REGISTER_ATTEMPTS" ]; do
   body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-  if printf '%s' "$body" | python3 -c 'import datetime,json,sys
+  if printf '%s' "$body" | python3 -c \
+    'import datetime,json,sys
 try:
- w=json.load(sys.stdin); h=w.get("last_heartbeat",""); old=sys.argv[2]
- ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and h and (not old or h>old)
+ w=json.load(sys.stdin); current=w.get("last_heartbeat", "")
+ fresh=bool(current) and (not sys.argv[2] or datetime.datetime.fromisoformat(current.replace("Z", "+00:00")) > datetime.datetime.fromisoformat(sys.argv[2].replace("Z", "+00:00")))
+ ok=w.get("id") == sys.argv[1] and w.get("health") == "healthy" and w.get("online") is True and fresh
 except Exception: ok=False
-raise SystemExit(not ok)' "$worker_id" "$previous_heartbeat" 2>/dev/null; then registered=1; break; fi
-  sleep "$REGISTER_DELAY"
+raise SystemExit(not ok)' \
+    "$worker_id" "$previous_heartbeat" 2>/dev/null; then
+    registered=1
+    break
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || sleep "$REGISTER_DELAY"
 done
-[ "$registered" = 1 ] || rollback "нет свежей healthy-регистрации воркера $worker_id" 6
-for pair in "$SERVER_SERVICE:$SERVER_BIN:$generation_path/payload/factory-server"; do
-  unit=${pair%%:*}; rest=${pair#*:}; installed=${rest%%:*}; expected=${rest#*:}
-  systemctl -q is-active "$unit" 2>/dev/null || continue
-  pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
-  exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-  [ "$exe" = "$installed" ] && [ "$(sha256sum "$exe" | awk '{print $1}')" = "$(sha256sum "$expected" | awk '{print $1}')" ] \
-    || rollback "реально запущенный $unit не совпадает с manifest" 6
-done
-for unit in $(worker_service_list); do
-  systemctl -q is-active "$unit" 2>/dev/null || continue
-  pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
-  exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-  [ "$exe" = "$WORKER_BIN" ] && [ "$(sha256sum "$exe" | awk '{print $1}')" = "$(sha256sum "$generation_path/payload/factory-worker" | awk '{print $1}')" ] \
-    || rollback "реально запущенный $unit не совпадает с manifest" 6
-done
-restore_service_state "$generation_path/services.tsv" || rollback "состояния служб не восстановлены" 6
-write_journal services-started "$generation_path" "$old_generation" || rollback "journal не записан" 4
+[ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
 
-cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
-  && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" \
-  || rollback "правдивые metadata не опубликованы" 7
-ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
-ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
-write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
+step "обновляю штатные команды управления Фабрикой"
+bash "$work/src/ops/install-factory-control.sh" "$work/src" \
+  || rollback "не смог обновить fx и драйвер выпуска" 7
+
+deferred_pilot_restart=0
+brain_restart_marker="$work/restart-pilot"
+if [ -x "$work/src/ops/install-brain.sh" ]; then
+    FACTORY_BRAIN_DEFER_PILOT_RESTART=1 \
+    FACTORY_BRAIN_RESTART_MARKER="$brain_restart_marker" \
+    bash "$work/src/ops/install-brain.sh" "$work/src" \
+    || rollback "мозг не встал" 7
+  [ ! -f "$brain_restart_marker" ] || deferred_pilot_restart=1
+fi
+if [ -f "$work/src/ops/factory-janitor.sh" ]; then
+  janitor_bin="${FACTORY_JANITOR_BIN:-/usr/local/bin/factory-janitor.sh}"
+  install -o root -g root -m 755 "$work/src/ops/factory-janitor.sh" "$janitor_bin" \
+    || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
+fi
+
+step "ставлю и проверяю изолированный серверный браузер"
+bash "$work/src/ops/install-server-browser.sh" \
+  || rollback "серверный браузер не прошёл сетевую проверку" 7
+
+if ! python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
+import json, sys, datetime
+p, sha, subj, ref, iso = sys.argv[1:6]
+M = ["января","февраля","марта","апреля","мая","июня",
+     "июля","августа","сентября","октября","ноября","декабря"]
+d = datetime.datetime.fromisoformat(iso)
+when = "%d %s, %02d:%02d" % (d.day, M[d.month - 1], d.hour, d.minute)
+json.dump({"name": "релиз от %s, из %s: %s" % (when, ref, subj),
+           "sha": sha, "short": sha[:7], "ref": ref,
+           "subject": subj, "when": when, "at": iso},
+          open(p, "w"), ensure_ascii=False, indent=2)
+print("== выкачено: релиз от %s, из %s: %s" % (when, ref, subj))
+PY
+then
+  rollback "не смог записать сведения о выпуске" 7
+fi
+set_owner "$INFO" 2>/dev/null || true
+
+if [ "$deferred_pilot_restart" = 1 ]; then
+  step "ставлю безопасный отложенный перезапуск Пилота"
+  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+    /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
+    || rollback "не смог отложить перезапуск Пилота" 7
+fi
+
 rollback_armed=0
-rm -f "$JOURNAL"; sync_path "$REL"
+delivery_status succeeded
 cleanup
-
-# Retention runs only after commit and always protects current, previous and all
-# pre-027 snapshots. Two complete generations and fourteen days are minimums.
-current_real=$(readlink -f "$CURRENT"); previous_real=$(readlink -f "$PREVIOUS")
-while read -r candidate; do
-  [ "$candidate" != "$current_real" ] || continue
-  [ "$candidate" != "$previous_real" ] || continue
-  if [ -e "$candidate/database.sqlite3" ] \
-    && [ "$(database_ledger "$candidate/database.sqlite3" 2>/dev/null || echo 999999)" -lt 27 ]; then
-    continue
-  fi
-  verify_generation "$candidate" || continue
-  if find "$candidate" -maxdepth 0 -mtime +14 -print -quit | grep -q .; then
-    rm -rf -- "$candidate"
-    echo "== retention: удалено проверенное поколение старше 14 дней: $(basename "$candidate")"
-  fi
-done < <(find "$GENERATIONS" -mindepth 1 -maxdepth 1 -type d -print)
-echo "== выкачено: $subject; current=$sha previous=$current_sha snapshot=$(basename "$generation_path")/database.sqlite3 manifest=$(manifest_hash "$generation_path")"
+ls -1dt "$REL"/build-* 2>/dev/null | tail -n +3 | xargs -r rm -rf
 exit 0

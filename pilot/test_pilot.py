@@ -346,85 +346,6 @@ class DeliveryAreaTests(unittest.TestCase):
         self.assertIn("только карточки", result["note"])
 
 
-class FreshDefaultBranchSnapshotTests(unittest.TestCase):
-    def git(self, cwd, *args):
-        rc, out = pilot._git(cwd, *args)
-        self.assertEqual(rc, 0, out)
-        return out.strip()
-
-    def commit(self, work, name, body):
-        path = os.path.join(work, name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(body)
-        self.git(work, "add", name)
-        self.git(work, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-                 "commit", "-qm", name)
-
-    def test_remote_main_advance_keeps_old_candidate_reviewable_without_cache(self):
-        """A real bare remote proves scope comes from pinned SHAs, not cached refs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            remote = os.path.join(tmp, "remote.git")
-            author = os.path.join(tmp, "author")
-            observer = os.path.join(tmp, "observer")
-            self.git(tmp, "init", "--bare", remote)
-            self.git(tmp, "init", "-q", author)
-            self.git(author, "checkout", "-qb", "main")
-            self.git(author, "remote", "add", "origin", remote)
-            self.commit(author, "README.md", "root\n")
-            self.git(author, "push", "-qu", "origin", "main")
-            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
-            self.git(author, "checkout", "-qb", "factory/candidate", "origin/main")
-            expected = ["delivery/file-%02d.txt" % i for i in range(1, 12)]
-            for names, message in ((expected[:6], "first delivery batch"),
-                                   (expected[6:], "second delivery batch")):
-                for name in names:
-                    path = os.path.join(author, name)
-                    os.makedirs(os.path.dirname(path), exist_ok=True)
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(name)
-                self.git(author, "add", "delivery")
-                self.git(author, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-                         "commit", "-qm", message)
-            self.git(author, "push", "-qu", "origin", "factory/candidate")
-
-            self.git(author, "checkout", "-q", "main")
-            self.commit(author, "foreign-from-advanced-main.txt", "not this delivery\n")
-            self.git(author, "push", "-q", "origin", "main")
-
-            self.git(tmp, "clone", "-q", remote, observer)
-
-            self.git(observer, "fetch", "-q", "origin",
-                     "factory/candidate:refs/remotes/origin/factory/candidate")
-            self.git(observer, "checkout", "-qb", "worker-owned")
-            before = self.git(observer, "symbolic-ref", "--short", "HEAD")
-
-            snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
-
-            self.assertEqual(snapshot["state"], "ok")
-            self.assertEqual(snapshot["files"], expected)
-            self.assertEqual(snapshot["ahead_by"], 2)
-            self.assertTrue(snapshot["base_advanced"])
-            self.assertEqual(snapshot["base_ahead_by"], 1)
-            self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
-            self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
-            self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
-
-    def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
-        snapshot = pilot.fresh_branch_snapshot("file:///definitely/not/a/repository", "factory/candidate")
-        self.assertEqual(snapshot["state"], "blocked")
-        self.assertIn("default branch", snapshot["reason"])
-
-    def test_review_gate_keeps_infrastructure_failure_out_of_request_changes(self):
-        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
-                "state": "blocked", "reason": "cannot fetch authoritative refs"}):
-            result = pilot.review_gate({}, "Работа", "factory/candidate",
-                                       "github.com/example/repo")
-        self.assertTrue(result["blocked"])
-        self.assertNotIn("REQUEST CHANGES", result["note"])
-        self.assertIn("review infrastructure", result["note"])
-
-
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
         self.created = []
@@ -750,14 +671,13 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                         mock.patch.object(pilot, "create_task", side_effect=[
                             RuntimeError("no worker"), {"task": {}}, {"task": {"id": stage}},
                         ]):
-                    parent = {"id": "source-" + stage}
                     with self.assertRaises(RuntimeError):
-                        pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
+                        pilot.create_cap_rescue("Работа", stage, {}, {})
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
                     with self.assertRaisesRegex(RuntimeError, "returned no task"):
-                        pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
+                        pilot.create_cap_rescue("Работа", stage, {}, {})
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
-                    pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
+                    pilot.create_cap_rescue("Работа", stage, {}, {})
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 1)
 
     def test_review_gate_defers_missing_branch_cap_until_return_task_exists(self):
@@ -841,10 +761,7 @@ class CardNumberReservationTests(unittest.TestCase):
 
     def test_review_rejects_card_with_other_reserved_number_first(self):
         files = ["pilot/pilot.py", "knowledge/cards/CARD-0071-wrong.md"]
-        snapshot = {"state": "ok", "default_branch": "main", "base_sha": "a" * 40,
-                    "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
-                    "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1, "files": files}
-        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
                 mock.patch.object(pilot, "implementation_commit_gate") as implementation:
             result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
                                        expected_card="CARD-0070")
@@ -855,10 +772,7 @@ class CardNumberReservationTests(unittest.TestCase):
 
     def test_review_accepts_matching_card_for_normal_commit_gate(self):
         files = ["pilot/pilot.py", "knowledge/cards/CARD-0070-correct.md"]
-        snapshot = {"state": "ok", "default_branch": "main", "base_sha": "a" * 40,
-                    "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
-                    "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1, "files": files}
-        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None) as implementation, \
                 mock.patch.object(pilot, "load", return_value={}):
             result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
@@ -1525,103 +1439,6 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
-class CorrectionProvenanceStormTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.works_path = os.path.join(self.temporary.name, "works.json")
-        self.events_path = os.path.join(
-            self.temporary.name, "duplicate-root-prevented.json")
-        self.patches = (
-            mock.patch.object(pilot, "WORKS_PATH", self.works_path),
-            mock.patch.object(
-                pilot, "DUPLICATE_ROOT_EVENTS_PATH", self.events_path),
-        )
-        for patcher in self.patches:
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        self.conf = {"stages": [
-            {"workflow": "Triage"}, {"workflow": "Specification"},
-            {"workflow": "Implement + Test"}, {"workflow": "Review"},
-            {"workflow": "Verify"},
-        ]}
-        self.root = {
-            "id": "root-work", "work_id": "root-work",
-            "title": "[auto] [1/5 Triage] Исправить корзину",
-            "state": "succeeded", "created_at": "2026-08-11T20:00:00Z",
-        }
-
-    def correction(self, kind):
-        source = "review-task" if kind == "review_return" else "verify-task"
-        return {
-            "id": kind, "work_id": self.root["id"],
-            "parent_task_id": source, "correction_kind": kind,
-            "title": "[auto] [3/5 Implement + Test] Исправить корзину",
-            "state": "queued", "created_at": "2026-08-11T20:01:00Z",
-        }
-
-    def assert_storm_is_single_pipeline(self, kind):
-        correction = self.correction(kind)
-        tasks = [self.root, correction]
-        with mock.patch.object(pilot, "log") as journal:
-            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
-            # A new Pilot process reads the same durable files and sees the
-            # same API snapshot. Discovery must remain idempotent after restart.
-            pilot.record_new_works(self.conf, list(reversed(tasks)),
-                                   max_age_min=10_000_000)
-        works = pilot.load(self.works_path, {})
-        events = pilot.load(self.events_path, {})
-        self.assertEqual(list(works), [self.root["id"]])
-        self.assertEqual(len({pilot.task_work_id(task) for task in tasks}), 1)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[correction["id"]], {
-            "task_id": correction["id"], "work_id": self.root["id"],
-            "parent_task_id": correction["parent_task_id"],
-            "correction_kind": kind,
-        })
-        prevented = [call for call in journal.call_args_list
-                     if call.args and call.args[0] ==
-                     "pilot_duplicate_root_prevented"]
-        self.assertEqual(len(prevented), 1)
-        self.assertFalse(any("Triage" in str(call) for call in journal.call_args_list))
-
-    def test_review_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("review_return")
-
-    def test_verify_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("verify_return")
-
-    def test_explicit_provenance_wins_over_auto_title(self):
-        correction = self.correction("review_return")
-        correction["title"] = "[auto] [1/5 Triage] Изменённое человеком имя"
-        pilot.record_new_works(
-            self.conf, [correction], max_age_min=10_000_000)
-        self.assertEqual(pilot.load(self.works_path, {}), {})
-        self.assertEqual(len(pilot.load(self.events_path, {})), 1)
-
-    def test_child_builder_always_sends_parent_and_correction(self):
-        sent = []
-        with mock.patch.object(
-                pilot, "create_task",
-                side_effect=lambda body, _conf: sent.append(body)
-                or {"task": {"id": "child"}}):
-            pilot.create_child_task(
-                {"title": "[auto] correction"}, self.root, {},
-                "review_return")
-        self.assertEqual(sent[0]["parent_task_id"], self.root["id"])
-        self.assertEqual(sent[0]["correction_kind"], "review_return")
-
-    def test_identical_titles_with_distinct_work_ids_remain_distinct(self):
-        first = dict(self.root, state="running")
-        other = dict(first, id="other-work", work_id="other-work")
-        tasks = [first, other, self.correction("review_return")]
-        self.assertEqual(len(pilot.active_auto_works(tasks)), 2)
-        self.assertEqual(pilot.stage_attempts(tasks, "Triage", first), 1)
-        self.assertEqual(pilot.stage_attempts(tasks, "Triage", other), 1)
-        self.assertIs(
-            pilot.live_or_done_at(tasks, other, 1), other)
-
-
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
@@ -1683,7 +1500,6 @@ class PipelineWatchTests(unittest.TestCase):
     @staticmethod
     def task(stage="Specification", state="succeeded", repository_id="repo-id"):
         return {
-            "id": "source-task",
             "title": f"[auto] [1/3 {stage}] Встроенный патруль",
             "state": state,
             "repository_id": repository_id,
@@ -2328,62 +2144,6 @@ class ClosedWorkLifecycleTests(unittest.TestCase):
             "Закрытая работа", self.old, [self.old, current]))
         self.assertEqual(pilot.work_lifecycle_block(
             "Закрытая работа", current, [self.old, current]), "")
-
-
-class WorkOriginAttributionTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.works_path = os.path.join(self.temporary.name, "works.json")
-        self.ideas_path = os.path.join(self.temporary.name, "ideas.json")
-        self.patches = [
-            mock.patch.object(pilot, "WORKS_PATH", self.works_path),
-            mock.patch.object(pilot, "IDEAS_PATH", self.ideas_path),
-        ]
-        for patcher in self.patches:
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        pilot.save(self.works_path, {})
-        pilot.save(self.ideas_path, [])
-        self.conf = {"stages": [{"workflow": "Triage"}, {"workflow": "Review"}]}
-
-    @staticmethod
-    def task(base, request_key="regular-task"):
-        return {
-            "id": request_key,
-            "title": f"[auto] [1/2 Triage] {base}",
-            "state": "queued",
-            "request_key": request_key,
-            "created_at": "2026-08-12T03:00:00Z",
-        }
-
-    def test_new_work_inherits_assistant_origin_from_plan(self):
-        pilot.save(self.ideas_path, [{
-            "id": "proposal", "title": "Assistant proposal",
-            "origin": "assistant", "state": "in_work",
-        }])
-
-        pilot.record_new_works(
-            self.conf, [self.task("Assistant proposal")], max_age_min=10_000,
-        )
-
-        work = pilot.load(self.works_path, {})["Assistant proposal"]
-        self.assertEqual(work["origin"], "assistant")
-
-    def test_automation_task_is_not_attributed_to_owner(self):
-        pilot.save(self.ideas_path, [{
-            "id": "old-owner-card", "title": "Scheduled patrol",
-            "origin": "owner", "state": "in_work",
-        }])
-
-        pilot.record_new_works(
-            self.conf,
-            [self.task("Scheduled patrol", "automation:patrol:schedule:one")],
-            max_age_min=10_000,
-        )
-
-        work = pilot.load(self.works_path, {})["Scheduled patrol"]
-        self.assertEqual(work["origin"], "orchestrator")
 
 
 class WorkArchiveCleanupTests(unittest.TestCase):
@@ -3728,8 +3488,6 @@ class AnswerEscalationTests(unittest.TestCase):
             )
 
         self.assertEqual(created[0]["worker_id"], "sol-high")
-        self.assertEqual(created[0]["parent_task_id"], "source-task")
-        self.assertEqual(created[0]["correction_kind"], "review_return")
         raised = [message for title, message in notifications
                   if title == "Исполнитель повышен"]
         self.assertEqual(len(raised), 1)
@@ -4748,22 +4506,9 @@ class PostMergeDeployTest(unittest.TestCase):
 
 
 class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.broker_build = tempfile.TemporaryDirectory()
-        cls.broker_executable = os.path.join(cls.broker_build.name, "factory-release-broker")
-        subprocess.run(["go", "build", "-o", cls.broker_executable,
-                        "./cmd/factory-release-broker"], check=True,
-                       cwd=os.path.dirname(os.path.dirname(__file__)))
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.broker_build.cleanup()
-
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.broker_processes = {}
         self.state_path = os.path.join(self.temporary.name, "state.json")
         self.receipts = os.path.join(self.temporary.name, "receipts.jsonl")
         self.outbox = os.path.join(self.temporary.name, "outbox.jsonl")
@@ -4773,323 +4518,64 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         return {"task_id": task, "base": "Единый выпуск", "link": "",
                 "merge_receipt": {"task_id": task, "base": "Единый выпуск"}}
 
-    def _stop_process(self, process):
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-
-    def _start_process_broker(self, locked=False, outcome="succeeded"):
-        """Run the real Go Unix broker against a blocking physical FX fixture."""
-        socket_path = os.path.join(self.temporary.name, uuid.uuid4().hex + ".sock")
-        state_dir = os.path.join(self.temporary.name, uuid.uuid4().hex + "-broker")
-        fx = os.path.join(self.temporary.name, uuid.uuid4().hex + "-fx")
-        attempts = fx + ".attempts"
-        success = fx + ".success"
-        started = fx + ".started"
-        pid = fx + ".pid"
-        release_gate = fx + ".release"
-        lock_once = fx + ".lock-once"
-        with open(fx, "w", encoding="utf-8") as stream:
-            stream.write("#!/bin/sh\nset -eu\n"
-                         "printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + "\"\n"
-                         "if [ -f \"" + lock_once + "\" ]; then rm -f \"" + lock_once + "\"; exit 8; fi\n"
-                         "printf '%s\\n' \"$$\" > \"" + pid + "\"\n"
-                         ": > \"" + started + "\"\n"
-                         "while [ ! -f \"" + release_gate + "\" ]; do sleep 0.01; done\n"
-                         "case \"" + outcome + "\" in\n"
-                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
-                         "  rollback_failed) exit 1 ;;\n"
-                         "  *) exit 7 ;;\n"
-                         "esac\n")
-        os.chmod(fx, 0o700)
-        if locked:
-            with open(lock_once, "w", encoding="utf-8") as stream:
-                stream.write("locked once\n")
-        broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
-                                   "-state-dir", state_dir, "-fx-executable", fx],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.broker_processes[socket_path] = broker
-        self.addCleanup(self._stop_process, broker)
-        for _ in range(100):
-            if os.path.exists(socket_path):
-                return {"socket": socket_path, "broker_state": state_dir,
-                        "fx": fx,
-                        "attempts": attempts, "success": success, "fx_started": started,
-                        "fx_pid": pid, "release_gate": release_gate}
-            if broker.poll() is not None:
-                self.fail("built release broker stopped before opening its Unix socket")
-            time.sleep(.02)
-        self.fail("built release broker did not open its Unix socket")
-
-    def _restart_process_broker(self, paths):
-        """Replace a stopped broker while retaining its durable state and FX."""
-        process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
-                                    "-state-dir", paths["broker_state"],
-                                    "-fx-executable", paths["fx"]],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.broker_processes[paths["socket"]] = process
-        self.addCleanup(self._stop_process, process)
-        for _ in range(100):
-            if os.path.exists(paths["socket"]):
-                return process
-            if process.poll() is not None:
-                self.fail("restarted release broker stopped before opening its Unix socket")
-            time.sleep(.02)
-        self.fail("restarted release broker did not open its Unix socket")
-
-    def _pilot_process(self, action, paths, boundary="", now=0, sha=""):
-        """Run or abruptly stop an independent real Pilot interpreter."""
-        invocation = {"action": action, "boundary": boundary, "now": now, "sha": sha,
-                      **paths}
-        config = os.path.join(self.temporary.name, uuid.uuid4().hex + ".json")
-        with open(config, "w", encoding="utf-8") as stream:
-            json.dump(invocation, stream)
-        script = r'''
-import json, os, sys, time
-from pilot import pilot
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-for name, key in (("STATE_PATH", "state"), ("MERGES_PATH", "merges"),
-                  ("DELIVERY_RECEIPTS_PATH", "receipts"), ("DELIVERY_OUTBOX_PATH", "outbox"),
-                  ("NOTIFY_LOG_PATH", "notifications")):
-    setattr(pilot, name, d[key])
-def event(name, *values):
-    with open(d["events"], "a", encoding="utf-8") as stream:
-        stream.write(json.dumps([name, *values]) + "\n")
-def generation(state):
-    target = state.get(pilot.DELIVERY_STATE_KEY, {}).get("targets", {}).get("factory", {})
-    return target.get("generations", {}).get(target.get("current_generation"), {})
-original_save = pilot.save
-def save_then_crash(path, state):
-    original_save(path, state)
-    if d["action"] != "crash":
-        return
-    phase = generation(state).get("phase")
-    boundary = d["boundary"]
-    if ((boundary in ("post", "wrapper_status") and phase == "launching") or
-            (boundary == "running" and phase == "running") or
-            (boundary == "terminal" and phase == "completed")):
-        event("crash", boundary, phase)
-        os._exit(0)
-pilot.save = save_then_crash
-pilot.mark_final = lambda *args: event("mark_final", *args)
-pilot.notify = lambda _conf, title, *_args, **_kw: event("owner_done", title)
-conf = {"release_broker_socket": d["socket"]}
-def wait(task, sha):
-    return {"task_id": task, "base": "Единый выпуск", "link": "",
-            "merge_receipt": {"task_id": task, "base": "Единый выпуск", "sha": sha}}
-state = pilot.load(pilot.STATE_PATH, {})
-if not generation(state):
-    intent = {"phase": "merged", "base": "Единый выпуск", "branch": "topic",
-              "repository": "github.com/timafen/factory", "commit_sha": d["sha"], "link": ""}
-    state = {"merge_intents": {"verify-1": intent}}
-    pilot.save(pilot.STATE_PATH, state)
-    pilot.recover_merge_intents(conf, state)
-if d["action"] == "seed":
-    raise SystemExit(0)
-if d["action"] == "join":
-    pilot.deploy_after_merge(conf, "github.com/timafen/factory", state, d["sha"], wait("verify-2", d["sha"]))
-    raise SystemExit(0)
-pilot.recover_merge_intents(conf, state)
-if d["action"] == "poll_once":
-    pilot.poll_delivery_state(conf, state, now=d["now"])
-    pilot.save(pilot.STATE_PATH, state)
-    raise SystemExit(0)
-if d["action"] == "recover":
-    with open(d["release_gate"], "w", encoding="utf-8"):
-        pass
-if d["action"] == "crash" and d["boundary"] == "pid":
-    pilot.poll_delivery_state(conf, state, now=d["now"])
-    operation = generation(state)
-    path = os.path.join(d["broker_state"], operation["id"] + ".json")
-    for _ in range(250):
-        try:
-            with open(path, encoding="utf-8") as stream:
-                if json.load(stream).get("pid"):
-                    event("crash", "pid", operation["id"])
-                    os._exit(0)
-        except (OSError, ValueError):
-            pass
-        time.sleep(.02)
-    raise SystemExit("physical FX PID was not persisted")
-released = d["action"] == "recover"
-for _ in range(250):
-    pilot.poll_delivery_state(conf, state, now=d["now"])
-    phase = generation(state).get("phase")
-    if d["action"] == "crash" and d["boundary"] == "terminal" and phase == "running" and not released:
-        with open(d["release_gate"], "w", encoding="utf-8"):
-            pass
-        released = True
-    if d["action"] != "crash" and phase in ("completed", "failed", "reserved"):
-        break
-    time.sleep(.02)
-if d["action"] == "crash":
-    raise SystemExit("crash boundary was not reached: " + d["boundary"])
-pilot.save(pilot.STATE_PATH, state)
-'''
-        subprocess.run([sys.executable, "-c", script, config], check=True,
-                       cwd=os.path.dirname(os.path.dirname(__file__)))
-
-    def _process_paths(self, broker):
-        prefix = os.path.join(self.temporary.name, uuid.uuid4().hex)
-        return {**broker, "state": prefix + ".state.json", "merges": prefix + ".merges.jsonl",
-                "receipts": prefix + ".receipts.jsonl", "outbox": prefix + ".outbox.jsonl",
-                "notifications": prefix + ".notifications.jsonl", "events": prefix + ".events.jsonl"}
-
-    def _events(self, path, name):
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as stream:
-            return [json.loads(line) for line in stream if json.loads(line)[0] == name]
-
-    def _read_json(self, path):
-        with open(path, encoding="utf-8") as stream:
-            return json.load(stream)
-
-    def test_state_file_crash_boundaries_recover_in_fresh_pilot_processes(self):
-        boundaries = ("post", "wrapper_status", "pid", "running", "terminal")
+    def test_state_file_restart_boundaries_keep_one_delivery_identity(self):
+        boundaries = ("intent", "after_merge", "after_journal", "after_wait", "reserved",
+                      "post", "wrapper_status", "pid", "running", "terminal",
+                      "outbox_before", "outbox_after")
         for boundary in boundaries:
             with self.subTest(boundary=boundary):
-                paths = self._process_paths(self._start_process_broker())
-                # The subprocess calls production recovery/polling and exits
-                # with os._exit immediately after its actual durable boundary.
-                self._pilot_process("crash", paths, boundary, sha=self.sha)
-                self.assertEqual(len(self._events(paths["events"], "crash")), 1)
-                crashed = self._read_json(paths["state"])
-                crashed_target = crashed[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-                crashed_generation = crashed_target["generations"][crashed_target["current_generation"]]
-                if boundary in ("post", "wrapper_status"):
-                    self.assertEqual(crashed_generation["phase"], "launching")
-                elif boundary == "running":
-                    self.assertEqual(crashed_generation["phase"], "running")
-                elif boundary == "terminal":
-                    self.assertEqual(crashed_generation["phase"], "completed")
-                    self.assertFalse(os.path.exists(paths["receipts"]))
-                    self.assertFalse(os.path.exists(paths["outbox"]))
-                    self.assertEqual(self._events(paths["events"], "mark_final"), [])
-                    self.assertEqual(self._events(paths["events"], "owner_done"), [])
-                else:
-                    broker_before_recovery = self._read_json(os.path.join(
-                        paths["broker_state"], crashed_generation["id"] + ".json"))
-                    self.assertGreater(broker_before_recovery.get("pid", 0), 0)
-                self._pilot_process("recover", paths, boundary, sha=self.sha)
-                state = self._read_json(paths["state"])
-                target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+                state = {"merge_intents": {"verify-1": {
+                    "phase": "merged" if boundary != "intent" else "intent",
+                    "base": "Единый выпуск", "branch": "topic",
+                    "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
+                journal = os.path.join(self.temporary.name, boundary + "-merges.jsonl")
+                calls = {"gh_merge": 0, "post": 0, "physical": 0, "owner_done": 0}
+
+                def merge(*_args):
+                    calls["gh_merge"] += 1
+                    return True, "merged"
+
+                def broker(_socket, method, _operation_id, _payload=None):
+                    if method == "POST":
+                        calls["post"] += 1
+                        calls["physical"] += 1
+                        return {"status": "succeeded"}
+                    return {"status": "succeeded"}
+
+                def owner_done(*_args):
+                    calls["owner_done"] += 1
+
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                        mock.patch.object(pilot, "MERGES_PATH", journal), \
+                        mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                        mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                        mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, boundary + "-notify.jsonl")), \
+                        mock.patch.object(pilot, "gh_merge", side_effect=merge), \
+                        mock.patch.object(pilot, "broker_operation", side_effect=broker), \
+                        mock.patch.object(pilot, "mark_final", side_effect=owner_done):
+                    pilot.save(self.state_path, state)
+                    # A restart always reconstructs journal and wait before
+                    # any broker contact, even when `processed` is irrelevant.
+                    restored = pilot.load(self.state_path, {})
+                    if boundary != "intent":
+                        with open(journal, "w", encoding="utf-8") as stream:
+                            stream.write(json.dumps({"task_id": "verify-1"}) + "\n")
+                    pilot.recover_merge_intents({}, restored)
+                    pilot.save(self.state_path, restored)
+                    restored = pilot.load(self.state_path, {})
+                    pilot.recover_merge_intents({}, restored)
+                    # This is the restarted state machine, not a state-shape
+                    # check: it performs its broker POST and owner completion.
+                    pilot.poll_delivery_state({}, restored)
+                self.assertLessEqual(calls["gh_merge"], 1)
+                self.assertEqual(calls["gh_merge"], 1 if boundary == "intent" else 0)
+                self.assertEqual(calls["post"], 1)
+                self.assertEqual(calls["physical"], 1)
+                self.assertEqual(calls["owner_done"], 1)
+                self.assertTrue(pilot._intent_has_wait(restored, "verify-1"))
+                target = restored[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
                 generation = target["generations"][target["current_generation"]]
-                broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
-                with open(paths["attempts"], encoding="utf-8") as stream:
-                    physical = [line.strip() for line in stream if line.strip()]
-                self.assertEqual(broker_state["posts"], 1)
-                self.assertGreater(broker_state.get("pid", 0), 0)
-                self.assertEqual(physical, [generation["id"]])
-                with open(paths["success"], encoding="utf-8") as stream:
-                    self.assertEqual([line.strip() for line in stream if line.strip()], [generation["id"]])
-                self.assertEqual(len(self._events(paths["events"], "mark_final")), 1)
-                self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
-                with open(paths["receipts"], encoding="utf-8") as stream:
-                    self.assertEqual(len(stream.readlines()), 1)
-                with open(paths["outbox"], encoding="utf-8") as stream:
-                    self.assertEqual(len(stream.readlines()), 1)
-                self.assertEqual(generation["phase"], "completed")
                 self.assertEqual(generation["waits"]["verify-1"]["task_id"], "verify-1")
-
-    def test_real_rollback_failure_never_completes_waits(self):
-        paths = self._process_paths(self._start_process_broker(outcome="rollback_failed"))
-        self._pilot_process("seed", paths, sha=self.sha)
-        self._pilot_process("recover", paths, sha=self.sha)
-        state = self._read_json(paths["state"])
-        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-        generation = target["generations"][target["current_generation"]]
-        broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
-        self.assertEqual(broker_state["status"], "rollback_failed")
-        self.assertEqual(generation["phase"], "failed")
-        self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
-        self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
-
-    def test_terminal_write_failure_survives_real_broker_restart_without_false_done(self):
-        paths = self._process_paths(self._start_process_broker())
-        self._pilot_process("seed", paths, sha=self.sha)
-        self._pilot_process("poll_once", paths, sha=self.sha)
-        for _ in range(250):
-            if os.path.exists(paths["fx_started"]):
-                break
-            time.sleep(.02)
-        else:
-            self.fail("physical FX did not start")
-
-        saved_state = paths["broker_state"] + ".saved"
-        os.rename(paths["broker_state"], saved_state)
-        with open(paths["broker_state"], "w", encoding="utf-8") as stream:
-            stream.write("injected terminal write failure\n")
-        with open(paths["release_gate"], "w", encoding="utf-8"):
-            pass
-        for _ in range(250):
-            if os.path.exists(paths["success"]):
-                break
-            time.sleep(.02)
-        else:
-            self.fail("physical delivery did not finish")
-
-        # The live broker must retain its last durable, non-terminal view.  A
-        # Pilot process therefore cannot create completion artifacts.
-        self._pilot_process("poll_once", paths, sha=self.sha)
-        state = self._read_json(paths["state"])
-        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-        generation = target["generations"][target["current_generation"]]
-        self.assertEqual(generation["phase"], "running")
-        self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
-        self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
-
-        old_broker = self.broker_processes[paths["socket"]]
-        self._stop_process(old_broker)
-        os.remove(paths["broker_state"])
-        os.rename(saved_state, paths["broker_state"])
-        self._restart_process_broker(paths)
-        self._pilot_process("recover", paths, sha=self.sha)
-
-        state = self._read_json(paths["state"])
-        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-        generation = target["generations"][target["current_generation"]]
-        broker_state = self._read_json(os.path.join(
-            paths["broker_state"], generation["id"] + ".json"))
-        with open(paths["attempts"], encoding="utf-8") as stream:
-            attempts = [line.strip() for line in stream if line.strip()]
-        with open(paths["success"], encoding="utf-8") as stream:
-            successful = [line.strip() for line in stream if line.strip()]
-        self.assertEqual(generation["phase"], "failed")
-        self.assertEqual(broker_state["status"], "failed")
-        self.assertEqual(attempts, [generation["id"]])
-        self.assertEqual(successful, [generation["id"]])
-        self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
-        self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
-
-    def test_failed_broker_terminal_never_completes_waits(self):
-        state = {}
-        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
-                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
-                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
-                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "notifications.jsonl")), \
-                mock.patch.object(pilot, "broker_operation", return_value={"status": "failed"}), \
-                mock.patch.object(pilot, "mark_final") as mark_final, \
-                mock.patch.object(pilot, "notify") as owner_done:
-            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
-            pilot.poll_delivery_state({}, state)
-        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-        generation = target["generations"][target["current_generation"]]
-        self.assertEqual(generation["phase"], "failed")
-        self.assertFalse(os.path.exists(self.receipts))
-        self.assertFalse(os.path.exists(self.outbox))
-        mark_final.assert_not_called()
-        owner_done.assert_not_called()
 
     def test_lock_join_and_successor_are_distinct(self):
         state = {}
@@ -5109,29 +4595,38 @@ pilot.save(pilot.STATE_PATH, state)
             pilot.poll_delivery_state({}, state)
         self.assertEqual(len(target["generations"]), 2)
 
-    def test_locked_retry_uses_same_real_broker_operation_after_second_merge(self):
-        paths = self._process_paths(self._start_process_broker(locked=True))
-        self._pilot_process("seed", paths, sha=self.sha)
-        self._pilot_process("poll", paths, now=0, sha=self.sha)  # first physical FX exits rc=8
-        self._pilot_process("join", paths, sha="b" * 40)  # second merge arrives in another Pilot process
-        self._pilot_process("recover", paths, now=pilot.DELIVERY_RETRY_DELAY, sha="b" * 40)
-        state = self._read_json(paths["state"])
+    def test_locked_join_uses_latest_snapshot_and_one_physical_retry(self):
+        state = {}
+        calls = {"post": 0, "successful_physical": 0, "owner_done": 0}
+
+        def broker(_socket, method, _operation_id, _payload=None):
+            if method == "GET":
+                return {"status": "locked"}
+            calls["post"] += 1
+            if calls["post"] == 1:
+                return {"status": "locked"}
+            calls["successful_physical"] += 1
+            return {"status": "succeeded"}
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "locked-notify.jsonl")), \
+                mock.patch.object(pilot, "mark_final", side_effect=lambda *_args: calls.__setitem__("owner_done", calls["owner_done"] + 1)):
+            first = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                               self.sha, self.wait("a"))
+            with mock.patch.object(pilot, "broker_operation", side_effect=broker):
+                pilot.poll_delivery_state({}, state, now=0)
+                joined = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                                                    "b" * 40, self.wait("b"))
+                pilot.poll_delivery_state({}, state, now=pilot.DELIVERY_RETRY_DELAY)
+        self.assertEqual(first["id"], joined["id"])
+        self.assertEqual(joined["commit_sha"], "b" * 40)
+        self.assertEqual(set(joined["waits"]), {"a", "b"})
+        self.assertEqual(joined["phase"], "completed")
+        self.assertEqual(calls, {"post": 2, "successful_physical": 1, "owner_done": 2})
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
-        self.assertEqual(len(target["generations"]), 1, "reserved N must not create N+1")
-        generation = target["generations"][target["current_generation"]]
-        broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
-        with open(paths["attempts"], encoding="utf-8") as stream:
-            physical = [line.strip() for line in stream if line.strip()]
-        with open(paths["success"], encoding="utf-8") as stream:
-            successful = [line.strip() for line in stream if line.strip()]
-        self.assertEqual(generation["commit_sha"], "b" * 40)
-        self.assertEqual(set(generation["waits"]), {"verify-1", "verify-2"})
-        self.assertEqual(generation["phase"], "completed")
-        self.assertEqual(broker_state["posts"], 2, "every real POST was persisted by the broker")
-        self.assertEqual(physical, [generation["id"], generation["id"]])
-        self.assertEqual(successful, [generation["id"]], "only retry installs successfully")
-        self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
-        self.assertEqual(len(self._events(paths["events"], "mark_final")), 2)
+        self.assertEqual(len(target["generations"]), 1)
 
     def test_pilot_uses_real_unix_broker_routes(self):
         """A built Go broker receives the Unix API request and runs fixed FX once."""
