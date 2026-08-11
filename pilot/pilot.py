@@ -1484,6 +1484,16 @@ def note_cap_rescue(base, stage):
     save(RESCUE_PATH, rec)
 
 
+def create_cap_rescue(base, stage, body, conf=None):
+    """Create a return task before consuming its durable rescue allowance."""
+    created = create_task(body, conf)
+    task = created.get("task") if isinstance(created, dict) else None
+    if not isinstance(task, dict) or not task.get("id"):
+        raise RuntimeError(f"{stage} return: create_task returned no task")
+    note_cap_rescue(base, stage)
+    return created
+
+
 LOOP_NOTE = (
     "\n\nВНИМАНИЕ: эта работа прошла один и тот же этап {n} раз(а) и каждый раз "
     "возвращалась. Значит мешает не качество кода, а что-то системное: сломанное "
@@ -2469,9 +2479,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         note_cap = cap_rescues(base, "GATE")
         if note_cap >= 2:
             return None  # дважды возвращали за то же — пусть решает Ревью
-        note_cap_rescue(base, "GATE")
         log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
         return {"back": True,
+                "cap_stage": "GATE",
                 "alert": "Вернул сам: разработка не загрузила работу",
                 "alert_msg": ("Агент сказал «готово», но не загрузил свою работу "
                               "в хранилище — проверять нечего. Вернул в разработку "
@@ -2544,9 +2554,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
                                  "Проверяй ветку " + clean + ".")}
         if foreign and cap_rescues(base, "DIRT") < 1:
-            note_cap_rescue(base, "DIRT")
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
+                    "cap_stage": "DIRT",
                     "alert": "Вернул сам: в поставке чужие файлы",
                     "alert_msg": ("В работе оказались файлы, не относящиеся к задаче "
                                   "(%d шт.) — вернул в разработку с точным списком, "
@@ -6404,9 +6414,9 @@ def cycle(conf, state):
             # Сбой окружения, а не работы: вход в модель протух, сеть моргнула.
             # Владельцу тут делать нечего — повторяем этап сами.
             if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA") < 3:
-                note_cap_rescue(base, "INFRA")
                 try:
-                    create_task({"request_key": str(uuid.uuid4()),
+                    create_cap_rescue(base, "INFRA", {
+                                 "request_key": str(uuid.uuid4()),
                                  "title": title[:200],
                                  "context": (detail.get("context") or
                                              detail["task"].get("context") or "")[:20000],
@@ -6422,7 +6432,10 @@ def cycle(conf, state):
                            tags="repeat", click=f"{UI_BASE}/work")
                     continue
                 except Exception as e:
+                    if tid in state["processed"]:
+                        state["processed"].remove(tid)
                     log("infra_retry_error", repr(e))
+                    continue
 
             done = stage_attempts(tasks, wf, base)
             if done >= conf.get("max_stage_attempts", 3):
@@ -6542,7 +6555,6 @@ def cycle(conf, state):
                         # разработку с прямым наказом перебазироваться. Один раз:
                         # если и после этого не влилось — зовём хозяина.
                         if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
-                            note_cap_rescue(base_title(title), "MERGE")
                             try:
                                 stages_all = [x["workflow"] for x in conf["stages"]]
                                 back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
@@ -6550,7 +6562,8 @@ def cycle(conf, state):
                                 bw = workers.get(stage_worker(conf, back_st, "medium", workers))
                                 bnw = workflows.get(back_st)
                                 if bw and bnw and bnw.get("enabled"):
-                                    create_task({"request_key": str(uuid.uuid4()),
+                                    create_cap_rescue(base_title(title), "MERGE", {
+                                        "request_key": str(uuid.uuid4()),
                                         "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
                                         "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n\n"
                                             "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
@@ -6568,9 +6581,9 @@ def cycle(conf, state):
                                 else:
                                     raise RuntimeError("нет воркера/сценария")
                             except Exception as e:
+                                if tid in state["processed"]:
+                                    state["processed"].remove(tid)
                                 log("merge_conflict_return_error", repr(e))
-                                notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
-                                       priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
                         else:
                             notify(conf, "Verify PASS, но мёрж не прошёл", f"{base_title(title)}\n{cut(out)}",
                                    priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
@@ -6700,7 +6713,6 @@ def cycle(conf, state):
                     log(f"SPEC BRANCH STOP {base[:40]!r}: возврат уже использован, "
                         "разработку не запускаю")
                     continue
-                note_cap_rescue(base, "SPEC_BRANCH")
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 reason = (f"ветки {branch} нет в origin" if branch_missing and branch
                           else "в отчёте и контексте нет имени ветки" if not branch
@@ -6713,7 +6725,8 @@ def cycle(conf, state):
                     "git diff --name-only origin/main...HEAD показывает файлы задачи. "
                     "Ветку не переключай. Затем сдай Specification повторно.")
                 try:
-                    create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                    create_cap_rescue(base, "SPEC_BRANCH", {
+                                 "request_key": str(uuid.uuid4()), "title": back_title,
                                  "context": spec_ctx[:20000],
                                  "worker_id": detail["task"].get("worker_id") or worker["id"],
                                  "repository_id": detail["task"].get("repository_id") or "",
@@ -6736,7 +6749,6 @@ def cycle(conf, state):
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
         if (wf == "Specification" and not PROMISE_LINE.search(result or "")
                 and cap_rescues(base, "SPEC") < 1):
-            note_cap_rescue(base, "SPEC")
             back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
             nl = chr(10)
             spec_ctx = nl.join([
@@ -6754,7 +6766,8 @@ def cycle(conf, state):
                 "Лучшая команда — новый тест, выражающий суть задачи "
                 "(сейчас он красный)."])
             try:
-                create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                create_cap_rescue(base, "SPEC", {
+                             "request_key": str(uuid.uuid4()), "title": back_title,
                              "context": spec_ctx[:20000],
                              "worker_id": worker["id"],
                              "repository_id": detail["task"].get("repository_id") or "",
@@ -6768,7 +6781,10 @@ def cycle(conf, state):
                        tags="wrench", click=f"{UI_BASE}/work")
                 continue
             except Exception as e:
+                if tid in state["processed"]:
+                    state["processed"].remove(tid)
                 log("spec_gate_error", repr(e))
+                continue
 
         # Ворота: дешёвая машинная проверка вместо дорогого круга Ревью.
         gate_note = ""
@@ -6784,14 +6800,19 @@ def cycle(conf, state):
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
                 try:
-                    created_g = create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                    return_body = {"request_key": str(uuid.uuid4()), "title": back_title,
                                  "context": (f"Pipeline: {base}\nPrevious stage: {wf}\n"
                                              f"Branch: {branch}\n\n" + g["note"])[:20000],
                                  "worker_id": worker["id"],
                                  "repository_id": rid_g,
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                                     or nw["revision_id"]}, conf)
+                                     or nw["revision_id"]}
+                    if g.get("cap_stage"):
+                        created_g = create_cap_rescue(
+                            base, g["cap_stage"], return_body, conf)
+                    else:
+                        created_g = create_task(return_body, conf)
                     new_tid = (created_g.get("task") or {}).get("id", "") if isinstance(created_g, dict) else ""
                     notify(conf, g.get("alert") or "Вернул сам: поставка не прошла машинную проверку",
                            base + chr(10) + (g.get("alert_msg") or ""),
@@ -6799,7 +6820,10 @@ def cycle(conf, state):
                            click=(f"{UI_BASE}/tasks/{new_tid}" if new_tid else f"{UI_BASE}/work"))
                     continue
                 except Exception as e:
+                    if tid in state["processed"]:
+                        state["processed"].remove(tid)
                     log("gate_return_error", repr(e))
+                continue
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]

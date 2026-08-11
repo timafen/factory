@@ -346,7 +346,11 @@ class DeliveryAreaTests(unittest.TestCase):
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
         self.created = []
+        self.successful_created = []
         self.state = {"processed": []}
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.rescue_path = os.path.join(self.temporary.name, "cap_rescues.json")
         self.conf = {
             "stages": [
                 {"workflow": "Specification"},
@@ -364,7 +368,11 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         }
 
     def run_cycle(self, result, branch_result=("есть", ["knowledge/spec.md"]),
-                  branch_error=None, published_branches=None):
+                  branch_error=None, published_branches=None, create_effects=None,
+                  cycles=1, restart_after_first=False, durable_caps=False,
+                  branch_results=None):
+        effects = list(create_effects or [])
+
         def fake_api(path, body=None):
             if path in ("/tasks?limit=100", "/tasks?limit=200"):
                 return {"tasks": [self.task]}
@@ -403,10 +411,15 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
 
         def create(body, _conf):
             self.created.append(body)
-            return {"task": {
+            effect = effects.pop(0) if effects else None
+            if isinstance(effect, Exception):
+                raise effect
+            response = effect or {"task": {
                 "id": "created-task", "title": body["title"], "state": "created",
                 "repository_id": body["repository_id"],
             }}
+            self.successful_created.append(body)
+            return response
 
         def github_branch(args, **_kwargs):
             name = args[-1].split("/branches/", 1)[-1]
@@ -431,6 +444,9 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
             if branch_error:
                 branch_report = stack.enter_context(mock.patch.object(
                     pilot, "branch_report", side_effect=branch_error))
+            elif branch_results is not None:
+                branch_report = stack.enter_context(mock.patch.object(
+                    pilot, "branch_report", side_effect=branch_results))
             else:
                 branch_report = stack.enter_context(mock.patch.object(
                     pilot, "branch_report", return_value=branch_result))
@@ -447,16 +463,24 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                 pilot, "work_lifecycle_block", return_value=""))
             stack.enter_context(mock.patch.object(pilot, "live_or_done_at", return_value=None))
             stack.enter_context(mock.patch.object(pilot, "is_stopped", return_value=False))
-            stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
-            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
-            stack.enter_context(mock.patch.object(pilot, "notify"))
+            if durable_caps:
+                stack.enter_context(mock.patch.object(
+                    pilot, "RESCUE_PATH", self.rescue_path))
+            else:
+                stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
+                stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
+            self.notify = stack.enter_context(mock.patch.object(pilot, "notify"))
             stack.enter_context(mock.patch.object(pilot, "decide", return_value={
                 "action": "advance", "reason": "готово",
                 "next_complexity": "medium", "handoff": "использовать документ",
             }))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
-            pilot.cycle(self.conf, self.state)
+            for number in range(cycles):
+                pilot.cycle(self.conf, self.state)
+                if restart_after_first and number == 0:
+                    self.state = {"processed": []}
+            self.rescues = pilot.load(self.rescue_path, {}) if durable_caps else {}
         return branch_report
 
     def test_published_nonempty_branch_starts_implementation(self):
@@ -523,6 +547,106 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
 
         self.assertEqual(self.created, [])
         self.assertEqual(self.state["processed"], [])
+
+    def test_failed_spec_branch_return_keeps_cap_notification_and_processed_clear(self):
+        self.run_cycle(
+            "BRANCH: factory/missing\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_result=("нет", []),
+            create_effects=[RuntimeError("no_eligible_worker")],
+            durable_caps=True,
+        )
+
+        self.assertEqual(self.rescues, {})
+        self.assertEqual(self.state["processed"], [])
+        self.assertEqual(self.successful_created, [])
+        self.notify.assert_not_called()
+
+    def test_next_cycle_retries_failed_spec_return_and_records_one_success(self):
+        self.run_cycle(
+            "BRANCH: factory/published",
+            create_effects=[RuntimeError("control plane unavailable"), None],
+            cycles=2,
+            durable_caps=True,
+        )
+
+        self.assertEqual(len(self.created), 2)
+        self.assertEqual(len(self.successful_created), 1)
+        self.assertEqual(self.rescues["Сохранить спецификацию::SPEC"], 1)
+        self.assertEqual(self.state["processed"], ["specification-done"])
+        self.notify.assert_called_once()
+
+    def test_restart_retries_failed_branch_return_with_same_durable_cap(self):
+        self.run_cycle(
+            "BRANCH: factory/missing\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_result=("нет", []),
+            create_effects=[RuntimeError("control plane unavailable"), None],
+            cycles=2,
+            restart_after_first=True,
+            durable_caps=True,
+        )
+
+        self.assertEqual(len(self.created), 2)
+        self.assertEqual(len(self.successful_created), 1)
+        self.assertEqual(self.rescues["Сохранить спецификацию::SPEC_BRANCH"], 1)
+        self.notify.assert_called_once()
+
+    def test_no_eligible_worker_then_published_branch_starts_implementation(self):
+        self.run_cycle(
+            "BRANCH: factory/published\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_results=[("нет", []), ("есть", ["knowledge/spec.md"])],
+            create_effects=[RuntimeError("no_eligible_worker"), None],
+            cycles=2,
+            durable_caps=True,
+        )
+
+        self.assertEqual(len(self.successful_created), 1)
+        self.assertIn("Implement + Test", self.successful_created[0]["title"])
+        self.assertIn("Branch: factory/published", self.successful_created[0]["context"])
+        self.assertEqual(self.rescues, {})
+        self.notify.assert_not_called()
+
+    def test_cap_rescue_primitive_records_each_return_only_after_task_id(self):
+        with mock.patch.object(pilot, "RESCUE_PATH", self.rescue_path):
+            for stage in ("SPEC_BRANCH", "SPEC", "GATE", "DIRT", "INFRA", "MERGE"):
+                with self.subTest(stage=stage), \
+                        mock.patch.object(pilot, "create_task", side_effect=[
+                            RuntimeError("no worker"), {"task": {}}, {"task": {"id": stage}},
+                        ]):
+                    with self.assertRaises(RuntimeError):
+                        pilot.create_cap_rescue("Работа", stage, {}, {})
+                    self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
+                    with self.assertRaisesRegex(RuntimeError, "returned no task"):
+                        pilot.create_cap_rescue("Работа", stage, {}, {})
+                    self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
+                    pilot.create_cap_rescue("Работа", stage, {}, {})
+                    self.assertEqual(pilot.cap_rescues("Работа", stage), 1)
+
+    def test_review_gate_defers_missing_branch_cap_until_return_task_exists(self):
+        with mock.patch.object(pilot, "branch_report", return_value=("нет", [])), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "note_cap_rescue") as note:
+            result = pilot.review_gate({}, "Работа", "factory/missing", "repo")
+
+        self.assertEqual(result["cap_stage"], "GATE")
+        note.assert_not_called()
+
+    def test_review_gate_defers_dirty_branch_cap_until_return_task_exists(self):
+        def loader(path, default=None):
+            if path == pilot.AREAS_PATH:
+                return {"Работа": ["repo::pilot/pilot.py"]}
+            return default
+
+        with mock.patch.object(pilot, "branch_report", return_value=(
+                "есть", ["pilot/pilot.py", "node_modules/cache.js"])), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "rebuild_clean_branch", return_value=""), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "note_cap_rescue") as note:
+            result = pilot.review_gate({}, "Работа", "factory/dirty", "repo")
+
+        self.assertEqual(result["cap_stage"], "DIRT")
+        note.assert_not_called()
 
     def test_branch_report_treats_only_http_404_as_missing(self):
         response = types.SimpleNamespace(
