@@ -224,11 +224,12 @@ Pilot binary; storm-тест на копии данных; проверка jour
 
 ## Карточка работы
 
-`knowledge/cards/CARD-0085-correction-provenance-single-pipeline.md`
+`knowledge/cards/CARD-0086-correction-provenance-single-pipeline.md`
 
-Номер 0085 выбран после `git fetch` и проверки свежего `origin/main` и всех
-опубликованных `origin/*`: 0083 и 0084 уже заняты, 0085 отсутствует. Карточка
-относится только к этой работе; конфликтная старая CARD-0079 не используется.
+Номер 0086 выбран после `git fetch` и проверки свежего `origin/main` и всех
+опубликованных `factory/*`: предыдущий номер уже занят параллельной работой, а
+CARD-0086 отсутствует. Карточка относится только к этой работе; конфликтная
+старая CARD-0079 не используется.
 
 ГОТОВО-КОГДА: файл migrations/026_task_provenance.sql
 ГОТОВО-КОГДА: файл internal/protocol/types.go
