@@ -2,13 +2,14 @@
 
 ## HEAD
 
-- Status: BLOCKED — полный HTTPS browser suite падает на `route.fetch: self-signed certificate`; runtime-критерии resume/Origin не достигнуты.
-- Branch: `factory/154779a5-fa3-d1267776-1f8`
-- Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — timeout 120 секунд установлен первой операцией `beforeAll` и закреплён unit-регрессией.
-- What changed: Verify не менял код; проверены review head `04d3f782e37376d5a77c577a8db4c42fd5658703`, чистая сборка и единственный полный browser-запуск.
-- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just check` и отдельный production build прошли; 14 UI-файлов/156 тестов, Go/tooling/launcher PASS, `web/dist` воспроизводим.
-- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` собрал 21 тест, но дал `1 passed, 1 failed, 19 did not run`; первый HTTPS page-тест прошёл, второй упал на сертификате в `route.fetch()`.
-- Next action: исправить TLS-доверие для Playwright `route.fetch()` без расширения browser trust и вернуть полный 21-test HTTPS suite в Verify.
+- Status: IMPLEMENTED — HTTPS fixture больше не использует недоверенный `route.fetch`; полный 21-test browser suite ожидает Verify.
+- Branch: `factory/f48d26e0-344-21705f71-21c`
+- Implementation commit: 000084fd7cc008d8df69d62dedf02c00d91d93a8 — HTTPS resume идёт через Chromium/SPKI, а proxy фиксирует и проверяет очищенные backend-заголовки.
+- What changed: readiness получает исходный dashboard через browser `fetch`; реальный resume продолжает intercepted-запрос через `route.continue`.
+- What changed: fixture сверяет входные и backend `Origin`/`Forwarded`/`X-Forwarded-*`; чужой Origin отправляет только уже существующий loopback-only test client, поскольку Chromium не даёт подменить его в route.
+- Evidence: два независимых холодных запуска выбранных overview + HTTPS resume тестов с `FACTORY_BROWSER_LAUNCHER=/missing` → `2 passed` за 46.9 с и 48.7 с.
+- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just check` → PASS (14 UI-файлов/157 тестов, Go/tooling); отдельный `just build` и `git diff --exit-code -- web/dist` → PASS.
+- Next action: Verify запускает полный 21-test HTTPS browser suite один раз и подтверждает cleanup процессов/портов.
 
 ## LOG
 
@@ -75,3 +76,10 @@
 | Реальный HTTPS, scoped SPKI и service worker | тот же запуск; URL и browser diagnostics | PARTIAL: Chromium со scoped SPKI открыл реальный HTTPS и первый page-тест прошёл без browser SSL errors; activation service worker явно не доказан, suite остановился на отдельном TLS-клиенте `route.fetch()`. |
 | Spoofed headers удалены; desktop/390 resume; stale pause; safe retry; cross-origin prevention | serial-сценарий №7 в том же полном suite; Go/UI regressions в `just check` | BLOCKED runtime: сценарий №7 не запущен. Unit/server regressions прошли, но они не заменяют обязательное browser-доказательство. |
 | Process, port и tree cleanup | `ps -eo pid,ppid,args` и `ss -ltnp` до/после browser; `git status --short`; `git diff --exit-code -- web/dist` | PASS: scoped процессов и новых listeners нет; до правки карточки дерево и `web/dist` чистые. |
+
+### 2026-08-11 — Implement
+
+- Удалена единственная runtime-зависимость от `route.fetch`: readiness читает dashboard браузером, а успешный resume идёт через Chromium `route.continue` со scoped SPKI trust.
+- TLS proxy возвращает fixture-only снимок входных и переданных backend-заголовков; тест доказывает очистку spoofed `Forwarded`/`X-Forwarded-*`, сохранение `Origin`, 403 для чужого origin и 200 для browser resume.
+- Чужой `Origin` оставлен на существующем loopback-only API-контексте: Chromium намеренно сохраняет собственный Origin даже при header override в route.
+- Два холодных target-прогона → `2 passed` каждый; `just check` (157 web tests + Go/tooling), production build и clean `web/dist` → PASS. Полный 21-test browser suite оставлен Verify.
