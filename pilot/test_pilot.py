@@ -668,13 +668,14 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                         mock.patch.object(pilot, "create_task", side_effect=[
                             RuntimeError("no worker"), {"task": {}}, {"task": {"id": stage}},
                         ]):
+                    parent = {"id": "source-" + stage}
                     with self.assertRaises(RuntimeError):
-                        pilot.create_cap_rescue("Работа", stage, {}, {})
+                        pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
                     with self.assertRaisesRegex(RuntimeError, "returned no task"):
-                        pilot.create_cap_rescue("Работа", stage, {}, {})
+                        pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 0)
-                    pilot.create_cap_rescue("Работа", stage, {}, {})
+                    pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 1)
 
     def test_review_gate_defers_missing_branch_cap_until_return_task_exists(self):
@@ -1436,6 +1437,103 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
+class CorrectionProvenanceStormTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.works_path = os.path.join(self.temporary.name, "works.json")
+        self.events_path = os.path.join(
+            self.temporary.name, "duplicate-root-prevented.json")
+        self.patches = (
+            mock.patch.object(pilot, "WORKS_PATH", self.works_path),
+            mock.patch.object(
+                pilot, "DUPLICATE_ROOT_EVENTS_PATH", self.events_path),
+        )
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.conf = {"stages": [
+            {"workflow": "Triage"}, {"workflow": "Specification"},
+            {"workflow": "Implement + Test"}, {"workflow": "Review"},
+            {"workflow": "Verify"},
+        ]}
+        self.root = {
+            "id": "root-work", "work_id": "root-work",
+            "title": "[auto] [1/5 Triage] Исправить корзину",
+            "state": "succeeded", "created_at": "2026-08-11T20:00:00Z",
+        }
+
+    def correction(self, kind):
+        source = "review-task" if kind == "review_return" else "verify-task"
+        return {
+            "id": kind, "work_id": self.root["id"],
+            "parent_task_id": source, "correction_kind": kind,
+            "title": "[auto] [3/5 Implement + Test] Исправить корзину",
+            "state": "queued", "created_at": "2026-08-11T20:01:00Z",
+        }
+
+    def assert_storm_is_single_pipeline(self, kind):
+        correction = self.correction(kind)
+        tasks = [self.root, correction]
+        with mock.patch.object(pilot, "log") as journal:
+            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+            # A new Pilot process reads the same durable files and sees the
+            # same API snapshot. Discovery must remain idempotent after restart.
+            pilot.record_new_works(self.conf, list(reversed(tasks)),
+                                   max_age_min=10_000_000)
+        works = pilot.load(self.works_path, {})
+        events = pilot.load(self.events_path, {})
+        self.assertEqual(list(works), [self.root["id"]])
+        self.assertEqual(len({pilot.task_work_id(task) for task in tasks}), 1)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[correction["id"]], {
+            "task_id": correction["id"], "work_id": self.root["id"],
+            "parent_task_id": correction["parent_task_id"],
+            "correction_kind": kind,
+        })
+        prevented = [call for call in journal.call_args_list
+                     if call.args and call.args[0] ==
+                     "pilot_duplicate_root_prevented"]
+        self.assertEqual(len(prevented), 1)
+        self.assertFalse(any("Triage" in str(call) for call in journal.call_args_list))
+
+    def test_review_correction_keeps_one_pipeline_before_and_after_restart(self):
+        self.assert_storm_is_single_pipeline("review_return")
+
+    def test_verify_correction_keeps_one_pipeline_before_and_after_restart(self):
+        self.assert_storm_is_single_pipeline("verify_return")
+
+    def test_explicit_provenance_wins_over_auto_title(self):
+        correction = self.correction("review_return")
+        correction["title"] = "[auto] [1/5 Triage] Изменённое человеком имя"
+        pilot.record_new_works(
+            self.conf, [correction], max_age_min=10_000_000)
+        self.assertEqual(pilot.load(self.works_path, {}), {})
+        self.assertEqual(len(pilot.load(self.events_path, {})), 1)
+
+    def test_child_builder_always_sends_parent_and_correction(self):
+        sent = []
+        with mock.patch.object(
+                pilot, "create_task",
+                side_effect=lambda body, _conf: sent.append(body)
+                or {"task": {"id": "child"}}):
+            pilot.create_child_task(
+                {"title": "[auto] correction"}, self.root, {},
+                "review_return")
+        self.assertEqual(sent[0]["parent_task_id"], self.root["id"])
+        self.assertEqual(sent[0]["correction_kind"], "review_return")
+
+    def test_identical_titles_with_distinct_work_ids_remain_distinct(self):
+        first = dict(self.root, state="running")
+        other = dict(first, id="other-work", work_id="other-work")
+        tasks = [first, other, self.correction("review_return")]
+        self.assertEqual(len(pilot.active_auto_works(tasks)), 2)
+        self.assertEqual(pilot.stage_attempts(tasks, "Triage", first), 1)
+        self.assertEqual(pilot.stage_attempts(tasks, "Triage", other), 1)
+        self.assertIs(
+            pilot.live_or_done_at(tasks, other, 1), other)
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
@@ -1497,6 +1595,7 @@ class PipelineWatchTests(unittest.TestCase):
     @staticmethod
     def task(stage="Specification", state="succeeded", repository_id="repo-id"):
         return {
+            "id": "source-task",
             "title": f"[auto] [1/3 {stage}] Встроенный патруль",
             "state": state,
             "repository_id": repository_id,
@@ -3484,6 +3583,8 @@ class AnswerEscalationTests(unittest.TestCase):
             )
 
         self.assertEqual(created[0]["worker_id"], "sol-high")
+        self.assertEqual(created[0]["parent_task_id"], "source-task")
+        self.assertEqual(created[0]["correction_kind"], "review_return")
         raised = [message for title, message in notifications
                   if title == "Исполнитель повышен"]
         self.assertEqual(len(raised), 1)
