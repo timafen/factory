@@ -2246,6 +2246,79 @@ class PipelineWatchMergeTests(unittest.TestCase):
         self.assertNotIn("verify-crash", state[pilot.MERGE_INTENT_KEY])
         self.assertNotIn("verify-crash", pilot.load(state_path, {})[pilot.MERGE_INTENT_KEY])
 
+    def test_processed_verify_recovers_durable_merge_intent_over_two_full_cycles(self):
+        """A processed Verify still restores its post-merge release after restart."""
+        self.conf.update({"stages": [{"workflow": "Verify"}], "auto_merge": True,
+                          "deploy_factory_cmd": "fx factory release"})
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        state_path = os.path.join(temporary.name, "state.json")
+        status = os.path.join(temporary.name, "release.status")
+        verify = {"id": "verify-crash", "repository_id": "repo-id",
+                  "title": "[auto] [1/1 Verify] Durable merge intent", "state": "succeeded"}
+        delivery = {"task_id": "verify-crash", "stage": "Verify",
+                    "base": "Durable merge intent"}
+        state = {"processed": ["verify-crash"], pilot.MERGE_INTENT_KEY: {
+            "verify-crash": {"branch": "factory/already-merged",
+                "repository": "github.com/timafen/factory", "base": delivery["base"],
+                "delivery": delivery}}}
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": [verify]}
+            if path == "/tasks?limit=200":
+                return {"tasks": [verify]}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                    "remote_identity": "github.com/timafen/factory"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": "verify-workflow", "enabled": True,
+                    "current_revision": {"id": "verify-revision", "title": "Verify"}}]}
+            raise AssertionError(path)
+
+        def reserve(command_key, _label, _command, saved_state):
+            saved_state[pilot.DEPLOY_STATE_KEY] = {"generation": 1, command_key: {
+                "generation": 1, "pid": 111, "status": status,
+                "output": "/missing", "queued": False}}
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "reconcile_diag_repairs", "diag_sweep",
+                 "rescue_queued", "supersede_stale_questions",
+                 "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
+                 "pipeline_watch", "cleanup_work_archive", "autostart_plan")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 0}))
+            stack.enter_context(mock.patch.object(pilot, "gh_merge"))
+            start = stack.enter_context(mock.patch.object(
+                pilot, "_start_post_merge_deploy", side_effect=reserve))
+            stack.enter_context(mock.patch.object(pilot, "_release_running", return_value=True))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", journal))
+            stack.enter_context(mock.patch.object(pilot, "STATE_PATH", state_path))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, state)
+            pilot.cycle(self.conf, state)
+
+        with open(journal, encoding="utf-8") as entries:
+            self.assertEqual([json.loads(line)["task_id"] for line in entries],
+                             ["verify-crash"])
+        self.assertNotIn("verify-crash", state[pilot.MERGE_INTENT_KEY])
+        self.assertEqual(start.call_count, 1)
+        self.assertEqual(state[pilot.DELIVERY_WAIT_KEY], [dict(
+            delivery, command_key="deploy_factory_cmd", generation=1)])
+        self.assertEqual(state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]["generation"], 1)
+
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
         self.conf["stages"] = [{"workflow": "Verify"}]
@@ -4168,6 +4241,89 @@ class PostMergeDeployTest(unittest.TestCase):
         self.assertFalse(release["queued"])
         self.assertEqual(popen.call_count, 1)
         self.assertEqual(supervisor.call_count, 2)
+
+    def test_finished_reserved_release_does_not_start_successor_over_two_full_cycles(self):
+        """A status from a lost launch token is generation one, not a successor."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        deliveries = os.path.join(temporary.name, "deliveries.jsonl")
+        verdict_dir = os.path.join(temporary.name, "verdicts")
+        conf = {"stages": [], "deploy_factory_cmd": "fx factory release"}
+        state = {}
+
+        def fake_api(path, payload=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": []}
+            if path == "/tasks?limit=200":
+                return {"tasks": []}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        noops = ("cleanup_completed_plan_cards", "write_dashboard",
+                 "provider_limits_tick", "detect_limits", "record_new_works",
+                 "budget_guard", "handle_epics", "reconcile_diag_repairs", "diag_sweep",
+                 "rescue_queued", "supersede_stale_questions",
+                 "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
+                 "pipeline_watch", "cleanup_work_archive", "autostart_plan")
+        real_save = pilot.save
+
+        def crash_after_popen(path, value):
+            release = (value.get(pilot.DEPLOY_STATE_KEY, {})
+                       .get("deploy_factory_cmd", {}))
+            if release.get("pid"):
+                raise SystemExit("Pilot stopped after Popen")
+            real_save(path, value)
+
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", deliveries), \
+                mock.patch.object(pilot, "VERDICT_DIR", verdict_dir), \
+                mock.patch.object(pilot.subprocess, "Popen") as popen:
+            popen.return_value.pid = 777
+            with mock.patch.object(pilot, "save", side_effect=crash_after_popen):
+                with self.assertRaises(SystemExit):
+                    pilot.deploy_after_merge(
+                        conf, "github.com/timafen/factory", state,
+                        delivery={"task_id": "verify-reserved", "stage": "Verify",
+                                  "base": "Reserved release"})
+
+            restored = pilot.load(state_path, {})
+            release = restored[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+            self.assertTrue(release["queued"])
+            self.assertIn("launch_token", release)
+            self.assertNotIn("pid", release)
+            with open(release["status"], "w", encoding="utf-8") as result:
+                result.write("0\n")
+
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+                stack.enter_context(mock.patch.object(pilot, "best_workers", return_value={}))
+                stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                    side_effect=lambda day_start, _week_start: {day_start: {}}))
+                stack.enter_context(mock.patch.object(
+                    pilot, "day_budget_blocks", return_value=False))
+                stack.enter_context(mock.patch.object(
+                    pilot, "host_block", return_value={"state": "ok"}))
+                notify = stack.enter_context(mock.patch.object(pilot, "notify"))
+                for name in noops:
+                    stack.enter_context(mock.patch.object(pilot, name))
+
+                pilot.cycle(conf, restored)
+                pilot.cycle(conf, restored)
+
+        self.assertNotIn("deploy_factory_cmd", restored[pilot.DEPLOY_STATE_KEY])
+        with mock.patch.object(pilot, "VERDICT_DIR", verdict_dir):
+            self.assertTrue(pilot.final_ok("verify-reserved", strict=True))
+        with open(deliveries, encoding="utf-8") as records:
+            self.assertEqual(len(records.readlines()), 1)
+        self.assertEqual(popen.call_count, 1)
+        notify.assert_called_once()
 
     @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")

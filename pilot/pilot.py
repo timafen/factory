@@ -5551,6 +5551,34 @@ def recover_merged_intent(conf, state, task_id, branch, repo_identity, delivery)
     return True
 
 
+def recover_durable_merge_intents(conf, state):
+    """Recover completed merges before the per-task ``processed`` cursor.
+
+    A successful ``gh_merge`` is preceded by a saved intent, but a crash can
+    happen before its journal receipt is written.  The task may already be in
+    the in-memory cursor on the next run, so this sweep must not depend on the
+    ordinary terminal-task loop below.
+    """
+    intents = state.get(MERGE_INTENT_KEY) or {}
+    if not isinstance(intents, dict):
+        return
+    for task_id, intent in list(intents.items()):
+        if not isinstance(intent, dict):
+            continue
+        branch = intent.get("branch")
+        repo_identity = intent.get("repository")
+        delivery = intent.get("delivery")
+        if not (branch and repo_identity and isinstance(delivery, dict)):
+            continue
+        repo_short = repo_identity.split("github.com/")[-1]
+        comparison = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
+        if comparison is None or comparison.get("ahead_by") != 0:
+            continue
+        if recover_merged_intent(
+                conf, state, task_id, branch, repo_identity, delivery):
+            log(f"MERGE RECOVER task={task_id}: durable intent restored after restart")
+
+
 def delivery_receipt(base, since=""):
     """Return a successful release receipt, never a merge-only receipt."""
     try:
@@ -6476,7 +6504,16 @@ def poll_post_merge_deploys(conf, state, now=None):
             except (OSError, ValueError):
                 pass
         if rc is not None:
-            queued = release.get("queued", False)
+            # ``queued`` originally covered both a durable launch reservation
+            # and a coalesced successor.  A wrapper can finish after Pilot
+            # dies between Popen and its pid save, leaving the reservation
+            # queued with only a launch token.  That is generation N, not a
+            # request for generation N+1.
+            successor_queued = release.get("successor_queued")
+            if successor_queued is None:
+                successor_queued = (release.get("queued", False) and
+                                    (release.get("pid") or
+                                     not release.get("launch_token")))
             output = _release_output(release)
             log(f"{label} completed generation={release.get('generation')} rc={rc} :: "
                 f"{output}")
@@ -6501,7 +6538,7 @@ def poll_post_merge_deploys(conf, state, now=None):
                 # survive even when no later merge had set queued=True.
                 _queue_post_merge_deploy_retry(
                     command_key, label, conf[command_key], state, now)
-            elif queued and conf.get(command_key):
+            elif successor_queued and conf.get(command_key):
                 _start_post_merge_deploy(command_key, label, conf[command_key], state)
         elif release.get("pid") and not _release_running(release["pid"]):
             # The runner disappeared before it could write a result. Retrying
@@ -6562,7 +6599,11 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None, delivery=None)
             waits.append(wait)
         save(STATE_PATH, state)
     if running:
+        # Keep ``queued`` for compatibility with persisted state, but record
+        # why it is set so status recovery cannot mistake a launch reservation
+        # for a separate release request.
         running["queued"] = True
+        running["successor_queued"] = True
         save(STATE_PATH, state)
         log(f"{label} queued after generation={running.get('generation')}")
         return target_generation if delivery else None
@@ -6601,6 +6642,13 @@ def cycle(conf, state):
         rev = w.get("current_revision") or {}
         workflows[rev.get("title")] = {"workflow_id": w["id"], "revision_id": rev.get("id"),
                                        "enabled": w.get("enabled")}
+
+    # This is deliberately before the terminal-task loop: ``processed`` is a
+    # convenience cursor, while a merge intent is the durable recovery record.
+    try:
+        recover_durable_merge_intents(conf, state)
+    except Exception as e:
+        log("merge_intent_recovery_error", repr(e))
 
     today = time.strftime("%Y-%m-%d", time.gmtime())
     day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
