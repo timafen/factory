@@ -207,46 +207,66 @@ type AuditScreen = {
   ready: (page: Page) => Locator;
 };
 
-async function expectAuditedLayout(page: Page, desktop: boolean) {
-  const layout = await page.evaluate<{
-    documentFits: boolean;
-    documentWidth: number;
-    mainFits: boolean;
-    actionOverlaps: string[];
-    horizontalOffenders: Array<{ element: string; left: number; right: number }>;
-    overflowElements: Array<{ element: string; left: number; right: number }>;
-    sidebar: { left: number; right: number } | null;
-    mainShell: { left: number; right: number } | null;
-    topbar: { left: number; right: number } | null;
-    viewportWidth: number;
-  }>(`(() => {
+type AuditedLayout = {
+  documentFits: boolean;
+  documentWidth: number;
+  mainFits: boolean;
+  actionOverlaps: string[];
+  horizontalOffenders: Array<{ element: string; left: number; right: number }>;
+  overflowElements: Array<{ element: string; left: number; right: number }>;
+  interactiveOffenders: Array<{ element: string; reason: string }>;
+  horizontalScrollerOffenders: Array<{ element: string; left: number; right: number }>;
+  sidebar: { left: number; right: number } | null;
+  mainShell: { left: number; right: number } | null;
+  topbar: { left: number; right: number } | null;
+  viewportWidth: number;
+};
+
+async function readAuditedLayout(page: Page) {
+  return page.evaluate<AuditedLayout>(`(() => {
     const visible = (element) => {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
     };
     const viewportWidth = document.documentElement.clientWidth;
-    const insideHorizontalScroller = (element) => {
+    const horizontalScrollerFor = (element) => {
       let parent = element.parentElement;
       while (parent && parent !== document.body) {
         const style = window.getComputedStyle(parent);
-        if (["auto", "scroll", "hidden"].includes(style.overflowX) && parent.scrollWidth > parent.clientWidth) {
-          return true;
+        if (["auto", "scroll"].includes(style.overflowX) && parent.scrollWidth > parent.clientWidth) {
+          return parent;
         }
         parent = parent.parentElement;
       }
-      return false;
+      return null;
     };
     const horizontalOffenders = Array.from(
-      document.querySelectorAll(".topbar, main, main .button, main input, main select, main textarea, .modal"),
+      document.querySelectorAll(".topbar, main, main .button, main button, main input, main select, main textarea, .modal"),
     )
-      .filter((element) => visible(element) && !insideHorizontalScroller(element))
+      .filter((element) => visible(element) && !horizontalScrollerFor(element))
       .map((element) => {
         const rect = element.getBoundingClientRect();
         return {
           element: element.tagName.toLowerCase() + "." + String(element.className).trim().split(" ").join("."),
           left: Math.round(rect.left),
           right: Math.round(rect.right),
+        };
+      })
+      .filter(({ left, right }) => left < -1 || right > viewportWidth + 1);
+    const horizontalScrollerOffenders = Array.from(document.querySelectorAll("*"))
+      .filter((element) => {
+        const style = window.getComputedStyle(element);
+        return visible(element)
+          && ["auto", "scroll"].includes(style.overflowX)
+          && element.scrollWidth > element.clientWidth;
+      })
+      .map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          element: element.tagName.toLowerCase() + "." + String(element.className).trim().split(" ").join("."),
+          left: Math.round(bounds.left),
+          right: Math.round(bounds.right),
         };
       })
       .filter(({ left, right }) => left < -1 || right > viewportWidth + 1);
@@ -270,8 +290,9 @@ async function expectAuditedLayout(page: Page, desktop: boolean) {
           })
           .map((control) => floating.className + " overlaps " + control.tagName.toLowerCase());
       });
-    const overflowElements = Array.from(document.querySelectorAll("*"))
-      .filter(visible)
+    const auditedElements = Array.from(document.querySelectorAll(".topbar, .topbar *, main, main *, .modal, .modal *"));
+    const overflowElements = auditedElements
+      .filter((element) => visible(element) && !horizontalScrollerFor(element))
       .map((element) => {
         const bounds = element.getBoundingClientRect();
         return {
@@ -280,7 +301,32 @@ async function expectAuditedLayout(page: Page, desktop: boolean) {
           right: Math.round(bounds.right),
         };
       })
-      .filter(({ right }) => right > viewportWidth + 1);
+      .filter(({ left, right }) => left < -1 || right > viewportWidth + 1);
+    const interactiveOffenders = Array.from(document.querySelectorAll(
+      ".topbar button, .topbar a[href], main button, main input, main select, main textarea, main a[href], main [role=button], .modal button, .modal input, .modal select, .modal textarea, .modal a[href], .modal [role=button]",
+    ))
+      .filter(visible)
+      .filter((element) => !horizontalScrollerFor(element))
+      .flatMap((element) => {
+        const bounds = element.getBoundingClientRect();
+        const name = element.tagName.toLowerCase() + "." + String(element.className).trim().split(" ").join(".");
+        if (bounds.left < -1 || bounds.right > viewportWidth + 1) {
+          return [{ element: name, reason: "outside viewport" }];
+        }
+        let parent = element.parentElement;
+        while (parent && parent !== document.body) {
+          const style = window.getComputedStyle(parent);
+          if (["hidden", "clip"].includes(style.overflowX)) {
+            const parentBounds = parent.getBoundingClientRect();
+            if (bounds.left < parentBounds.left - 1 || bounds.right > parentBounds.right + 1) {
+              const parentName = parent.tagName.toLowerCase() + "." + String(parent.className).trim().split(" ").join(".");
+              return [{ element: name, reason: "clipped by " + parentName }];
+            }
+          }
+          parent = parent.parentElement;
+        }
+        return [];
+      });
     return {
       documentFits: document.documentElement.scrollWidth <= viewportWidth + 1,
       documentWidth: document.documentElement.scrollWidth,
@@ -288,17 +334,25 @@ async function expectAuditedLayout(page: Page, desktop: boolean) {
       actionOverlaps,
       horizontalOffenders,
       overflowElements,
+      interactiveOffenders,
+      horizontalScrollerOffenders,
       sidebar: rect(".sidebar"),
       mainShell: rect(".main-shell"),
       topbar: rect(".topbar"),
       viewportWidth,
     };
   })()`);
+}
 
+async function expectAuditedLayout(page: Page, desktop: boolean) {
+  const layout = await readAuditedLayout(page);
   expect(layout.documentFits, `the document must not scroll horizontally: ${JSON.stringify(layout)}`).toBe(true);
   expect(layout.mainFits, "main content must not scroll horizontally").toBe(true);
   expect(layout.actionOverlaps, "sticky actions must not cover form controls").toEqual([]);
   expect(layout.horizontalOffenders, "controls and shell must stay inside the viewport").toEqual([]);
+  expect(layout.overflowElements, "audited content must stay inside the viewport").toEqual([]);
+  expect(layout.interactiveOffenders, "interactive elements must not be outside or clipped").toEqual([]);
+  expect(layout.horizontalScrollerOffenders, "horizontal scrollers must stay inside the viewport").toEqual([]);
   expect(layout.topbar?.left ?? -1).toBeGreaterThanOrEqual(0);
   expect(layout.topbar?.right ?? Infinity).toBeLessThanOrEqual(layout.viewportWidth + 1);
   if (desktop) {
@@ -306,6 +360,40 @@ async function expectAuditedLayout(page: Page, desktop: boolean) {
   } else {
     expect(layout.mainShell?.left ?? -1).toBe(0);
   }
+}
+
+async function expectInteractiveOverflowRegression(page: Page) {
+  await page.evaluate(`(() => {
+    const clippingFixture = document.createElement("div");
+    clippingFixture.className = "visual-audit-clipping-fixture";
+    clippingFixture.style.cssText = "width: 4px; overflow-x: hidden";
+    const clippedButton = document.createElement("button");
+    clippedButton.className = "visual-audit-clipped-native-button";
+    clippedButton.style.width = "80px";
+    clippedButton.textContent = "clipped audit fixture";
+    clippingFixture.append(clippedButton);
+
+    const outsideButton = document.createElement("button");
+    outsideButton.className = "visual-audit-outside-native-button";
+    outsideButton.style.cssText = "position: fixed; left: calc(100vw + 10px); width: 80px";
+    outsideButton.textContent = "outside audit fixture";
+    document.querySelector("main").append(clippingFixture, outsideButton);
+  })()`);
+
+  const layout = await readAuditedLayout(page);
+  expect(layout.interactiveOffenders, "native main buttons must be checked for clipping").toContainEqual({
+    element: "button.visual-audit-clipped-native-button",
+    reason: "clipped by div.visual-audit-clipping-fixture",
+  });
+  expect(layout.interactiveOffenders, "native main buttons must be checked against the viewport").toContainEqual({
+    element: "button.visual-audit-outside-native-button",
+    reason: "outside viewport",
+  });
+  expect(layout.overflowElements.map(({ element }) => element), "overflow findings must be retained for assertions")
+    .toContain("button.visual-audit-outside-native-button");
+
+  await page.evaluate(`document.querySelector(".visual-audit-clipping-fixture").remove();
+    document.querySelector(".visual-audit-outside-native-button").remove()`);
 }
 
 async function exerciseMobileNavigation(page: Page) {
@@ -991,6 +1079,9 @@ test("audits every Factory screen on desktop and phone", async ({ context }) => 
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(screen.path);
       await expect(screen.ready(page), `${screen.name} must show meaningful content`).toBeVisible();
+      if (viewport.name === "desktop" && screen.name === "overview") {
+        await expectInteractiveOverflowRegression(page);
+      }
       if (viewport.name === "phone") await exerciseMobileNavigation(page);
       await expectAuditedLayout(page, viewport.name === "desktop");
       await page.screenshot({
