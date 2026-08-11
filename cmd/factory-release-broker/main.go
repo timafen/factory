@@ -25,6 +25,7 @@ func main() {
 
 func run() error {
 	socket := flag.String("socket", "/run/factory/project-release-broker.sock", "Unix socket path")
+	stateDir := flag.String("state-dir", "/var/lib/factory/release-broker", "durable operation state directory")
 	flag.Parse()
 	if os.Geteuid() != 0 {
 		return errors.New("must run as root")
@@ -46,8 +47,12 @@ func run() error {
 		return fmt.Errorf("secure Unix socket permissions: %w", err)
 	}
 
+	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{})
+	if err != nil {
+		return fmt.Errorf("prepare durable state: %w", err)
+	}
 	server := &http.Server{
-		Handler:           releasebroker.New(releasebroker.FXExecutor{}).Handler(),
+		Handler:           broker.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
