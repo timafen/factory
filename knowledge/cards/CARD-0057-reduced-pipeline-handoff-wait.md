@@ -3,11 +3,11 @@
 ## HEAD
 
 - Implementation commit: b6921569ab9223ba2d59709ff324ed6a0ac09f61 — патруль ждёт потерянный переход 450 секунд, недельная цель требует пять работ, а рекламируемые checkout доступны для явного назначения.
-- Status: READY FOR REVIEW: требования CARD-0057 и одобренный блокер назначения исправлены; целевые и смежные проверки проходят.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/6cd3115e-e0a-7568361e-806`.
 - What changed: пауза между этапами сокращена на 25%, до 450 секунд; недельная цель ≤10% не заявляет успех до пяти работ; свежий пустой срез не очищает «Обзор»; прямые checkout можно назначать офлайн- и локальному воркеру.
-- Evidence: `go test ./...`, 160 Python-тестов, UI lint/typecheck, 139 unit-тестов и production build — PASS; оба ранее заблокированных Playwright-сценария — PASS; полный browser-suite прошёл 4 сценария и выявил отдельное ожидание экрана Work.
-- One next action: провести Review реализации CARD-0057.
+- Evidence: чистый `go test ./...` — PASS; 160 Python-тестов, UI lint/typecheck, 139 unit-тестов и production build — PASS; целевые проверки патруля и цели — PASS. Полный browser-suite прошёл 4 сценария и выявил отдельное ожидание экрана Work.
+- One next action: человеку проверить известный сбой Work и принять решение о слиянии CARD-0057.
 
 ## LOG
 
@@ -32,3 +32,13 @@
 ### 2026-08-10 — Implement
 
 Работа заново перенесена на свежий `origin/main` без посторонних файлов. Рекламируемые воркером checkout теперь доступны для явного назначения независимо от готовности managed acquisition; нерекламируемые неготовые маршруты остаются заблокированы. Оба ранее остановленных Playwright-сценария проходят, включая очередь офлайн-воркера и реальный Git-worktree; полный прогон дошёл до отдельного несоответствия экрана Work, которое не относится к CARD-0057.
+
+### 2026-08-10 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Ожидание между этапами сокращено до 450 секунд | `go test ./internal/controlplane -run 'Test(PipelinePatrol|EfficiencyTarget)' -count=1` | PASS, 1.390 s; покрыты новая пауза и миграция прежней инструкции. |
+| Цель ≤10% не объявляется раньше пяти завершённых работ | Та же серверная проверка и `cd web && npm test` | PASS; сервер и интерфейс покрывают выборки 0, 1, 4 и 5 работ. |
+| Пилот использует ту же паузу | `python3 -m unittest pilot.test_pilot` | PASS, 160 tests; `STALL_WAIT == 450`. |
+| Смежные серверные и интерфейсные функции не регрессировали | `go clean -testcache && go test ./...`; `cd web && npm run lint && npm run typecheck && npm test && npm run build` | PASS; полный Go-набор, 139 UI unit-тестов и production build. |
+| Браузерный сценарий | `cd web && npm run test:browser` | FAIL вне области: 4 passed, затем Work не находит `Prove the complete local workflow` за 8 s; 13 последующих не запущены. |
