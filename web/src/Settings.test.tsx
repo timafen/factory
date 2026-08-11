@@ -125,3 +125,33 @@ it("allows adding a configuration note when the API omits it", async () => {
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
 });
+
+it("changes the brain-chain order and saves notes with that order", async () => {
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({...response,settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  const moveUp=await screen.findAllByRole("button",{name:"Поднять"});
+  await user.click(moveUp[1]);
+  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await screen.findByText(/Настройки сохранены/);
+  const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
+  expect(JSON.parse(String(put![1]!.body)).settings.brain_chain).toEqual([
+    {cli:"claude",model:"sonnet",provider:"anthropic",note:"second"},
+    {cli:"codex",model:"gpt",provider:"openai",note:"first"},
+  ]);
+});
+
+it("offers to reload current settings after a version conflict", async () => {
+  const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
+    if(init?.method==="PUT") return new Response(JSON.stringify({error:{code:"config_conflict",message:"Настройки уже изменились. Загрузите свежую версию."}}),{status:409,headers:{"Content-Type":"application/json"}});
+    return new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}});
+  });
+  renderSettings(fetchMock); const user=userEvent.setup();
+  await screen.findByRole("heading",{name:"Настройки"});
+  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  expect(await screen.findByText("Настройки уже изменились. Загрузите свежую версию.")).toBeVisible();
+  await user.click(screen.getByRole("button",{name:"Загрузить свежие настройки"}));
+  expect(fetchMock.mock.calls.filter(([,init])=>!init?.method)).toHaveLength(2);
+});
