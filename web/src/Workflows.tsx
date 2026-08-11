@@ -265,6 +265,7 @@ function WorkflowForm({
     const title = String(form.get("title") ?? "").trim();
     const summary = String(form.get("summary") ?? "").trim();
     const instructions = String(form.get("instructions") ?? "");
+    const readOnly = form.get("read_only") === "on";
     const nextErrors: Record<string, string> = {};
     if (!title) nextErrors.title = "Enter a runbook title.";
     else if (Array.from(title).length > 100) nextErrors.title = "Keep the title to 100 characters.";
@@ -273,7 +274,7 @@ function WorkflowForm({
     else if (new TextEncoder().encode(instructions).length > 48 * 1024) nextErrors.instructions = "Keep instructions to 48 KiB.";
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
-    const payload = { title, summary, instructions };
+    const payload = { title, summary, instructions, read_only: readOnly };
     const fingerprint = JSON.stringify(payload);
     if (requestRef.current?.fingerprint !== fingerprint) {
       requestRef.current = { fingerprint, key: crypto.randomUUID() };
@@ -299,6 +300,10 @@ function WorkflowForm({
             <WorkflowField label="Markdown instructions" htmlFor={instructionsID} error={errors.instructions} hint="Required · 48 KiB">
               <textarea id={instructionsID} name="instructions" rows={12} defaultValue={current?.instructions ?? ""} aria-invalid={Boolean(errors.instructions)} />
             </WorkflowField>
+            <label className="field checkbox-field">
+              <span><input type="checkbox" name="read_only" defaultChecked={current?.read_only ?? false} /> Read-only committed snapshot</span>
+              <span className="field-hint">Runs without blocking a writer; missing committed data is retried as not ready.</span>
+            </label>
             {save.error && <InlineError error={save.error} />}
           </div>
           <div className="modal-footer">

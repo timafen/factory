@@ -354,6 +354,7 @@ type Task struct {
 	WorkerID       string    `json:"worker_id"`
 	RepositoryID   string    `json:"repository_id"`
 	TimeoutSeconds int       `json:"timeout_seconds"`
+	ReadOnly       bool      `json:"read_only"`
 	State          string    `json:"state"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -418,6 +419,7 @@ type TaskWorkflowSnapshot struct {
 	RevisionID     string `json:"revision_id"`
 	Title          string `json:"title"`
 	RevisionNumber int    `json:"revision_number"`
+	ReadOnly       bool   `json:"read_only"`
 }
 
 type Workflow struct {
@@ -435,6 +437,7 @@ type WorkflowRevision struct {
 	Title          string    `json:"title"`
 	Summary        string    `json:"summary"`
 	Instructions   string    `json:"instructions,omitempty"`
+	ReadOnly       bool      `json:"read_only"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -448,6 +451,7 @@ type CreateWorkflowRequest struct {
 	Title        string `json:"title"`
 	Summary      string `json:"summary"`
 	Instructions string `json:"instructions"`
+	ReadOnly     bool   `json:"read_only"`
 }
 
 type CreateWorkflowRevisionRequest struct {
@@ -456,6 +460,7 @@ type CreateWorkflowRevisionRequest struct {
 	Title              string `json:"title"`
 	Summary            string `json:"summary"`
 	Instructions       string `json:"instructions"`
+	ReadOnly           bool   `json:"read_only"`
 }
 
 type SetWorkflowEnabledRequest struct {
@@ -857,6 +862,7 @@ type MetricsSummary struct {
 	MedianCycleTimeSeconds *float64     `json:"median_cycle_time_seconds"`
 	WorkersOnline          int64        `json:"workers_online"`
 	WorkersTotal           int64        `json:"workers_total"`
+	QueueReassignments     int64        `json:"queue_reassignments"`
 	WeeklyLimit            *WeeklyLimit `json:"weekly_limit,omitempty"`
 }
 

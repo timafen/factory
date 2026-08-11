@@ -2303,17 +2303,18 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	resolvedPrompt := taskContext
 	var workflowID, workflowName string
 	var workflowRevisionNumber int
+	var readOnly bool
 	if input.WorkflowRevisionID != "" {
 		var enabled int
 		var instructions string
 		err := tx.QueryRowContext(ctx, `
 			SELECT workflow.id, workflow.enabled, revision.title,
-			       revision.revision_number, revision.instructions
+			       revision.revision_number, revision.instructions, revision.read_only
 			FROM workflow_revisions revision
 			JOIN workflows workflow ON workflow.id = revision.workflow_id
 			WHERE revision.id = ?
 		`, input.WorkflowRevisionID).Scan(
-			&workflowID, &enabled, &workflowName, &workflowRevisionNumber, &instructions,
+			&workflowID, &enabled, &workflowName, &workflowRevisionNumber, &instructions, &readOnly,
 		)
 		if errors.Is(err, sql.ErrNoRows) {
 			return protocol.TaskDetail{}, false, invalid("workflow_revision_not_found", "workflow revision was not found")
@@ -2411,12 +2412,12 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		INSERT INTO tasks(
 			id, request_key, title, description, repository_id, timeout_seconds, created_at,
 			workflow_id, workflow_revision_id, workflow_title, workflow_revision_number,
-			context
+			context, read_only
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, input.RequestKey, input.Title, resolvedPrompt, input.RepositoryID,
 		input.TimeoutSeconds, now, nullableString(workflowID), nullableString(input.WorkflowRevisionID),
-		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext)
+		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext, readOnly)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO executions(id, task_id, assigned_worker_id, required_runtime, state, created_at, updated_at)
@@ -2487,7 +2488,7 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	}
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
-		       e.assigned_worker_id, e.state, t.created_at
+		       e.assigned_worker_id, e.state, t.read_only, t.created_at
 		FROM tasks t JOIN executions e ON e.task_id = t.id
 	`
 	args := make([]any, 0, 3)
@@ -2531,10 +2532,10 @@ func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var err error
 	if detail {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.Description, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &created)
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created)
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &created)
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created)
 	}
 	task.CreatedAt = fromMillis(created)
 	if task.State == "preparing" {
@@ -2561,7 +2562,7 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 	var detail protocol.TaskDetail
 	row := s.db.QueryRowContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
-		       e.assigned_worker_id, e.state, t.created_at
+		       e.assigned_worker_id, e.state, t.read_only, t.created_at
 		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?
 	`, id)
 	task, err := scanTask(row, true)
@@ -2590,6 +2591,7 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 		detail.Workflow = &protocol.TaskWorkflowSnapshot{
 			ID: workflowID.String, RevisionID: workflowRevisionID.String,
 			Title: workflowTitle.String, RevisionNumber: int(workflowRevisionNumber.Int64),
+			ReadOnly: detail.Task.ReadOnly,
 		}
 	}
 	row = s.db.QueryRowContext(ctx, `

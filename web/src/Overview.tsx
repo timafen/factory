@@ -62,6 +62,7 @@ type ProductCapacityPeriod = {
   underload: { reason: string; seconds: number; share: number | null }[] | null;
 };
 type ProductCapacitySummary = { generated_at: string; capacity: number; periods: Record<"24h" | "7d", ProductCapacityPeriod> };
+type QueueMetrics = { queue_reassignments?: number };
 
 export type ProductEnvironment = { name: string; status: "available" | "unavailable"; release_label?: string; health?: "healthy" | "unhealthy" };
 export type ProjectReadinessState = "ready" | "needs_configuration" | "blocked" | "unknown";
@@ -369,14 +370,16 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   const [activeWork, setActiveWork] = useState<OverviewWork[]>([]);
   const [efficiency, setEfficiency] = useState<EfficiencySummary>();
   const [capacity, setCapacity] = useState<ProductCapacitySummary>();
+  const [queueMetrics, setQueueMetrics] = useState<QueueMetrics>({});
   const [loading, setLoading] = useState(true);
 
   const pull = async () => {
     try {
-      const [dashboardResponse, tasks, worksResponse, efficiencyResponse, capacityResponse] = await Promise.all([
+      const [dashboardResponse, tasks, worksResponse, efficiencyResponse, capacityResponse, queueResponse] = await Promise.all([
         fetch("/api/v1/dashboard"), fetchAllTasks(), fetch("/api/v1/works"),
         fetch("/api/v1/metrics/efficiency"),
         fetch("/api/v1/metrics/product-capacity"),
+        fetch("/api/v1/metrics/summary?window=24h"),
       ]);
       if (dashboardResponse.ok) setD((await dashboardResponse.json()) as Dash);
       if (efficiencyResponse.ok) {
@@ -387,6 +390,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         const value = (await capacityResponse.json()) as ProductCapacitySummary;
         if (value.periods?.["24h"] && value.periods?.["7d"]) setCapacity(value);
       }
+      if (queueResponse.ok) setQueueMetrics((await queueResponse.json()) as QueueMetrics);
       if (worksResponse.ok) {
         const works = (await worksResponse.json()) as Record<string, WorkMeta>;
         setActiveWork(overviewWork(tasks, works));
@@ -439,7 +443,7 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           <strong style={{ fontSize: 20 }}>{headline.text}</strong>
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 13, color: muted }}>
-            в работе {running} · в очереди {queued}
+            в работе {running} · в очереди {queued} · переназначено за 24 ч {queueMetrics.queue_reassignments ?? 0}
           </span>
         </div>
         {(d.now?.questions ?? []).length > 0 && (

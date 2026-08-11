@@ -42,6 +42,122 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
+	store := newTestStore(t)
+	repository := protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/shared-queue",
+	}
+	assigned := registerTestWorker(t, store, workerA, 1, repository)
+	registerTestWorker(t, store, workerB, 1, repository)
+	task := createTestTask(t, store, "shared-queue-task", workerA, assigned.Repositories[0].ID)
+
+	claim := claimTestTask(t, store, workerB, "shared-queue-claim", tokenB)
+	if claim.Task.ID != task.Task.ID || claim.Execution.AssignedWorkerID != workerB ||
+		claim.Attempt.WorkerID != workerB {
+		t.Fatalf("reassigned claim = %#v; want task on worker-b", claim)
+	}
+	var reassignments int
+	if err := store.db.QueryRow(`SELECT reassignment_count FROM executions WHERE id = ?`,
+		task.Execution.ID).Scan(&reassignments); err != nil {
+		t.Fatal(err)
+	}
+	if reassignments != 1 {
+		t.Fatalf("reassignment count = %d; want 1", reassignments)
+	}
+	summary, err := store.Metrics(context.Background(), metricsWindowAll)
+	if err != nil || summary.QueueReassignments != 1 {
+		t.Fatalf("queue reassignment metric = %d, error %v; want 1", summary.QueueReassignments, err)
+	}
+}
+
+func TestCompatibleWorkersClaimOnceWhileWriterContinues(t *testing.T) {
+	store := newTestStore(t)
+	repository := protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/concurrent-review",
+	}
+	assigned := registerTestWorker(t, store, workerA, 2, repository)
+	registerTestWorker(t, store, workerB, 1, repository)
+	writer := createTestTask(t, store, "writer", workerA, assigned.Repositories[0].ID)
+	claimTestTask(t, store, workerA, "writer-claim", tokenA)
+	review := createTestTask(t, store, "readonly-review", workerA, assigned.Repositories[0].ID)
+
+	type claimResult struct {
+		claim *protocol.Claim
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan claimResult, 2)
+	for _, candidate := range []struct{ worker, request, token string }{
+		{workerA, "review-claim-a", tokenB},
+		{workerB, "review-claim-b", strings.Repeat("c", 64)},
+	} {
+		go func(candidate struct{ worker, request, token string }) {
+			<-start
+			claim, err := store.Claim(context.Background(), candidate.worker, protocol.ClaimRequest{
+				RequestID: candidate.request, LeaseToken: candidate.token,
+			})
+			results <- claimResult{claim: claim, err: err}
+		}(candidate)
+	}
+	close(start)
+	claimed := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.claim != nil {
+			claimed++
+			if result.claim.Task.ID != review.Task.ID {
+				t.Fatalf("parallel claim selected %s; want review %s", result.claim.Task.ID, review.Task.ID)
+			}
+		}
+	}
+	if claimed != 1 {
+		t.Fatalf("parallel review claims = %d; want exactly 1", claimed)
+	}
+	var attempts int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE execution_id = ?`,
+		review.Execution.ID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 {
+		t.Fatalf("review attempts = %d; want 1", attempts)
+	}
+	writerDetail, err := store.Task(context.Background(), writer.Task.ID)
+	if err != nil || writerDetail.Execution.State != "preparing" {
+		t.Fatalf("writer stopped while review started: state %q, error %v", writerDetail.Execution.State, err)
+	}
+}
+
+func TestQueuedAssignmentRejectsIncompatibleWorkers(t *testing.T) {
+	store := newTestStore(t)
+	assigned := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/compatibility",
+	})
+	registerTestWorker(t, store, workerB, 1, protocol.RepositoryRegistration{
+		Key: "other", RemoteIdentity: "github.com/example/other",
+	})
+	task := createTestTask(t, store, "compatibility-task", workerA, assigned.Repositories[0].ID)
+	claim, err := store.Claim(context.Background(), workerB, protocol.ClaimRequest{
+		RequestID: "incompatible-claim", LeaseToken: tokenB,
+	})
+	if err != nil || claim != nil {
+		t.Fatalf("incompatible claim = %#v, error %v; want no work", claim, err)
+	}
+	detail, err := store.Task(context.Background(), task.Task.ID)
+	if err != nil || detail.Execution.AssignedWorkerID != workerA || detail.Execution.State != "queued" {
+		t.Fatalf("incompatible worker changed queue: %#v, error %v", detail.Execution, err)
+	}
+	registerTestWorker(t, store, workerB, 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/compatibility",
+	})
+	ready := claimTestTask(t, store, workerB, "compatible-recheck", strings.Repeat("d", 64))
+	if ready.Task.ID != task.Task.ID {
+		t.Fatalf("recheck claimed %s; want formerly not-ready task %s", ready.Task.ID, task.Task.ID)
+	}
+}
+
 func TestTaskPaginationMigrationProvidesTheOrderingIndex(t *testing.T) {
 	store := newTestStore(t)
 	rows, err := store.db.Query(`

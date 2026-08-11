@@ -733,6 +733,11 @@ func terminalState(message supervisorMessage) string {
 
 func buildPrompt(claim protocol.Claim, value worktree) string {
 	description := claim.Task.Description
+	if claim.Task.ReadOnly {
+		description = "READ-ONLY SNAPSHOT RULE: inspect only the committed snapshot in this worktree; " +
+			"do not modify repository data and do not wait on or block a writer. If required committed data " +
+			"is not present yet, report NOT READY so Factory can retry instead of treating it as a defect.\n\n" + description
+	}
 	if len(claim.Attachments) > 0 {
 		description += "\n\nПрикреплённые файлы уже сохранены в рабочей копии. Обязательно ознакомься с ними:\n"
 		for _, attachment := range claim.Attachments {

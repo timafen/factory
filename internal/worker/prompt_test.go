@@ -36,3 +36,16 @@ func TestWorkerUsesSharedPromptFormatAndRejectsOversizedLegacyClaim(t *testing.T
 		t.Fatalf("oversized legacy claim error = %v", err)
 	}
 }
+
+func TestReadOnlyClaimCarriesCommittedSnapshotRule(t *testing.T) {
+	claim := protocol.Claim{
+		Task:       protocol.Task{Title: "Review", Description: "Check the implementation.", ReadOnly: true},
+		Repository: protocol.Repository{RemoteIdentity: "github.com/example/repository"},
+	}
+	prompt := buildPrompt(claim, worktree{Branch: "factory/review", BaseBranch: "main"})
+	for _, promise := range []string{"READ-ONLY SNAPSHOT RULE", "committed snapshot", "do not wait on or block a writer", "NOT READY"} {
+		if !strings.Contains(prompt, promise) {
+			t.Fatalf("read-only prompt omitted %q:\n%s", promise, prompt)
+		}
+	}
+}

@@ -61,6 +61,7 @@ export interface PilotSettings {
   enabled: boolean;
   poll_seconds: number;
   timeout_seconds: number;
+  read_only?: boolean;
   auto_merge: boolean;
   auto_answer: boolean;
   max_stage_attempts: number;
@@ -208,6 +209,7 @@ export interface TaskWorkflowSnapshot {
   revision_id: string;
   title: string;
   revision_number: number;
+  read_only?: boolean;
 }
 
 export interface WorkflowRevision {
@@ -217,6 +219,7 @@ export interface WorkflowRevision {
   title: string;
   summary: string;
   instructions?: string;
+  read_only?: boolean;
   created_at: string;
 }
 
@@ -442,6 +445,7 @@ export interface MetricsSummary {
   median_cycle_time_seconds: number | null;
   workers_online: number;
   workers_total: number;
+  queue_reassignments: number;
   weekly_limit?: WeeklyLimit;
 }
 
@@ -492,6 +496,7 @@ export interface CreateWorkflowInput {
 	title: string;
   summary: string;
   instructions: string;
+  read_only?: boolean;
 }
 
 export interface CreateWorkflowRevisionInput extends CreateWorkflowInput {

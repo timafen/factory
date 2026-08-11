@@ -107,9 +107,8 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		FROM executions e
 		JOIN tasks t ON t.id = e.task_id
 		JOIN worker_repositories wr
-		  ON wr.worker_id = e.assigned_worker_id AND wr.repository_id = t.repository_id
-		WHERE e.assigned_worker_id = ?
-		  AND e.required_runtime = ?
+		  ON wr.worker_id = ? AND wr.repository_id = t.repository_id
+		WHERE e.required_runtime = ?
 		  AND e.state = 'queued'
 		  AND wr.advertised = 1
 		  AND wr.retained_count + (
@@ -117,7 +116,7 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		      FROM attempts active_attempt
 		      JOIN executions active_execution ON active_execution.id = active_attempt.execution_id
 		      JOIN tasks active_task ON active_task.id = active_execution.task_id
-		      WHERE active_attempt.worker_id = e.assigned_worker_id
+		      WHERE active_attempt.worker_id = ?
 		        AND active_task.repository_id = t.repository_id
 		        AND active_attempt.state IN ('preparing', 'running')
 		  ) + (
@@ -125,14 +124,14 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		      FROM attempts terminal_attempt
 		      JOIN executions terminal_execution ON terminal_execution.id = terminal_attempt.execution_id
 		      JOIN tasks terminal_task ON terminal_task.id = terminal_execution.task_id
-		      WHERE terminal_attempt.worker_id = e.assigned_worker_id
+		      WHERE terminal_attempt.worker_id = ?
 		        AND terminal_task.repository_id = t.repository_id
 		        AND terminal_attempt.state IN ('succeeded', 'failed', 'cancelled', 'lost')
 		        AND terminal_attempt.capacity_acknowledged = 0
 		  ) < ?
 		ORDER BY e.created_at, e.id
 		LIMIT 1
-	`, workerID, runtime, protocol.MaxRetainedPerRepo).Scan(&executionID)
+	`, workerID, runtime, workerID, workerID, protocol.MaxRetainedPerRepo).Scan(&executionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := insertEmptyClaim(ctx, tx, workerID, input.RequestID, digest, nowMillis); err != nil {
 			return nil, err
@@ -164,9 +163,12 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		return nil, unavailable(err)
 	}
 	result, err := tx.ExecContext(ctx, `
-		UPDATE executions SET state = 'preparing', cancellation_requested = 0, updated_at = ?
+		UPDATE executions
+		SET state = 'preparing', cancellation_requested = 0, updated_at = ?,
+		    reassignment_count = reassignment_count + CASE WHEN assigned_worker_id = ? THEN 0 ELSE 1 END,
+		    assigned_worker_id = ?
 		WHERE id = ? AND state = 'queued'
-	`, nowMillis, executionID)
+	`, nowMillis, workerID, workerID, executionID)
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -225,7 +227,7 @@ func (s *Store) claimDetail(ctx context.Context, attemptID string) (protocol.Cla
 	}
 	row = s.db.QueryRowContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
-		       e.assigned_worker_id, e.state, t.created_at
+		       e.assigned_worker_id, e.state, t.read_only, t.created_at
 		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?
 	`, claim.Execution.TaskID)
 	claim.Task, err = scanTask(row, true)
