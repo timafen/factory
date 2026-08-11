@@ -1467,6 +1467,55 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             pilot.reopen_work("Настоящая работа", "generation-2")
         self.assertEqual(pilot.implementation_artifact("Настоящая работа"), {})
 
+    def test_reprocessing_same_implementation_keeps_delivery_branch(self):
+        implementation = {
+            "branch": "factory/real", "head": "e" * 40,
+            "task_id": "implement-task", "recorded_at": "2026-08-11T10:00:00Z",
+            "generation": "generation-1",
+        }
+        delivery = {
+            "branch": "factory/real-clean", "selected_at": "2026-08-11T10:01:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": implementation,
+            "delivery_artifact": delivery,
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head="e" * 40)):
+            artifact = pilot.record_implementation_artifact(
+                "Настоящая работа", "implement-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/real", "", "github.com/timafen/factory")
+
+        self.assertEqual(artifact["branch"], "factory/real")
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
+
+    def test_new_implementation_invalidates_delivery_branch(self):
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/old", "head": "a" * 40,
+                "task_id": "old-task", "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+            "delivery_artifact": {
+                "branch": "factory/old-clean", "selected_at": "2026-08-11T10:01:00Z",
+                "generation": "generation-1",
+            },
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/new", head="f" * 40)):
+            pilot.record_implementation_artifact(
+                "Настоящая работа", "new-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/new", "", "github.com/timafen/factory")
+
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), {})
+
 
 class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
     def test_review_gate_rebuild_reaches_review_verify_and_merge(self):
@@ -1563,7 +1612,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             "handle_answers", "advance_epics", "pipeline_watch",
             "cleanup_work_archive", "retry_pending_factory_deploy",
             "autostart_plan", "area_extend", "collect_ideas", "all_tasks",
-            "record_implementation_artifact", "save_stage_verdict", "mark_final",
+            "save_stage_verdict", "mark_final",
             "deploy_after_merge", "notify",
         )
         with contextlib.ExitStack() as stack:
@@ -1592,8 +1641,14 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 candidates[0] if candidates else ""))
             stack.enter_context(mock.patch.object(
                 pilot, "merge_recorded", return_value=False))
-            stack.enter_context(mock.patch.object(
-                pilot, "gh_json", return_value={"ahead_by": 1}))
+            def github(args, strict=False):
+                path = args[-1]
+                if "/branches/" in path:
+                    return {"name": original, "commit": {"sha": head}}
+                if "/compare/main..." in path:
+                    return {"files": [{"filename": "pilot/pilot.py"}], "ahead_by": 1}
+                raise AssertionError(path)
+            stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
                 pilot, "gh_merge", return_value=(True, "merged")))
             for name in noops:
@@ -1603,6 +1658,14 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertIn(f"Branch: {rebuilt}", created[0]["context"])
             self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
             self.assertEqual(pilot.implementation_artifact(base)["branch"], original)
+
+            # A watcher restart reprocesses the terminal Implement task before
+            # Review completes.  Recording the same implementation must not
+            # discard the rebuilt branch selected by review_gate.
+            state["processed"] = []
+            pilot.cycle(conf, state)
+            self.assertEqual(len(created), 1)
+            self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
 
             tasks[-1]["state"] = "succeeded"
             details["review"]["attempts"] = [{"result": "PASS"}]

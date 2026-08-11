@@ -4110,11 +4110,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
             "recorded_at": now,
             "generation": meta.get("run_generation") or "",
         }
+        previous = meta.get("implementation_artifact") or {}
         meta["implementation_artifact"] = artifact
-        # A new implementation invalidates a clean branch selected for an
-        # earlier attempt in this generation.  review_gate will choose and
-        # record the next delivery branch after checking the new artifact.
-        meta.pop("delivery_artifact", None)
+        # Re-reading the same completed Implement task happens after a
+        # watcher restart.  It must keep review_gate's rebuilt delivery
+        # branch.  Only a genuinely different implementation can invalidate
+        # that selected branch for this generation.
+        identity = ("branch", "head", "task_id", "generation")
+        if any(previous.get(key) != artifact[key] for key in identity):
+            meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
     return {}
