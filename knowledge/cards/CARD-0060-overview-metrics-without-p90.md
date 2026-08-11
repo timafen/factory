@@ -4,15 +4,24 @@ Implementation commit: 7806818a30ab205b0fb3ce92790912ab8b0bee19 — экран �
 
 ## HEAD
 
-- Status: Implemented — готово к повторной проверке.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/aa214943-372-b133badc-c0e`.
 - Implementation commit: 7806818a30ab205b0fb3ce92790912ab8b0bee19 — понятные подписи метрик и явное отсутствие данных реализованы в исходнике и production-бандле.
 - What changed: время до слияния, число кругов и очередь объясняют границу для 90% случаев без видимого `p90`; пустое значение подписано «данных нет».
-- Evidence: `npm test -- --run src/Overview.test.ts` → PASS, 19 tests; `npm run typecheck` → PASS; `npm run lint` → PASS; `npm run build` → PASS.
-- One next action: повторно провести Verify после подтверждения удалённого HEAD ветки.
+- Evidence: `npm --prefix web test -- --run src/Overview.test.ts` → PASS, 19 tests; `npm --prefix web test` → PASS, 139 tests; `npm --prefix web run typecheck`, `lint`, `build` → PASS; `go test ./...` → PASS.
+- One next action: владельцу принять решение о слиянии проверенной ветки.
 
 ## LOG
 
 ### 2026-08-10 — Implement
 
 Экран «Обзор» получил понятные русские пояснения границ времени до слияния, числа кругов и очереди для 90 процентов наблюдений. Пустая граница больше не выглядит как числовое утверждение: интерфейс сообщает «данных нет». Регрессионный тест прошёл 19 сценариев, TypeScript, ESLint и production-сборка завершились успешно.
+
+### 2026-08-10 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Время до слияния объясняет границу 90% без видимого `p90` | `npm --prefix web test -- --run src/Overview.test.ts` | PASS: сценарий проверяет обе границы периода, отсутствие данных и отсутствие текста `p90`. |
+| Число кругов объясняет границу 90% без видимого `p90` | тот же целевой сценарий | PASS: проверены текущий и предыдущий периоды, включая пустое значение. |
+| Очередь объясняется словами и честно показывает пустое значение | тот же целевой сценарий | PASS: «очередь в 90% замеров», величина и «данных нет» подтверждены. |
+| Смежные сценарии обзора не нарушены | `npm --prefix web test`; `npm --prefix web run typecheck`; `npm --prefix web run lint`; `npm --prefix web run build`; `go test ./...` | PASS: 139 web-тестов, статические проверки, production-сборка и Go-набор завершились успешно. |
