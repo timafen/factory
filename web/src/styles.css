@@ -692,6 +692,15 @@ button { color: inherit; }
   align-items: start;
 }
 .detail-grid { margin-bottom: 12px; }
+.detail-grid > * { min-width: 0; }
+.runbook-copy {
+  max-width: 100%;
+  max-height: 420px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .panel {
   margin-bottom: 12px;
@@ -1269,7 +1278,7 @@ button { color: inherit; }
   .task-stack { min-height: 0; }
   .column-empty { display: none; }
   .detail-heading { flex-direction: column; }
-  .detail-actions { width: 100%; }
+  .detail-actions { width: 100%; flex-wrap: wrap; }
   .detail-actions > .button { flex: 1; }
   .confirm-action { width: 100%; }
   .confirm-action span { text-align: left; }

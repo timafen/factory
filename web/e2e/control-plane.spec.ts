@@ -445,7 +445,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
 
   await page.getByRole("button", { name: "Disable" }).click();
   await page.getByRole("button", { name: "Confirm disable" }).click();
-  await expect(page.getByRole("button", { name: "Enable" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Delegate task" }).click();
   await expect(page.getByRole("dialog").getByLabel("Workflow").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -546,8 +546,9 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   );
   await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   await expect(page.getByText("Не вышло / остановлено")).toHaveCount(0);
-  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
+  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: /Архив/ }).click();
+  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
   await expect(page.getByText("Cancelled queue cleanup", { exact: true })).toBeVisible();
   await expect(page.getByText("Long operational title", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/work-desktop.png", fullPage: true });
@@ -639,7 +640,7 @@ test("delegates with worker-specific repositories and preserves the task on refr
   await expect(dialog.getByText(/task will queue until it returns/i)).toBeVisible();
   await expect(dialog.getByText("This becomes the Claude Code prompt.")).toBeVisible();
   await expect(dialog.getByLabel("Repository").getByRole("option", { name: /archive/ })).toHaveCount(1);
-  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toHaveCount(0);
+  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toBeDisabled();
   await dialog.getByLabel("Title").fill("Durable delegated browser task");
   await dialog.getByLabel("Context").fill("Created in the real UI and stored by the real Go server.");
   await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
@@ -717,9 +718,12 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
-  expect(await explanation.evaluate("element => getComputedStyle(element).gridTemplateColumns.split(' ').length")).toBe(1);
-  const main = page.locator("main");
-  expect(await main.evaluate("element => element.scrollWidth <= element.clientWidth")).toBe(true);
+  expect(await page.evaluate(
+    "getComputedStyle(document.querySelector('.work-explanation')).gridTemplateColumns.split(' ').length",
+  )).toBe(1);
+  expect(await page.evaluate(
+    "document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth",
+  )).toBe(true);
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");
@@ -897,7 +901,7 @@ test("previews and dispatches one typed GitHub issue Automation without duplicat
   await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable" }).click();
+  await page.getByRole("button", { name: "Enable", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -961,7 +965,7 @@ test("previews and dispatches one typed GitHub pull-request Automation without d
   await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable" }).click();
+  await page.getByRole("button", { name: "Enable", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -1023,7 +1027,7 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
   await page.getByRole("button", { name: "Test trigger" }).click();
   await expect(page.getByText(/next matching UTC instant/i)).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
-  await page.getByRole("button", { name: "Enable" }).click();
+  await page.getByRole("button", { name: "Enable", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   const nextDue = page.getByText("Next due UTC").locator("..").locator("dd");
@@ -1040,7 +1044,10 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".sidebar")).not.toBeInViewport();
   await page.screenshot({ path: "test-results/screenshots/automation-detail-narrow.png", fullPage: true });
-  expect(await page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true);
+  const overflow = await page.evaluate(`Array.from(document.querySelectorAll("*"))
+    .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
+    .map((element) => ({ tag: element.tagName, className: element.className }))`);
+  expect(overflow).toEqual([]);
   const tasks = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   expect(tasks.tasks.filter((task) => task.request_key.includes(":schedule:run:"))).toHaveLength(1);
   await api.dispose();
