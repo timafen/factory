@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — блокеры rollback и передачи секретов устранены.
-- Branch: `factory/4aa29ec7-ed9-5d65729b-035`.
-Implementation commit: 7fac53f6a3fc6734c45596a9303ebdb685649210 — Tarser выпускается фиксированной SHA-операцией с проверяемым rollback, секреты закрыто передаются адаптеру.
+- Status: IMPLEMENTED — два security-блокера повторного Review устранены.
+- Branch: `factory/a19865f9-450-b71bfaba-455`.
+Implementation commit: a1f85be4a53a611947fa3d76a1fe638683a67337 — окружение адаптера изолировано, а готовность подтверждается сервером и живым worker.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
-- What changed: Tarser выпускается через `fx staging release <SHA>`, подтверждает
-  возврат целью `staging/current`, а после сбоя запускает фиксированный rollback.
-  Объявленные секреты получает только environment разрешённого процесса.
+- What changed: адаптер получает фиксированное минимальное окружение и только
+  разрешённые секреты проекта. Публичная запись gate-results удалена; routing и
+  release дополнительно требуют актуальную `ManagedRepositoryReadiness` worker.
 - Evidence: `go test ./internal/controlplane -run 'Project|Secret|Adapter|Tarser' -count=1` → PASS;
-  `npm --prefix web test -- --run src/Projects.test.tsx` → 2 PASS;
-  `npx tsc -p tsconfig.app.json --noEmit`, vet, lint и Go/Web build → PASS.
-- One next action: Review проверяет исправленные блокеры и экран `/projects`.
+  три security-регрессии → PASS; `go vet`, Go/Web build и 2 Vitest-теста → PASS.
+- One next action: повторно запустить Review исправленных security-блокеров.
 
 ## LOG
 
@@ -67,3 +66,11 @@ lint и обе сборки прошли.
 `deploy-release` с Git SHA из API. Адаптер переведён на фиксированную серверную
 операцию `fx staging release <SHA>`; точные argv, секретное environment и оба
 пути подтверждения rollback повторно проверены целевыми Go-тестами, vet и build.
+
+### 2026-08-11 — Implement
+
+Устранены два блокера повторного Review: процессы адаптеров больше не наследуют
+окружение control-plane, а клиентский endpoint записи готовности удалён. Сводная
+готовность теперь включает фактическую `ManagedRepositoryReadiness` живого worker;
+подделка клиентских полей не открывает routing или release. Целевые Go-тесты,
+три security-регрессии, vet, Go/Web build и 2 Vitest-теста прошли.
