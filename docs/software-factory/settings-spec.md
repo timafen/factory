@@ -57,3 +57,23 @@ tiers `low`/`medium`/`high`, бюджеты, автоматизации, уве�
 
 Аутентификация control-plane, изменение кода pilot для общего file lock и
 редактирование server/worker/provider settings этой задачей не добавляются.
+
+## Проверяемые обещания
+
+Карточка работы: `knowledge/cards/CARD-0064-settings-spec-verifiable-promises.md`.
+
+ГОТОВО-КОГДА: файл `internal/protocol/types.go`
+ГОТОВО-КОГДА: файл `internal/controlplane/http.go`
+ГОТОВО-КОГДА: файл `internal/controlplane/pilot_config.go`
+ГОТОВО-КОГДА: файл `internal/controlplane/pilot_config_http.go`
+ГОТОВО-КОГДА: файл `internal/controlplane/pilot_config_test.go`
+ГОТОВО-КОГДА: файл `cmd/factory-server/main.go`
+ГОТОВО-КОГДА: файл `web/src/App.tsx`
+ГОТОВО-КОГДА: файл `web/src/Settings.tsx`
+ГОТОВО-КОГДА: файл `web/src/Settings.test.tsx`
+ГОТОВО-КОГДА: файл `web/src/api.ts`
+ГОТОВО-КОГДА: файл `web/src/types.ts`
+ГОТОВО-КОГДА: файл `web/src/styles.css`
+ГОТОВО-КОГДА: файл `web/e2e/control-plane.spec.ts`
+ГОТОВО-КОГДА: файл `web/e2e/server.mjs`
+ГОТОВО-КОГДА: команда `go test ./internal/controlplane -run 'TestPilotConfigStorePreservesNotesAndRejectsConflict|TestPilotConfigValidationWorkerPolicy|TestPilotSettingsHTTPInitializesKnownWorkerIDsAndConflicts' -count=1`
