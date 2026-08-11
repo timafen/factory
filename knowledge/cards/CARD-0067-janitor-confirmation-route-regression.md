@@ -1,12 +1,12 @@
 # CARD-0067 — Регрессия адреса подтверждения очистки санитара
 
-Implementation commit: 5e6275d94a61bca2eb12ce8d3e4d3c1689ff87b7 — shell-проверка подтверждает точный внутренний маршрут очистки retained worktree.
+Implementation commit: 711a2b6b5e319151d53d4f6856ab8f3897d15828 — shell-проверка подтверждает точный внутренний маршрут очистки retained worktree.
 
 ## HEAD
 
 - Status: Implemented — awaiting human merge
 - Branch: `factory/a979ad6e-1d0-5ca0fe0d-b50`
-- Implementation commit: 5e6275d94a61bca2eb12ce8d3e4d3c1689ff87b7 — shell-проверка
+- Implementation commit: 711a2b6b5e319151d53d4f6856ab8f3897d15828 — shell-проверка
   подтверждает точный внутренний маршрут очистки retained worktree.
 - What changed: изолированный сценарий санитара проверяет не только снимок
   очищенного worktree, но и путь POST-подтверждения для нужного воркера.
