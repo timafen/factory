@@ -4,7 +4,7 @@
 
 - Status: Implemented — ожидает review/verify.
 - Branch: `factory/145d1805-ea0-da91db87-ef2`.
-- Implementation commit: 54ee2f365c5c49f454e79c36fa37f86cc3bd2696 — финальный PASS и уведомление выдаются только после успешного выпуска.
+- Implementation commit: 2951ac42e9883ecbb34c075388409a1a04bd296e — финальный PASS и уведомление выдаются только после успешного выпуска без повтора уведомления после рестарта.
 - What changed: ожидание выпуска сохраняется с задачей и поколением; `rc=0`
   создаёт delivery receipt, а `rc=8`/коалесцирование сохраняют ожидание.
 - What changed: эпики и «Сделано недавно» признают готовность только по receipt
