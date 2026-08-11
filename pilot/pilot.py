@@ -654,7 +654,7 @@ def reopen_work(base, generation, reason="Владелец явно запуст
             ) if meta.get(key)})
             meta["closed_generations"] = history
         for key in ("closed", "closed_reason", "retention_until",
-                    "implementation_artifact"):
+                    "implementation_artifact", "delivery_artifact"):
             meta.pop(key, None)
         meta.update({"run_generation": generation, "reopened_reason": reason})
         save(WORKS_PATH, works)
@@ -3393,7 +3393,7 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
     """Record a pipeline stop that needs the owner. The UI shows these and the
     answer resumes the pipeline."""
     os.makedirs(QUESTION_DIR, exist_ok=True)
-    branch, implementation_head = canonical_implementation(base, branch)
+    branch, implementation_head = selected_delivery(base, branch)
     rec = {
         "id": task_id,
         "task_id": task_id,
@@ -3807,7 +3807,7 @@ def handle_answers(conf, workflows, workers, tasks):
         base = base_title(q.get("title", ""))
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base))
-        br, implementation_head = canonical_implementation(base, br)
+        br, implementation_head = selected_delivery(base, br)
         branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -4111,6 +4111,10 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
             "generation": meta.get("run_generation") or "",
         }
         meta["implementation_artifact"] = artifact
+        # A new implementation invalidates a clean branch selected for an
+        # earlier attempt in this generation.  review_gate will choose and
+        # record the next delivery branch after checking the new artifact.
+        meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
     return {}
@@ -4122,8 +4126,49 @@ def canonical_implementation(base, branch=""):
     return artifact.get("branch") or branch, artifact.get("head") or ""
 
 
+def delivery_artifact(base):
+    """Return the generation-scoped branch selected by the delivery gate."""
+    works = load(WORKS_PATH, {}) or {}
+    meta = works.get(base) or {}
+    artifact = meta.get("delivery_artifact") or {}
+    if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
+        return {}
+    if not artifact.get("branch"):
+        return {}
+    return artifact
+
+
+def record_delivery_artifact(base, branch):
+    """Keep review_gate's published rebuild for Review, Verify, and merge."""
+    if not branch:
+        return {}
+    works = load(WORKS_PATH, {}) or {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    meta = works.setdefault(base, {
+        "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
+        "reason": "", "at": now,
+    })
+    artifact = {
+        "branch": branch,
+        "selected_at": now,
+        "generation": meta.get("run_generation") or "",
+    }
+    meta["delivery_artifact"] = artifact
+    save(WORKS_PATH, works)
+    return artifact
+
+
+def selected_delivery(base, branch=""):
+    """Prefer the gate-selected delivery branch; canonical is the fallback."""
+    artifact = delivery_artifact(base)
+    if artifact:
+        implementation = implementation_artifact(base)
+        return artifact["branch"], implementation.get("head") or ""
+    return canonical_implementation(base, branch)
+
+
 def implementation_context_lines(base, branch=""):
-    branch, head = canonical_implementation(base, branch)
+    branch, head = selected_delivery(base, branch)
     return ((f"Branch: {branch}\n" if branch else "")
             + (f"Implementation head: {head}\n" if head else ""))
 
@@ -6449,7 +6494,7 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': Verify уже завершён — дубль не открываю")
                     continue
                 mark_final(tid, wf, True)
-                branch, _implementation_head = canonical_implementation(
+                branch, _implementation_head = selected_delivery(
                     base_title(title), extract_branch(result, detail.get("context", "")))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
@@ -6547,7 +6592,7 @@ def cycle(conf, state):
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
                     squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
-                    branch=canonical_implementation(
+                    branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
@@ -6566,7 +6611,7 @@ def cycle(conf, state):
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
                            attempts_so_far=stage_attempts(tasks, back, base),
-                           branch=canonical_implementation(
+                           branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
             continue
 
@@ -6618,7 +6663,7 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
-        branch, implementation_head = canonical_implementation(base, branch)
+        branch, implementation_head = selected_delivery(base, branch)
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -6754,6 +6799,7 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
+                    record_delivery_artifact(base, branch)
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 

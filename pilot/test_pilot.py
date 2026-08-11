@@ -1468,6 +1468,157 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
         self.assertEqual(pilot.implementation_artifact("Настоящая работа"), {})
 
 
+class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
+    def test_review_gate_rebuild_reaches_review_verify_and_merge(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        works_path = os.path.join(temporary.name, "works.json")
+        merges_path = os.path.join(temporary.name, "merges.jsonl")
+        base = "Чистая поставка"
+        original = "factory/original-implementation"
+        rebuilt = "factory/original-implementation-clean"
+        head = "e" * 40
+        pilot.save(works_path, {base: {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": original, "head": head, "task_id": "implement",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+        }})
+        conf = {
+            "stages": [
+                {"workflow": "Implement + Test"},
+                {"workflow": "Review"},
+                {"workflow": "Verify"},
+            ],
+            "auto_merge": True,
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        tasks = [{
+            "id": "implement", "title": f"[auto] [1/3 Implement + Test] {base}",
+            "state": "succeeded", "created_at": "2026-08-11T10:00:00Z",
+            "repository_id": "repo-id",
+        }]
+        details = {
+            "implement": {
+                "task": {"repository_id": "repo-id"},
+                "workflow": {"title": "Implement + Test"},
+                "context": "",
+                "attempts": [{"result": f"BRANCH: {original}\nГотово"}],
+            },
+        }
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path.startswith("/tasks/"):
+                return details[path.rsplit("/", 1)[-1]]
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": stage.lower(), "enabled": True,
+                    "current_revision": {"id": "rev-" + stage.lower(),
+                                         "title": stage},
+                } for stage in ("Review", "Verify")]}
+            raise AssertionError(path)
+
+        def create(body, _conf):
+            stage = "Review" if " Review]" in body["title"] else "Verify"
+            task_id = stage.lower()
+            task = {
+                "id": task_id, "title": body["title"], "state": "created",
+                "created_at": "2026-08-11T10:0%d:00Z" % (len(created) + 1),
+                "repository_id": "repo-id", "context": body["context"],
+            }
+            tasks.append(task)
+            details[task_id] = {
+                "task": {"repository_id": "repo-id", "context": body["context"]},
+                "workflow": {"title": stage}, "context": body["context"],
+                "attempts": [],
+            }
+            created.append(body)
+            return {"task": task}
+
+        verdict = {
+            "action": "advance", "reason": "готово",
+            "next_complexity": "medium", "handoff": "",
+        }
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "cleanup_work_archive", "retry_pending_factory_deploy",
+            "autostart_plan", "area_extend", "collect_ideas", "all_tasks",
+            "record_implementation_artifact", "save_stage_verdict", "mark_final",
+            "deploy_after_merge", "notify",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "WORKS_PATH", works_path))
+            stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", merges_path))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value=verdict))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            gate = stack.enter_context(mock.patch.object(
+                pilot, "review_gate",
+                return_value={"back": False, "branch": rebuilt, "note": "rebuilt"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "pushed_branch", side_effect=lambda candidates, _repo:
+                candidates[0] if candidates else ""))
+            stack.enter_context(mock.patch.object(
+                pilot, "merge_recorded", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "gh_json", return_value={"ahead_by": 1}))
+            merge = stack.enter_context(mock.patch.object(
+                pilot, "gh_merge", return_value=(True, "merged")))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+            self.assertIn(f"Branch: {rebuilt}", created[0]["context"])
+            self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
+            self.assertEqual(pilot.implementation_artifact(base)["branch"], original)
+
+            tasks[-1]["state"] = "succeeded"
+            details["review"]["attempts"] = [{"result": "PASS"}]
+            pilot.cycle(conf, state)
+            self.assertIn(f"Branch: {rebuilt}", created[1]["context"])
+
+            tasks[-1]["state"] = "succeeded"
+            details["verify"]["attempts"] = [{"result": "PASS"}]
+            pilot.cycle(conf, state)
+
+        gate.assert_called_once_with(
+            conf, base, original, "github.com/acme/repo", mock.ANY,
+            area_repo="repo-id")
+        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
+
+
 class ClosedWorkLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
