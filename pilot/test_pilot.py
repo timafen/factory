@@ -343,6 +343,201 @@ class DeliveryAreaTests(unittest.TestCase):
         self.assertIn("только карточки", result["note"])
 
 
+class SpecificationBranchHandoffTests(unittest.TestCase):
+    def setUp(self):
+        self.created = []
+        self.state = {"processed": []}
+        self.conf = {
+            "stages": [
+                {"workflow": "Specification"},
+                {"workflow": "Implement + Test"},
+            ],
+            "poll_seconds": 30,
+            "auto_plan": False,
+        }
+        self.task = {
+            "id": "specification-done",
+            "title": "[auto] [1/2 Specification] Сохранить спецификацию",
+            "state": "succeeded",
+            "created_at": "2026-08-11T10:00:00Z",
+            "repository_id": "repo-id",
+        }
+
+    def run_cycle(self, result, branch_result=("есть", ["knowledge/spec.md"]),
+                  branch_error=None, published_branches=None):
+        def fake_api(path, body=None):
+            if path in ("/tasks?limit=100", "/tasks?limit=200"):
+                return {"tasks": [self.task]}
+            if path == "/tasks/specification-done":
+                return {
+                    "task": {
+                        "repository_id": "repo-id",
+                        "worker_id": "spec-worker-id",
+                    },
+                    "workflow": {
+                        "title": "Specification",
+                        "revision_id": "rev-specification",
+                    },
+                    "context": "",
+                    "attempts": [{"result": result}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "implement-worker-id", "name": "worker",
+                    "online": True, "health": "healthy", "capacity": 1,
+                    "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id",
+                    "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "implement", "enabled": True,
+                    "current_revision": {
+                        "id": "rev-implementation", "title": "Implement + Test",
+                    },
+                }]}
+            raise AssertionError(path)
+
+        def create(body, _conf):
+            self.created.append(body)
+            return {"task": {
+                "id": "created-task", "title": body["title"], "state": "created",
+                "repository_id": body["repository_id"],
+            }}
+
+        def github_branch(args, **_kwargs):
+            name = args[-1].split("/branches/", 1)[-1]
+            if published_branches is not None and name not in published_branches:
+                return None
+            return {"name": name}
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas", "save_promises",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github_branch))
+            if branch_error:
+                branch_report = stack.enter_context(mock.patch.object(
+                    pilot, "branch_report", side_effect=branch_error))
+            else:
+                branch_report = stack.enter_context(mock.patch.object(
+                    pilot, "branch_report", return_value=branch_result))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot", side_effect=lambda day, _week: {day: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "live_or_done_at", return_value=None))
+            stack.enter_context(mock.patch.object(pilot, "is_stopped", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "cap_rescues", return_value=0))
+            stack.enter_context(mock.patch.object(pilot, "note_cap_rescue"))
+            stack.enter_context(mock.patch.object(pilot, "notify"))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "reason": "готово",
+                "next_complexity": "medium", "handoff": "использовать документ",
+            }))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(self.conf, self.state)
+        return branch_report
+
+    def test_published_nonempty_branch_starts_implementation(self):
+        report = self.run_cycle(
+            "BRANCH: factory/published\nГОТОВО-КОГДА: файл pilot/pilot.py")
+
+        report.assert_called_once_with("github.com/acme/repo", "factory/published")
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("Implement + Test", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-implementation")
+        self.assertIn("Branch: factory/published", self.created[0]["context"])
+
+    def test_handoff_uses_published_branch_instead_of_stale_first_mention(self):
+        report = self.run_cycle(
+            "BRANCH: factory/stale\n"
+            "Опубликована: factory/published\n"
+            "ГОТОВО-КОГДА: файл pilot/pilot.py",
+            published_branches={"factory/published"},
+        )
+
+        report.assert_called_once_with("github.com/acme/repo", "factory/published")
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("Branch: factory/published", self.created[0]["context"])
+
+    def test_missing_branch_returns_same_specification(self):
+        self.run_cycle(
+            "BRANCH: factory/missing\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_result=("нет", []),
+        )
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("Specification", self.created[0]["title"])
+        self.assertEqual(self.created[0]["workflow_revision_id"], "rev-specification")
+        self.assertEqual(self.created[0]["repository_id"], "repo-id")
+        self.assertIn("закоммить", self.created[0]["context"])
+        self.assertIn("git push -u origin HEAD", self.created[0]["context"])
+
+    def test_empty_branch_diff_returns_same_specification(self):
+        self.run_cycle(
+            "BRANCH: factory/empty\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_result=("есть", []),
+        )
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("Specification", self.created[0]["title"])
+        self.assertIn("не содержит отличий от main", self.created[0]["context"])
+
+    def test_absent_branch_name_returns_same_specification(self):
+        report = self.run_cycle("ГОТОВО-КОГДА: файл pilot/pilot.py")
+
+        report.assert_not_called()
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("Specification", self.created[0]["title"])
+        self.assertIn("нет имени ветки", self.created[0]["context"])
+
+    def test_github_error_retries_without_creating_any_stage(self):
+        self.run_cycle(
+            "BRANCH: factory/published\nГОТОВО-КОГДА: файл pilot/pilot.py",
+            branch_error=RuntimeError("GitHub unavailable"),
+        )
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.state["processed"], [])
+
+    def test_branch_report_treats_only_http_404_as_missing(self):
+        response = types.SimpleNamespace(
+            returncode=1, stdout="", stderr="gh: Branch not found (HTTP 404)")
+        with mock.patch.object(pilot.subprocess, "run", return_value=response):
+            self.assertEqual(
+                pilot.branch_report("github.com/acme/repo", "factory/missing"),
+                ("нет", []),
+            )
+
+    def test_branch_report_raises_on_service_failure(self):
+        response = types.SimpleNamespace(
+            returncode=1, stdout="", stderr="connection reset by peer")
+        with mock.patch.object(pilot.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "connection reset"):
+                pilot.branch_report("github.com/acme/repo", "factory/task")
+
+
 class CodexUsageTests(unittest.TestCase):
     def setUp(self):
         pilot._codex_rollout_cache.clear()
