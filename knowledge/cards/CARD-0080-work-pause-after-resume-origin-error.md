@@ -2,14 +2,13 @@
 
 ## HEAD
 
-- Status: IMPLEMENTED — HTTPS fixture больше не использует недоверенный `route.fetch`; полный 21-test browser suite ожидает Verify.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/f48d26e0-344-21705f71-21c`
 - Implementation commit: 000084fd7cc008d8df69d62dedf02c00d91d93a8 — HTTPS resume идёт через Chromium/SPKI, а proxy фиксирует и проверяет очищенные backend-заголовки.
-- What changed: readiness получает исходный dashboard через browser `fetch`; реальный resume продолжает intercepted-запрос через `route.continue`.
-- What changed: fixture сверяет входные и backend `Origin`/`Forwarded`/`X-Forwarded-*`; чужой Origin отправляет только уже существующий loopback-only test client, поскольку Chromium не даёт подменить его в route.
-- Evidence: два независимых холодных запуска выбранных overview + HTTPS resume тестов с `FACTORY_BROWSER_LAUNCHER=/missing` → `2 passed` за 46.9 с и 48.7 с.
-- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just check` → PASS (14 UI-файлов/157 тестов, Go/tooling); отдельный `just build` и `git diff --exit-code -- web/dist` → PASS.
-- Next action: Verify запускает полный 21-test HTTPS browser suite один раз и подтверждает cleanup процессов/портов.
+- Evidence summary: чистый `just check` прошёл Go/UI/lint/typecheck/tooling/launcher (14 UI-файлов, 157 тестов); production build собрал три бинарника, committed `web/dist` воспроизводим.
+- Evidence summary: единственный полный HTTPS browser-прогон с обычным Chromium собрал и прошёл все 21 тест за 3.4 минуты; сценарий resume/Origin №7 прошёл, TLS/browser errors отсутствуют.
+- Evidence summary: после прогона не осталось scoped-процессов или listeners; дерево было чистым до обновления этой карточки.
+- Next action: человек сливает `factory/f48d26e0-344-21705f71-21c` в `main`.
 
 ## LOG
 
@@ -83,3 +82,17 @@
 - TLS proxy возвращает fixture-only снимок входных и переданных backend-заголовков; тест доказывает очистку spoofed `Forwarded`/`X-Forwarded-*`, сохранение `Origin`, 403 для чужого origin и 200 для browser resume.
 - Чужой `Origin` оставлен на существующем loopback-only API-контексте: Chromium намеренно сохраняет собственный Origin даже при header override в route.
 - Два холодных target-прогона → `2 passed` каждый; `just check` (157 web tests + Go/tooling), production build и clean `web/dist` → PASS. Полный 21-test browser suite оставлен Verify.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+|---|---|---|
+| Доставлены review head и стабильный implementation commit | `git reset --hard FETCH_HEAD`; `git merge-base --is-ancestor 000084fd7cc008d8df69d62dedf02c00d91d93a8 HEAD`; `git show --stat 000084fd...` | PASS: review head `4115aac86e28c1e256552d3d221171df3df3824e`; implementation — предок, не tip карточки и меняет три файла вне `knowledge/cards/`. |
+| Чистые Go/UI, lint, typecheck и tooling | `go clean -testcache`; `npm --prefix web ci`; `FACTORY_BROWSER_LAUNCHER=/missing just check` | PASS: format, vet, vuln, staticcheck, boundary, все Go-пакеты, 14 UI-файлов/157 тестов, tooling и launcher. |
+| Production build и воспроизводимый dist | `FACTORY_BROWSER_LAUNCHER=/missing FACTORY_BUILD_DIR=/tmp/card-0080-build.Zes4QU/bin just build`; `git diff --exit-code -- web/dist` | PASS: собраны `factory-server`, `factory-worker`, `factory-release-broker`; committed `web/dist` не изменился. |
+| Полный HTTPS browser suite ровно один раз | `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` без фильтров, повторов и retry | PASS: `Running 21 tests using 1 worker`; `21 passed (3.4m)`. |
+| Реальный HTTPS, scoped SPKI и service worker | тот же browser-прогон; `playwright.config.ts` вычисляет SHA-256 DER SPKI и передаёт только `--ignore-certificate-errors-spki-list`; первый HTTPS page-test завершает `observeBrowser().assertClean()` | PASS: Chromium открыл `https://127.0.0.1:<port>`; регистрируемый `/sw.js` с `skipWaiting()`/`clients.claim()` не дал SSL, console или request failure; в полном логе TLS/service-worker ошибок нет. |
+| Resume идёт через Chromium и proxy очищает заголовки | browser-сценарий №7; runtime assertions и `grep -R` по e2e runtime | PASS: `route.continue` (runtime `route.fetch` отсутствует), ответ 200; `Origin` сохранён, supplied `Forwarded`/`X-Forwarded-For`/`X-Real-IP` отсутствуют на backend, host/proto заменены на trusted HTTPS fixture. |
+| Desktop/390 resume, stale pause, safe retry и cross-origin | тот же сценарий №7 в полном suite | PASS: hostile Origin получил 403 `cross_origin_request`; безопасное сообщение и retry остались видимы; queued pause и completed stale pause очищены; desktop и 390px assertions/screenshots выполнены. |
+| Смежные browser/API/UI регрессии | оставшиеся 20 Playwright-сценариев; полный Go/UI suite; `npm --prefix web audit --omit=dev` | PASS: все 20 соседних browser-сценариев прошли, Go/UI regressions прошли, production dependencies — `found 0 vulnerabilities`. |
+| Cleanup и чистота дерева | `ps -eo pid,ppid,args`, `ss -ltnp` до/после; `git diff --check`; `git status --short --untracked-files=all` | PASS: scoped-процессов нет; listeners 27 → 27 без новых записей; до правки карточки tracked/untracked изменений не было. |
