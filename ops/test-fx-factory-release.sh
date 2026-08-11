@@ -212,6 +212,7 @@ EOF
 [ -r "$FACTORY_RELEASE_INFO" ] || exit 9
 echo 'release-info ready' >>"$TEST_EVENTS"
 echo "systemd-run $*" >>"$TEST_EVENTS"
+[ "$TEST_MODE" != systemd-run-fail ] || exit 1
 capture=0
 for arg in "$@"; do
   [ "$arg" != /usr/bin/flock ] || capture=1
@@ -422,6 +423,28 @@ tail -n 3 "$brain_failed/events" | diff -u - <(printf '%s\n' \
 ! grep -F 'systemd-run ' "$brain_failed/events" >/dev/null \
   || fail "failed brain install scheduled a Pilot restart"
 assert_no_fixture_processes "$brain_failed"
+
+systemd_failed="$temporary/systemd-run-fail"
+make_fixture "$systemd_failed" systemd-run-fail
+printf 'previous-release-info\n' >"$systemd_failed/current.json"
+if run_release "$systemd_failed" systemd-run-fail; then
+  fail "systemd-run-fail unexpectedly succeeded"
+fi
+assert_file "$systemd_failed/install/factory-server" old-server
+assert_file "$systemd_failed/install/factory-worker" old-worker
+assert_file "$systemd_failed/current.json" previous-release-info
+assert_no_fixture_processes "$systemd_failed"
+
+systemd_failed_without_info="$temporary/systemd-run-fail-without-info"
+make_fixture "$systemd_failed_without_info" systemd-run-fail
+if run_release "$systemd_failed_without_info" systemd-run-fail; then
+  fail "systemd-run-fail without previous info unexpectedly succeeded"
+fi
+assert_file "$systemd_failed_without_info/install/factory-server" old-server
+assert_file "$systemd_failed_without_info/install/factory-worker" old-worker
+[ ! -e "$systemd_failed_without_info/current.json" ] \
+  || fail "failed systemd-run left newly written release-info"
+assert_no_fixture_processes "$systemd_failed_without_info"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail

@@ -225,6 +225,12 @@ rollback() {
     && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
   cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
     && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
+  if [ "${info_previous_exists:-0}" = 1 ]; then
+    cp -f "$work/release-info.prev" "$INFO.new" \
+      && mv -f "$INFO.new" "$INFO"
+  else
+    rm -f "$INFO"
+  fi
   systemctl restart "$SERVER_SERVICE" || true
   restart_workers || true
   cleanup
@@ -328,6 +334,13 @@ fi
 step "ставлю и проверяю изолированный серверный браузер"
 bash "$work/src/ops/install-server-browser.sh" \
   || rollback "серверный браузер не прошёл сетевую проверку" 7
+
+info_previous_exists=0
+if [ -e "$INFO" ]; then
+  cp -f "$INFO" "$work/release-info.prev" \
+    || rollback "не смог сохранить прежние сведения о выпуске" 7
+  info_previous_exists=1
+fi
 
 if ! python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
 import json, sys, datetime
