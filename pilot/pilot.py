@@ -5548,7 +5548,8 @@ def _complete_delivery_waits(conf, state, command_key, generation):
         task_id = wait.get("task_id")
         if not task_id:
             continue
-        if not _delivery_already_recorded(task_id, command_key, generation):
+        newly_delivered = not _delivery_already_recorded(task_id, command_key, generation)
+        if newly_delivered:
             receipt = {"task_id": task_id, "base": wait.get("base", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "command_key": command_key, "generation": generation}
@@ -5561,6 +5562,10 @@ def _complete_delivery_waits(conf, state, command_key, generation):
                 remaining.append(wait)
                 continue
         mark_final(task_id, wait.get("stage", "Verify"), True)
+        if not newly_delivered:
+            # A restart may replay a saved wait after the durable receipt was
+            # written. Restore the PASS, but never send its owner message twice.
+            continue
         link = wait.get("try_url") or ""
         proof = wait.get("proof") or ""
         body = "\nПосмотреть: " + link if link else (
