@@ -26,14 +26,27 @@ type sequenceExecutor struct {
 	mu       sync.Mutex
 	statuses []string
 	calls    int
+	adapters []string
+	shas     []string
 }
 
-func (executor *sequenceExecutor) Execute(_ context.Context, _, _ string) string {
+func (executor *sequenceExecutor) Execute(_ context.Context, adapter, sha string) string {
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
-	status := executor.statuses[executor.calls]
+	status := "failed"
+	if executor.calls < len(executor.statuses) {
+		status = executor.statuses[executor.calls]
+	}
 	executor.calls++
+	executor.adapters = append(executor.adapters, adapter)
+	executor.shas = append(executor.shas, sha)
 	return status
+}
+
+func (executor *sequenceExecutor) snapshot() (int, []string, []string) {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	return executor.calls, append([]string(nil), executor.adapters...), append([]string(nil), executor.shas...)
 }
 
 func (executor *recordingExecutor) Execute(_ context.Context, adapter, sha string) string {
@@ -44,6 +57,57 @@ func (executor *recordingExecutor) Execute(_ context.Context, adapter, sha strin
 		<-executor.done
 	}
 	return "succeeded"
+}
+
+func postStatus(t *testing.T, server *httptest.Server, body string) int {
+	t.Helper()
+	response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+func operationStatus(t *testing.T, server *httptest.Server, id string) Response {
+	t.Helper()
+	response, err := server.Client().Get(server.URL + "/v1/operations/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET status=%d", response.StatusCode)
+	}
+	var result Response
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func waitForOperationStatus(t *testing.T, server *httptest.Server, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if got := operationStatus(t, server, id).Status; got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation %q did not reach %q", id, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func operationSnapshot(broker *Broker, id string) (operation, bool) {
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	item := broker.items[id]
+	if item == nil {
+		return operation{}, false
+	}
+	return *item, true
 }
 
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
@@ -114,28 +178,10 @@ func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 	server := httptest.NewServer(New(executor).Handler())
 	defer server.Close()
 	body := `{"operation_id":"factory-rollback-1","adapter":"fx-factory-rollback","commit_sha":"` + testSHA + `"}`
-	response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
 	}
-	_ = response.Body.Close()
-	var result Response
-	for i := 0; i < 100; i++ {
-		statusResponse, getErr := http.Get(server.URL + "/v1/operations/factory-rollback-1")
-		if getErr != nil {
-			t.Fatal(getErr)
-		}
-		if err := json.NewDecoder(statusResponse.Body).Decode(&result); err != nil {
-			t.Fatal(err)
-		}
-		_ = statusResponse.Body.Close()
-		if result.Status != "running" {
-			break
-		}
-	}
-	if result.Status != "succeeded" {
-		t.Fatalf("status=%q", result.Status)
-	}
+	waitForOperationStatus(t, server, "factory-rollback-1", "succeeded")
 }
 
 func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
@@ -149,11 +195,10 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	server := httptest.NewServer(broker.Handler())
 	defer server.Close()
 	body := `{"operation_id":"delivery-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
-	response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
 	}
-	_ = response.Body.Close()
+	waitForOperationStatus(t, server, "delivery-1", "running")
 	if _, err := os.Stat(filepath.Join(dir, "delivery-1.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -163,76 +208,101 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := restarted.items["delivery-1"]
-	if item == nil || item.Status != "failed" {
+	item, ok := operationSnapshot(restarted, "delivery-1")
+	if !ok || item.Status != "failed" {
 		t.Fatalf("recovered item=%+v", item)
 	}
 	close(blocked)
-	for i := 0; i < 100 && broker.items["delivery-1"].Status != "succeeded"; i++ {
-		time.Sleep(time.Millisecond)
-	}
+	waitForOperationStatus(t, server, "delivery-1", "succeeded")
 }
 
 func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
 	dir := t.TempDir()
-	broker, err := NewAt(dir, &recordingExecutor{done: make(chan struct{})})
+	blocked := make(chan struct{})
+	broker, err := NewAt(dir, &recordingExecutor{done: blocked})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(broker.Handler())
 	defer server.Close()
-	post := func(body string) int {
-		response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		return response.StatusCode
-	}
 	body := `{"operation_id":"delivery-2","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
-	if got := post(body); got != http.StatusAccepted {
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
 		t.Fatalf("first=%d", got)
 	}
-	if got := post(`{"operation_id":"delivery-2","adapter":"fx-factory-rollback","commit_sha":"` + testSHA + `"}`); got != http.StatusConflict {
+	if got := postStatus(t, server, `{"operation_id":"delivery-2","adapter":"fx-factory-rollback","commit_sha":"`+testSHA+`"}`); got != http.StatusConflict {
 		t.Fatalf("changed=%d", got)
 	}
+	close(blocked)
+	waitForOperationStatus(t, server, "delivery-2", "succeeded")
 }
 
-func TestLockedOperationRetriesOnceButTerminalOperationDoesNot(t *testing.T) {
+func TestLockedOperationRetriesWithNewerSHAOnlyForSameAdapter(t *testing.T) {
 	executor := &sequenceExecutor{statuses: []string{"locked", "succeeded"}}
 	broker := New(executor)
 	server := httptest.NewServer(broker.Handler())
 	defer server.Close()
-	body := `{"operation_id":"lock-retry-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
-	post := func() int {
-		response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		return response.StatusCode
-	}
-	if got := post(); got != http.StatusAccepted {
+	first := `{"operation_id":"lock-retry-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	newerSHA := strings.Repeat("b", 40)
+	retry := `{"operation_id":"lock-retry-1","adapter":"fx-factory-release","commit_sha":"` + newerSHA + `"}`
+	if got := postStatus(t, server, first); got != http.StatusAccepted {
 		t.Fatalf("first=%d", got)
 	}
-	for i := 0; i < 100 && broker.items["lock-retry-1"].Status != "locked"; i++ {
-		time.Sleep(time.Millisecond)
-	}
-	if got := post(); got != http.StatusAccepted {
+	waitForOperationStatus(t, server, "lock-retry-1", "locked")
+	if got := postStatus(t, server, retry); got != http.StatusAccepted {
 		t.Fatalf("retry=%d", got)
 	}
-	for i := 0; i < 100 && broker.items["lock-retry-1"].Status != "succeeded"; i++ {
-		time.Sleep(time.Millisecond)
-	}
-	if got := post(); got != http.StatusOK {
+	waitForOperationStatus(t, server, "lock-retry-1", "succeeded")
+	if got := postStatus(t, server, retry); got != http.StatusOK {
 		t.Fatalf("terminal duplicate=%d", got)
 	}
-	executor.mu.Lock()
-	defer executor.mu.Unlock()
-	if executor.calls != 2 {
-		t.Fatalf("physical executions=%d, want 2 (locked + retry)", executor.calls)
+	calls, adapters, shas := executor.snapshot()
+	if calls != 2 {
+		t.Fatalf("physical executions=%d, want 2 (locked + retry)", calls)
 	}
-	if got := broker.items["lock-retry-1"].Posts; got != 3 {
+	if strings.Join(adapters, ",") != "fx-factory-release,fx-factory-release" || strings.Join(shas, ",") != testSHA+","+newerSHA {
+		t.Fatalf("executions adapter=%v sha=%v", adapters, shas)
+	}
+	item, ok := operationSnapshot(broker, "lock-retry-1")
+	if !ok {
+		t.Fatal("missing operation")
+	}
+	if got := item.Posts; got != 3 {
 		t.Fatalf("durable POST observations=%d, want 3", got)
+	}
+}
+
+func TestLockedOperationRejectsAdapterAndTargetMutationAtomically(t *testing.T) {
+	executor := &sequenceExecutor{statuses: []string{"locked", "succeeded"}}
+	broker := New(executor)
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	first := `{"operation_id":"lock-identity-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, first); got != http.StatusAccepted {
+		t.Fatalf("first=%d", got)
+	}
+	waitForOperationStatus(t, server, "lock-identity-1", "locked")
+	for _, mutation := range []string{
+		`{"operation_id":"lock-identity-1","adapter":"fx-factory-rollback","commit_sha":"` + testSHA + `"}`,
+		`{"operation_id":"lock-identity-1","adapter":"tarser-staging-deploy-release","commit_sha":"` + testSHA + `"}`,
+	} {
+		if got := postStatus(t, server, mutation); got != http.StatusConflict {
+			t.Fatalf("mutated retry=%d, want conflict", got)
+		}
+	}
+	item, ok := operationSnapshot(broker, "lock-identity-1")
+	if !ok || item.Request.Adapter != "fx-factory-release" || item.Request.CommitSHA != testSHA || item.Status != "locked" || item.Posts != 1 {
+		t.Fatalf("mutated stored operation=%+v", item)
+	}
+	calls, adapters, _ := executor.snapshot()
+	if calls != 1 || strings.Join(adapters, ",") != "fx-factory-release" {
+		t.Fatalf("rollback/target executor ran: calls=%d adapters=%v", calls, adapters)
+	}
+	if got := postStatus(t, server, `{"operation_id":"lock-identity-1","adapter":"fx-factory-release","commit_sha":"`+strings.Repeat("c", 40)+`"}`); got != http.StatusAccepted {
+		t.Fatalf("same-adapter retry=%d", got)
+	}
+	waitForOperationStatus(t, server, "lock-identity-1", "succeeded")
+	calls, adapters, _ = executor.snapshot()
+	if calls != 2 || strings.Join(adapters, ",") != "fx-factory-release,fx-factory-release" {
+		t.Fatalf("unexpected executor calls=%d adapters=%v", calls, adapters)
 	}
 }
