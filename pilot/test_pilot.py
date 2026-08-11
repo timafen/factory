@@ -2221,6 +2221,31 @@ class PipelineWatchMergeTests(unittest.TestCase):
             "timeout_seconds": 900,
         }
 
+    def test_crash_after_external_merge_recovers_release_from_durable_intent(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        merges = os.path.join(temporary.name, "merges.jsonl")
+        state = {pilot.MERGE_INTENT_KEY: {"verify-crash": {
+            "branch": "factory/crash-after-merge", "base": "Crash merge",
+        }}}
+        delivery = {"task_id": "verify-crash", "base": "Crash merge", "stage": "Verify"}
+
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "MERGES_PATH", merges), \
+                mock.patch.object(pilot, "recover_post_merge_delivery") as recover:
+            restored = pilot.recover_merged_intent(
+                {"deploy_factory_cmd": "fx factory release"}, state,
+                "verify-crash", "factory/crash-after-merge",
+                "github.com/timafen/factory", delivery)
+            self.assertTrue(pilot.merge_recorded("verify-crash"))
+
+        self.assertTrue(restored)
+        recover.assert_called_once_with(
+            mock.ANY, state, "github.com/timafen/factory", delivery)
+        self.assertNotIn("verify-crash", state[pilot.MERGE_INTENT_KEY])
+        self.assertNotIn("verify-crash", pilot.load(state_path, {})[pilot.MERGE_INTENT_KEY])
+
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
         self.conf["stages"] = [{"workflow": "Verify"}]
@@ -4111,6 +4136,40 @@ class DashboardSnapshotTest(unittest.TestCase):
 
 class PostMergeDeployTest(unittest.TestCase):
     @mock.patch.object(pilot.subprocess, "Popen")
+    @mock.patch.object(pilot, "_release_supervisor_pid", side_effect=[None, 777])
+    def test_restart_adopts_launch_after_crash_before_pid_save(self, supervisor, popen):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        conf = {"deploy_factory_cmd": "fx factory release"}
+        popen.return_value.pid = 777
+        real_save = pilot.save
+        saves = {"count": 0}
+
+        def crash_on_pid_save(path, value):
+            saves["count"] += 1
+            if saves["count"] == 2:
+                raise SystemExit("crash after Popen")
+            real_save(path, value)
+
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "save", side_effect=crash_on_pid_save):
+            with self.assertRaises(SystemExit):
+                pilot.deploy_after_merge(conf, "github.com/timafen/factory", {})
+
+        restored = pilot.load(state_path, {})
+        with mock.patch.object(pilot, "DEPLOY_DIR", temporary.name), \
+                mock.patch.object(pilot, "STATE_PATH", state_path):
+            pilot.poll_post_merge_deploys(conf, restored)
+
+        release = restored[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"]
+        self.assertEqual(release["pid"], 777)
+        self.assertFalse(release["queued"])
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(supervisor.call_count, 2)
+
+    @mock.patch.object(pilot.subprocess, "Popen")
     @mock.patch.object(pilot, "log")
     def test_release_is_started_in_background_and_saved_for_next_cycle(self, log, popen):
         temporary = tempfile.TemporaryDirectory()
@@ -4128,7 +4187,7 @@ class PostMergeDeployTest(unittest.TestCase):
         self.assertEqual(release["generation"], 1)
         self.assertTrue(release["status"].endswith(".status"))
         self.assertIn("started generation=1", log.call_args.args[0])
-        self.assertIn("fx factory release", popen.call_args.args[0])
+        self.assertIn("fx factory release", popen.call_args.args[0][2])
         self.assertEqual(pilot.load(state_path, {}), state)
 
     @mock.patch.object(pilot.subprocess, "Popen")

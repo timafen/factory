@@ -5504,6 +5504,7 @@ MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
 DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/deliveries.jsonl"
 DELIVERY_WAIT_KEY = "post_merge_delivery_waits"
 DELIVERY_NOTIFICATION_KEY = "post_merge_delivery_notifications"
+MERGE_INTENT_KEY = "post_merge_intents"
 
 
 def merge_recorded(task_id):
@@ -5524,6 +5525,30 @@ def merge_recorded(task_id):
     except OSError:
         pass
     return False
+
+
+def record_merge_receipt(task_id, base):
+    """Durably and idempotently record a merge completed outside Pilot."""
+    if merge_recorded(task_id):
+        return
+    os.makedirs(os.path.dirname(MERGES_PATH), exist_ok=True)
+    with open(MERGES_PATH, "a", encoding="utf-8") as merges:
+        merges.write(json.dumps({
+            "task_id": task_id, "base": base,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, ensure_ascii=False) + chr(10))
+
+
+def recover_merged_intent(conf, state, task_id, branch, repo_identity, delivery):
+    """Convert a pre-merge intent into the missing journal and release wait."""
+    intent = (state.get(MERGE_INTENT_KEY) or {}).get(task_id)
+    if not intent or intent.get("branch") != branch:
+        return False
+    record_merge_receipt(task_id, intent.get("base") or delivery.get("base", ""))
+    recover_post_merge_delivery(conf, state, repo_identity, delivery)
+    state.get(MERGE_INTENT_KEY, {}).pop(task_id, None)
+    save(STATE_PATH, state)
+    return True
 
 
 def delivery_receipt(base, since=""):
@@ -6287,6 +6312,28 @@ def _release_running(pid):
         return False
 
 
+def _release_supervisor_pid(token):
+    """Find the already launched wrapper after a crash before pid was saved."""
+    if not token:
+        return None
+    marker = str(token).encode()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as command_line:
+                arguments = command_line.read().split(b"\0")
+        except OSError:
+            continue
+        if marker in arguments:
+            return int(entry)
+    return None
+
+
 def _release_output(release):
     try:
         with open(release["output"], encoding="utf-8", errors="replace") as out:
@@ -6384,12 +6431,23 @@ def _start_post_merge_deploy(command_key, label, command, state):
     else:
         generation = release["generation"]
 
-    # This atomic reservation must reach disk before Popen. If Pilot stops at
-    # the next instruction, the next process sees queued=True and resumes it.
+    token = release.setdefault(
+        "launch_token", f"pilot-release-{command_key}-{generation}-{uuid.uuid4().hex}")
+    # The token is both a durable reservation and the wrapper's argv identity.
+    # A restarted Pilot can therefore adopt the process even if it crashed
+    # after Popen returned but before pid/queued were saved.
     save(STATE_PATH, state)
+    existing_pid = _release_supervisor_pid(token)
+    if existing_pid:
+        release["pid"] = existing_pid
+        release["queued"] = False
+        save(STATE_PATH, state)
+        log(f"{label} adopted generation={generation} pid={existing_pid}")
+        return
     script = (f"{command} >{shlex.quote(release['output'])} 2>&1; rc=$?; "
               f"printf '%s\\n' \"$rc\" >{shlex.quote(release['status'])}; exit \"$rc\"")
-    child = subprocess.Popen(script, shell=True, stdin=subprocess.DEVNULL,
+    child = subprocess.Popen(["/bin/sh", "-c", script, token], shell=False,
+                             stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True, env=dict(os.environ, HOME=HOME))
     release["pid"] = child.pid
@@ -6830,17 +6888,21 @@ def cycle(conf, state):
                     repo_short = repo_identity.split("github.com/")[-1]
                     cmp_ = gh_json(["api", f"repos/{repo_short}/compare/main...{branch}"])
                     if cmp_ is not None and cmp_.get("ahead_by") == 0:
-                        log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
+                        if recover_merged_intent(
+                                conf, state, tid, branch, repo_identity, delivery):
+                            log(f"MERGE RECOVER '{base_title(title)}': ветка {branch} уже в main — выпуск восстановлен")
+                        else:
+                            log(f"MERGE SKIP '{base_title(title)}': ветка {branch} уже в main — дубль не открываю")
                         continue
+                    intents = state.setdefault(MERGE_INTENT_KEY, {})
+                    intents[tid] = {"branch": branch, "repository": repo_identity,
+                                    "base": base_title(title), "delivery": delivery}
+                    save(STATE_PATH, state)
                     ok, out = gh_merge(repo_identity, branch, base_title(title))
                     log(f"AUTO-MERGE pipeline='{base_title(title)}' branch={branch} ok={ok} :: {out[:200]}")
                     if ok:
                         try:
-                            with open(MERGES_PATH, "a", encoding="utf-8") as mf:
-                                mf.write(json.dumps({"task_id": tid,
-                                    "base": base_title(title),
-                                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                    ensure_ascii=False) + chr(10))
+                            record_merge_receipt(tid, base_title(title))
                         except Exception as e:
                             log("merge_journal_error", repr(e))
                         # Финальный PASS и сообщение владельцу принадлежат не merge,
