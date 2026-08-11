@@ -573,7 +573,7 @@ class CardNumberReservationTests(unittest.TestCase):
         self.assertEqual(pilot.extract_card("", "Branch: factory/task\nCard: CARD-0070\n"),
                          "CARD-0070")
         self.assertEqual(pilot.extract_card("Card: CARD-0071\n", "Card: CARD-0070\n"),
-                         "CARD-0071")
+                         "CARD-0070")
         self.assertIn("выдана строка `Card: CARD-…`", pilot.AGENT_RULES)
 
     def test_review_rejects_card_with_other_reserved_number_first(self):
@@ -1878,7 +1878,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
             records = [json.loads(line) for line in entries]
         self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
 
-    def test_merge_conflict_keeps_reserved_card_through_implement_to_review(self):
+    def test_merge_conflict_keeps_context_card_despite_verify_report_to_review(self):
         self.conf["stages"] = [
             {"workflow": "Implement + Test"},
             {"workflow": "Review"},
@@ -1908,7 +1908,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
                     "task": {"repository_id": "repo-id"},
                     "workflow": {"title": "Verify", "revision_id": "verify-revision"},
                     "context": "Branch: factory/card-conflict\nCard: CARD-0070\n",
-                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict"}],
+                    "attempts": [{"result": "PASS\nBRANCH: factory/card-conflict\nCard: CARD-0071"}],
                 }
             if path == "/tasks/implement-after-conflict":
                 return {
@@ -1981,11 +1981,13 @@ class PipelineWatchMergeTests(unittest.TestCase):
 
             pilot.cycle(self.conf, state)
             self.assertIn("Card: CARD-0070", created[0]["context"])
+            self.assertNotIn("Card: CARD-0071", created[0]["context"])
             phase["value"] = "implement"
             pilot.cycle(self.conf, state)
 
         self.assertIn("Review", created[1]["title"])
         self.assertIn("Card: CARD-0070", created[1]["context"])
+        self.assertNotIn("Card: CARD-0071", created[1]["context"])
         self.assertEqual(review_gate.call_args.kwargs["expected_card"], "CARD-0070")
 
 

@@ -2337,7 +2337,9 @@ def reserved_card_number(state, repo_identity, branch):
 
 def extract_card(result, prev_context):
     """Keep the reservation as a pipeline identity through every handoff."""
-    match = CARD_LINE.search(result or "") or CARD_LINE.search(prev_context or "")
+    # The context is the durable pipeline identity.  A later agent report can
+    # repeat it, but must not silently replace it with a different card.
+    match = CARD_LINE.search(prev_context or "") or CARD_LINE.search(result or "")
     return match.group(1) if match else ""
 
 
