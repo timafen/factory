@@ -4651,6 +4651,13 @@ class PostMergeDeliveryCompletionTests(unittest.TestCase):
             pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
             pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
 
+            # Replaying the saved wait after a restart restores state silently.
+            state[pilot.DELIVERY_WAIT_KEY] = [{"task_id": "verify-1", "stage": "Verify",
+                "base": "Оплата", "command_key": "deploy_factory_cmd", "generation": 2}]
+            state[pilot.DEPLOY_STATE_KEY]["deploy_factory_cmd"] = {"generation": 2,
+                "status": status, "output": "/missing", "queued": False}
+            pilot.poll_post_merge_deploys({"deploy_factory_cmd": "fx factory release"}, state)
+
             self.assertTrue(pilot.final_ok("verify-1", strict=True))
         with open(deliveries, encoding="utf-8") as recorded:
             self.assertEqual(len(recorded.readlines()), 1)
