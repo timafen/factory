@@ -45,6 +45,8 @@ make_fixture() {
   chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
+  : >"$case_dir/gate-children"
+  : >"$case_dir/handshake-events"
 
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
@@ -82,6 +84,24 @@ EOF
   cat >"$case_dir/bin/npx" <<'EOF'
 #!/bin/bash
 echo "npx $*" >>"$TEST_GATES"
+assert_gate_handshake() {
+  local name=$1 state='' sid_field pgid_field ready_field extra sid pgid actual_sid actual_pgid
+  state=$(find "$TEST_RELEASE_DIR" -name "$name" -type f -print -quit)
+  [ -n "$state" ] || exit 18
+  IFS=' ' read -r sid_field pgid_field ready_field extra <"$state" || exit 18
+  case "$sid_field:$pgid_field:$ready_field:$extra" in
+    sid=*:pgid=*:ready=1:) ;;
+    *) exit 18 ;;
+  esac
+  sid=${sid_field#sid=}
+  pgid=${pgid_field#pgid=}
+  case "$sid:$pgid" in
+    *[!0-9:]*|:*|*:) exit 18 ;;
+  esac
+  read -r actual_sid actual_pgid < <(ps -o sid= -o pgid= -p "$$") || exit 18
+  [ "$sid" = "$actual_sid" ] && [ "$pgid" = "$actual_pgid" ] || exit 18
+  printf 'ui-after-handshake\n' >>"$TEST_HANDSHAKE_EVENTS"
+}
 wait_for_file() {
   local file=$1 i
   for ((i = 0; i < 500; i++)); do
@@ -99,6 +119,16 @@ case "$TEST_MODE:${1:-}" in
     : >"$TEST_UI_STARTED"
     wait_for_file "$TEST_GO_RUNNING"
     ;;
+  signal-forked-gates:tsc)
+    assert_gate_handshake ui-checks.session
+    (
+      trap 'echo ui-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
+      trap '' HUP INT
+      while :; do /bin/sleep 1; done
+    ) &
+    : >"$TEST_UI_RUNNING"
+    wait "$!"
+    ;;
   signal-gates:tsc)
     : >"$TEST_UI_RUNNING"
     trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
@@ -110,6 +140,24 @@ EOF
   cat >"$case_dir/bin/go" <<'EOF'
 #!/bin/bash
 echo "go $*" >>"$TEST_GATES"
+assert_gate_handshake() {
+  local name=$1 state='' sid_field pgid_field ready_field extra sid pgid actual_sid actual_pgid
+  state=$(find "$TEST_RELEASE_DIR" -name "$name" -type f -print -quit)
+  [ -n "$state" ] || exit 18
+  IFS=' ' read -r sid_field pgid_field ready_field extra <"$state" || exit 18
+  case "$sid_field:$pgid_field:$ready_field:$extra" in
+    sid=*:pgid=*:ready=1:) ;;
+    *) exit 18 ;;
+  esac
+  sid=${sid_field#sid=}
+  pgid=${pgid_field#pgid=}
+  case "$sid:$pgid" in
+    *[!0-9:]*|:*|*:) exit 18 ;;
+  esac
+  read -r actual_sid actual_pgid < <(ps -o sid= -o pgid= -p "$$") || exit 18
+  [ "$sid" = "$actual_sid" ] && [ "$pgid" = "$actual_pgid" ] || exit 18
+  printf 'go-after-handshake\n' >>"$TEST_HANDSHAKE_EVENTS"
+}
 if [ "${1:-}" = test ]; then
   wait_for_file() {
     local file=$1 i
@@ -130,6 +178,16 @@ if [ "${1:-}" = test ]; then
       : >"$TEST_GO_RUNNING"
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
+      ;;
+    signal-forked-gates)
+      assert_gate_handshake go-checks.session
+      (
+        trap 'echo go-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
+        trap '' HUP INT
+        while :; do /bin/sleep 1; done
+      ) &
+      : >"$TEST_GO_RUNNING"
+      wait "$!"
       ;;
     signal-gates)
       : >"$TEST_GO_RUNNING"
@@ -189,6 +247,35 @@ if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
 fi
 exec /bin/bash "$@"
 EOF
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+[ "${1:-}" != --wait ] || shift
+case "$TEST_MODE" in
+  signal-forked-gates)
+    printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
+    /usr/bin/setsid --fork --wait "$@" &
+    wait "$!"
+    ;;
+  signal-before-ready)
+    printf 'setsid-before-ready\n' >>"$TEST_HANDSHAKE_EVENTS"
+    /usr/bin/setsid --fork --wait /bin/bash -c '
+      cd "$1"
+      : >"$2"
+      trap "" HUP INT TERM
+      exec /bin/sleep 30
+    ' bash "$TEST_STUCK_CWD" "$TEST_SETSID_STARTED" &
+    : >"$TEST_SETSID_STARTED"
+    wait "$!"
+    ;;
+  *) exec /usr/bin/setsid --wait "$@" ;;
+esac
+EOF
+  cat >"$case_dir/bin/as-fork" <<'EOF'
+#!/bin/bash
+printf 'as-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
+"$@" &
+exit 0
+EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
 echo "$1 $2" >>"$TEST_EVENTS"
@@ -232,6 +319,9 @@ fi
 EOF
   cat >"$case_dir/bin/sleep" <<'EOF'
 #!/bin/bash
+case "$TEST_MODE" in
+  ui-test-fail|signal-forked-gates|signal-before-ready) exec /bin/sleep "$@" ;;
+esac
 exit 0
 EOF
   cat >"$case_dir/bin/chmod" <<'EOF'
@@ -266,8 +356,23 @@ EOF
   chmod +x "$case_dir/bin/"*
 }
 
+configure_release_mode() {
+  case_dir=$1 mode=$2
+  fixture_release_as=''
+  fixture_gate_ready_attempts=500
+  fixture_gate_stop_attempts=100
+  case "$mode" in
+    ui-test-fail|signal-forked-gates|signal-before-ready)
+      fixture_gate_ready_attempts=20
+      fixture_gate_stop_attempts=20
+      ;;
+  esac
+  [ "$mode" != signal-forked-gates ] || fixture_release_as="$case_dir/bin/as-fork"
+}
+
 run_release() {
   case_dir=$1 mode=$2
+  configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
@@ -277,13 +382,19 @@ run_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_AS="$fixture_release_as" FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
+    FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
+    FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -299,6 +410,7 @@ run_release() {
 
 start_release() {
   case_dir=$1 mode=$2
+  configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
@@ -308,13 +420,19 @@ start_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_AS="$fixture_release_as" FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
+    FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
+    FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -324,7 +442,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+    env --default-signal=INT /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
 
@@ -482,27 +600,56 @@ grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
 for signal in HUP INT TERM; do
-  for attempt in 1 2 3 4 5; do
-    signaled="$temporary/signal-$signal-$attempt"
-    make_fixture "$signaled" signal-gates
-    start_release "$signaled" signal-gates
-    wait_for_file "$signaled/ui-running"
-    wait_for_file "$signaled/go-running"
-    kill -"$signal" "$release_pid"
-    set +e
-    wait "$release_pid"
-    status=$?
-    set -e
-    [ "$status" -eq 130 ] || fail "signal $signal attempt $attempt returned $status instead of 130"
-    assert_file "$signaled/install/factory-server" old-server
-    assert_file "$signaled/install/factory-worker" old-worker
-    [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
-    grep -Fx 'ui-stopped' "$signaled/gate-children" >/dev/null \
-      || fail "signal $signal left the UI test group running"
-    grep -Fx 'go-stopped' "$signaled/gate-children" >/dev/null \
-      || fail "signal $signal left the Go test group running"
-    assert_no_fixture_processes "$signaled"
-  done
+  signaled="$temporary/signal-forked-$signal"
+  make_fixture "$signaled" signal-forked-gates
+  start_release "$signaled" signal-forked-gates
+  wait_for_file "$signaled/ui-running"
+  wait_for_file "$signaled/go-running"
+  SECONDS=0
+  kill -"$signal" "$release_pid"
+  set +e
+  wait "$release_pid"
+  status=$?
+  set -e
+  [ "$status" -eq 130 ] || fail "signal $signal returned $status instead of 130"
+  [ "$SECONDS" -lt 3 ] || fail "signal $signal did not stop the forked gates in bounded time"
+  assert_file "$signaled/install/factory-server" old-server
+  assert_file "$signaled/install/factory-worker" old-worker
+  [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
+  grep -Fx 'setsid-forked' "$signaled/handshake-events" >/dev/null \
+    || fail "signal $signal did not force the GNU setsid fork path"
+  grep -Fx 'as-forked' "$signaled/handshake-events" >/dev/null \
+    || fail "signal $signal did not run the opaque AS intermediary"
+  grep -Fx 'ui-after-handshake' "$signaled/handshake-events" >/dev/null \
+    || fail "signal $signal started the UI gate before its handshake"
+  grep -Fx 'go-after-handshake' "$signaled/handshake-events" >/dev/null \
+    || fail "signal $signal started the Go gate before its handshake"
+  grep -Fx 'ui-term-ignored' "$signaled/gate-children" >/dev/null \
+    || fail "signal $signal did not TERM the UI group before KILL"
+  grep -Fx 'go-term-ignored' "$signaled/gate-children" >/dev/null \
+    || fail "signal $signal did not TERM the Go group before KILL"
+  assert_no_fixture_processes "$signaled"
+done
+
+for signal in HUP INT TERM; do
+  before_ready="$temporary/signal-before-ready-$signal"
+  make_fixture "$before_ready" signal-before-ready
+  start_release "$before_ready" signal-before-ready
+  wait_for_file "$before_ready/setsid-started"
+  SECONDS=0
+  kill -"$signal" "$release_pid"
+  set +e
+  wait "$release_pid"
+  status=$?
+  set -e
+  [ "$status" -eq 130 ] || fail "pre-ready signal $signal returned $status instead of 130"
+  [ "$SECONDS" -lt 3 ] || fail "pre-ready signal $signal did not stop the launcher in bounded time"
+  assert_file "$before_ready/install/factory-server" old-server
+  assert_file "$before_ready/install/factory-worker" old-worker
+  [ ! -s "$before_ready/events" ] || fail "pre-ready signal $signal touched services before installation"
+  ! grep -F 'after-handshake' "$before_ready/handshake-events" >/dev/null \
+    || fail "pre-ready signal $signal allowed a gate to start"
+  assert_no_fixture_processes "$before_ready"
 done
 
 auth_failed="$temporary/auth-provision-fail"
