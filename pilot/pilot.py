@@ -188,13 +188,24 @@ def no_bare_hashes(text):
 NOTIFY_LOG_PATH = f"{HOME}/pilot/notifications.jsonl"
 
 
-def _notify_journal(title, message, group, delivered, click):
+def _notify_journal(title, message, group, delivered, click, event_id=""):
     """Каждое уведомление остаётся в журнале — экран «Уведомления» читает его.
-    Тихие (выключенная группа) тоже пишутся, с пометкой."""
+    Тихие (выключенная группа) тоже пишутся, с пометкой. Устойчивый event id
+    не даёт outbox-повтору после рестарта создать вторую запись на экране."""
     try:
+        if event_id:
+            try:
+                with open(NOTIFY_LOG_PATH, encoding="utf-8") as existing:
+                    if any(json.loads(line).get("id") == event_id
+                           for line in existing if line.strip()):
+                        return
+            except (OSError, TypeError, ValueError):
+                pass
         rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
                "title": title, "message": message[:1500],
                "group": group, "delivered": bool(delivered), "click": click}
+        if event_id:
+            rec["id"] = event_id
         with open(NOTIFY_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         if os.path.getsize(NOTIFY_LOG_PATH) > 1_500_000:
@@ -204,19 +215,19 @@ def _notify_journal(title, message, group, delivered, click):
         log("notify_journal_error", repr(e))
 
 
-def notify(conf, title, message, priority="default", tags="", click=""):
+def notify(conf, title, message, priority="default", tags="", click="", event_id=""):
     title = no_bare_hashes(title)
     message = no_bare_hashes(message)
     _notify_journal(title, message, notify_group(title),
-                    notify_allowed(conf, title), click)
+                    notify_allowed(conf, title), click, event_id)
     if not notify_allowed(conf, title):
         log("QUIET[" + notify_group(title) + "] " + str(title)
             + " :: " + str(message)[:80].replace("\n", " "))
-        return
+        return True
     """Phone push via ntfy (if ntfy_topic set in config). Never raises."""
     topic = (conf or {}).get("ntfy_topic", "")
     if not topic:
-        return
+        return True
     server = (conf or {}).get("ntfy_server", "https://ntfy.sh")
     try:
         prio = {"low": 2, "default": 3, "high": 4, "max": 5}.get(priority, 3)
@@ -226,13 +237,19 @@ def notify(conf, title, message, priority="default", tags="", click=""):
                 # for reading; the link is followed deliberately.
                 "actions": [{"action": "view", "label": "Открыть в Factory",
                              "url": click or (UI_BASE + "/work"), "clear": False}]}
+        if event_id:
+            # A replay with the same sequence id updates the existing ntfy
+            # notification instead of creating a second owner alert.
+            body["sequence_id"] = uuid.uuid5(uuid.NAMESPACE_URL, event_id).hex
         if tags:
             body["tags"] = tags.split(",")
         req = urllib.request.Request(server, data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15).read()
+        return True
     except Exception as e:
         log("notify_error", repr(e))
+        return False
 
 
 def best_workers(worker_list):
@@ -5410,6 +5427,7 @@ def host_load_admits(tasks, stage, load, respect_host_load=True):
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
 DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/deliveries.jsonl"
 DELIVERY_WAIT_KEY = "post_merge_delivery_waits"
+DELIVERY_NOTIFICATION_KEY = "post_merge_delivery_notifications"
 
 
 def merge_recorded(task_id):
@@ -5485,8 +5503,36 @@ def recover_post_merge_delivery(conf, state, repo_identity, delivery):
     return deploy_after_merge(conf, repo_identity, state, delivery=delivery)
 
 
+def _queue_delivery_notification(state, event_id, title, message, **options):
+    """Persist one owner notification before attempting its external effect."""
+    outbox = state.setdefault(DELIVERY_NOTIFICATION_KEY, {})
+    if event_id not in outbox:
+        outbox[event_id] = {
+            "status": "pending", "title": title, "message": message,
+            "options": options,
+        }
+        save(STATE_PATH, state)
+    return outbox[event_id]
+
+
+def _deliver_delivery_notifications(conf, state):
+    """Drain the durable outbox using ntfy's stable sequence id on retries."""
+    outbox = state.get(DELIVERY_NOTIFICATION_KEY) or {}
+    for event_id, event in list(outbox.items()):
+        if event.get("status") == "delivered":
+            continue
+        delivered = notify(conf, event.get("title", ""), event.get("message", ""),
+                           event_id=event_id, **(event.get("options") or {}))
+        if delivered is False:
+            continue
+        event["status"] = "delivered"
+        event["delivered_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        save(STATE_PATH, state)
+
+
 def _complete_delivery_waits(conf, state, command_key, generation):
-    """Finish exactly the tasks whose promised release generation succeeded."""
+    """Advance receipt, PASS and owner notification as separate durable steps."""
     waits = state.setdefault(DELIVERY_WAIT_KEY, [])
     remaining = []
     statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
@@ -5512,22 +5558,28 @@ def _complete_delivery_waits(conf, state, command_key, generation):
                 log("delivery_receipt_error", repr(exc))
                 remaining.append(wait)
                 continue
-        mark_final(task_id, wait.get("stage", "Verify"), True)
+        wait["receipt_recorded"] = True
+        save(STATE_PATH, state)
+        if not final_ok(task_id, strict=True):
+            mark_final(task_id, wait.get("stage", "Verify"), True)
+        if not final_ok(task_id, strict=True):
+            remaining.append(wait)
+            continue
+        wait["finalized"] = True
+        save(STATE_PATH, state)
         base = wait.get("base", "")
         if base and (statuses.get(base) or {}).get("state") == "release_failed":
             statuses.pop(base, None)
             statuses_changed = True
-        if not newly_delivered:
-            # A restart may replay a saved wait after the durable receipt was
-            # written. Restore the PASS, but never send its owner message twice.
-            continue
         link = wait.get("try_url") or ""
         proof = wait.get("proof") or ""
         body = "\nПосмотреть: " + link if link else (
             "\nРезультат не визуальный. Проверено: " + proof if proof else
             "\nВыпуск завершён; подробности есть в карточке.")
-        notify(conf, "Задача выполнена", wait.get("base", "") + body,
-               tags="white_check_mark", click=link or f"{UI_BASE}/tasks/{task_id}")
+        _queue_delivery_notification(
+            state, f"delivery-success:{task_id}", "Задача выполнена",
+            wait.get("base", "") + body, tags="white_check_mark",
+            click=link or f"{UI_BASE}/tasks/{task_id}")
     state[DELIVERY_WAIT_KEY] = remaining
     if statuses_changed:
         os.makedirs(f"{HOME}/pilot", exist_ok=True)
@@ -6298,18 +6350,15 @@ def poll_post_merge_deploys(conf, state, now=None):
             # a failed release. Every other non-zero result is an incident.
             if rc not in (0, 8):
                 _record_release_failure(command_key, release, output)
-                alerted = state.setdefault("post_merge_delivery_failures", set())
-                # JSON state cannot persist a set; accept older in-memory state too.
-                if not isinstance(alerted, list):
-                    alerted = list(alerted)
-                    state["post_merge_delivery_failures"] = alerted
                 failure_id = f"{command_key}:{release.get('generation')}"
-                if failure_id not in alerted:
-                    alerted.append(failure_id)
-                    notify(conf, "Выпуск после слияния не прошёл",
-                           "Работа остаётся незавершённой; выпуск завершился с ошибкой. " + output,
-                           priority="high", tags="warning")
                 _fail_delivery_waits(state, command_key, release.get("generation", 0), rc, output)
+                alerted = state.get("post_merge_delivery_failures") or []
+                if failure_id not in alerted:
+                    _queue_delivery_notification(
+                        state, f"delivery-failure:{failure_id}",
+                        "Выпуск после слияния не прошёл",
+                        "Работа остаётся незавершённой; выпуск завершился с ошибкой. " + output,
+                        priority="high", tags="warning")
             elif rc == 0:
                 _complete_delivery_waits(conf, state, command_key, release.get("generation", 0))
             releases.pop(command_key, None)
@@ -6332,6 +6381,7 @@ def poll_post_merge_deploys(conf, state, now=None):
             current = time.time() if now is None else now
             if due is None or current >= float(due):
                 _start_post_merge_deploy(command_key, label, conf[command_key], state)
+    _deliver_delivery_notifications(conf, state)
 
 
 def retry_pending_factory_deploy(conf, state, now=None):
@@ -6364,8 +6414,14 @@ def deploy_after_merge(conf, repo_identity, state=None, now=None, delivery=None)
     running = releases.get(command_key)
     if delivery:
         # A merge behind an active release must wait for its coalesced successor.
-        target_generation = (int(running.get("generation", 0)) + 1 if running
-                             else int(releases.get("generation", 0)) + 1)
+        if running and running.get("queued") and not running.get("pid"):
+            # rc=8 already reserved this not-yet-started generation. A merge
+            # arriving now belongs to that retry; inventing N+1 would lose it
+            # when starting N clears the coalescing flag.
+            target_generation = int(running.get("generation", 0))
+        else:
+            target_generation = (int(running.get("generation", 0)) + 1 if running
+                                 else int(releases.get("generation", 0)) + 1)
         wait = dict(delivery, command_key=command_key, generation=target_generation)
         waits = state.setdefault(DELIVERY_WAIT_KEY, [])
         if not any(item.get("task_id") == wait.get("task_id") for item in waits):
