@@ -3,13 +3,13 @@
 ## HEAD
 
 - Status: Implemented — ожидает review/verify.
-- Branch: `factory/981e1909-2f1-7977a914-6af`.
-- Implementation commit: 370c82994593fc96d49d8248e57a30b40de19738 — terminal failure выпуска сохраняет незавершённый Verify и честный статус Work.
-- What changed: Pilot связывает terminal release failure с ожидающими Verify, сохраняет причину для Work и не даёт архиву скрыть этот сбой.
-- What changed: Work по-русски сообщает «Выпуск остановлен», причину и безопасное повторное действие вместо ложного ожидания.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.WorkArchiveCleanupTests pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests` → 27 OK.
-- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 12 passed; `cd web && npm run build` → passed.
-- Next action: Review проверить terminal release failure на полном цикле Pilot.
+- Branch: `factory/95bac4a0-123-9e15e522-9f1`.
+- Implementation commit: cdd6f5ae9ab2d7ed0087514c31dcbe7751719d1b — рестарт после merge journal восстанавливает единственное ожидание выпуска.
+- What changed: Pilot не пропускает выпуск, если остановился между durable merge receipt и `deploy_after_merge`; receipt и `release_failed` не перезапускаются.
+- What changed: Сквозная регрессия доказывает один запуск выпуска, PASS только после `rc=0` и отсутствие дублей уведомлений.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.PipelineWatchMergeTests pilot.test_pilot.PostMergeDeployTest pilot.test_pilot.PostMergeDeliveryCompletionTests pilot.test_pilot.EpicCompletionReceiptTests` → 27 OK.
+- Evidence: `cd web && npm test -- --run src/Work.test.ts` → 12 passed; `npm run lint` → passed; `npm run build` → passed.
+- Next action: Review проверить restart между merge journal и `deploy_after_merge` на полном цикле Pilot.
 
 ## LOG
 
@@ -47,3 +47,11 @@ Python-тестами и 11 UI-тестами Work.
 рестарта. Work показывает остановленный выпуск с причиной и безопасным
 действием. Сквозные Python-сценарии покрывают success, `rc=8`, failure и
 restart; Work UI и production build прошли.
+
+### 2026-08-11 — Implement
+
+После merge journal Pilot восстанавливает отсутствующее ожидание поставки до
+пропуска повторного merge. Новый сквозной тест моделирует рестарт ровно в этом
+окне: выпуск стартует один раз, `final_pass` появляется только после `rc=0`, а
+delivery receipt и уведомление не дублируются. Проверены 27 Python-регрессий,
+12 Work UI-тестов, ESLint и production build.
