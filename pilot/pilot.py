@@ -2229,15 +2229,23 @@ def pipeline_watch(conf, tasks, workflows, workers):
 # а по гигиене — ветки нет в хранилище или в диффе чужие файлы. Проверять
 # это умеет машина за секунды. Дорогое Ревью получает уже проверенный факт.
 
-def gh_json(args, timeout=30):
+def gh_json(args, timeout=30, strict=False):
     env = dict(os.environ, HOME=HOME)
     r = subprocess.run(["gh"] + args, capture_output=True, text=True,
                        env=env, timeout=timeout)
     if r.returncode != 0:
+        # Most callers use None as a deliberately soft failure.  Branch
+        # handoff is different: only a real 404 proves that an artifact was
+        # not published; a network/service failure must be retried later.
+        failure = (r.stderr or r.stdout or "gh failed").strip()
+        if strict and "HTTP 404" not in failure:
+            raise RuntimeError(failure)
         return None
     try:
         return json.loads(r.stdout)
-    except Exception:
+    except Exception as e:
+        if strict:
+            raise RuntimeError("gh returned invalid JSON") from e
         return None
 
 
@@ -2275,10 +2283,10 @@ def branch_report(repo_identity, branch):
     repo = repo_identity.split("github.com/")[-1]
     if not repo or not branch:
         return "", []
-    b = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+    b = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
     if b is None:
         return "нет", []
-    cmp_ = gh_json(["api", f"repos/{repo}/compare/main...{branch}"])
+    cmp_ = gh_json(["api", f"repos/{repo}/compare/main...{branch}"], strict=True)
     files = [f.get("filename") for f in (cmp_ or {}).get("files", [])][:80]
     return "есть", files
 
@@ -6503,7 +6511,7 @@ def cycle(conf, state):
 
         handoff = verdict.get("handoff", "")
         branch = extract_branch(result, detail.get("context", ""))
-        if next_stage in ("Review", "Verify"):
+        if wf == "Specification" or next_stage in ("Review", "Verify"):
             try:
                 rid_b = detail["task"].get("repository_id") or ""
                 cands = branch_candidates(result, detail.get("context", ""))
@@ -6513,6 +6521,67 @@ def cycle(conf, state):
             except Exception as e:
                 log("branch_pick_error", repr(e))
         branch_line = f"Branch: {branch}\n" if branch else ""
+
+        # Спецификация является артефактом поставки, а не только текстом в
+        # сокращённом отчёте.  До разработки подтверждаем, что выбранная ветка
+        # действительно опубликована и содержит изменения относительно main.
+        if wf == "Specification":
+            branch_state, branch_files = "", []
+            if branch:
+                try:
+                    rid_s = detail["task"].get("repository_id") or ""
+                    branch_state, branch_files = branch_report(
+                        repo_identity_by_id.get(rid_s, ""), branch)
+                except Exception as e:
+                    if tid in state["processed"]:
+                        state["processed"].remove(tid)
+                    log(f"SPEC BRANCH WAIT {base[:40]!r}: проверка GitHub недоступна: {e}")
+                    continue
+
+            branch_missing = not branch or branch_state == "нет"
+            branch_empty = branch_state == "есть" and not branch_files
+            if branch and branch_state not in ("есть", "нет"):
+                if tid in state["processed"]:
+                    state["processed"].remove(tid)
+                log(f"SPEC BRANCH WAIT {base[:40]!r}: состояние ветки неизвестно")
+                continue
+            if branch_missing or branch_empty:
+                if cap_rescues(base, "SPEC_BRANCH") >= 1:
+                    log(f"SPEC BRANCH STOP {base[:40]!r}: возврат уже использован, "
+                        "разработку не запускаю")
+                    continue
+                note_cap_rescue(base, "SPEC_BRANCH")
+                back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
+                reason = (f"ветки {branch} нет в origin" if branch_missing and branch
+                          else "в отчёте и контексте нет имени ветки" if not branch
+                          else f"ветка {branch} не содержит отличий от main")
+                spec_ctx = (
+                    f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}\n"
+                    f"Спецификацию нельзя передать в разработку: {reason}. "
+                    "Сохрани документ в ТЕКУЩЕЙ назначенной ветке: закоммить "
+                    "изменения, выполни git push -u origin HEAD и проверь, что "
+                    "git diff --name-only origin/main...HEAD показывает файлы задачи. "
+                    "Ветку не переключай. Затем сдай Specification повторно.")
+                try:
+                    create_task({"request_key": str(uuid.uuid4()), "title": back_title,
+                                 "context": spec_ctx[:20000],
+                                 "worker_id": detail["task"].get("worker_id") or worker["id"],
+                                 "repository_id": detail["task"].get("repository_id") or "",
+                                 "timeout_seconds": conf.get("timeout_seconds", 7200),
+                                 "workflow_revision_id": (detail.get("workflow") or {}).get(
+                                     "revision_id") or workflows.get(wf, {}).get("revision_id")
+                                     or nw["revision_id"]}, conf)
+                    log(f"SPEC BRANCH GATE {base[:40]!r}: {reason} — вернул сохранить")
+                    notify(conf, "Вернул сам: спецификация не сохранена",
+                           base + chr(10) + reason.capitalize() +
+                           ". Вернул закоммитить и загрузить документ; твоего участия не нужно.",
+                           tags="wrench", click=f"{UI_BASE}/work")
+                    continue
+                except Exception as e:
+                    if tid in state["processed"]:
+                        state["processed"].remove(tid)
+                    log("spec_branch_gate_error", repr(e))
+                    continue
 
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
         if (wf == "Specification" and not PROMISE_LINE.search(result or "")
