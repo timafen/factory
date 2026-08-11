@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — исправления review готовы к повторной проверке.
-- Branch: `factory/922d676e-7e3-bf047ab5-9de`.
+- Status: Implemented — доказательство перезапуска усилено после строгого review.
+- Branch: `factory/e783f445-945-25356772-a70`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 3085c03f25cfa2184abff882f93185ffd46e86d3 — реальный Unix broker подтверждает восстановление одного выпуска.
-- What changed: Pilot-тест собирает и запускает Go broker на Unix-сокете, проходит API и один физический FX executor.
-- What changed: Все restart boundaries считают merge/POST/physical/owner done; `rc=8` retry завершает тот же N без N+1.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (206, 13 skipped); `go test ./internal/releasebroker` → OK; shell fixtures → OK; `just check` → passed.
-- Next action: Review проверить три исправленных доказательства CARD-0084.
+- Implementation commit: 0c3997247d848a6df447b705f92600f09f4d9f60 — реальный broker и отдельные Pilot-процессы доказывают recovery выпуска.
+- What changed: Каждая crash boundary запускается через отдельный persisted Pilot process и восстанавливается свежим process против собранного Go broker.
+- What changed: Broker сохраняет счётчик POST; lock retry сохраняет N, принимает SHA второго merge до первого принятого выпуска и достраивает completed receipts после restart.
+- Evidence: `python3 -m unittest pilot.test_pilot` → OK; `go test ./internal/releasebroker` → OK; обе shell fixture → OK; `just check` → passed.
+- Next action: Review проверить process-level crash evidence CARD-0084.
 
 ## LOG
 
@@ -37,3 +37,11 @@ Correction replaces the hand-written Python socket with the built Go broker,
 its real Unix API, and a fixed FX executor fixture. Restart boundaries now
 drive recovery to completion with explicit merge/POST/physical/owner counts;
 the lock retry joins a second merge to the same N and succeeds once.
+
+### 2026-08-11 — Implement
+
+Strict review correction replaces the in-memory phase fixture with independent
+Pilot interpreter invocations over one persisted state/journal and the built
+Unix broker. The broker durably records every POST; a locked N accepts the
+second merge snapshot before its single successful physical installation, and
+recovery from durable `completed` writes its missing receipts/outbox exactly once.
