@@ -33,7 +33,7 @@ func main() {
 }
 
 func run() error {
-	defaultConfig, err := worker.DefaultConfigPath()
+	defaultConfig, err := selectedDefaultConfigPath(os.Args[1:])
 	if err != nil {
 		return err
 	}
@@ -143,8 +143,20 @@ func flagExplicit(flags *flag.FlagSet, name string) bool {
 }
 
 func cleanupConfigExplicit(arguments []string) bool {
+	return configArgumentExplicit(arguments)
+}
+
+func selectedDefaultConfigPath(arguments []string) (string, error) {
+	if configArgumentExplicit(arguments) {
+		return "", nil
+	}
+	return worker.DefaultConfigPath()
+}
+
+func configArgumentExplicit(arguments []string) bool {
 	for _, argument := range arguments {
-		if argument == "--config" || strings.HasPrefix(argument, "--config=") {
+		if argument == "-config" || argument == "--config" ||
+			strings.HasPrefix(argument, "-config=") || strings.HasPrefix(argument, "--config=") {
 			return true
 		}
 	}
