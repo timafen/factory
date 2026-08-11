@@ -200,6 +200,19 @@ func TestHTTPClearRetainedWorktrees(t *testing.T) {
 	response.Body.Close()
 }
 
+func TestHTTPClearRetainedWorktreesRequiresDirectLoopback(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/worker-1/retained-worktrees/clear", strings.NewReader(`{"retained_worktrees":[]}`))
+	request.RemoteAddr = "127.0.0.1:42123"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	response := httptest.NewRecorder()
+
+	NewHandlerWithWorkerBootstrapCredential(fixture.store, slog.New(slog.NewJSONHandler(fixture.logs, nil)), testWorkerBootstrapCredential).ServeHTTP(response, request)
+
+	requireStatus(t, response.Result(), http.StatusForbidden)
+}
+
 func TestHTTPManagedRepositoryCatalog(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	response := fixture.request(http.MethodPost, "/api/v1/repositories", "application/json", "", map[string]string{
