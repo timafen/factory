@@ -5854,6 +5854,10 @@ def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
     activity = {"task_created": False, "answer_applied": False}
     conf["_cycle_activity"] = activity
+    overlap_wait_decisions = state.setdefault("overlap_wait_decisions", {})
+    if not isinstance(overlap_wait_decisions, dict):
+        overlap_wait_decisions = {}
+        state["overlap_wait_decisions"] = overlap_wait_decisions
 
     tasks = api("/tasks?limit=100").get("tasks") or []
     new_terminal = remember_new_terminal_tasks(conf, state, tasks)
@@ -6016,6 +6020,7 @@ def cycle(conf, state):
 
         closed_reason = work_lifecycle_block(base_title(title), t, tasks)
         if closed_reason:
+            overlap_wait_decisions.pop(tid, None)
             state["processed"].append(tid)
             log(f"stage_ended task={tid} — не продолжаю: {closed_reason}")
             continue
@@ -6103,10 +6108,15 @@ def cycle(conf, state):
                 save_promises(base_title(title), result)
             except Exception as e:
                 log("promises_error", repr(e))
-        verdict = decide(conf, wf, next_stage, title, result,
-                         detail["task"].get("repository_id") or "")
+        verdict = overlap_wait_decisions.pop(tid, None)
+        reused_overlap_decision = isinstance(verdict, dict)
+        if reused_overlap_decision:
+            log(f"decision reuse task={tid} stage={wf} after AREA WAIT")
+        else:
+            verdict = decide(conf, wf, next_stage, title, result,
+                             detail["task"].get("repository_id") or "")
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
-        if verdict.get("verdict_ru"):
+        if verdict.get("verdict_ru") and not reused_overlap_decision:
             try:
                 save_stage_verdict(
                     tid, wf, verdict, result,
@@ -6244,6 +6254,7 @@ def cycle(conf, state):
                            (detail.get("task") or {}).get("repository_id", ""))
         if holder:
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
+            overlap_wait_decisions[tid] = verdict
             if tid in state["processed"]:
                 state["processed"].remove(tid)
             continue
@@ -6332,6 +6343,7 @@ def cycle(conf, state):
             g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
                             area_repo=rid_g)
             if g and g.get("wait"):
+                overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:
                     state["processed"].remove(tid)
                 continue
