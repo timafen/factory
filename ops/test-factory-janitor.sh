@@ -10,12 +10,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$TMP/bin" "$TMP/worker/worktrees/retained" "$TMP/worker/repositories/repo" "$TMP/quarantine"
+mkdir -p "$TMP/bin" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/unmoved" "$TMP/worker/repositories/repo" "$TMP/quarantine"
 printf 'name = "claude-haiku"\ndata_directory = "%s/worker"\n' "$TMP" >"$TMP/worker.toml"
 printf '#!/usr/bin/env bash\ncase "$1" in\n  list-units) echo "factory-claude.service loaded active running" ;;\n  cat) echo "ExecStart=/bin/factory-worker --config %s/worker.toml" ;;\nesac\n' "$TMP" >"$TMP/bin/systemctl"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/sleep"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/su"
-chmod +x "$TMP/bin/systemctl" "$TMP/bin/sleep" "$TMP/bin/su"
+printf '#!/usr/bin/env bash\nif [ "$1" = "%s/worker/worktrees/unmoved" ]; then exit 1; fi\nexec /bin/mv "$@"\n' "$TMP" >"$TMP/bin/mv"
+chmod +x "$TMP/bin/systemctl" "$TMP/bin/sleep" "$TMP/bin/su" "$TMP/bin/mv"
 
 python3 -c '
 import json, sys
@@ -23,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 requests, request_path = sys.argv[1:3]
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = {"workers": [{"id": "worker-1", "name": "claude-haiku", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}]}]}
+        body = {"workers": [{"id": "worker-1", "name": "claude-haiku", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]}]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
     def do_POST(self):
@@ -35,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -55,11 +56,13 @@ python3 - "$TMP/request.json" <<'PY'
 import json, sys
 payload = json.load(open(sys.argv[1]))
 retained = payload["retained_worktrees"]
-assert len(retained) == 1, retained
-assert retained[0]["attempt_id"] == "attempt-moved", retained
+assert [item["attempt_id"] for item in retained] == [
+    "attempt-moved", "attempt-missing"
+], retained
 PY
 test "$(<"$TMP/request-path")" = '/api/v1/workers/worker-1/retained-worktrees/clear'
 test ! -e "$TMP/worker/worktrees/retained"
+test -e "$TMP/worker/worktrees/unmoved"
 test -e "$TMP/quarantine/worker-retained."* 2>/dev/null
 grep -q 'подтверждена очистка retained worktree: claude-haiku' "$TMP/janitor.log"
 

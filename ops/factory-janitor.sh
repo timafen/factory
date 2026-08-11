@@ -81,24 +81,26 @@ PY
     su -s /bin/bash factory -c \
       "git -c safe.directory='*' -C '$repository' worktree prune" >>"$LOG" 2>&1
   done
-  if [ "${#moved[@]}" -gt 0 ]; then
-    confirmed=$(python3 - "$retained_b64" "${moved[@]}" <<'PY'
-import base64, json, sys
+  confirmed=$(python3 - "$retained_b64" "${moved[@]}" <<'PY'
+import base64, json, os, sys
 retained = json.loads(base64.b64decode(sys.argv[1]))
 moved = set(sys.argv[2:])
-confirmed = [worktree for worktree in retained if worktree.get("path") in moved]
+confirmed = []
+for worktree in retained:
+    path = worktree.get("path")
+    if path and (path in moved or not os.path.exists(path)):
+        confirmed.append(worktree)
 print(json.dumps({"retained_worktrees": confirmed}, separators=(",", ":")))
 PY
-)
-    if [ "$confirmed" != '{"retained_worktrees":[]}' ]; then
-      if curl --fail --silent --show-error -X POST \
-        -H 'Content-Type: application/json' \
-        --data "$confirmed" \
-        "$API/workers/$worker_id/retained-worktrees/clear" >>"$LOG" 2>&1; then
-        say "  подтверждена очистка retained worktree: $name"
-      else
-        say "  не удалось подтвердить очистку retained worktree: $name"
-      fi
+  )
+  if [ "$confirmed" != '{"retained_worktrees":[]}' ]; then
+    if curl --fail --silent --show-error -X POST \
+      -H 'Content-Type: application/json' \
+      --data "$confirmed" \
+      "$API/workers/$worker_id/retained-worktrees/clear" >>"$LOG" 2>&1; then
+      say "  подтверждена очистка retained worktree: $name"
+    else
+      say "  не удалось подтвердить очистку retained worktree: $name"
     fi
   fi
   chown -R factory:factory "$dir" 2>/dev/null
