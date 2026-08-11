@@ -80,6 +80,9 @@ func (s *Store) Metrics(ctx context.Context, window string) (protocol.MetricsSum
 	if err := s.countQueueReassignments(ctx, tx, start, now, &summary.QueueReassignments); err != nil {
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
+	if err := s.countCapacityReconciliations(ctx, tx, start, now, &summary); err != nil {
+		return protocol.MetricsSummary{}, unavailable(err)
+	}
 	if err := s.loadWeeklyLimit(ctx, tx, now, &summary); err != nil {
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
@@ -87,6 +90,11 @@ func (s *Store) Metrics(ctx context.Context, window string) (protocol.MetricsSum
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
 	return summary, nil
+}
+
+func (s *Store) countCapacityReconciliations(ctx context.Context, query metricsQuerier, start *time.Time, end time.Time, summary *protocol.MetricsSummary) error {
+	filter, args := metricsTimeFilter("reconciled_at", start, end)
+	return query.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(ghost_slots_released), 0) FROM worker_capacity_reconciliations WHERE `+filter, args...).Scan(&summary.CapacityReconciliations, &summary.GhostSlotsReleased)
 }
 
 func (s *Store) countQueueReassignments(

@@ -108,6 +108,59 @@ func TestMetricsSummarizesBoundedExecutionFacts(t *testing.T) {
 	}
 }
 
+func TestMetricsCountsCapacityReconciliationsInWindow(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	seedMetricsWorker(t, store, "capacity-metrics", now)
+	if _, err := store.db.Exec(`
+		INSERT INTO worker_capacity_reconciliations(worker_id, reconciled_at, trigger, previous_active_count, derived_active_count, ghost_slots_released)
+		VALUES ('capacity-metrics', ?, 'sweep', 2, 0, 2), ('capacity-metrics', ?, 'claim', 0, 1, 0)
+	`, now.Add(-time.Hour).UnixMilli(), now.Add(-8*24*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := store.Metrics(context.Background(), metricsWindow24Hours)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CapacityReconciliations != 1 || summary.GhostSlotsReleased != 2 {
+		t.Fatalf("capacity metrics = reconciliations %d, ghost slots %d; want 1, 2", summary.CapacityReconciliations, summary.GhostSlotsReleased)
+	}
+}
+
+func TestSweepExpiredPrunesExpiredReconciliationRowsWhenWorkersAreIdle(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	worker := "capacity-retention"
+	seedMetricsWorker(t, store, worker, now)
+	if _, err := store.db.Exec(`
+		INSERT INTO worker_capacity_reconciliations(worker_id, reconciled_at, trigger, previous_active_count, derived_active_count, ghost_slots_released)
+		VALUES (?, ?, 'claim', 1, 0, 0), (?, ?, 'claim', 1, 0, 0)
+	`, worker, now.Add(-capacityRetention-time.Millisecond).UnixMilli(), worker, now.Add(-time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if expired, err := store.SweepExpired(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(expired) != 0 {
+		t.Fatalf("expired leases = %d; want 0", len(expired))
+	}
+	var expired, retained int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM worker_capacity_reconciliations WHERE reconciled_at < ?`, now.Add(-capacityRetention).UnixMilli()).Scan(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM worker_capacity_reconciliations WHERE reconciled_at >= ?`, now.Add(-capacityRetention).UnixMilli()).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 || retained != 1 {
+		t.Fatalf("journal retention = expired %d retained %d; want 0, 1", expired, retained)
+	}
+	summary, err := store.Metrics(context.Background(), metricsWindow24Hours)
+	if err != nil || summary.CapacityReconciliations != 1 {
+		t.Fatalf("in-window reconciliation metrics = %d, %v; want 1", summary.CapacityReconciliations, err)
+	}
+}
+
 func TestMetricsHaveUndefinedRatesWithoutCompletedAgentOutcomes(t *testing.T) {
 	store := newTestStore(t)
 	store.now = func() time.Time {
