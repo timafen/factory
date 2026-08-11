@@ -100,6 +100,13 @@ files, verdicts, merge/delivery receipts и подменёнными `notify`/`P
 `PostMergeDeployTest` и `EpicCompletionReceiptTests` обновить так, чтобы они
 доказывали сохранение ожиданий и запрет завершения по одному merge.
 
+Ключевая новая регрессия должна сначала быть красной: создать в
+`PostMergeDeliveryCompletionTests` сценарий успешного merge до завершения
+release и утверждать, что `final_pass` отсутствует. Затем этот же сценарий
+должен стать зелёным только после `rc=0` связанного поколения, когда появляется
+delivery receipt и ровно один итоговый PASS. Так команда ниже проверяет саму
+причину задачи, а не только наличие нового кода.
+
 В `web/src/Work.test.ts` добавить terminal Verify без `final_pass` и проверить
 пользовательский статус ожидания, а также сохранить текущую проверку standalone
 success в Done. Целевые команды:
