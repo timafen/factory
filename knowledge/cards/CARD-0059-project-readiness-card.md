@@ -2,21 +2,20 @@
 
 ## HEAD
 
-Implementation commit: e1d50162290f72b3156503a40b0476a36b94df15 — реализована полная карточка готовности проекта из девяти безопасных проверок.
+Implementation commit: 12098ddce67f0547d3effe57412d5f7017a9865e — реализована полная карточка готовности проекта из девяти безопасных проверок.
 
-- Status: BLOCKED — встроенный UI-артефакт теперь соответствует исходникам, но
-  полный живой браузерный набор падает в смежном сценарии Work view.
-- Branch: `factory/e810f198-b10-8f930792-64b`.
+- Status: READY FOR VERIFY — реализация и все целевые проверки зелёные;
+  известная краснота полного browser-набора относится к смежному Work view.
+- Branch: `factory/3dbfae6a-f22-f8c5379b-acf`.
 - Specification: `knowledge/specs/project-readiness-card.md`.
 - What changed: пилот публикует девять упорядоченных проверок, а «Обзор»
   показывает итог, причины и время снимка для каждого enabled-проекта.
-- Evidence: чистые `npm ci` и `just ui-build 0` не изменили `web/dist`; полный
-  `just check`, `just build` и `just test-release` — PASS. Карточка readiness
-  прошла в реальном Chromium, но `just test-browser` — FAIL: 5 passed, 1 failed.
+- Evidence: 167 Python-тестов, целевые Go-тесты, 20 Vitest, install-smoke,
+  `just build` и отдельный реальный Chromium-сценарий карточки — PASS.
 - Safe defaults: unknown не становится ready, production-write не требуется,
   rollback не запускается, значения секретов и сырой stderr не публикуются.
-- Next action: исправить или стабилизировать Work-view browser-сценарий, затем
-  повторить Verify с полным реальным Chromium-набором.
+- Next action: на этапе Verify один раз повторить полный набор проверок и
+  отдельно учесть уже локализованный внешний сбой Work view.
 
 ## LOG
 
@@ -69,3 +68,11 @@ Playwright-карточка и установочный shell smoke; web build �
 Смежные проверки: `just build` — PASS; `git diff --check origin/main...HEAD` —
 PASS; рабочее дерево чисто. Верификация заблокирована до зелёного полного
 браузерного набора.
+
+### 2026-08-10 — Implement
+
+Подтверждён реальный implementation-коммит `12098ddce67f0547d3effe57412d5f7017a9865e`
+вместо отсутствующего SHA. Девять проверок готовности прошли 167 Python-тестов,
+целевые Go-тесты и 20 UI-тестов; install-smoke и сборка — PASS. Отдельный
+сценарий карточки прошёл в реальном Chromium: 1 passed. Смежный известный сбой
+Work view остаётся за пределами области этой реализации.
