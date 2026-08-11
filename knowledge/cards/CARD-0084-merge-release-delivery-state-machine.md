@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — готово к повторному review.
-- Branch: `factory/c5420272-51f-199aa460-48e`.
+- Status: Implemented — исправления review готовы к повторной проверке.
+- Branch: `factory/922d676e-7e3-bf047ab5-9de`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 8e0f448f01f57ad499078f7d455bbcc49b5b9b9c — Pilot V2 и broker безопасно восстанавливают один выпуск.
-- What changed: Pilot POST использует `/v1/operations`; intent → journal → wait и outbox имеют durable idempotent границы.
-- What changed: `rc=8` оставляет generation reserved, присоединяет свежий SHA и повторно исполняет только тот же immutable id.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (206, 13 skipped); `go test ./internal/releasebroker` → OK; `bash ops/test-fx-factory-release.sh` → PASS; `just check` → passed.
-- Next action: Review проверить diff CARD-0084 и смержить при отсутствии новых замечаний.
+- Implementation commit: 3085c03f25cfa2184abff882f93185ffd46e86d3 — реальный Unix broker подтверждает восстановление одного выпуска.
+- What changed: Pilot-тест собирает и запускает Go broker на Unix-сокете, проходит API и один физический FX executor.
+- What changed: Все restart boundaries считают merge/POST/physical/owner done; `rc=8` retry завершает тот же N без N+1.
+- Evidence: `python3 -m unittest pilot.test_pilot` → OK (206, 13 skipped); `go test ./internal/releasebroker` → OK; shell fixtures → OK; `just check` → passed.
+- Next action: Review проверить три исправленных доказательства CARD-0084.
 
 ## LOG
 
@@ -30,3 +30,10 @@ Review fixes make the Pilot Unix-socket POST match the broker API, preserve
 journal/wait/outbox recovery boundaries, and allow only `rc=8` operations to
 re-enter the executor. State-file restarts, real Unix-socket protocol coverage,
 physical executor counts and full Python/broker/shell checks provide evidence.
+
+### 2026-08-11 — Implement
+
+Correction replaces the hand-written Python socket with the built Go broker,
+its real Unix API, and a fixed FX executor fixture. Restart boundaries now
+drive recovery to completion with explicit merge/POST/physical/owner counts;
+the lock retry joins a second merge to the same N and succeeds once.
