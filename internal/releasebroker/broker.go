@@ -42,6 +42,14 @@ type DeliveryExecutor interface {
 	ExecuteDelivery(context.Context, string, string, string) string
 }
 
+// PIDDeliveryExecutor reports the real child PID after it has started but
+// before the broker calls the operation running.  PID is diagnostic only: a
+// restarted broker still fails an uncertain operation closed rather than
+// trying to adopt or restart that process.
+type PIDDeliveryExecutor interface {
+	ExecuteDeliveryWithPID(context.Context, string, string, string, func(int) bool) string
+}
+
 type FXExecutor struct{ Executable string }
 
 func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
@@ -49,6 +57,10 @@ func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
 }
 
 func (e FXExecutor) ExecuteDelivery(ctx context.Context, adapter, sha, operationID string) string {
+	return e.ExecuteDeliveryWithPID(ctx, adapter, sha, operationID, func(int) bool { return true })
+}
+
+func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, operationID string, started func(int) bool) string {
 	executable := e.Executable
 	if executable == "" {
 		executable = "/usr/local/bin/fx"
@@ -63,7 +75,15 @@ func (e FXExecutor) ExecuteDelivery(ctx context.Context, adapter, sha, operation
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"FACTORY_DELIVERY_ID=" + operationID,
 	}
-	err := command.Run()
+	if err := command.Start(); err != nil {
+		return "rollback_failed"
+	}
+	if started != nil && !started(command.Process.Pid) {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return "failed"
+	}
+	err := command.Wait()
 	if err == nil {
 		return "succeeded"
 	}
@@ -194,6 +214,30 @@ func valid(input Request) bool {
 	return operationIDPattern.MatchString(input.OperationID) && commitSHAPattern.MatchString(input.CommitSHA) && func() bool { _, ok := invocation(input.Adapter, input.CommitSHA); return ok }()
 }
 
+func deliveryTarget(adapter string) (string, bool) {
+	switch adapter {
+	case "fx-factory-release", "fx-factory-rollback":
+		return "factory", true
+	case "tarser-staging-deploy-release", "tarser-staging-auto-rollback":
+		return "tarser-staging", true
+	default:
+		return "", false
+	}
+}
+
+// canJoinLockedOperation is deliberately narrower than Request equality.  A
+// lock (rc=8) did not accept a physical release, so Pilot may retry the same
+// delivery id with the newer main SHA.  Its adapter and derived project target
+// remain immutable; otherwise a retry could turn one release into a rollback.
+func canJoinLockedOperation(existing, retry Request) bool {
+	existingTarget, existingOK := deliveryTarget(existing.Adapter)
+	retryTarget, retryOK := deliveryTarget(retry.Adapter)
+	return existingOK && retryOK &&
+		existing.OperationID == retry.OperationID &&
+		existing.Adapter == retry.Adapter &&
+		existingTarget == retryTarget
+}
+
 func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	decoder := json.NewDecoder(r.Body)
@@ -207,38 +251,46 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 	if existing := b.items[input.OperationID]; existing != nil {
 		// A lock did not accept a release.  Pilot may therefore safely attach a
 		// later merge to the still-reserved generation and retry its same id
-		// with the newest immutable snapshot before the next executor launch.
+		// with the newest commit snapshot before the next executor launch.  The
+		// adapter and target are not mutable at that boundary.
 		lockedRetry := existing.Status == "locked" && b.active == ""
-		if existing.Request != input && !lockedRetry {
+		if existing.Request != input && (!lockedRetry || !canJoinLockedOperation(existing.Request, input)) {
 			b.mu.Unlock()
 			http.Error(w, "operation identity already has different immutable input", http.StatusConflict)
-			return
-		}
-		if lockedRetry {
-			existing.Request = input
-		}
-		existing.Posts++
-		if err := b.persist(existing); err != nil {
-			b.mu.Unlock()
-			http.Error(w, "cannot persist operation", http.StatusServiceUnavailable)
 			return
 		}
 		// rc=8 is a reservation failure, not a terminal delivery.  It is
 		// explicitly safe to re-enter the executor with the same immutable
 		// operation id once the privileged release lock is available again.
 		if lockedRetry {
-			existing.Status = "launching"
-			if err := b.persist(existing); err != nil {
+			// Persist the allowed newer SHA and the new launch as one operation
+			// record.  A failed write leaves both the in-memory and durable
+			// identity unchanged for the next safe retry.
+			updated := *existing
+			updated.Request = input
+			updated.Status = "launching"
+			updated.PID = 0
+			updated.Posts++
+			if err := b.persist(&updated); err != nil {
 				b.mu.Unlock()
 				http.Error(w, "cannot persist operation", http.StatusServiceUnavailable)
 				return
 			}
+			*existing = updated
 			b.active = input.OperationID
 			b.mu.Unlock()
 			go b.execute(existing)
 			writeJSON(w, http.StatusAccepted, Response{Status: "launching"})
 			return
 		}
+		updated := *existing
+		updated.Posts++
+		if err := b.persist(&updated); err != nil {
+			b.mu.Unlock()
+			http.Error(w, "cannot persist operation", http.StatusServiceUnavailable)
+			return
+		}
+		*existing = updated
 		status := existing.Status
 		b.mu.Unlock()
 		writeJSON(w, http.StatusOK, Response{Status: status})
@@ -264,20 +316,18 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 
 func (b *Broker) execute(item *operation) {
 	b.mu.Lock()
-	item.Status = "running"
-	if err := b.persist(item); err != nil {
-		item.Status = "failed"
-		_ = b.persist(item)
-		b.active = ""
-		b.mu.Unlock()
-		return
-	}
+	request := item.Request
 	b.mu.Unlock()
 	status := "failed"
-	if delivery, ok := b.executor.(DeliveryExecutor); ok {
-		status = delivery.ExecuteDelivery(context.Background(), item.Request.Adapter, item.Request.CommitSHA, item.Request.OperationID)
+	if delivery, ok := b.executor.(PIDDeliveryExecutor); ok {
+		status = delivery.ExecuteDeliveryWithPID(context.Background(), request.Adapter, request.CommitSHA, request.OperationID,
+			func(pid int) bool { return b.runnerStarted(item, pid) })
+	} else if !b.runnerStarted(item, 0) {
+		return
+	} else if delivery, ok := b.executor.(DeliveryExecutor); ok {
+		status = delivery.ExecuteDelivery(context.Background(), request.Adapter, request.CommitSHA, request.OperationID)
 	} else {
-		status = b.executor.Execute(context.Background(), item.Request.Adapter, item.Request.CommitSHA)
+		status = b.executor.Execute(context.Background(), request.Adapter, request.CommitSHA)
 	}
 	switch status {
 	case "succeeded", "locked", "release_failed_rolled_back", "rollback_failed", "failed":
@@ -291,6 +341,32 @@ func (b *Broker) execute(item *operation) {
 		b.active = ""
 	}
 	b.mu.Unlock()
+}
+
+// runnerStarted creates the real durable boundaries after the wrapper starts:
+// PID first, then running.  Neither transition relies on PID during recovery.
+func (b *Broker) runnerStarted(item *operation, pid int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.active != item.Request.OperationID || item.Status != "launching" {
+		return false
+	}
+	item.PID = pid
+	if err := b.persist(item); err != nil {
+		item.PID = 0
+		item.Status = "failed"
+		_ = b.persist(item)
+		b.active = ""
+		return false
+	}
+	item.Status = "running"
+	if err := b.persist(item); err != nil {
+		item.Status = "failed"
+		_ = b.persist(item)
+		b.active = ""
+		return false
+	}
+	return true
 }
 
 func (b *Broker) status(w http.ResponseWriter, r *http.Request) {
