@@ -93,7 +93,7 @@ worktree либо сохраняют коллизию при большем чи
 
 ## Карточка
 
-`knowledge/cards/CARD-0070-parallel-final-browser-port.md`
+`knowledge/cards/CARD-0071-parallel-final-browser-port.md`
 
 Карточку создаёт стадия Implement после отдельного коммита реализации, чтобы её
 первая строка содержала существующий полный `Implementation commit`.
