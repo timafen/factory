@@ -2,16 +2,16 @@
 
 ## HEAD
 
-Implementation commit: b35203557471b1a5f5e54c90ea7c7fc977b55820 — реализован доверенный путь onboarding и закрыты все пять замечаний Review.
-- Status: IMPLEMENTED — безопасное подключение подтверждено сквозными тестами.
+Implementation commit: 3f8ed34f20602e9e01763a4b5d69d2c494ad2416 — завершён безопасный onboarding и зафиксирован внешний broker self-release.
+- Status: IMPLEMENTED — четыре пути работают; self-release честно fail-closed до внешнего broker.
 - Branch: `factory/78634ed9-845-bbaa9e69-c02`.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
 - What changed: `factory-worker verify-project` связывает результаты с реальным
   HEAD основной ветки, конкретным worker и точным web-host allowlist. Self-release
-  вынесен в долговечную операцию `fx` с восстановлением после рестарта сервера.
+  использует только внешний Unix-socket broker; дочерний процесс запрещён.
 - Evidence: `go test ./internal/controlplane -count=1` → PASS (80.256s); пять
   целевых сценариев, worker verifier, 2 Vitest-теста, vet/lint и обе сборки → PASS.
-- One next action: повторно запустить Review всех пяти закрытых замечаний.
+- One next action: повторно запустить Review пяти сценариев и точного broker-контракта.
 
 ## LOG
 
@@ -85,3 +85,14 @@ branch/SHA/worker/host сценарии остаются fail-closed. Self-relea
 узким root-посредником `fx` во внешнем systemd unit и восстанавливается при
 старте нового server process. Полный пакет control-plane, целевые worker/UI
 тесты, vet, lint, TypeScript и обе сборки прошли.
+
+### 2026-08-11 — Implement
+
+Финальная проверка production unit уточнила self-release: `factory-server` имеет
+`NoNewPrivileges=true`, поэтому текущий `fx` не способен создать root systemd job
+из процесса сервера. Ложный дочерний путь удалён. Control-plane теперь вызывает
+только точную внешнюю операцию: Unix socket
+`/run/factory/project-release-broker.sock`, `POST /v1/releases` и последующий
+`GET /v1/releases/{operation_id}`. Пока root-owned broker не установлен, выпуск
+fail-closed с понятной причиной; отрицательный тест подтверждает отсутствие
+запуска. Целевые Go-тесты, vet и обе Go-сборки прошли.
