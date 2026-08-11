@@ -699,24 +699,67 @@ WORK_ORIGINS = frozenset((
 ))
 
 
+def _duplicate_root_crash_boundary(_name):
+    """Test hook for proving that the durable outbox survives every boundary."""
+
+
+def _duplicate_root_outbox():
+    raw = load(DUPLICATE_ROOT_EVENTS_PATH, {}) or {}
+    if raw.get("version") == 1 and isinstance(raw.get("events"), dict):
+        raw.setdefault("acknowledged", {})
+        return raw
+    # Upgrade the original task-id marker map without losing its evidence.
+    events = {}
+    for task_id, payload in raw.items():
+        if not isinstance(payload, dict):
+            continue
+        event_id = "pilot_duplicate_root_prevented:" + task_id
+        events[event_id] = {
+            "event_id": event_id,
+            "event_type": "pilot_duplicate_root_prevented",
+            "payload": payload,
+        }
+    return {"version": 1, "events": events,
+            "acknowledged": {event_id: True for event_id in events}}
+
+
 def note_duplicate_root_prevented(task):
-    """Persist and journal a correction that a title-only Pilot would adopt."""
+    """Put one complete correction event in the durable idempotent outbox.
+
+    The outbox record, rather than the best-effort stdout mirror, is the
+    authoritative observable event.  Acknowledgement never removes it.
+    """
     task_id = (task or {}).get("id") or ""
     if not task_id:
         return
-    seen = load(DUPLICATE_ROOT_EVENTS_PATH, {}) or {}
-    if task_id in seen:
+    event_id = "pilot_duplicate_root_prevented:" + task_id
+    outbox = _duplicate_root_outbox()
+    event = outbox["events"].get(event_id)
+    if event is None:
+        payload = {
+            "task_id": task_id,
+            "work_id": (task or {}).get("work_id") or "",
+            "parent_task_id": (task or {}).get("parent_task_id") or "",
+            "correction_kind": (task or {}).get("correction_kind") or "",
+        }
+        event = {"event_id": event_id,
+                 "event_type": "pilot_duplicate_root_prevented",
+                 "payload": payload}
+        outbox["events"][event_id] = event
+        _duplicate_root_crash_boundary("before_journal_append")
+        save(DUPLICATE_ROOT_EVENTS_PATH, outbox)
+        _duplicate_root_crash_boundary("after_journal_append")
+    if event_id in outbox["acknowledged"]:
         return
-    event = {
-        "task_id": task_id,
-        "work_id": (task or {}).get("work_id") or "",
-        "parent_task_id": (task or {}).get("parent_task_id") or "",
-        "correction_kind": (task or {}).get("correction_kind") or "",
-    }
-    seen[task_id] = event
-    save(DUPLICATE_ROOT_EVENTS_PATH, seen)
-    log("pilot_duplicate_root_prevented", json.dumps(
-        event, ensure_ascii=False, sort_keys=True))
+    _duplicate_root_crash_boundary("before_acknowledgement")
+    # Claim delivery durably before the optional stdout mirror.  Even if the
+    # process dies next, the complete event remains queryable in the outbox.
+    outbox["acknowledged"][event_id] = True
+    save(DUPLICATE_ROOT_EVENTS_PATH, outbox)
+    _duplicate_root_crash_boundary("after_acknowledgement")
+    log(event["event_type"], json.dumps(
+        dict(event["payload"], event_id=event_id),
+        ensure_ascii=False, sort_keys=True))
 
 
 def note_work(base, origin, start_stage="", skipped=None, reason="", work_id=""):
