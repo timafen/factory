@@ -20,21 +20,22 @@ chmod +x "$TMP/bin/systemctl" "$TMP/bin/sleep" "$TMP/bin/su"
 python3 -c '
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-requests = sys.argv[1]
+requests, request_path = sys.argv[1:3]
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = {"workers": [{"id": "worker-1", "name": "claude-haiku", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[2], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup missing"}]}]}
+        body = {"workers": [{"id": "worker-1", "name": "claude-haiku", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}]}]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
     def do_POST(self):
         size = int(self.headers["Content-Length"])
         open(requests, "wb").write(self.rfile.read(size))
+        open(request_path, "w").write(self.path)
         self.send_response(200); self.end_headers()
     def log_message(self, *args): pass
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -57,6 +58,7 @@ retained = payload["retained_worktrees"]
 assert len(retained) == 1, retained
 assert retained[0]["attempt_id"] == "attempt-moved", retained
 PY
+test "$(<"$TMP/request-path")" = '/api/v1/workers/worker-1/retained-worktrees/clear'
 test ! -e "$TMP/worker/worktrees/retained"
 test -e "$TMP/quarantine/worker-retained."* 2>/dev/null
 grep -q 'подтверждена очистка retained worktree: claude-haiku' "$TMP/janitor.log"
