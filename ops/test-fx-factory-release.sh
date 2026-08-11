@@ -7,7 +7,7 @@ temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-assert_file() { grep -Fx "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
+assert_file() { grep -Fx -- "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
 wait_for_file() {
   local file=$1 i
   for ((i = 0; i < 500; i++)); do
@@ -51,7 +51,11 @@ make_fixture() {
 case "$*" in
   *'clone --quiet'*)
     destination=${@: -1}
-    mkdir -p "$destination/web" "$destination/ops"
+    mkdir -p "$destination/web" "$destination/ops/systemd"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/install-project-release-broker.sh" \
+      "$destination/ops/install-project-release-broker.sh"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
+      "$destination/ops/systemd/factory-release-broker.service"
     cat >"$destination/ops/install-brain.sh" <<'BRAIN'
 #!/bin/bash
 echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_RESTART_MARKER:-}" >>"$TEST_GATES"
@@ -61,6 +65,7 @@ echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_
 BRAIN
     touch "$destination/ops/install-server-browser.sh"
     chmod +x "$destination/ops/install-brain.sh"
+    chmod +x "$destination/ops/install-project-release-broker.sh"
     chmod +x "$destination/ops/install-server-browser.sh"
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
@@ -184,6 +189,19 @@ EOF
 echo "$1 $2" >>"$TEST_EVENTS"
 exit 0
 EOF
+  cat >"$case_dir/bin/broker-systemctl" <<'EOF'
+#!/bin/bash
+echo "$*" >>"$TEST_BROKER_EVENTS"
+[ "${1:-}" != is-active ]
+EOF
+  cat >"$case_dir/bin/getent" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+  cat >"$case_dir/bin/groupadd" <<'EOF'
+#!/bin/bash
+echo "$*" >>"$TEST_BROKER_EVENTS"
+EOF
   cat >"$case_dir/bin/systemd-run" <<'EOF'
 #!/bin/bash
 echo "systemd-run $*" >>"$TEST_EVENTS"
@@ -238,6 +256,7 @@ EOF
 run_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -250,6 +269,13 @@ run_release() {
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
+    FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
+    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
+    FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
+    FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
@@ -258,6 +284,7 @@ run_release() {
 start_release() {
   case_dir=$1 mode=$2
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -270,6 +297,13 @@ start_release() {
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
+    FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
+    FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
+    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
+    FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
+    FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
@@ -293,6 +327,11 @@ grep -F 'полный вывод: Go-проверки и сценарий вык
   || fail "Go output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
+assert_file "$success/install/factory-release-broker" '#!/bin/bash'
+assert_file "$success/install/factory-release-broker.service" 'Group=factory-release'
+assert_file "$success/install/50-project-release-broker.conf" 'SupplementaryGroups=factory-release'
+assert_file "$success/broker-events" '--system factory-release'
+assert_file "$success/broker-events" 'enable --now factory-release-broker.service'
 [ "$(sed -n '1p' "$success/events")" = 'restart factory-server.service' ] \
   || fail "server was not restarted first"
 [ "$(sed -n '2p' "$success/events")" = 'stop factory-worker.service' ] \
