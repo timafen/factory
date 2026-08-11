@@ -275,7 +275,7 @@ func TestKnowledgeCardImplementationCommitMigrationRevisesAllLiveLegacyRules(t *
 	}
 }
 
-func TestSpecificationPublishesDocumentsMigrationInstallsExactRevision(t *testing.T) {
+func TestSpecificationPublishesDocumentsMigrationPreservesExactRevision(t *testing.T) {
 	path := t.TempDir() + "/specification-publishes-documents.sqlite3"
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -336,10 +336,6 @@ func TestSpecificationPublishesDocumentsMigrationInstallsExactRevision(t *testin
 		}
 	})
 
-	installed, err := store.Workflow(context.Background(), "specification")
-	if err != nil {
-		t.Fatal(err)
-	}
 	const instructions = "Ты выполняешь только этап Specification. Не реализуй продуктовый код, не\n" +
 		"меняй UI и не исправляй исходники приложения. Подготовь спецификацию в\n" +
 		"`knowledge/specs/` и отдельную карточку\n" +
@@ -353,8 +349,120 @@ func TestSpecificationPublishesDocumentsMigrationInstallsExactRevision(t *testin
 		"`git push -u origin HEAD`. Отчёт закончи отдельными строками:\n" +
 		"`BRANCH: <имя назначенной ветки>`, `HEAD: <полный SHA последнего коммита>` и\n" +
 		"`PUSHED: yes`. Без commit и push этап не считается завершённым."
-	if installed.Workflow.CurrentRevision.ID != "migration-023-specification-publishes-documents-specification" ||
-		installed.Workflow.CurrentRevision.RevisionNumber != 2 ||
+	var number int
+	var requestKey, title, summary, storedInstructions string
+	if err := store.db.QueryRow(`
+		SELECT revision_number, request_key, title, summary, instructions
+		FROM workflow_revisions WHERE id = ?
+	`, "migration-023-specification-publishes-documents-specification").Scan(
+		&number, &requestKey, &title, &summary, &storedInstructions,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if number != 2 ||
+		requestKey != "migration:023:specification-publishes-documents:specification" ||
+		title != "Specification" || summary != "Подготовить контракт" ||
+		storedInstructions != instructions {
+		t.Fatalf("preserved migration 023 revision = number %d, request key %q, title %q, summary %q, instructions %q",
+			number, requestKey, title, summary, storedInstructions)
+	}
+	installed, err := store.Workflow(context.Background(), "specification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installed.Revisions) != 3 || installed.Revisions[1].ID != "migration-023-specification-publishes-documents-specification" || installed.Revisions[2].ID != "specification-v1" {
+		t.Fatalf("Specification history = %#v", installed.Revisions)
+	}
+	disabled, err := store.Workflow(context.Background(), "disabled-specification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Workflow.CurrentRevision.ID != "disabled-specification-v1" || len(disabled.Revisions) != 1 {
+		t.Fatalf("disabled Specification changed: %#v", disabled)
+	}
+}
+
+func TestSpecificationPublishesCurrentWorkMigrationInstallsExactRevision(t *testing.T) {
+	path := t.TempDir() + "/specification-publishes-current-work.sqlite3"
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for version, name := range []string{
+		"001_controlplane.sql", "002_attempt_capacity_handoff.sql", "003_task_list_pagination.sql",
+		"004_worker_runtime.sql", "005_metrics_indexes.sql", "006_execution_retries.sql",
+		"007_worker_source_access.sql", "008_managed_repositories.sql", "009_workflows.sql",
+		"010_github_issue_automations.sql", "011_github_pull_request_automations.sql",
+		"012_schedule_automations.sql", "013_legacy_poller_migration.sql",
+		"014_workflow_automation_titles.sql", "015_codex_weekly_limit.sql",
+		"016_worker_capacity.sql", "017_task_attachments.sql", "018_efficiency_metrics.sql",
+		"019_knowledge_card_implementation_commit.sql", "020_product_capacity_samples.sql",
+		"021_projects.sql", "022_worker_credentials.sql", "023_specification_publishes_documents.sql",
+	} {
+		body, readErr := migrations.Files.ReadFile(name)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := database.Exec(string(body)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+		if _, execErr := database.Exec(
+			`INSERT INTO schema_migrations(version, applied_at) VALUES (?, 1)`, version+1,
+		); execErr != nil {
+			t.Fatalf("record %s: %v", name, execErr)
+		}
+	}
+	if _, err := database.Exec(`
+		INSERT INTO workflows(id, enabled, current_revision_id, current_title_key, created_at, updated_at)
+		VALUES
+			('specification-live', 1, 'specification-live-v7', 'specification live', 1, 1),
+			('disabled-specification-live', 0, 'disabled-specification-live-v7', 'disabled specification live', 1, 1);
+		INSERT INTO workflow_revisions(id, workflow_id, revision_number, request_key, request_digest, title, summary, instructions, created_at)
+		VALUES
+			('specification-live-v7', 'specification-live', 7, 'specification-live-v7-request', X'01', 'Specification', 'Подготовить контракт', 'Живая ревизия 7.', 1),
+			('disabled-specification-live-v7', 'disabled-specification-live', 7, 'disabled-specification-live-v7-request', X'02', 'Specification', 'Отключено', 'Живая ревизия 7.', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := createDatabaseMarker(path + ".v2-control-plane"); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrade database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	installed, err := store.Workflow(context.Background(), "specification-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const instructions = "Ты выполняешь только этап Specification. Не реализуй продуктовый код, не\n" +
+		"меняй UI и не исправляй исходники приложения. Подготовь спецификацию в\n" +
+		"`knowledge/specs/` и отдельную карточку текущей работы. Если context содержит\n" +
+		"строку `Card:` или путь `knowledge/cards/CARD-*.md`, используй именно эту\n" +
+		"карточку. Если карточка не указана, создай для текущей работы отдельную карточку\n" +
+		"с новым свободным номером. Никогда не используй фиксированную CARD-0074 как\n" +
+		"универсальную карточку. Изменяй только документы этапа Specification,\n" +
+		"необходимые для этой работы.\n" +
+		"Работай в назначенной рабочей ветке и не переключай её. Перед сдачей\n" +
+		"выполни `git fetch origin main`, при необходимости `git rebase origin/main`,\n" +
+		"затем проверь `git diff --name-only origin/main...HEAD` — diff должен быть\n" +
+		"непустым и содержать только документы этой задачи. Обязательно выполни\n" +
+		"commit с русским человеческим заголовком и\n" +
+		"`git push -u origin HEAD`. Отчёт закончи отдельными строками:\n" +
+		"`BRANCH: <имя назначенной ветки>`, `HEAD: <полный SHA последнего коммита>` и\n" +
+		"`PUSHED: yes`. Без commit и push этап не считается завершённым."
+	if installed.Workflow.CurrentRevision.ID != "migration-025-specification-publishes-current-work-specification-live" ||
+		installed.Workflow.CurrentRevision.RevisionNumber != 8 ||
 		installed.Workflow.CurrentRevision.Title != "Specification" ||
 		installed.Workflow.CurrentRevision.Summary != "Подготовить контракт" ||
 		installed.Workflow.CurrentRevision.Instructions != instructions {
@@ -364,17 +472,17 @@ func TestSpecificationPublishesDocumentsMigrationInstallsExactRevision(t *testin
 	if err := store.db.QueryRow(`SELECT request_key FROM workflow_revisions WHERE id = ?`, installed.Workflow.CurrentRevision.ID).Scan(&requestKey); err != nil {
 		t.Fatal(err)
 	}
-	if requestKey != "migration:023:specification-publishes-documents:specification" {
+	if requestKey != "migration:025:specification-publishes-current-work:specification-live" {
 		t.Fatalf("request key = %q", requestKey)
 	}
-	if len(installed.Revisions) != 2 || installed.Revisions[1].ID != "specification-v1" {
+	if len(installed.Revisions) != 2 || installed.Revisions[1].ID != "specification-live-v7" {
 		t.Fatalf("Specification history = %#v", installed.Revisions)
 	}
-	disabled, err := store.Workflow(context.Background(), "disabled-specification")
+	disabled, err := store.Workflow(context.Background(), "disabled-specification-live")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disabled.Workflow.CurrentRevision.ID != "disabled-specification-v1" || len(disabled.Revisions) != 1 {
+	if disabled.Workflow.CurrentRevision.ID != "disabled-specification-live-v7" || len(disabled.Revisions) != 1 {
 		t.Fatalf("disabled Specification changed: %#v", disabled)
 	}
 }
