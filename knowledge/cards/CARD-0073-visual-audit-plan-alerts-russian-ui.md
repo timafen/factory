@@ -3,10 +3,11 @@
 ## HEAD
 
 - Status: Implemented — awaiting Verify.
-- Branch: `factory/be36087a-432-729507f1-249`.
-Implementation commit: bdd3043235fdbbc72e4c794c960f68609f69ad20 — План, Уведомления и подписи интерфейса приведены к единому русскому виду.
-- What changed: реальные `/plan` и `/alerts` получили компактные disclosures и группы; control plane получил русский словарь и точечную адаптивную компоновку.
-- Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 5 tests, OK; `npm test` → 147 tests, PASS; целевые Playwright-аудиты → PASS на desktop и phone.
+- Branch: `factory/46c1169d-306-eeac2047-f6d`.
+Implementation commit: 5442ad5450b3192c99fad32ca5394f2678eb7a59 — План сохраняет внешний `/intake/plan`, а TaskDetail, постановка задачи и общий словарь переведены.
+- What changed: redirect `Location` нормализуется к публичному пути; технические ID/SHA остаются без изменений.
+- What changed: intake и control-plane browser fixtures используют раздельные свободные порты после ребейза на `main`.
+- Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 5 OK; `npm test` → 156 PASS; `go test ./...` → PASS; целевые Playwright-аудиты → 2 + 1 PASS на 1440/390.
 - Next action: Verify запускает полный browser suite.
 
 ## LOG
@@ -18,3 +19,11 @@ Implementation commit: bdd3043235fdbbc72e4c794c960f68609f69ad20 — План, У
 Уведомления показывают до 30 свежих событий в сворачиваемых группах. Русские
 labels и responsive-правила проверены Vitest, Playwright, lint, typecheck,
 сборкой и `go test ./...`; полный browser suite оставлен этапу Verify.
+
+### 2026-08-11 — Implement
+
+Исправлены четыре замечания Review: внешний redirect Плана, русские TaskDetail
+и DelegateModal, а также общий словарь состояния, обновления, ошибок и повторов.
+Проверены `Location`, role/name selectors и сохранение ID/SHA; intake-аудит прошёл
+на 1440/390, как и общий control-plane аудит. После ребейза intake fixture также
+получил отдельный свободный порт; полный browser suite остаётся этапу Verify.
