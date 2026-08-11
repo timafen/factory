@@ -60,3 +60,11 @@ durable outbox event. Full Go tests passed with the exact pending 026 migration
 fixture; all 204 Pilot tests and the final-tree build passed. This branch is
 intentionally unmergeable/unreleasable until CARD-0085/026 reaches `main`, and
 Pilot remains disabled.
+
+### 2026-08-11 — Release-unblock correction
+
+CARD-0085 migration 026 is now in `origin/main` at
+`60cba840f39a453862c1c0f87f261fd453b09688`; the clean CARD-0086 code was
+cherry-picked onto that base. The focused provenance migration tests, all 204
+Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
+passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
