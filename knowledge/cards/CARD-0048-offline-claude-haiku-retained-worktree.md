@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge
-- Branch: `factory/55529d04-53b-d876a132-bb3`
-- Head commit: `fb85141` — доказаны очистка истории и сбой подтверждения санитара
+- Status: Implemented — awaiting human merge
+- Branch: `factory/043d00f7-93e-1bf83e08-ef9`
+- Implementation commit: 1734a5efa237bab4c1cd63221070a6d6d7991c30 — внутреннее
+  подтверждение очистки retained worktree принимает запросы только с loopback.
 - Specification: `knowledge/specs/offline-claude-haiku-retained-worktree.md`
-- What changed: control plane идемпотентно удаляет только точный подтверждённый
-  снимок retained worktree; санитар посылает подтверждение только после успешного
-  переноса соответствующей директории в карантин.
-- Evidence: сборка, UI, release, Go, race, vulnerability scan и целевые
-  сценарии PASS; два общих сбоя локализованы вне diff задачи.
+- What changed: control plane по-прежнему снимает только точные подтверждённые
+  снимки после карантина; новый маршрут теперь защищён прямым loopback-доступом,
+  поэтому внешний запрос не может снять retained worktree.
+- Evidence: `go test ./internal/controlplane` — PASS; `bash
+  ops/test-factory-janitor.sh` — PASS.
 - Next action: человеку влить ветку в `main`.
 
 ## LOG
@@ -48,3 +49,10 @@
 Все прошло, кроме уже существующих ошибок `staticcheck` в
 `cards_http.go:37`/`pilot_config.go:136` и несвязанного browser-таймаута в
 `control-plane.spec.ts:421`; все три файла вне diff задачи.
+
+### 2026-08-11 — Implement
+
+Маршрут подтверждения очистки retained worktree теперь отклоняет forwarded и
+внешние запросы той же loopback-проверкой, что и регистрация воркера. Тест
+`TestHTTPClearRetainedWorktreesRequiresDirectLoopback` подтверждает ответ 403;
+`go test ./internal/controlplane` и `bash ops/test-factory-janitor.sh` проходят.
