@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import { defineConfig, devices } from "@playwright/test";
 
 const defaultBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox";
+const intakePython = process.env.FACTORY_INTAKE_PYTHON ?? "/opt/factory-data/intake/venv/bin/python";
 const e2eHost = "127.0.0.1";
 const allocatedE2EPorts = new Set<number>();
 export const testWorkerBootstrapCredential =
@@ -65,9 +66,15 @@ export async function createE2EServerAddress(
   return { port, origin, healthURL: `${origin}/healthz` };
 }
 
-export async function createPlaywrightConfig(portOverride?: string) {
+export async function createPlaywrightConfig(
+  portOverride?: string,
+  intakePortOverride?: string,
+) {
   const serverAddress = await createE2EServerAddress(portOverride);
+  const intakeServerAddress = await createE2EServerAddress(intakePortOverride);
   process.env.FACTORY_E2E_PORT = String(serverAddress.port);
+  process.env.FACTORY_INTAKE_E2E_PORT = String(intakeServerAddress.port);
+  process.env.FACTORY_INTAKE_E2E_ORIGIN = intakeServerAddress.origin;
   return defineConfig({
     testDir: "./e2e",
     fullyParallel: false,
@@ -89,17 +96,31 @@ export async function createPlaywrightConfig(portOverride?: string) {
         use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } },
       },
     ],
-    webServer: {
-      command: "node e2e/server.mjs",
-      url: serverAddress.healthURL,
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        FACTORY_E2E_PORT: String(serverAddress.port),
-        FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
+    webServer: [
+      {
+        command: "node e2e/server.mjs",
+        url: serverAddress.healthURL,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        env: {
+          FACTORY_E2E_PORT: String(serverAddress.port),
+          FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL: testWorkerBootstrapCredential,
+        },
       },
-    },
+      {
+        command: `${intakePython} e2e/intake-fixture.py`,
+        url: intakeServerAddress.healthURL,
+        reuseExistingServer: false,
+        timeout: 30_000,
+        env: {
+          FACTORY_INTAKE_E2E_PORT: String(intakeServerAddress.port),
+        },
+      },
+    ],
   });
 }
 
-export default await createPlaywrightConfig(process.env.FACTORY_E2E_PORT);
+export default await createPlaywrightConfig(
+  process.env.FACTORY_E2E_PORT,
+  process.env.FACTORY_INTAKE_E2E_PORT,
+);

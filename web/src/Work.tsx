@@ -1,6 +1,6 @@
 import { ChevronRight, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { runtimeLabel, taskStates, timeAgo } from "./format";
+import { runtimeLabel, taskStates } from "./format";
 import { ProjectTag, useProjectName } from "./project";
 import type { Task, TaskState, Worker } from "./types";
 import {
@@ -41,6 +41,17 @@ const TONE: Record<string, { bg: string; fg: string }> = {
   muted: { bg: "#22262f", fg: "#8a94a6" },
 };
 const muted = "var(--text-muted, #8a94a6)";
+
+function timeAgoRu(value: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 10) return "только что";
+  if (seconds < 60) return `${seconds} с назад`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} мин назад`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч назад`;
+  return `${Math.floor(hours / 24)} дн. назад`;
+}
 
 function Pill({ text, tone }: { text: string; tone: keyof typeof TONE }) {
   const c = TONE[tone];
@@ -607,7 +618,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
         )}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: muted }}>
-          {worker?.name ?? ""} · {timeAgo(g.latest.created_at)}
+          {worker?.name ?? ""} · {timeAgoRu(g.latest.created_at)}
         </span>
         <ChevronRight size={14} style={{ transform: expanded ? "rotate(90deg)" : undefined, color: muted }} />
       </div>
@@ -710,7 +721,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
               )}
               {history[task.id] && <span style={{ color: muted }}>{history[task.id]}</span>}
               <span style={{ color: muted }}>
-                {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgo(task.created_at)}
+                {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgoRu(task.created_at)}
               </span>
               <span style={{ flex: 1 }} />
               <span style={{ color: muted }}>открыть ›</span>
@@ -768,7 +779,7 @@ function StageBoard({ tasks, verdicts, workerMap, onTask }: {
                         <span>{w?.name ?? "—"}</span>
                         <span aria-hidden="true">·</span>
                         {w && <><span>{runtimeLabel(w.runtime)}</span><span aria-hidden="true">·</span></>}
-                        <span>{timeAgo(task.created_at)}</span>
+                        <span>{timeAgoRu(task.created_at)}</span>
                       </div>
                     </button>
                   );
