@@ -301,7 +301,9 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
  * активной задачи, открытый вопрос и состояние, которое записал пилот. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function sectionOf(g: Group): "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive" {
-  if (g.meta?.closed && g.status.kind !== "done") return "archive";
+  // Ручное закрытие — явное решение владельца убрать работу из текущей
+  // картины. Даже успешно завершённая попытка в таком случае остаётся в архиве.
+  if (g.meta?.closed) return "archive";
   return g.status.kind;
 }
 

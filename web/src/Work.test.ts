@@ -107,7 +107,7 @@ describe("build", () => {
     });
   });
 
-  it("archives cancelled and inactive old attempts while retaining successful completions", () => {
+  it("archives manually closed, cancelled, and inactive old attempts", () => {
     const cancelled = build([task("cancelled", "Review", "cancelled", 1)], {}, [])[0];
     const closed = build([task("closed", "Review", "succeeded", 1)], {}, [], {
       "Экран Работа": { closed: "2026-08-08" },
@@ -118,7 +118,7 @@ describe("build", () => {
 
     expect(cancelled.status.kind).toBe("archive");
     expect(closed.status.kind).toBe("done");
-    expect(sectionOf(closed)).toBe("done");
+    expect(sectionOf(closed)).toBe("archive");
     expect(inactiveRework.status).toMatchObject({
       kind: "archive", next: "Новый активный шаг в API не найден.",
     });
