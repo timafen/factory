@@ -4,7 +4,7 @@
 
 Status: реализовано
 Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
-Implementation commit: bee3952c44d4e4bd652061c28f7d51d5a0bb9d94 — второй независимый невалидный Specification HEAD не создаёт Implement.
+Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — второй независимый невалидный Specification HEAD не создаёт Implement.
 What changed: cycle-test использует новые task/execution/attempt ID и новый невалидный HEAD; после исчерпания rescue работа получает SPEC HEAD STOP и не меняется в следующем цикле.
 Evidence: `python3 -m unittest -v pilot.test_pilot.SpecificationBranchHandoffTests` → 18 тестов, `OK`; без production guard тест падает (`2 != 1`).
 One next action: передать ветку в Review после push.
@@ -16,7 +16,7 @@ One next action: передать ветку в Review после push.
 Исправлен blocker проверки: повторный цикл больше не возвращает ту же задачу из
 `processed`. Две отдельные успешные Specification с разными task/execution/attempt ID
 подтверждают один rescue, ясную жёсткую остановку и отсутствие Implement; implementation
-commit — `bee3952c44d4e4bd652061c28f7d51d5a0bb9d94`.
+commit — `bee395269e7fc5e6aeba0c3a44077442f48ea968`.
 
 ### 2026-08-11 — Implement
 

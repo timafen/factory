@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Implementation commit: bee3952c44d4e4bd652061c28f7d51d5a0bb9d94 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
+Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
 
 - Status: Implemented and tested — уникальные номера и строгий HEAD-gate исправлены.
 - Branch: `factory/5b9cb945-2d5-c61f3f8a-cb6`.
@@ -13,7 +13,7 @@ Implementation commit: bee3952c44d4e4bd652061c28f7d51d5a0bb9d94 — после �
 ### 2026-08-11 — Implement
 
 Обновлена доказательная регрессия для двух независимых Specification после конфликта
-нумерации карточек; implementation commit — `bee3952c44d4e4bd652061c28f7d51d5a0bb9d94`.
+нумерации карточек; implementation commit — `bee395269e7fc5e6aeba0c3a44077442f48ea968`.
 
 ### 2026-08-11 — Implement
 
