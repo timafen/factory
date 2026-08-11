@@ -2,15 +2,22 @@
 
 ## HEAD
 
-- Status: Verify FAIL — full Playwright suite has one repository-routing failure; human fix required.
-- Branch: `factory/4d1fc847-78d-58c2d589-8aa`.
-Implementation commit: 34af0677eb18fa6b3d2e6decbc89b5ae2d679bac — План сохраняет внешний `/intake/plan`, а TaskDetail, постановка задачи и общий словарь переведены.
-- What changed: redirect `Location` нормализуется к публичному пути; технические ID/SHA остаются без изменений.
-- What changed: intake и control-plane browser fixtures используют раздельные свободные порты после ребейза на `main`.
-- Evidence: Go/UI gates pass; Playwright ran once with 16 passed, 1 failed, and 5 not run. The desktop/phone visual audit, narrow layout, Plan, and Alerts scenarios passed.
-- Next action: Исправить отсутствие поля `Canonical identity` на экране `/repositories`, затем повторить Verify.
+- Status: Implemented — targeted repository routing and visual audit pass; full browser suite remains for Verify.
+- Branch: `factory/f96a9d17-685-e490b9a1-1db`.
+Implementation commit: 9bdba3c63cc815fec799659dd7d451482c5f7a48 — Проверки repository routing синхронизированы с русским интерфейсом, а production `web/dist` пересобран.
+- What changed: repository routing assertions используют актуальные русские labels/actions, сохраняя exact identity и API routing checks.
+- What changed: production `web/dist` пересобран воспроизводимо и совпадает с исходниками.
+- Evidence: repository Playwright 1 passed; visual audit 1 passed; UI Vitest 157 passed; `npm run build` passed.
+- Next action: Повторить полный Verify после доставки этой реализации.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Исправлены соседние assertions сценария repository routing: «Точная идентичность»,
+«Добавить репозиторий», русское резюме готовности и действия маршрутизации. `web/dist`
+обновлён результатом `npm run build`; targeted repository Playwright, visual audit и
+157 UI-тестов прошли.
 
 ### 2026-08-11 — Implement
 
