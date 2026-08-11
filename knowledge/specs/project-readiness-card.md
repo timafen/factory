@@ -161,6 +161,8 @@ rollback и secret-name probes. Публичный API не получает з�
 
 `knowledge/cards/CARD-0059-project-readiness-card.md`
 
+## Проверяемые обещания
+
 ГОТОВО-КОГДА: файл internal/protocol/types.go
 ГОТОВО-КОГДА: файл internal/controlplane/pilot_config.go
 ГОТОВО-КОГДА: файл internal/controlplane/pilot_config_test.go
