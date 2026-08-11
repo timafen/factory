@@ -126,6 +126,35 @@ func TestMetricsHaveUndefinedRatesWithoutCompletedAgentOutcomes(t *testing.T) {
 	}
 }
 
+func TestMetricsCountQueueReassignmentsByEventTime(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	seedMetricsWorker(t, store, "worker-online", now)
+	seedMetricsWorker(t, store, "worker-old", now)
+	seedMetricsExecution(t, store, metricsExecution{
+		id: "reassigned", state: "queued", createdAt: now.Add(-48 * time.Hour), updatedAt: now,
+	})
+	if _, err := store.db.Exec(`
+		INSERT INTO execution_reassignments(execution_id, from_worker_id, to_worker_id, reassigned_at)
+		VALUES ('execution-reassigned', 'worker-old', 'worker-online', ?)
+	`, now.Add(-25*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	// A later execution update must not pull this old reassignment into the new window.
+	if _, err := store.db.Exec(`UPDATE executions SET updated_at = ? WHERE id = 'execution-reassigned'`, now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := store.Metrics(context.Background(), metricsWindow24Hours)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.QueueReassignments != 0 {
+		t.Fatalf("24h reassignments = %d, want 0", summary.QueueReassignments)
+	}
+}
+
 func TestMetricsCountExplicitRetryBeforeFirstClaim(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)

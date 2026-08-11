@@ -30,6 +30,7 @@ type attemptHandle struct {
 	expiry        time.Time
 	supervisor    *supervisorProcess
 	manifestReady bool
+	readOnly      bool
 }
 
 func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim, token string) {
@@ -37,6 +38,7 @@ func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim,
 	handle := &attemptHandle{
 		context: attemptContext, cancel: cancel, done: make(chan struct{}),
 		heartbeatDone: make(chan struct{}), expiry: claim.Attempt.LeaseExpiresAt,
+		readOnly: claim.Task.ReadOnly,
 	}
 	manager.stateMutex.Lock()
 	manager.active[claim.Attempt.ID] = handle
@@ -640,7 +642,7 @@ func (manager *Manager) complete(
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	_, err := manager.client.complete(ctx, attemptID, protocol.CompleteAttemptRequest{
-		LeaseToken: token, State: state, Result: result, Error: errorText,
+		LeaseToken: token, State: state, Disposition: completionDisposition(handle.readOnly, state, result), Result: result, Error: errorText,
 	})
 	if err != nil {
 		manager.logger.Warn(
@@ -652,6 +654,13 @@ func (manager *Manager) complete(
 	}
 	manager.logger.Info("attempt_completed", "attempt_id", attemptID, "state", state)
 	return true
+}
+
+func completionDisposition(readOnly bool, state, result string) string {
+	if readOnly && state == "succeeded" && strings.TrimSpace(result) == "NOT READY" {
+		return protocol.CompletionDispositionNotReady
+	}
+	return ""
 }
 
 func (manager *Manager) retain(claim protocol.Claim, repository Repository, value worktree, reason string) {
@@ -733,6 +742,11 @@ func terminalState(message supervisorMessage) string {
 
 func buildPrompt(claim protocol.Claim, value worktree) string {
 	description := claim.Task.Description
+	if claim.Task.ReadOnly {
+		description = "READ-ONLY SNAPSHOT RULE: inspect only the committed snapshot in this worktree; " +
+			"do not modify repository data and do not wait on or block a writer. If required committed data " +
+			"is not present yet, report NOT READY so Factory can retry instead of treating it as a defect.\n\n" + description
+	}
 	if len(claim.Attachments) > 0 {
 		description += "\n\nПрикреплённые файлы уже сохранены в рабочей копии. Обязательно ознакомься с ними:\n"
 		for _, attachment := range claim.Attachments {

@@ -22,15 +22,16 @@ type normalizedWorkflowRevision struct {
 	Title        string `json:"name"`
 	Summary      string `json:"summary"`
 	Instructions string `json:"instructions"`
+	ReadOnly     bool   `json:"read_only,omitempty"`
 }
 
 func normalizeWorkflowRevision(
-	requestKey, workflowID, expectedRevisionID, title, summary, instructions string,
+	requestKey, workflowID, expectedRevisionID, title, summary, instructions string, readOnly bool,
 ) (normalizedWorkflowRevision, string, error) {
 	value := normalizedWorkflowRevision{
 		RequestKey: strings.TrimSpace(requestKey), WorkflowID: strings.TrimSpace(workflowID),
 		ExpectedRevisionID: strings.TrimSpace(expectedRevisionID), Title: strings.TrimSpace(title),
-		Summary: strings.TrimSpace(summary), Instructions: instructions,
+		Summary: strings.TrimSpace(summary), Instructions: instructions, ReadOnly: readOnly,
 	}
 	if value.RequestKey == "" || len(value.RequestKey) > 200 {
 		return value, "", invalid("invalid_request_key", "request_key is required and limited to 200 bytes")
@@ -74,7 +75,7 @@ func (s *Store) CreateWorkflow(
 	input protocol.CreateWorkflowRequest,
 ) (protocol.WorkflowDetail, bool, error) {
 	value, titleKey, err := normalizeWorkflowRevision(
-		input.RequestKey, "", "", input.Title, input.Summary, input.Instructions,
+		input.RequestKey, "", "", input.Title, input.Summary, input.Instructions, input.ReadOnly,
 	)
 	if err != nil {
 		return protocol.WorkflowDetail{}, false, err
@@ -135,9 +136,9 @@ func (s *Store) CreateWorkflow(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO workflow_revisions(
 			id, workflow_id, revision_number, request_key, request_digest,
-			title, summary, instructions, created_at
-		) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-	`, revisionID, workflowID, value.RequestKey, digest, value.Title, value.Summary, value.Instructions, now); err != nil {
+			title, summary, instructions, created_at, read_only
+		) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+	`, revisionID, workflowID, value.RequestKey, digest, value.Title, value.Summary, value.Instructions, now, value.ReadOnly); err != nil {
 		return protocol.WorkflowDetail{}, false, unavailable(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -154,7 +155,7 @@ func (s *Store) CreateWorkflowRevision(
 ) (protocol.WorkflowDetail, bool, error) {
 	value, titleKey, err := normalizeWorkflowRevision(
 		input.RequestKey, workflowID, input.ExpectedRevisionID,
-		input.Title, input.Summary, input.Instructions,
+		input.Title, input.Summary, input.Instructions, input.ReadOnly,
 	)
 	if err != nil {
 		return protocol.WorkflowDetail{}, false, err
@@ -223,10 +224,10 @@ func (s *Store) CreateWorkflowRevision(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO workflow_revisions(
 			id, workflow_id, revision_number, request_key, request_digest,
-			title, summary, instructions, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			title, summary, instructions, created_at, read_only
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, revisionID, value.WorkflowID, currentRevisionNumber+1, value.RequestKey, digest,
-		value.Title, value.Summary, value.Instructions, now); err != nil {
+		value.Title, value.Summary, value.Instructions, now, value.ReadOnly); err != nil {
 		return protocol.WorkflowDetail{}, false, unavailable(err)
 	}
 	result, err := tx.ExecContext(ctx, `
@@ -284,7 +285,7 @@ func (s *Store) Workflow(ctx context.Context, workflowID string) (protocol.Workf
 	}
 	detail.Workflow = workflow
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, workflow_id, revision_number, title, summary, instructions, created_at
+		SELECT id, workflow_id, revision_number, title, summary, instructions, read_only, created_at
 		FROM workflow_revisions
 		WHERE workflow_id = ?
 		ORDER BY revision_number DESC
@@ -310,7 +311,7 @@ func (s *Store) Workflow(ctx context.Context, workflowID string) (protocol.Workf
 const workflowSelect = `
 	SELECT workflow.id, workflow.enabled, workflow.created_at, workflow.updated_at,
 	       revision.id, revision.workflow_id, revision.revision_number,
-	       revision.title, revision.summary, revision.created_at
+	       revision.title, revision.summary, revision.read_only, revision.created_at
 	FROM workflows workflow
 	JOIN workflow_revisions revision ON revision.id = workflow.current_revision_id
 `
@@ -457,15 +458,16 @@ type workflowScanner interface {
 
 func scanWorkflow(row workflowScanner) (protocol.Workflow, error) {
 	var workflow protocol.Workflow
-	var enabled int
+	var enabled, readOnly int
 	var createdAt, updatedAt, revisionCreatedAt int64
 	err := row.Scan(
 		&workflow.ID, &enabled, &createdAt, &updatedAt,
 		&workflow.CurrentRevision.ID, &workflow.CurrentRevision.WorkflowID,
 		&workflow.CurrentRevision.RevisionNumber, &workflow.CurrentRevision.Title,
-		&workflow.CurrentRevision.Summary, &revisionCreatedAt,
+		&workflow.CurrentRevision.Summary, &readOnly, &revisionCreatedAt,
 	)
 	workflow.Enabled = enabled != 0
+	workflow.CurrentRevision.ReadOnly = readOnly != 0
 	workflow.CreatedAt = fromMillis(createdAt)
 	workflow.UpdatedAt = fromMillis(updatedAt)
 	workflow.CurrentRevision.CreatedAt = fromMillis(revisionCreatedAt)
@@ -475,14 +477,16 @@ func scanWorkflow(row workflowScanner) (protocol.Workflow, error) {
 func scanWorkflowRevision(row workflowScanner, instructions bool) (protocol.WorkflowRevision, error) {
 	var revision protocol.WorkflowRevision
 	var createdAt int64
+	var readOnly int
 	var err error
 	if instructions {
 		err = row.Scan(&revision.ID, &revision.WorkflowID, &revision.RevisionNumber,
-			&revision.Title, &revision.Summary, &revision.Instructions, &createdAt)
+			&revision.Title, &revision.Summary, &revision.Instructions, &readOnly, &createdAt)
 	} else {
 		err = row.Scan(&revision.ID, &revision.WorkflowID, &revision.RevisionNumber,
-			&revision.Title, &revision.Summary, &createdAt)
+			&revision.Title, &revision.Summary, &readOnly, &createdAt)
 	}
+	revision.ReadOnly = readOnly != 0
 	revision.CreatedAt = fromMillis(createdAt)
 	return revision, err
 }

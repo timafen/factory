@@ -77,6 +77,9 @@ func (s *Store) Metrics(ctx context.Context, window string) (protocol.MetricsSum
 	if err := s.countWorkers(ctx, tx, now, &summary); err != nil {
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
+	if err := s.countQueueReassignments(ctx, tx, start, now, &summary.QueueReassignments); err != nil {
+		return protocol.MetricsSummary{}, unavailable(err)
+	}
 	if err := s.loadWeeklyLimit(ctx, tx, now, &summary); err != nil {
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
@@ -84,6 +87,20 @@ func (s *Store) Metrics(ctx context.Context, window string) (protocol.MetricsSum
 		return protocol.MetricsSummary{}, unavailable(err)
 	}
 	return summary, nil
+}
+
+func (s *Store) countQueueReassignments(
+	ctx context.Context,
+	query metricsQuerier,
+	start *time.Time,
+	end time.Time,
+	count *int64,
+) error {
+	filter, args := metricsTimeFilter("reassigned_at", start, end)
+	return query.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM execution_reassignments WHERE `+filter,
+		args...,
+	).Scan(count)
 }
 
 func metricsTimeFilter(column string, start *time.Time, end time.Time) (string, []any) {

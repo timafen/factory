@@ -145,6 +145,7 @@ func (s *Store) ImportLegacyPoller(
 		workflowValue, workflowTitleKey, normalizeErr := normalizeWorkflowRevision(
 			"legacy-poller:"+input.MigrationID+":workflow:"+queueID,
 			"", "", mapping.WorkflowTitle, "Imported from legacy poller queue "+queue.Name+".", queue.Prompt,
+			false,
 		)
 		if normalizeErr != nil {
 			return protocol.LegacyPollerMigration{}, normalizeErr

@@ -73,6 +73,15 @@ case "$prompt" in
 	printf 'completed by fake Codex' > "$result"
 	echo '{"type":"item.completed","item":{"type":"agent_message","text":"completed"}}'
 	;;
+  *FAKE_MODE=not-ready-once*)
+	marker="$FACTORY_TEST_CODEX_LOG/not-ready-once.done"
+	if [ ! -f "$marker" ]; then
+	  : > "$marker"
+	  printf 'NOT READY' > "$result"
+	else
+	  printf 'completed after retry' > "$result"
+	fi
+	;;
 	*FAKE_MODE=runtime-overlap*)
 	touch "$FACTORY_TEST_CODEX_LOG/$attempt.running"
 	while [ "$(find "$FACTORY_TEST_CODEX_LOG" -name '*.running' | wc -l)" -lt 2 ]; do sleep 0.01; done
@@ -1403,6 +1412,41 @@ func TestMultiRepositorySuccessAndBoundedOutput(t *testing.T) {
 		if !strings.Contains(string(prompt), expected) {
 			t.Fatalf("Codex prompt does not contain %q:\n%s", expected, prompt)
 		}
+	}
+}
+
+func TestReadOnlyNotReadyIsRequeuedWithoutDuplicateAttempt(t *testing.T) {
+	repository := createRepository(t, "not-ready")
+	fixture := newServerFixture(t, nil)
+	codexPath := filepath.Join(t.TempDir(), "codex")
+	writeFakeCodex(t, codexPath)
+	manager := newTestManager(t, fixture, codexPath, filepath.Join(t.TempDir(), "worker"),
+		map[string]repositoryFixture{"not-ready": repository}, 1)
+	startManager(t, manager)
+	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool {
+		return worker.Health == "healthy" && len(worker.Repositories) == 1
+	})
+	workflow, created, err := fixture.store.CreateWorkflow(context.Background(), protocol.CreateWorkflowRequest{
+		RequestKey: "not-ready-review", Title: "Review", Instructions: "Inspect the snapshot.", ReadOnly: true,
+	})
+	if err != nil || !created {
+		t.Fatalf("create review workflow: created=%v err=%v", created, err)
+	}
+	task, created, err := fixture.store.CreateTask(context.Background(), protocol.CreateTaskRequest{
+		RequestKey: "not-ready-task", Title: "Review snapshot", Context: "FAKE_MODE=not-ready-once",
+		WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID,
+		WorkflowRevisionID: workflow.Workflow.CurrentRevision.ID, TimeoutSeconds: 60,
+	})
+	if err != nil || !created {
+		t.Fatalf("create review task: created=%v err=%v", created, err)
+	}
+	completed := waitForTaskState(t, fixture.store, task.Task.ID, "succeeded")
+	if len(completed.Attempts) != 2 {
+		t.Fatalf("attempts = %#v, want exactly failed not-ready and one retry", completed.Attempts)
+	}
+	if completed.Attempts[0].State != "failed" || completed.Attempts[0].Result != "NOT READY" ||
+		completed.Attempts[1].State != "succeeded" {
+		t.Fatalf("not-ready lifecycle = %#v", completed.Attempts)
 	}
 }
 

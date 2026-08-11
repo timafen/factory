@@ -43,6 +43,17 @@ describe("overviewWork", () => {
 });
 
 describe("Overview active work", () => {
+  it("shows queue reassignments for the last 24 hours", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/metrics/summary?window=24h" ? { queue_reassignments: 3 }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+    render(createElement(Overview, {}));
+    expect(await screen.findByText(/переназначено за 24 ч 3/)).toBeVisible();
+  });
+
   it("loads active work from the server and opens the work screen", async () => {
     const onNav = vi.fn();
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -55,7 +66,7 @@ describe("Overview active work", () => {
 
     render(createElement(Overview, { onNav }));
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
-    expect(within(section).getByText("Новый обзор")).toBeVisible();
+    expect(await within(section).findByText("Новый обзор")).toBeVisible();
     expect(within(section).getByText("поставил Клод")).toBeVisible();
     expect(within(section).getByText("этап: Review")).toBeVisible();
     fireEvent.click(within(section).getByText("Новый обзор"));

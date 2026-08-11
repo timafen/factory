@@ -151,6 +151,31 @@ func TestWorkflowTaskSnapshotsSurviveDisableRevisionAndRetry(t *testing.T) {
 	}
 }
 
+func TestReadOnlyWorkflowMetadataIsSnapshottedIntoClaims(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/readonly",
+	})
+	workflow, created, err := store.CreateWorkflow(context.Background(), protocol.CreateWorkflowRequest{
+		RequestKey: "readonly-workflow", Title: "Review", Instructions: "Inspect committed data.", ReadOnly: true,
+	})
+	if err != nil || !created || !workflow.Workflow.CurrentRevision.ReadOnly {
+		t.Fatalf("read-only workflow = created %v, error %v, detail %#v", created, err, workflow)
+	}
+	task, created, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
+		RequestKey: "readonly-task", Title: "Review snapshot", Context: "Review when ready.",
+		WorkerID: workerA, RepositoryID: worker.Repositories[0].ID,
+		WorkflowRevisionID: workflow.Workflow.CurrentRevision.ID, TimeoutSeconds: 60,
+	})
+	if err != nil || !created || !task.Task.ReadOnly || task.Workflow == nil || !task.Workflow.ReadOnly {
+		t.Fatalf("read-only task snapshot = created %v, error %v, detail %#v", created, err, task)
+	}
+	claim := claimTestTask(t, store, workerA, "readonly-snapshot-claim", tokenA)
+	if !claim.Task.ReadOnly {
+		t.Fatalf("claim lost read-only snapshot: %#v", claim.Task)
+	}
+}
+
 func TestBlankTaskAndOldClaimContractRemainCompatible(t *testing.T) {
 	store := newTestStore(t)
 	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{
