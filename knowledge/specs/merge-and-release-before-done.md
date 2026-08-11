@@ -137,7 +137,7 @@ cd web && npm test -- --run src/Work.test.ts
 
 ## Карточка
 
-`knowledge/cards/CARD-0075-merge-and-release-before-done.md`
+`knowledge/cards/CARD-0077-merge-and-release-before-done.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
