@@ -1157,24 +1157,24 @@ test("manages repository routing end to end and preserves add input while pollin
   await page.goto("/repositories");
   const repositoriesNavigation = page.getByRole("button", { name: "Репозитории", exact: true });
   await expect(repositoriesNavigation).toHaveAttribute("aria-current", "page");
-  const input = page.getByLabel("Canonical identity");
+  const input = page.getByLabel("Точная идентичность");
   await input.fill("github.com/example/browser-managed");
   await expect(input).toBeFocused();
   await page.waitForTimeout(10_500);
   await expect(input).toHaveValue("github.com/example/browser-managed");
   await expect(input).toBeFocused();
-  await page.getByRole("button", { name: "Add repository" }).click();
+  await page.getByRole("button", { name: "Добавить репозиторий" }).click();
 
   await expect(page.getByRole("heading", { name: "github.com/example/browser-managed" })).toBeVisible();
   await expect(repositoriesNavigation).toHaveClass(/active/);
   await expect(repositoriesNavigation).not.toHaveAttribute("aria-current");
-  await expect(page.getByText(/\d+ workers? (?:is|are) ready to acquire routed work/)).toBeVisible();
+  await expect(page.getByText(/^\d+ исполнител(?:ь готов|ей готовы) взять работу$/)).toBeVisible();
   await expect(page.getByText("Managed repository worker")).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/repository-detail-desktop.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Disable repository" }).click();
-  await expect(page.getByText(/Disabling rejects new routed work/)).toBeVisible();
-  await page.getByRole("button", { name: "Disable routing" }).click();
+  await page.getByRole("button", { name: "Выключить репозиторий" }).click();
+  await expect(page.getByText(/После выключения новые работы не будут направляться сюда/)).toBeVisible();
+  await page.getByRole("button", { name: "Выключить маршрутизацию" }).click();
   await expect(page.getByText("Маршрутизация выключена")).toBeVisible();
 
   const disabledRoute = await api.post("/api/v1/tasks", {
