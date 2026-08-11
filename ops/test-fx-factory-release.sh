@@ -227,6 +227,14 @@ EOF
 #!/bin/bash
 if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
   echo "bash $1" >>"$TEST_GATES"
+  if [ "$TEST_MODE" = gate-result-spoof ]; then
+    for ((i = 0; i < 400; i++)); do
+      grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null 2>&1 && break
+      /bin/sleep 0.005
+    done
+    grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null || exit 20
+    exit 1
+  fi
   [ "$TEST_MODE" != release-test-fail ] && [ "$TEST_MODE" != forked-gate-fail ]
   exit
 fi
@@ -251,7 +259,7 @@ EOF
 #!/bin/bash
 [ "${1:-}" != --wait ] || shift
 case "$TEST_MODE" in
-  forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates)
+  forked-gates-success|forked-gate-fail|signal-forked-gates)
     printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
     /usr/bin/setsid --fork --wait "$@" &
     wait "$!"
@@ -272,11 +280,41 @@ esac
 EOF
   cat >"$case_dir/bin/as-fork" <<'EOF'
 #!/bin/bash
-if [[ "${5:-}" = *.session.result ]]; then
-  printf 'as-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
-  [ "$TEST_MODE" != forked-gate-no-result ] || exit 0
-  "$@" &
-  exit 0
+for argument in "$@"; do
+  [[ "$argument" != *.session.result ]] || printf 'result-path-leaked\n' >>"$TEST_SPOOF_EVENTS"
+done
+if [ "$TEST_MODE" = gate-result-spoof ] && mkdir "$TEST_SPOOF_LOCK" 2>/dev/null; then
+  (
+    result=
+    for ((i = 0; i < 400; i++)); do
+      build_dir=$(find "$TEST_RELEASE_DIR" -maxdepth 1 -type d -name 'build-*' -print -quit)
+      if [ -n "$build_dir" ]; then
+        result="$build_dir/go-checks.session.result"
+        break
+      fi
+      /bin/sleep 0.005
+    done
+    [ -n "$result" ] || exit 19
+
+    # Reproduce every unsafe filesystem state before writing the exact valid
+    # success that fooled the old protocol. All writes are by the untrusted AS.
+    printf 'state=finished status=0\n' >"$result"
+    printf 'stale\n' >>"$TEST_SPOOF_EVENTS"
+    for ((i = 0; i < 400; i++)); do
+      [ -e "${result%.result}" ] && break
+      /bin/sleep 0.005
+    done
+    printf 'corrupt\n' >"$result"
+    printf 'corrupt\n' >>"$TEST_SPOOF_EVENTS"
+    temporary_result="${result}.attacker.$$"
+    printf 'state=finished status=0\n' >"$temporary_result"
+    mv -f -- "$temporary_result" "$result"
+    printf 'valid-success\n' >>"$TEST_SPOOF_EVENTS"
+    temporary_result="${result}.replay.$$"
+    printf 'state=finished status=0\n' >"$temporary_result"
+    mv -f -- "$temporary_result" "$result"
+    printf 'replayed-success\n' >>"$TEST_SPOOF_EVENTS"
+  ) </dev/null >/dev/null 2>&1 &
 fi
 exec "$@"
 EOF
@@ -366,13 +404,13 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
   esac
   case "$mode" in
-    forked-gates-success|forked-gate-fail|forked-gate-no-result|signal-forked-gates)
+    gate-result-spoof)
       fixture_release_as="$case_dir/bin/as-fork"
       ;;
   esac
@@ -391,6 +429,7 @@ run_release() {
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -429,6 +468,7 @@ start_release() {
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -517,10 +557,14 @@ forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
 run_release "$forked_success" forked-gates-success \
   || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
-[ "$(grep -Fxc 'as-forked' "$forked_success/handshake-events")" -eq 2 ] \
-  || fail "successful fork scenario did not fork both gate launchers"
+[ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 2 ] \
+  || fail "successful fork scenario did not fork both gate sessions"
+[ ! -e "$forked_success/spoof-events" ] \
+  || fail "successful fork scenario unexpectedly used a filesystem result"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
 assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
+[ "$(grep -Fxc 'restart factory-server.service' "$forked_success/events")" -eq 1 ] \
+  || fail "successful fork scenario did not install exactly once"
 assert_no_fixture_processes "$forked_success"
 
 identity_retry="$temporary/identity-transient"
@@ -624,8 +668,8 @@ run_release "$forked_failed" forked-gate-fail
 status=$?
 set -e
 [ "$status" -eq 5 ] || fail "forked failing gate returned $status instead of build error 5"
-[ "$(grep -Fxc 'as-forked' "$forked_failed/handshake-events")" -eq 2 ] \
-  || fail "failing fork scenario did not fork both gate launchers"
+[ "$(grep -Fxc 'setsid-forked' "$forked_failed/handshake-events")" -eq 2 ] \
+  || fail "failing fork scenario did not fork both gate sessions"
 grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
   || fail "forked failure did not reach the actual release gate"
 grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \
@@ -637,18 +681,28 @@ assert_file "$forked_failed/install/factory-worker" old-worker
   || fail "binaries were built after a forked gate failure"
 assert_no_fixture_processes "$forked_failed"
 
-forked_without_result="$temporary/forked-gate-no-result"
-make_fixture "$forked_without_result" forked-gate-no-result
-SECONDS=0
+spoofed_result="$temporary/gate-result-spoof"
+make_fixture "$spoofed_result" gate-result-spoof
 set +e
-run_release "$forked_without_result" forked-gate-no-result
+run_release "$spoofed_result" gate-result-spoof
 status=$?
 set -e
-[ "$status" -eq 5 ] || fail "missing forked result returned $status instead of build error 5"
-[ "$SECONDS" -lt 3 ] || fail "missing forked result did not fail in bounded time"
-[ ! -s "$forked_without_result/events" ] \
-  || fail "installation ran without an authoritative gate result"
-assert_no_fixture_processes "$forked_without_result"
+[ "$status" -eq 5 ] || fail "spoofed successful result returned $status instead of build error 5"
+for attack in stale corrupt valid-success replayed-success; do
+  grep -Fx "$attack" "$spoofed_result/spoof-events" >/dev/null \
+    || fail "adversarial AS did not attempt $attack result"
+done
+! grep -Fx 'result-path-leaked' "$spoofed_result/spoof-events" >/dev/null \
+  || fail "gate result path was passed through adversarial AS"
+grep -F 'завершилась с кодом 1' "$spoofed_result/output" >/dev/null \
+  || fail "spoof hid the real gate status"
+assert_file "$spoofed_result/install/factory-server" old-server
+assert_file "$spoofed_result/install/factory-worker" old-worker
+[ ! -s "$spoofed_result/events" ] \
+  || fail "installation ran after AS forged a successful gate result"
+! grep -F 'go build ' "$spoofed_result/gates" >/dev/null \
+  || fail "binaries were built after the spoofed gate failure"
+assert_no_fixture_processes "$spoofed_result"
 
 for signal in HUP INT TERM; do
   signaled="$temporary/signal-forked-$signal"
@@ -669,8 +723,6 @@ for signal in HUP INT TERM; do
   [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
   grep -Fx 'setsid-forked' "$signaled/handshake-events" >/dev/null \
     || fail "signal $signal did not force the GNU setsid fork path"
-  grep -Fx 'as-forked' "$signaled/handshake-events" >/dev/null \
-    || fail "signal $signal did not run the opaque AS intermediary"
   grep -Fx 'ui-after-handshake' "$signaled/handshake-events" >/dev/null \
     || fail "signal $signal started the UI gate before its handshake"
   grep -Fx 'go-after-handshake' "$signaled/handshake-events" >/dev/null \
