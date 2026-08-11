@@ -1444,10 +1444,18 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.works_path = os.path.join(self.temporary.name, "works.json")
         self.events_path = os.path.join(
             self.temporary.name, "duplicate-root-prevented.json")
+        self.questions_path = os.path.join(self.temporary.name, "questions")
+        self.state_path = os.path.join(self.temporary.name, "state.json")
+        self.tasks_path = os.path.join(self.temporary.name, "tasks.json")
+        self.merges_path = os.path.join(self.temporary.name, "merges.jsonl")
+        os.makedirs(self.questions_path)
         self.patches = (
             mock.patch.object(pilot, "WORKS_PATH", self.works_path),
             mock.patch.object(
                 pilot, "DUPLICATE_ROOT_EVENTS_PATH", self.events_path),
+            mock.patch.object(pilot, "QUESTION_DIR", self.questions_path),
+            mock.patch.object(pilot, "STATE_PATH", self.state_path),
+            mock.patch.object(pilot, "MERGES_PATH", self.merges_path),
         )
         for patcher in self.patches:
             patcher.start()
@@ -1482,26 +1490,195 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             pilot.record_new_works(self.conf, list(reversed(tasks)),
                                    max_age_min=10_000_000)
         works = pilot.load(self.works_path, {})
-        events = pilot.load(self.events_path, {})
+        outbox = pilot.load(self.events_path, {})
+        events = outbox["events"]
+        event_id = "pilot_duplicate_root_prevented:" + correction["id"]
         self.assertEqual(list(works), [self.root["id"]])
         self.assertEqual(len({pilot.task_work_id(task) for task in tasks}), 1)
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[correction["id"]], {
+        self.assertEqual(events[event_id]["payload"], {
             "task_id": correction["id"], "work_id": self.root["id"],
             "parent_task_id": correction["parent_task_id"],
             "correction_kind": kind,
         })
+        self.assertEqual(outbox["acknowledged"], {event_id: True})
         prevented = [call for call in journal.call_args_list
                      if call.args and call.args[0] ==
                      "pilot_duplicate_root_prevented"]
         self.assertEqual(len(prevented), 1)
         self.assertFalse(any("Triage" in str(call) for call in journal.call_args_list))
 
-    def test_review_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("review_return")
+    def assert_full_cycle_survives_restart(self, kind):
+        for path in (self.works_path, self.events_path, self.state_path,
+                     self.tasks_path, self.merges_path):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        base = "Исправить корзину"
+        source_stage = "Review" if kind == "review_return" else "Verify"
+        source = {
+            "id": source_stage.lower() + "-failed", "work_id": self.root["id"],
+            "parent_task_id": "implement-original", "correction_kind": "",
+            "title": f"[auto] [{'4' if source_stage == 'Review' else '5'}/5 {source_stage}] {base}",
+            "state": "succeeded", "created_at": "2026-08-11T20:01:00Z",
+            "repository_id": "repo-id",
+        }
+        tasks = [dict(self.root, repository_id="repo-id"), source]
+        pilot.save(self.works_path, {self.root["id"]: {
+            "origin": pilot.ORIGIN_OWNER, "base_title": base,
+        }})
+        question = {
+            "id": "answer-" + kind, "status": "answered", "answer": "Исправь",
+            "title": base, "stage": source_stage,
+            "resume_stage": "Implement + Test", "task_id": source["id"],
+            "repository_id": "repo-id", "question": "Исправлять?",
+            "prior_result": "REQUEST CHANGES",
+        }
+        pilot.save(os.path.join(self.questions_path, question["id"] + ".json"), question)
+        workflows = {stage: {"enabled": True, "revision_id": "rev-" + stage}
+                     for stage in ("Triage", "Specification", "Implement + Test",
+                                   "Review", "Verify")}
+        workers = {"worker": {"id": "worker-id", "name": "worker",
+                               "online": True, "health": "healthy",
+                               "capacity": 1, "active_count": 0}}
+        created = []
+        details = {source["id"]: {
+            "task": source, "workflow": {"title": source_stage},
+            "attempts": [{"result": "REQUEST CHANGES"}],
+        }}
 
-    def test_verify_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("verify_return")
+        def create(body, _conf=None):
+            parent = next(task for task in tasks if task["id"] == body["parent_task_id"])
+            task_id = "created-%d" % (len(created) + 1)
+            task = {
+                "id": task_id, "work_id": parent["work_id"],
+                "parent_task_id": parent["id"],
+                "correction_kind": body.get("correction_kind", ""),
+                "title": body["title"], "state": "queued",
+                "created_at": "2026-08-11T20:%02d:00Z" % (len(created) + 2),
+                "repository_id": "repo-id",
+            }
+            tasks.append(task)
+            stage = next(stage for stage in workflows if f" {stage}]" in task["title"])
+            details[task_id] = {"task": task, "workflow": {"title": stage},
+                                "context": body.get("context", ""), "attempts": []}
+            created.append(dict(body))
+            return {"task": task}
+
+        with mock.patch.object(pilot, "create_task", side_effect=create), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "notify"):
+            self.assertEqual(
+                pilot.handle_answers(self.conf, workflows, workers, tasks), 1)
+
+        correction = tasks[-1]
+        self.assertEqual(correction["correction_kind"], kind)
+        # A human edit makes the display title look exactly like a new root;
+        # persisted provenance must remain authoritative.
+        correction["title"] = "[auto] [1/5 Triage] Изменённое человеком имя"
+        pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+
+        # Persist API and Pilot state, then discard both in-memory snapshots.
+        pilot.save(self.tasks_path, tasks)
+        pilot.save(self.state_path, {"processed": [source["id"], self.root["id"]]})
+        tasks = pilot.load(self.tasks_path, [])
+        state = pilot.load(self.state_path, {})
+        correction = next(task for task in tasks
+                          if task.get("correction_kind") == kind)
+        correction["state"] = "succeeded"
+        details[correction["id"]]["task"] = correction
+        details[correction["id"]]["attempts"] = [{"result": (
+            "BRANCH: factory/correction\nHEAD: " + "a" * 40 + "\nCard: CARD-0086") }]
+        pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path.startswith("/tasks/"):
+                return details[path.rsplit("/", 1)[-1]]
+            if path == "/workers":
+                return {"workers": list(workers.values())}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                                           "remote_identity": "github.com/acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": stage, "enabled": True,
+                    "current_revision": {"id": data["revision_id"], "title": stage}}
+                    for stage, data in workflows.items()]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "budget_guard", "handle_epics", "reconcile_diag_repairs", "diag_sweep",
+            "rescue_queued", "supersede_stale_questions",
+            "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
+            "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
+            "record_implementation_artifact", "save_stage_verdict",
+            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+        )
+        notifications = mock.Mock()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "all_tasks", return_value=tasks))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot", return_value={
+                    pilot.calendar.timegm(time.strptime(
+                        time.strftime("%Y-%m-%d", time.gmtime()),
+                        "%Y-%m-%d")): {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "reason": "готово", "handoff": "",
+                "next_complexity": "medium"}))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(pilot, "review_gate", return_value={
+                "back": False, "branch": "factory/correction", "note": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "selected_delivery",
+                                                  return_value=("factory/correction", "a" * 40)))
+            stack.enter_context(mock.patch.object(pilot, "pushed_branch",
+                                                  return_value="factory/correction"))
+            stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+            merge = stack.enter_context(mock.patch.object(pilot, "gh_merge",
+                                                           return_value=(True, "merged")))
+            final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
+            stack.enter_context(mock.patch.object(pilot, "notify", notifications))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, state)
+            review = tasks[-1]
+            review["state"] = "succeeded"
+            details[review["id"]]["attempts"] = [{"result": "APPROVE"}]
+            pilot.cycle(self.conf, state)
+            verify = tasks[-1]
+            verify["state"] = "succeeded"
+            details[verify["id"]]["attempts"] = [{"result": "PASS\nTRY: none"}]
+            pilot.cycle(self.conf, state)
+
+        self.assertEqual(len([task for task in tasks if task["id"] == task["work_id"]]), 1)
+        self.assertEqual({task["work_id"] for task in tasks}, {self.root["id"]})
+        self.assertFalse(any(" Triage]" in body["title"] or " Specification]" in body["title"]
+                             for body in created))
+        self.assertEqual([body.get("correction_kind", "") for body in created],
+                         [kind, "", ""])
+        merge.assert_called_once_with("github.com/acme/repo", "factory/correction",
+                                      "Изменённое человеком имя")
+        final.assert_called_once_with(verify["id"], "Verify", True)
+        self.assertTrue(any(len(call.args) > 1 and call.args[1] == "Задача выполнена"
+                            for call in notifications.call_args_list),
+                        notifications.call_args_list)
+
+    def test_review_and_verify_corrections_complete_one_pipeline_after_restart(self):
+        for kind in ("review_return", "verify_return"):
+            with self.subTest(kind=kind):
+                self.assert_full_cycle_survives_restart(kind)
 
     def test_explicit_provenance_wins_over_auto_title(self):
         correction = self.correction("review_return")
@@ -1509,7 +1686,45 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         pilot.record_new_works(
             self.conf, [correction], max_age_min=10_000_000)
         self.assertEqual(pilot.load(self.works_path, {}), {})
-        self.assertEqual(len(pilot.load(self.events_path, {})), 1)
+        self.assertEqual(
+            len(pilot.load(self.events_path, {})["events"]), 1)
+
+    def test_duplicate_root_outbox_converges_at_every_crash_boundary(self):
+        correction = self.correction("review_return")
+        boundaries = (
+            "before_journal_append", "after_journal_append",
+            "before_acknowledgement", "after_acknowledgement",
+        )
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary):
+                try:
+                    os.unlink(self.events_path)
+                except FileNotFoundError:
+                    pass
+                crashed = False
+
+                def crash_once(name):
+                    nonlocal crashed
+                    if name == boundary and not crashed:
+                        crashed = True
+                        raise RuntimeError("simulated crash at " + name)
+
+                with mock.patch.object(
+                        pilot, "_duplicate_root_crash_boundary",
+                        side_effect=crash_once):
+                    with self.assertRaises(RuntimeError):
+                        pilot.note_duplicate_root_prevented(correction)
+                # A recreated process rediscovers the same task and replays
+                # the idempotent event from durable state.
+                pilot.note_duplicate_root_prevented(correction)
+                pilot.note_duplicate_root_prevented(correction)
+                outbox = pilot.load(self.events_path, {})
+                event_id = "pilot_duplicate_root_prevented:" + correction["id"]
+                self.assertEqual(list(outbox["events"]), [event_id])
+                self.assertEqual(list(outbox["acknowledged"]), [event_id])
+                self.assertEqual(
+                    outbox["events"][event_id]["event_type"],
+                    "pilot_duplicate_root_prevented")
 
     def test_child_builder_always_sends_parent_and_correction(self):
         sent = []

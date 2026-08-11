@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -445,11 +446,15 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("list migrations: %w", err)
 	}
 	sort.Slice(names, func(i, j int) bool { return names[i].Name() < names[j].Name() })
-	for version, entry := range names {
+	for _, entry := range names {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		v := version + 1
+		prefix, _, ok := strings.Cut(entry.Name(), "_")
+		v, parseErr := strconv.Atoi(prefix)
+		if !ok || parseErr != nil || v < 1 || fmt.Sprintf("%03d", v) != prefix {
+			return fmt.Errorf("invalid migration filename %q", entry.Name())
+		}
 		var exists int
 		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&exists); err != nil {
 			return fmt.Errorf("check migration %s: %w", entry.Name(), err)
