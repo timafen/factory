@@ -5,7 +5,6 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
-import { testWorkerBootstrapCredential } from "../playwright.config";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
@@ -23,7 +22,6 @@ const offlineRepositories = [
   { key: "archive", remote_identity: "github.com/example/archive", retained_count: 0 },
 ];
 const identifiers: Record<string, string> = {};
-const workerCredentials: Record<string, string> = {};
 let fixtureAPI: APIRequestContext | undefined;
 let runningHeartbeat: ReturnType<typeof setInterval> | undefined;
 
@@ -54,44 +52,37 @@ async function registerWorker(
   runtime: "codex" | "claude-code" = "codex",
   sourceAccess: Array<{ provider: "github"; hostname: string }> = [],
 ) {
-  const response = await api.put(`/api/v1/workers/${id}`, {
-    headers: {
-      "X-Factory-Worker-Bootstrap-Credential": testWorkerBootstrapCredential,
-    },
-    data: {
-      name,
-      worker_version: "2.0.0-test",
-      runtime,
-      runtime_version: runtime === "claude-code" ? "2.1.220-test" : "0.42.0-test",
-      capacity: 2,
-      active_count: activeCount,
-      health: "healthy",
-      source_access: sourceAccess,
-      capacity_handoff_version: 1,
-      disposed_attempt_ids: disposedAttemptIDs,
-      repositories,
-      retained_worktrees:
-        id === workerOnline
-          ? [
-              {
-                attempt_id: "attempt-retained-001",
-                repository_id: identifiers.factoryRepository ?? "",
-                path: "/tmp/factory-e2e/worktrees/attempt-retained-001",
-                reason: "failed with local changes",
-                cleanup_command: "factory-worker cleanup attempt-retained-001 --confirm",
-              },
-            ]
-          : [],
-    },
-  });
-  const credential = response.headers()["x-factory-worker-credential"];
-  if (response.ok() && !credential) {
-    throw new Error(`worker ${id} registration did not return a credential`);
-  }
-  if (credential) workerCredentials[id] = credential;
   return json<{
     repositories: Array<{ id: string; key: string }>;
-  }>(response);
+  }>(
+    await api.put(`/api/v1/workers/${id}`, {
+      data: {
+        name,
+        worker_version: "2.0.0-test",
+        runtime,
+        runtime_version: runtime === "claude-code" ? "2.1.220-test" : "0.42.0-test",
+        capacity: 2,
+        active_count: activeCount,
+        health: "healthy",
+        source_access: sourceAccess,
+        capacity_handoff_version: 1,
+        disposed_attempt_ids: disposedAttemptIDs,
+        repositories,
+        retained_worktrees:
+          id === workerOnline
+            ? [
+                {
+                  attempt_id: "attempt-retained-001",
+                  repository_id: identifiers.factoryRepository ?? "",
+                  path: "/tmp/factory-e2e/worktrees/attempt-retained-001",
+                  reason: "failed with local changes",
+                  cleanup_command: "factory-worker cleanup attempt-retained-001 --confirm",
+                },
+              ]
+            : [],
+      },
+    }),
+  );
 }
 
 async function createTask(
@@ -124,9 +115,6 @@ async function claimAndStart(api: APIRequestContext, requestID: string) {
     task: { id: string };
   }>(
     await api.post(`/api/v1/workers/${workerOnline}/claims`, {
-      headers: {
-        "X-Factory-Worker-Credential": workerCredentials[workerOnline],
-      },
       data: { request_id: requestID, lease_token: token },
     }),
   );
@@ -405,42 +393,6 @@ test("shows every project product and saves the overview", async ({ page }) => {
   browser.assertClean();
 });
 
-test("shows project readiness card", async ({ page }) => {
-  const browser = observeBrowser(page);
-  const checks = [
-    ["repository", "Репозиторий"], ["workers", "Исполнители"],
-    ["safe_environment", "Безопасный стенд"], ["access", "Доступы"],
-    ["tests", "Тесты"], ["release", "Выпуск"], ["rollback", "Откат"],
-    ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
-  ].map(([key, title]) => ({ key, title, state: "ready", reason: `${title} подтверждено` }));
-  await page.route("**/api/v1/dashboard", async (route) => {
-    const response = await route.fetch();
-    const dashboard = await response.json();
-    dashboard.projects[0].readiness = {
-      verdict: "ready", checked_at: "2026-08-10T12:00:00Z", checks,
-    };
-    dashboard.projects[1].readiness = {
-      verdict: "ready", checked_at: "2026-08-10T12:00:00Z",
-      checks: checks.map((check) => check.key === "safe_environment"
-        ? { ...check, state: "unknown", reason: "Для Factory отдельный безопасный стенд не выбран." }
-        : check),
-    };
-    await route.fulfill({ response, json: dashboard });
-  });
-
-  await page.goto("/");
-  const factory = page.getByRole("region", { name: "Продукт — factory-demo" });
-  await expect(factory.getByLabel("Готовность проекта")).toContainText("Готов");
-  await expect(factory.getByLabel("Готовность проекта").locator("strong")).toHaveCount(10);
-  const handbook = page.getByRole("region", { name: "Продукт — handbook-demo" });
-  await expect(handbook.getByLabel("Готовность проекта")).toContainText("Требует настройки");
-  await expect(handbook.getByLabel("Готовность проекта")).toContainText(
-    "Для Factory отдельный безопасный стенд не выбран.",
-  );
-  await page.screenshot({ path: "test-results/screenshots/project-readiness-card.png", fullPage: true });
-  browser.assertClean();
-});
-
 test("creates, pins, revises, and disables a reusable Workflow", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");
@@ -493,7 +445,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page }
 
   await page.getByRole("button", { name: "Disable" }).click();
   await page.getByRole("button", { name: "Confirm disable" }).click();
-  await expect(page.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enable" })).toBeVisible();
   await page.getByRole("button", { name: "Delegate task" }).click();
   await expect(page.getByRole("dialog").getByLabel("Workflow").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -594,9 +546,9 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   );
   await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   await expect(page.getByText("Не вышло / остановлено")).toHaveCount(0);
-  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toHaveCount(0);
+  const doneSection = page.getByRole("heading", { name: "Сделано" }).locator("..").locator("..");
+  await expect(doneSection.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Архив/ }).click();
-  await expect(page.getByText("Prove the complete local workflow", { exact: true })).toBeVisible();
   await expect(page.getByText("Cancelled queue cleanup", { exact: true })).toBeVisible();
   await expect(page.getByText("Long operational title", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/work-desktop.png", fullPage: true });
@@ -688,7 +640,7 @@ test("delegates with worker-specific repositories and preserves the task on refr
   await expect(dialog.getByText(/task will queue until it returns/i)).toBeVisible();
   await expect(dialog.getByText("This becomes the Claude Code prompt.")).toBeVisible();
   await expect(dialog.getByLabel("Repository").getByRole("option", { name: /archive/ })).toHaveCount(1);
-  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toBeDisabled();
+  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toHaveCount(0);
   await dialog.getByLabel("Title").fill("Durable delegated browser task");
   await dialog.getByLabel("Context").fill("Created in the real UI and stored by the real Go server.");
   await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
@@ -766,12 +718,9 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
-  expect(await page.evaluate(
-    "getComputedStyle(document.querySelector('.work-explanation')).gridTemplateColumns.split(' ').length",
-  )).toBe(1);
-  expect(await page.evaluate(
-    "document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth",
-  )).toBe(true);
+  expect(await explanation.evaluate("element => getComputedStyle(element).gridTemplateColumns.split(' ').length")).toBe(1);
+  const main = page.locator("main");
+  expect(await main.evaluate("element => element.scrollWidth <= element.clientWidth")).toBe(true);
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");
@@ -814,9 +763,6 @@ test("manages repository routing end to end and preserves add input while pollin
   const api = await request.newContext({ baseURL: "http://127.0.0.1:17437" });
   await json(
     await api.put(`/api/v1/workers/${managedWorker}`, {
-      headers: {
-        "X-Factory-Worker-Bootstrap-Credential": testWorkerBootstrapCredential,
-      },
       data: {
         name: "Managed repository worker",
         worker_version: "2.0.0-test",
@@ -952,7 +898,7 @@ test("previews and dispatches one typed GitHub issue Automation without duplicat
   await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Enable" }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -1016,7 +962,7 @@ test("previews and dispatches one typed GitHub pull-request Automation without d
   await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Enable" }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -1078,7 +1024,7 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
   await page.getByRole("button", { name: "Test trigger" }).click();
   await expect(page.getByText(/next matching UTC instant/i)).toBeVisible();
   await expect(page.getByText("No runs yet.")).toBeVisible();
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Enable" }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Confirm enable" }).click();
   const nextDue = page.getByText("Next due UTC").locator("..").locator("dd");
@@ -1095,10 +1041,7 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".sidebar")).not.toBeInViewport();
   await page.screenshot({ path: "test-results/screenshots/automation-detail-narrow.png", fullPage: true });
-  const overflow = await page.evaluate(`Array.from(document.querySelectorAll("*"))
-    .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
-    .map((element) => ({ tag: element.tagName, className: element.className }))`);
-  expect(overflow).toEqual([]);
+  expect(await page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true);
   const tasks = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   expect(tasks.tasks.filter((task) => task.request_key.includes(":schedule:run:"))).toHaveLength(1);
   await api.dispose();

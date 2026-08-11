@@ -107,7 +107,7 @@ describe("build", () => {
     });
   });
 
-  it("archives cancelled, closed, and inactive old attempts instead of calling them unfinished", () => {
+  it("archives cancelled and inactive old attempts while retaining successful completions", () => {
     const cancelled = build([task("cancelled", "Review", "cancelled", 1)], {}, [])[0];
     const closed = build([task("closed", "Review", "succeeded", 1)], {}, [], {
       "Экран Работа": { closed: "2026-08-08" },
@@ -117,10 +117,30 @@ describe("build", () => {
     }, [])[0];
 
     expect(cancelled.status.kind).toBe("archive");
-    expect(closed.status.kind).toBe("archive");
-    expect(sectionOf(closed)).toBe("archive");
+    expect(closed.status.kind).toBe("done");
+    expect(sectionOf(closed)).toBe("done");
     expect(inactiveRework.status).toMatchObject({
       kind: "archive", next: "Новый активный шаг в API не найден.",
     });
+  });
+
+  it("shows a successful standalone task in Done without a pipeline verdict", () => {
+    const completed = {
+      ...task("completed", "Implement + Test", "succeeded", 1),
+      title: "Prove the complete local workflow",
+    };
+    const standalone = build([completed], {}, [])[0];
+    const pipeline = build([task("verify", "Verify", "succeeded", 1)], {
+      verify: { final_pass: true },
+    }, [])[0];
+    const failedLastAttempt = build([
+      task("accepted", "Verify", "succeeded", 1),
+      task("failed", "Implement + Test", "failed", 2),
+    ], { accepted: { final_pass: true } }, [])[0];
+
+    expect(standalone.status).toMatchObject({ kind: "done", label: "работа завершена" });
+    expect(sectionOf(standalone)).toBe("done");
+    expect(pipeline.status).toMatchObject({ kind: "done", label: "работа принята" });
+    expect(sectionOf(failedLastAttempt)).toBe("archive");
   });
 });
