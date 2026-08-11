@@ -6611,6 +6611,8 @@ def cycle(conf, state):
                         # если и после этого не влилось — зовём хозяина.
                         if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
                             try:
+                                card = extract_card(result, detail.get("context", ""))
+                                card_line = f"Card: {card}\n" if card else ""
                                 stages_all = [x["workflow"] for x in conf["stages"]]
                                 back_st = "Implement + Test" if "Implement + Test" in stages_all else wf
                                 bidx = stages_all.index(back_st)
@@ -6620,7 +6622,8 @@ def cycle(conf, state):
                                     create_cap_rescue(base_title(title), "MERGE", {
                                         "request_key": str(uuid.uuid4()),
                                         "title": f"[auto] [{bidx+1}/{len(stages_all)} {back_st}] {base_title(title)}"[:200],
-                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n\n"
+                                        "context": (f"Pipeline: {base_title(title)}\nBranch: {branch}\n"
+                                            f"{card_line}\n"
                                             "Проверка прошла, но ветка НЕ влилась в main: конфликт слияния — "
                                             "пока работа шла, main уехал вперёд. ВЕТКУ НЕ ПЕРЕКЛЮЧАЙ, "
                                             "оставайся на своей. Сделай ровно это: "
