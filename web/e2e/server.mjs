@@ -235,6 +235,7 @@ const [factoryRepository, handbookRepository] = await Promise.all([
 
 await mkdir(workerData, { recursive: true });
 await mkdir(join(temporary, "server"), { recursive: true });
+await chmod(join(temporary, "server"), 0o700);
 await writeFile(
   join(temporary, "server", "worker-bootstrap-credential"),
   `${workerBootstrapCredential}\n`,
