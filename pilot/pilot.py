@@ -652,10 +652,6 @@ WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
 ORIGIN_OWNER = "owner"              # завёл человек: голосом или кнопкой
 ORIGIN_ASSISTANT = "assistant"      # завёл помощник из переписки
 ORIGIN_ORCHESTRATOR = "orchestrator"  # развернулось из эпика само
-WORK_ORIGINS = frozenset((
-    ORIGIN_OWNER, ORIGIN_ASSISTANT, ORIGIN_ORCHESTRATOR,
-    "worker", "agent", "patrol",
-))
 
 
 def note_duplicate_root_prevented(task):
@@ -3997,14 +3993,6 @@ def record_new_works(conf, tasks, max_age_min=180):
     if not stages:
         return
     known = load(WORKS_PATH, {})
-    # A Plan card already has the trustworthy author.  Do not overwrite it
-    # with "owner" merely because Pilot noticed the created task one tick
-    # before the normal note_work call completed.
-    planned_origins = {
-        base_title(item.get("title") or "").strip().casefold(): item.get("origin")
-        for item in ideas_all()
-        if item.get("origin") in WORK_ORIGINS and item.get("title")
-    }
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            time.gmtime(time.time() - max_age_min * 60))
     # Явно созданная владельцем новая live-задача после durable close — это
@@ -4061,29 +4049,15 @@ def record_new_works(conf, tasks, max_age_min=180):
         if not base or not n or key in known:
             continue
         if key not in first or n < first[key][0]:
-            first[key] = (n, t.get("created_at") or "", base,
-                          t.get("work_id") or "", t)
-    for _key, (n, _at, base, work_id, task) in first.items():
+            first[key] = (n, t.get("created_at") or "", base, t.get("work_id") or "")
+    for _key, (n, _at, base, work_id) in first.items():
         skipped = stages[: n - 1]
-        # The durable request key is the strongest evidence: an Automation ran
-        # the task even if an older Plan card for the same title says "owner".
-        if str(task.get("request_key") or "").startswith("automation:"):
-            origin = ORIGIN_ORCHESTRATOR
-        else:
-            origin = planned_origins.get(base.strip().casefold())
-        origin = origin or ORIGIN_OWNER
-        skipped_reason = {
-            ORIGIN_OWNER: "владелец завёл работу сразу с этого шага",
-            ORIGIN_ASSISTANT: "помощник завёл работу сразу с этого шага",
-            ORIGIN_ORCHESTRATOR: "Factory запустила работу сразу с этого шага",
-        }.get(origin, "Factory запустила работу по находке сразу с этого шага")
-        note_work(base, origin,
-                  stages[n - 1] if n <= len(stages) else "",
+        note_work(base, ORIGIN_OWNER, stages[n - 1] if n <= len(stages) else "",
                   skipped,
-                  skipped_reason if skipped else "",
+                  "владелец завёл работу сразу с этого шага" if skipped else "",
                   work_id=work_id)
         if skipped:
-            log(f"WORK ORIGIN base={base!r} origin={origin} начал с {stages[n - 1]}, "
+            log(f"WORK ORIGIN base={base!r} владелец начал с {stages[n - 1]}, "
                 f"пропущено: {', '.join(skipped)}")
 
 
