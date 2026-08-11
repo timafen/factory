@@ -224,10 +224,12 @@ base title хранится атрибутом. Поэтому рестарт, �
 
 ## Rollout, rollback и вне области
 
-До появления CARD-0085/026 в `main` эта ветка намеренно не подлежит merge или
-release. После снятия зависимости rollout: backup SQLite; миграция и control plane; API smoke root/child/read;
-Pilot binary; storm-тест на копии данных; проверка journal-события; только затем
-отдельное решение о включении после поставки safe release logic. При ошибке
+CARD-0085 migration 026 уже находится в `main`
+(`60cba840f39a453862c1c0f87f261fd453b09688`), поэтому 027 можно выпускать
+после review этой корректировки. Rollout: backup SQLite; миграция и control
+plane; API smoke root/child/read; Pilot binary; storm-тест на копии данных;
+проверка journal-события; только затем отдельное решение о включении после
+поставки safe release logic. При ошибке
 остановить Pilot и вернуть предыдущий бинарник, не удаляя migration 027.
 
 Вне области: включение Pilot, реализация безопасного release/rollback автомата,
@@ -238,7 +240,8 @@ Pilot binary; storm-тест на копии данных; проверка jour
 
 `knowledge/cards/CARD-0086-correction-provenance-single-pipeline.md`
 
-Реализация строгой коррекции: `aa05c7eb3c01e665609bc847b0f493f35edd10f9`.
+Реализация строгой коррекции:
+`7cd603288a2e666cb261248649fa3bba871f744a`.
 
 Номер 0086 выбран после `git fetch` и проверки свежего `origin/main` и всех
 опубликованных `factory/*`: предыдущий номер уже занят параллельной работой, а
