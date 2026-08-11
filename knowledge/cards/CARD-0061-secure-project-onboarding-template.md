@@ -4,10 +4,10 @@
 
 - Status: IMPLEMENTED — блокеры rollback и передачи секретов устранены.
 - Branch: `factory/4aa29ec7-ed9-5d65729b-035`.
-Implementation commit: 5e4a6d9ad9a110fb94b30a57c0a51c9ede5f6e10 — реализованы безопасные шаблоны, проверяемый rollback Tarser и закрытая передача секретов адаптеру.
+Implementation commit: 7fac53f6a3fc6734c45596a9303ebdb685649210 — Tarser выпускается фиксированной SHA-операцией с проверяемым rollback, секреты закрыто передаются адаптеру.
 - Specification: `knowledge/specs/secure-project-onboarding-template.md`.
-- What changed: Tarser подтверждает возврат сравнением цели `staging/current`,
-  а после ошибки health-check запускает фиксированный `fx staging rollback`.
+- What changed: Tarser выпускается через `fx staging release <SHA>`, подтверждает
+  возврат целью `staging/current`, а после сбоя запускает фиксированный rollback.
   Объявленные секреты получает только environment разрешённого процесса.
 - Evidence: `go test ./internal/controlplane -run 'Project|Secret|Adapter|Tarser' -count=1` → PASS;
   `npm --prefix web test -- --run src/Projects.test.tsx` → 2 PASS;
@@ -60,3 +60,10 @@ FQDN, а чтение secret-файла защищено от подмены п�
 Значения только объявленных секретов передаются environment разрешённого
 процесса и не попадают в API/SQLite; целевые Go/Vitest-тесты, vet, typecheck,
 lint и обе сборки прошли.
+
+### 2026-08-11 — Implement
+
+Финальная проверка реального интерфейса Tarser выявила несовместимость прямого
+`deploy-release` с Git SHA из API. Адаптер переведён на фиксированную серверную
+операцию `fx staging release <SHA>`; точные argv, секретное environment и оба
+пути подтверждения rollback повторно проверены целевыми Go-тестами, vet и build.
