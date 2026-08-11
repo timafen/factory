@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -300,6 +301,14 @@ func TestFactorySelfReleaseRunsOutsideServerAndRecoversAfterRestart(t *testing.T
 	recovered, err := store.ProjectOperation(context.Background(), restarted, project.ID, operation.ID)
 	if err != nil || recovered.Status != "succeeded" || !strings.Contains(recovered.Message, "survived the server restart") {
 		t.Fatalf("recovered operation=%+v err=%v", recovered, err)
+	}
+}
+
+func TestFactorySelfReleaseFailsClosedWhenExternalBrokerIsMissing(t *testing.T) {
+	runner := execProjectCommandRunner{releaseBrokerSocket: filepath.Join(t.TempDir(), "missing.sock")}
+	err := runner.StartDurable(context.Background(), "factory-project-release-1234567890abcdef1234567890abcdef", "/usr/local/bin/fx", []string{"factory", "release", projectSHA})
+	if err == nil || !strings.Contains(err.Error(), "POST /v1/releases") {
+		t.Fatalf("missing broker error = %v", err)
 	}
 }
 

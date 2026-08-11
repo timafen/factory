@@ -85,12 +85,15 @@ release-операции принимается за успешный тольк
 `fx staging rollback` и такое же сравнение. Production Tarser, универсальные
 shell/SSH-адаптеры и клиентский выбор группы в v1 отсутствуют.
 
-Self-release Factory не остаётся дочерним процессом `factory-server`. Узкие
-root-операции `fx factory release-job` и `release-job-status` запускают
-фиксированный `fx factory release <SHA>` отдельным transient systemd unit и
-возвращают только его безопасный статус. Имя unit выводится из сохранённого ID
-операции, поэтому новый процесс сервера после собственного рестарта восстанавливает
-итог без in-memory handle; значения секретов в unit environment не передаются.
+Self-release Factory не запускается дочерним процессом `factory-server`: unit
+сервера имеет `NoNewPrivileges=true`, поэтому текущий `fx` не может стать root и
+создать долговечный systemd job. Точная недостающая операция внешнего посредника:
+Unix socket `/run/factory/project-release-broker.sock`, `POST /v1/releases` с
+`operation_id` и `commit_sha`, затем `GET /v1/releases/{operation_id}` со
+статусом `running`, `succeeded` либо `failed`. Control-plane реализует только этот
+клиентский контракт и восстановление сохранённых операций при старте; если
+root-owned broker не установлен, release остаётся fail-closed и никакой дочерний
+процесс не запускается. Значения секретов в запрос посредника не передаются.
 
 Секретный resolver читает только
 `/etc/factory/projects/<project>/<environment>.env`; путь строится из

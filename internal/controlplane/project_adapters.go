@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -25,7 +29,19 @@ type projectDurableStatus struct {
 	Running bool
 	Success bool
 }
-type execProjectCommandRunner struct{}
+
+const defaultProjectReleaseBrokerSocket = "/run/factory/project-release-broker.sock"
+
+type execProjectCommandRunner struct{ releaseBrokerSocket string }
+
+type projectReleaseBrokerRequest struct {
+	OperationID string `json:"operation_id"`
+	CommitSHA   string `json:"commit_sha"`
+}
+
+type projectReleaseBrokerResponse struct {
+	Status string `json:"status"`
+}
 
 func projectAdapterBaselineEnvironment() []string {
 	return []string{
@@ -47,23 +63,19 @@ func (execProjectCommandRunner) Output(ctx context.Context, executable string, a
 	return command.Output()
 }
 
-func (execProjectCommandRunner) StartDurable(ctx context.Context, unit, executable string, args []string) error {
+func (runner execProjectCommandRunner) StartDurable(ctx context.Context, unit, executable string, args []string) error {
 	if executable != "/usr/local/bin/fx" || len(args) != 3 || args[0] != "factory" || args[1] != "release" || !validCommitSHA(args[2]) {
 		return errors.New("durable broker accepts only a fixed Factory release invocation")
 	}
-	command := exec.CommandContext(ctx, "/usr/local/bin/fx", "factory", "release-job", args[2], unit)
-	command.Env = projectAdapterBaselineEnvironment()
-	return command.Run()
+	return runner.callReleaseBroker(ctx, http.MethodPost, "/v1/releases", projectReleaseBrokerRequest{OperationID: unit, CommitSHA: args[2]}, nil)
 }
 
-func (execProjectCommandRunner) DurableStatus(ctx context.Context, unit string) (projectDurableStatus, error) {
-	command := exec.CommandContext(ctx, "/usr/local/bin/fx", "factory", "release-job-status", unit)
-	command.Env = projectAdapterBaselineEnvironment()
-	output, err := command.Output()
-	if err != nil {
+func (runner execProjectCommandRunner) DurableStatus(ctx context.Context, unit string) (projectDurableStatus, error) {
+	var response projectReleaseBrokerResponse
+	if err := runner.callReleaseBroker(ctx, http.MethodGet, "/v1/releases/"+url.PathEscape(unit), nil, &response); err != nil {
 		return projectDurableStatus{}, err
 	}
-	switch strings.TrimSpace(string(output)) {
+	switch response.Status {
 	case "running":
 		return projectDurableStatus{Running: true}, nil
 	case "succeeded":
@@ -73,6 +85,45 @@ func (execProjectCommandRunner) DurableStatus(ctx context.Context, unit string) 
 	default:
 		return projectDurableStatus{}, errors.New("durable release broker returned an unknown status")
 	}
+}
+
+func (runner execProjectCommandRunner) callReleaseBroker(ctx context.Context, method, path string, input, output any) error {
+	socket := runner.releaseBrokerSocket
+	if socket == "" {
+		socket = defaultProjectReleaseBrokerSocket
+	}
+	var body bytes.Buffer
+	if input != nil {
+		if err := json.NewEncoder(&body).Encode(input); err != nil {
+			return fmt.Errorf("encode external release broker request: %w", err)
+		}
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	request, err := http.NewRequestWithContext(ctx, method, "http://release-broker"+path, &body)
+	if err != nil {
+		return fmt.Errorf("create external release broker request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("external release broker operation %s %s is unavailable: %w", method, path, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("external release broker operation %s %s returned HTTP %d", method, path, response.StatusCode)
+	}
+	if output != nil {
+		decoder := json.NewDecoder(io.LimitReader(response.Body, protocol.MaxBodyBytes+1))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(output); err != nil {
+			return fmt.Errorf("decode external release broker response: %w", err)
+		}
+	}
+	return nil
 }
 
 type projectHealthChecker interface {
@@ -311,7 +362,7 @@ func (s *Store) RunProjectOperation(ctx context.Context, runner projectCommandRu
 	}
 	if kind == "release" && adapter == "fx-factory-release" {
 		if err := runner.StartDurable(ctx, factoryProjectOperationUnit(operation.ID), "/usr/local/bin/fx", []string{"factory", "release", request.CommitSHA}); err != nil {
-			return s.finishProjectOperation(ctx, operation, "rollback_failed", "external self-release could not be started")
+			return s.finishProjectOperation(ctx, operation, "rollback_failed", "external release broker POST /v1/releases is unavailable; self-release was not started")
 		}
 		operation.Message = "external self-release started; poll this operation after the server restart"
 		if _, err := s.db.ExecContext(ctx, `UPDATE project_operations SET message=?,updated_at=? WHERE id=?`, operation.Message, s.now().UnixMilli(), operation.ID); err != nil {
