@@ -2,13 +2,18 @@
 
 ## HEAD
 
-Implementation commit: 86f9d14f6247e3006980d0761bb7d1f068df4d64 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
+Implementation commit: c911b48c009d286ae2d82bff66a3565b96dd2c5f — после исчерпания возврата второй невалидный HEAD не запускает Implement.
 
 - Status: Implemented and tested — уникальные номера и строгий HEAD-gate исправлены.
-- Branch: `factory/39bed45d-49c-7c30a9dc-059`.
+- Branch: `factory/5b9cb945-2d5-c61f3f8a-cb6`.
 - What changed: после первого SPEC_HEAD rescue повторный missing/short/malformed HEAD безопасно останавливает переход в Implement; добавлен cycle test.
 - Evidence: `python3 -m unittest pilot.test_pilot.SpecificationBranchHandoffTests` → 18 tests, `OK`.
 - Next action: Провести независимый Review и слить ветку в `main`.
+
+### 2026-08-11 — Implement
+
+Обновлена доказательная регрессия для двух независимых Specification после конфликта
+нумерации карточек; implementation commit — `c911b48c009d286ae2d82bff66a3565b96dd2c5f`.
 
 ### 2026-08-11 — Implement
 
