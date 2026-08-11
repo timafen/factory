@@ -170,6 +170,102 @@ type SetManagedRepositoryEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+const (
+	ProjectTypeFactorySingleInstance   = "factory-single-instance"
+	ProjectTypeTarserOperationsStaging = "tarser-operations-staging"
+)
+
+type ProjectEnvironmentInput struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	HealthURL       string   `json:"health_url"`
+	Blocked         bool     `json:"blocked"`
+	ReleaseAdapter  string   `json:"release_adapter"`
+	RollbackAdapter string   `json:"rollback_adapter"`
+	RequiredSecrets []string `json:"required_secrets"`
+	WebHosts        []string `json:"web_hosts"`
+}
+
+type CreateProjectRequest struct {
+	Name           string                    `json:"name"`
+	RemoteIdentity string                    `json:"remote_identity"`
+	MainBranch     string                    `json:"main_branch"`
+	ProjectType    string                    `json:"project_type"`
+	RequiredChecks []string                  `json:"required_checks"`
+	Environments   []ProjectEnvironmentInput `json:"environments"`
+}
+
+type ProjectEnvironment struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	HealthURL       string   `json:"health_url"`
+	Blocked         bool     `json:"blocked"`
+	ReleaseAdapter  string   `json:"release_adapter"`
+	RollbackAdapter string   `json:"rollback_adapter"`
+	RequiredSecrets []string `json:"required_secrets"`
+	WebHosts        []string `json:"web_hosts"`
+}
+
+type Project struct {
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	RepositoryID   string               `json:"repository_id"`
+	RemoteIdentity string               `json:"remote_identity"`
+	MainBranch     string               `json:"main_branch"`
+	ProjectType    string               `json:"project_type"`
+	ExecutorGroup  string               `json:"executor_group"`
+	RequiredChecks []string             `json:"required_checks"`
+	Environments   []ProjectEnvironment `json:"environments"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
+}
+
+type ProjectGate struct {
+	Name      string    `json:"name"`
+	Ready     bool      `json:"ready"`
+	Reason    string    `json:"reason"`
+	CommitSHA string    `json:"commit_sha,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+}
+
+type ProjectSecretStatus struct {
+	Name    string `json:"name"`
+	Present bool   `json:"present"`
+}
+
+type ProjectReadiness struct {
+	Ready         bool                  `json:"ready"`
+	CommitSHA     string                `json:"commit_sha,omitempty"`
+	Gates         []ProjectGate         `json:"gates"`
+	Secrets       []ProjectSecretStatus `json:"secrets"`
+	RoutingReason string                `json:"routing_reason,omitempty"`
+}
+
+type ProjectGateResultRequest struct {
+	CommitSHA     string          `json:"commit_sha"`
+	BranchAccess  bool            `json:"branch_access"`
+	ExecutorReady bool            `json:"executor_ready"`
+	Checks        map[string]bool `json:"checks"`
+}
+
+type ProjectOperationRequest struct {
+	CommitSHA      string `json:"commit_sha"`
+	OwnerConfirmed bool   `json:"owner_confirmed,omitempty"`
+}
+
+type ProjectOperation struct {
+	ID             string    `json:"id"`
+	ProjectID      string    `json:"project_id"`
+	Environment    string    `json:"environment"`
+	Kind           string    `json:"kind"`
+	CommitSHA      string    `json:"commit_sha"`
+	Status         string    `json:"status"`
+	Message        string    `json:"message"`
+	OwnerConfirmed bool      `json:"owner_confirmed"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 type Worker struct {
 	ID                         string             `json:"id"`
 	Name                       string             `json:"name"`
