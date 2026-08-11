@@ -82,6 +82,36 @@ func TestExplicitConfigSelectionBypassesLegacyDefault(t *testing.T) {
 	}
 }
 
+func TestIdentityWithExplicitConfigDoesNotNeedHome(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "no-home-worker.toml")
+	if err := os.WriteFile(configPath, []byte(`name = "no-home-worker"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("FACTORY_DATA_HOME", "")
+	t.Setenv("FACTORY_WORKER_CONFIG", "")
+	t.Setenv("FACTORY_V2_DATA_HOME", "")
+	t.Setenv("FACTORY_V2_WORKER_CONFIG", "")
+
+	oldArgs, oldStdout := os.Args, os.Stdout
+	output, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Args = []string{"factory-worker", "identity", "-config", configPath}
+	os.Stdout = output
+	err = run()
+	os.Args, os.Stdout = oldArgs, oldStdout
+	closeErr := output.Close()
+	if err != nil {
+		t.Fatalf("identity with explicit config required HOME: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
 func TestConfigArgumentDetection(t *testing.T) {
 	flags := flag.NewFlagSet("test", flag.ContinueOnError)
 	flags.String("config", "/default.toml", "")
@@ -95,6 +125,8 @@ func TestConfigArgumentDetection(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"attempt-id", "--config", "/explicit.toml"},
 		{"attempt-id", "--config=/explicit.toml"},
+		{"attempt-id", "-config", "/explicit.toml"},
+		{"attempt-id", "-config=/explicit.toml"},
 	} {
 		if !cleanupConfigExplicit(arguments) {
 			t.Fatalf("cleanup config was not detected in %v", arguments)
