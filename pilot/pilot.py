@@ -4063,11 +4063,11 @@ def record_new_works(conf, tasks, max_age_min=180):
         if key not in first or n < first[key][0]:
             first[key] = (n, t.get("created_at") or "", base,
                           t.get("work_id") or "", t)
-    for _key, (n, _at, base, work_id, task) in first.items():
+    for _key, (n, _at, base, work_id, t) in first.items():
         skipped = stages[: n - 1]
         # The durable request key is the strongest evidence: an Automation ran
         # the task even if an older Plan card for the same title says "owner".
-        if str(task.get("request_key") or "").startswith("automation:"):
+        if str(t.get("request_key") or "").startswith("automation:"):
             origin = ORIGIN_ORCHESTRATOR
         else:
             origin = planned_origins.get(base.strip().casefold())
@@ -4081,6 +4081,7 @@ def record_new_works(conf, tasks, max_age_min=180):
                   stages[n - 1] if n <= len(stages) else "",
                   skipped,
                   skipped_reason if skipped else "",
+                    work_id=work_id)
                   work_id=work_id)
         if skipped:
             log(f"WORK ORIGIN base={base!r} origin={origin} начал с {stages[n - 1]}, "
