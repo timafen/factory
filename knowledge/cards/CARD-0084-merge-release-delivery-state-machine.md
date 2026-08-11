@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — исправления третьего строгого review готовы к повторной проверке.
-- Branch: `factory/4b80f667-aa4-f342742f-30a`.
+- Status: Implemented — terminal результат не подтверждается без надёжной записи.
+- Branch: `factory/2c29f61e-762-453fb329-76b`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 380e77b1223a16a6608134e3d002f0d9629988ad — retry после `rc=8` сохраняет неизменный adapter/target и реальные crash boundaries.
-- What changed: Broker принимает новый SHA того же delivery id только при том же adapter/target; rollback и чужой target атомарно отклоняются.
-- What changed: Реальный FX PID и terminal phase сохраняются до recovery; отдельные Pilot-процессы проверяют post/wrapper_status/pid/running/terminal без ручной подмены phase.
-- Evidence: `python3 -m unittest pilot.test_pilot` → OK (208, 13 skipped); `go test -race ./internal/releasebroker` → OK; обе shell fixture → OK; `just check` → passed.
-- Next action: Review проверить неизменность retry и process-level evidence CARD-0084.
+- Implementation commit: 2c15afeb71f813f72de700105f5447e4dc600aca — terminal status публикуется только после успешного persist.
+- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
+- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
+- Evidence: `go test -race ./internal/releasebroker` → OK; process crash/restart regression → OK (2); полный Pilot → OK (209, 13 skipped); обе shell fixture → PASS; `just check` → passed; `git diff --check` → passed.
+- Next action: Strict Review проверить fail-closed terminal persistence CARD-0084.
 
 ## LOG
 
@@ -45,3 +45,10 @@ Third strict-review correction keeps adapter and derived target immutable after
 The process fixture now exits a real Pilot after every durable delivery boundary,
 recovers against the built Unix broker and physical FX, and proves failed terminals
 cannot create receipts, finalization, or owner completion.
+
+### 2026-08-11 — Implement
+
+Terminal and restart-recovery states are now published only after the matching
+operation record is persisted. A real filesystem write failure followed by a
+fresh broker and Pilot process proves one physical delivery, durable fail-closed
+recovery, and no receipt, outbox, finalization or owner completion.
