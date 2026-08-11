@@ -1,8 +1,10 @@
 # CARD-0048 — Санитар убирает фантомные worktree остановленного Claude-воркера
 
+Implementation commit: dd4990781ac69cf867eed7d159278e4248a3b51f — внутреннее подтверждение очистки retained worktree принимает запросы только с loopback.
+
 ## HEAD
 
-- Status: Implemented — awaiting human merge
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/47f4cd8b-10f-cac304a5-7fd`
 - Implementation commit: dd4990781ac69cf867eed7d159278e4248a3b51f — внутреннее
   подтверждение очистки retained worktree принимает запросы только с loopback.
@@ -11,7 +13,8 @@
   снимки после карантина; новый маршрут теперь защищён прямым loopback-доступом,
   поэтому внешний запрос не может снять retained worktree.
 - Evidence: `go test ./internal/controlplane` — PASS; `bash
-  ops/test-factory-janitor.sh` — PASS.
+  ops/test-factory-janitor.sh` — PASS. Полный `just check` дошёл до Go-тестов;
+  единственный сбой — несвязанный `internal/worker.TestLostClaimAndCompletionResponsesAreIdempotent`.
 - Next action: человеку влить ветку в `main`.
 
 ## LOG
@@ -63,3 +66,18 @@
 ветки. В этой ветке loopback-защиту маршрута добавляет
 `dd4990781ac69cf867eed7d159278e4248a3b51f`; хеш является предком ветки и меняет
 `internal/controlplane/http.go` вместе с его тестом.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Forwarded-запрос не очищает запись | `TestHTTPClearRetainedWorktreesRequiresDirectLoopback` | PASS: ответ 403 до обработки payload. |
+| Прямой loopback сохраняет очистку | `go test ./internal/controlplane`; `bash ops/test-factory-janitor.sh` | PASS: точный snapshot снимается после карантина. |
+| Санитар использует внутренний маршрут | `bash ops/test-factory-janitor.sh` | PASS: POST идёт на `/api/v1/workers/worker-1/retained-worktrees/clear`. |
+| Смежные гарантии очистки | целевые `TestClearRetainedWorktrees…` | PASS: terminal task разблокируется, несовпавший snapshot сохранён. |
+
+Полный запуск с чистыми UI-зависимостями: `just ui-install`, `just ui-build 0`,
+`just build`, `just test-tooling`, `just test-release`, `just check`. Он остановился
+на ранее существующем несвязанном флапе
+`internal/worker.TestLostClaimAndCompletionResponsesAreIdempotent`; целевые проверки
+данного изменения прошли.

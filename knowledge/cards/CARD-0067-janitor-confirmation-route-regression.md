@@ -4,8 +4,8 @@ Implementation commit: 711a2b6b5e319151d53d4f6856ab8f3897d15828 — shell-про
 
 ## HEAD
 
-- Status: Implemented — awaiting human merge
-- Branch: `factory/a979ad6e-1d0-5ca0fe0d-b50`
+- Status: Verified PASS — awaiting human merge
+- Branch: `factory/47f4cd8b-10f-cac304a5-7fd`
 - Implementation commit: 711a2b6b5e319151d53d4f6856ab8f3897d15828 — shell-проверка
   подтверждает точный внутренний маршрут очистки retained worktree.
 - What changed: изолированный сценарий санитара проверяет не только снимок
@@ -22,3 +22,14 @@ Implementation commit: 711a2b6b5e319151d53d4f6856ab8f3897d15828 — shell-про
 `/api/v1/workers/worker-1/retained-worktrees/clear`. Это не даст санитару
 незаметно подтвердить карантин через неверный внутренний маршрут. Целевой shell
 тест и тесты control plane проходят.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Адрес подтверждения точен | `bash ops/test-factory-janitor.sh` | PASS: мок API зафиксировал `/api/v1/workers/worker-1/retained-worktrees/clear`. |
+| Внешний forwarded-запрос отклонён | `go test ./internal/controlplane -run TestHTTPClearRetainedWorktreesRequiresDirectLoopback` | PASS: 403. |
+| Очистка не регрессировала | `go test ./internal/controlplane` | PASS. |
+
+Полный `just check` остановился только на несвязанном флапе worker-интеграции;
+проверки маршрута и очистки прошли.
