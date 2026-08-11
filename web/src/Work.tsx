@@ -15,7 +15,7 @@ const STAGE_RU: Record<string, string> = {
 
 type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  // Где владельцу открыть сделанное и посмотреть.
-                 try_url?: string; proof?: string;
+                 try_url?: string; proof?: string; return_reason?: string;
 };
 type Question = { task_id?: string; status?: string; question?: string };
 type HistoryEntry = { task_id: string; text: string };
@@ -169,7 +169,8 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const waiting = g.items.find((i) => openQ.has(i.task.id));
     const noWorker = g.items.find((i) => noWorkerQ.has(i.task.id));
     const passed = g.items.some((i) => i.verdict?.final_pass === true);
-    const rework = g.items.some((i) => i.verdict?.final_pass === false);
+    const rework = g.items.some((i) => i.verdict?.final_pass === false
+      || (i.stage === "Review" && i.verdict?.action === "stop"));
     // Сорвалась — только если сорвалась ПОСЛЕДНЯЯ попытка. Одна упавшая
     // стадия в середине истории не делает всю работу проваленной:
     // её могли перезапустить и довести.
@@ -700,6 +701,11 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
                 {stage ? STAGE_RU[stage] ?? stage : "—"}
               </span>
               <Pill text={label} tone={tone as keyof typeof TONE} />
+              {stage === "Review" && verdict?.action === "stop" && verdict.return_reason && (
+                <span style={{ color: "#e0cf9f", flexBasis: "100%", paddingLeft: 120 }}>
+                  Причина возврата: {verdict.return_reason}
+                </span>
+              )}
               {history[task.id] && <span style={{ color: muted }}>{history[task.id]}</span>}
               <span style={{ color: muted }}>
                 {workerMap.get(task.worker_id)?.name ?? "—"} · {timeAgo(task.created_at)}

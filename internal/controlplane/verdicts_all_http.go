@@ -38,8 +38,19 @@ func (a *API) listVerdicts(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(data, &rec); err != nil {
 			continue
 		}
-		// the long Russian explanation is not needed for the board
+		// A stopped Review sends the work back. Keep one compact explanation
+		// per task so repeated laps remain understandable on the Work board.
+		// Older records predate the short reason and fall back to the verdict.
+		if rec["stage"] == "Review" && rec["action"] == "stop" {
+			if reason, ok := rec["reason"].(string); ok && strings.TrimSpace(reason) != "" {
+				rec["return_reason"] = reason
+			} else if verdict, ok := rec["verdict"].(string); ok && strings.TrimSpace(verdict) != "" {
+				rec["return_reason"] = verdict
+			}
+		}
+		// Long explanations and generic routing reasons are not needed by the board.
 		delete(rec, "verdict")
+		delete(rec, "reason")
 		out[strings.TrimSuffix(e.Name(), ".json")] = rec
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"verdicts": out})

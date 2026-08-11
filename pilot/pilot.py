@@ -1351,6 +1351,30 @@ def mark_final(task_id, stage, passed):
         log("mark_final_error", repr(e))
 
 
+def save_stage_verdict(task_id, stage, verdict, result, repo_id=""):
+    """Save the compact board record for a completed pipeline stage.
+
+    Review return reasons must survive subsequent repair laps: the Work board
+    uses one record per task to explain why every lap was sent back.
+    """
+    rec = {"task_id": task_id, "stage": stage,
+           "verdict": verdict["verdict_ru"],
+           "action": verdict["action"]}
+    reason = str(verdict.get("reason") or "").strip()
+    if reason:
+        rec["reason"] = reason[:1000]
+    seen = try_url(result, repo_id)
+    if seen and any(u in seen for u in TRY_USELESS):
+        seen = ""
+    if seen:
+        rec["try_url"] = seen
+    pf = proof_of(result)
+    if pf:
+        rec["proof"] = pf
+    os.makedirs(VERDICT_DIR, exist_ok=True)
+    save(f"{VERDICT_DIR}/{task_id}.json", rec)
+
+
 def final_ok(task_id, strict=False):
     """Прошла ли финальная проверка по существу.
 
@@ -6084,21 +6108,9 @@ def cycle(conf, state):
         log(f"decision task={tid} stage={wf} action={verdict['action']} reason={verdict.get('reason','')}")
         if verdict.get("verdict_ru"):
             try:
-                os.makedirs(VERDICT_DIR, exist_ok=True)
-                rec = {"task_id": tid, "stage": wf,
-                       "verdict": verdict["verdict_ru"],
-                       "action": verdict["action"]}
-                # Ссылка живёт рядом с итогом: экран показывает её только там,
-                # где написано «сделано».
-                seen = try_url(result, detail["task"].get("repository_id") or "")
-                if seen and any(u in seen for u in TRY_USELESS):
-                    seen = ""     # страница «ok» — не дверь к результату
-                if seen:
-                    rec["try_url"] = seen
-                pf = proof_of(result)
-                if pf:
-                    rec["proof"] = pf
-                save(f"{VERDICT_DIR}/{tid}.json", rec)
+                save_stage_verdict(
+                    tid, wf, verdict, result,
+                    detail["task"].get("repository_id") or "")
             except Exception as e:
                 log("verdict_save_error", repr(e))
 
