@@ -1,10 +1,12 @@
-import { closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
+import { createHash, X509Certificate } from "node:crypto";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createE2EServerAddress,
   createPlaywrightConfig,
+  httpsFixtureCertificate,
   serverBrowserLaunchOptions,
   testWorkerBootstrapCredential,
 } from "../playwright.config";
@@ -29,28 +31,85 @@ describe("server browser launcher", () => {
     closeSync(openSync(launcher, "w"));
 
     expect(serverBrowserLaunchOptions(launcher)).toEqual({
+      args: [
+        `--ignore-certificate-errors-spki-list=${httpsFixtureCertificate.spkiSHA256}`,
+      ],
       executablePath: launcher,
       chromiumSandbox: true,
     });
   });
 
-  it("leaves ordinary development and CI Playwright discovery unchanged", () => {
-    expect(serverBrowserLaunchOptions("/missing/factory-browser-sandbox")).toBeUndefined();
+  it("trusts only the HTTPS fixture certificate with the default Chromium", () => {
+    const certificate = new X509Certificate(
+      readFileSync(httpsFixtureCertificate.certificatePath),
+    );
+    expect(certificate.checkIP("127.0.0.1")).toBe("127.0.0.1");
+    expect(
+      createHash("sha256")
+        .update(certificate.publicKey.export({ type: "spki", format: "der" }))
+        .digest("base64"),
+    ).toBe(httpsFixtureCertificate.spkiSHA256);
+    expect(process.env.FACTORY_E2E_TLS_KEY).toBe(httpsFixtureCertificate.keyPath);
+    expect(process.env.FACTORY_E2E_TLS_CERTIFICATE).toBe(
+      httpsFixtureCertificate.certificatePath,
+    );
+    expect(serverBrowserLaunchOptions("/missing/factory-browser-sandbox")).toEqual({
+      args: [
+        `--ignore-certificate-errors-spki-list=${httpsFixtureCertificate.spkiSHA256}`,
+      ],
+    });
+    expect(serverBrowserLaunchOptions("/missing/factory-browser-sandbox").args).not.toContain(
+      "--ignore-certificate-errors",
+    );
   });
 });
 
 describe("browser fixture server address", () => {
+  it("extends the cold fixture setup timeout inside its beforeAll hook", () => {
+    const specification = readFileSync(
+      join(process.cwd(), "e2e/control-plane.spec.ts"),
+      "utf8",
+    );
+
+    expect(specification).toMatch(
+      /test\.beforeAll\(async \(\{ baseURL \}\) => \{\s+test\.setTimeout\(120_000\);/,
+    );
+  });
+
   it("uses an explicit valid port for every Playwright consumer", async () => {
     const config = await createPlaywrightConfig("24567");
     const reloadedConfig = await createPlaywrightConfig(process.env.FACTORY_E2E_PORT);
 
-    expect(config.use?.baseURL).toBe("http://127.0.0.1:24567");
+    expect(config.use?.baseURL).toBe("https://127.0.0.1:24567");
     expect(reloadedConfig.use?.baseURL).toBe(config.use?.baseURL);
-    expect(config.webServer).toMatchObject({
+    expect(config.use?.ignoreHTTPSErrors).toBeUndefined();
+    const webServer = Array.isArray(config.webServer) ? config.webServer[0] : config.webServer;
+    expect(webServer).toMatchObject({
       command: "node e2e/server.mjs",
-      url: "http://127.0.0.1:24567/healthz",
-      env: { FACTORY_E2E_PORT: "24567" },
+      env: {
+        FACTORY_E2E_PORT: "24567",
+        FACTORY_E2E_TLS_KEY: httpsFixtureCertificate.keyPath,
+        FACTORY_E2E_TLS_CERTIFICATE: httpsFixtureCertificate.certificatePath,
+      },
     });
+    const backendPort = webServer?.env?.FACTORY_E2E_BACKEND_PORT;
+    expect(backendPort).toMatch(/^[0-9]+$/);
+    expect(webServer?.url).toBe(`http://127.0.0.1:${backendPort}/healthz`);
+  });
+
+  it("keeps intercepted HTTPS requests in Chromium and captures sanitized proxy headers", () => {
+    const specification = readFileSync(
+      join(process.cwd(), "e2e/control-plane.spec.ts"),
+      "utf8",
+    );
+    const fixtureServer = readFileSync(join(process.cwd(), "e2e/server.mjs"), "utf8");
+
+    expect(specification).not.toContain("route.fetch(");
+    expect(specification).toContain("route.continue({");
+    expect(specification).toContain('"x-factory-e2e-backend-forwarded-host"');
+    expect(fixtureServer).toContain('responseHeaders["x-factory-e2e-client-origin"]');
+    expect(fixtureServer).toContain('responseHeaders["x-factory-e2e-backend-forwarded-host"]');
+    expect(fixtureServer).not.toContain("NODE_TLS_REJECT_UNAUTHORIZED");
   });
 
   it.each(["", "0", "65536", "12.5", "not-a-port"]) (
@@ -71,7 +130,9 @@ describe("browser fixture server address", () => {
     expect(first.port).toBeGreaterThan(0);
     expect(first.port).toBeLessThanOrEqual(65_535);
     expect(second.port).not.toBe(first.port);
-    expect(first.origin).toBe(`http://127.0.0.1:${first.port}`);
-    expect(second.origin).toBe(`http://127.0.0.1:${second.port}`);
+    expect(first.backendPort).not.toBe(first.port);
+    expect(second.backendPort).not.toBe(second.port);
+    expect(first.origin).toBe(`https://127.0.0.1:${first.port}`);
+    expect(second.origin).toBe(`https://127.0.0.1:${second.port}`);
   });
 });

@@ -2,6 +2,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -9,6 +10,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer as createHTTPSServer } from "node:https";
+import { request as proxyRequest } from "node:http";
 
 const root = resolve(import.meta.dirname, "../..");
 const temporary = await mkdtemp(join(tmpdir(), "factory-ui-e2e-"));
@@ -24,6 +27,9 @@ const legacyLedger = join(legacyRoot, "poller", "poller.sqlite3");
 const workerID = "11111111-1111-4111-8111-111111111111";
 const workerBootstrapCredential = process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL;
 const e2ePortValue = process.env.FACTORY_E2E_PORT;
+const e2eBackendPortValue = process.env.FACTORY_E2E_BACKEND_PORT;
+const pausedHTTPSWork = "HTTPS proxy resumes paused work";
+const completedHTTPSWork = "HTTPS proxy clears completed pause";
 
 if (!workerBootstrapCredential) {
   throw new Error("FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL is required");
@@ -35,7 +41,15 @@ const e2ePort = Number(e2ePortValue);
 if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65_535) {
   throw new Error("FACTORY_E2E_PORT must be an integer from 1 to 65535");
 }
-const e2eServerAddress = `127.0.0.1:${e2ePort}`;
+if (!e2eBackendPortValue || !/^[0-9]+$/.test(e2eBackendPortValue)) {
+  throw new Error("FACTORY_E2E_BACKEND_PORT must be an integer from 1 to 65535");
+}
+const e2eBackendPort = Number(e2eBackendPortValue);
+if (!Number.isSafeInteger(e2eBackendPort) || e2eBackendPort < 1 || e2eBackendPort > 65_535 || e2eBackendPort === e2ePort) {
+  throw new Error("FACTORY_E2E_BACKEND_PORT must be a distinct integer from 1 to 65535");
+}
+const e2eProxyAddress = `127.0.0.1:${e2ePort}`;
+const e2eServerAddress = `127.0.0.1:${e2eBackendPort}`;
 const e2eServerOrigin = `http://${e2eServerAddress}`;
 
 function run(command, args, options = {}) {
@@ -252,6 +266,7 @@ await writeFile(
   { mode: 0o600 },
 );
 await mkdir(join(temporary, "pilot"), { recursive: true });
+await mkdir(join(temporary, "pilot", "verdicts"), { recursive: true });
 await writeFile(join(temporary, "pilot", "dashboard.json"), JSON.stringify({
   updated_at: "2026-08-09T12:00:00Z",
   projects: [
@@ -298,10 +313,10 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
   owner_ui_url: "https://example.test/ui",
   stages: pilotStages.map((workflow) => ({
     workflow,
-    workers: { low: workerID, medium: workerID, high: workerID },
+    workers: { low: "Real local worker", medium: "Real local worker", high: "Real local worker" },
   })),
   skip_stages_for_low: ["Review"],
-  stopped_pipelines: [],
+  stopped_pipelines: [pausedHTTPSWork, completedHTTPSWork],
   stage_base_usd: Object.fromEntries(pilotStages.map((stage) => [stage, 1])),
   complexity_factor: { low: 1, medium: 2, high: 3 },
   work_cap_usd: { low: 2, medium: 4, high: 8 },
@@ -310,6 +325,12 @@ await writeFile(join(temporary, "pilot", "config.json"), JSON.stringify({
     { remote_identity: "github.com/example/factory", type: "factory" },
   ],
   brain_chain: [{ cli: "codex", model: "gpt", provider: "openai", note: "first" }],
+}, null, 2));
+await writeFile(join(temporary, "pilot", "work_status.json"), JSON.stringify({
+  [pausedHTTPSWork]: {
+    state: "stopped_owner",
+    text: "Пауза для проверки возобновления через HTTPS-прокси.",
+  },
 }, null, 2));
 await writeFile(join(workerData, "worker-id"), `${workerID}\n`, { mode: 0o600 });
 await writeFile(
@@ -341,6 +362,62 @@ const server = spawn(
     stdio: "inherit",
   },
 );
+
+const proxyKey = process.env.FACTORY_E2E_TLS_KEY;
+const proxyCertificate = process.env.FACTORY_E2E_TLS_CERTIFICATE;
+if (!proxyKey || !proxyCertificate) {
+  throw new Error("FACTORY_E2E_TLS_KEY and FACTORY_E2E_TLS_CERTIFICATE are required");
+}
+
+// This is deliberately a real TLS hop, not a mocked Origin header. It strips
+// client-supplied forwarding metadata before adding the one trusted loopback
+// view that the control plane accepts.
+const tlsProxy = createHTTPSServer({
+  key: await readFile(proxyKey),
+  cert: await readFile(proxyCertificate),
+}, (clientRequest, clientResponse) => {
+  const headers = { ...clientRequest.headers };
+  for (const header of ["forwarded", "x-forwarded-for", "x-real-ip", "x-forwarded-host", "x-forwarded-proto"]) {
+    delete headers[header];
+  }
+  headers.host = e2eServerAddress;
+  headers["x-forwarded-host"] = clientRequest.headers.host ?? e2eProxyAddress;
+  headers["x-forwarded-proto"] = "https";
+  const upstream = proxyRequest({
+    host: "127.0.0.1",
+    port: e2eBackendPort,
+    method: clientRequest.method,
+    path: clientRequest.url,
+    headers,
+  }, (upstreamResponse) => {
+    const responseHeaders = { ...upstreamResponse.headers };
+    if (clientRequest.method === "POST" && clientRequest.url === "/api/v1/works/resume") {
+      const capturedHeader = (value) => Array.isArray(value) ? value.join(", ") : value ?? "<absent>";
+      responseHeaders["x-factory-e2e-client-origin"] = capturedHeader(clientRequest.headers.origin);
+      responseHeaders["x-factory-e2e-client-forwarded"] = capturedHeader(clientRequest.headers.forwarded);
+      responseHeaders["x-factory-e2e-client-forwarded-host"] = capturedHeader(clientRequest.headers["x-forwarded-host"]);
+      responseHeaders["x-factory-e2e-client-forwarded-proto"] = capturedHeader(clientRequest.headers["x-forwarded-proto"]);
+      responseHeaders["x-factory-e2e-backend-origin"] = capturedHeader(headers.origin);
+      responseHeaders["x-factory-e2e-backend-forwarded"] = capturedHeader(headers.forwarded);
+      responseHeaders["x-factory-e2e-backend-forwarded-for"] = capturedHeader(headers["x-forwarded-for"]);
+      responseHeaders["x-factory-e2e-backend-real-ip"] = capturedHeader(headers["x-real-ip"]);
+      responseHeaders["x-factory-e2e-backend-forwarded-host"] = capturedHeader(headers["x-forwarded-host"]);
+      responseHeaders["x-factory-e2e-backend-forwarded-proto"] = capturedHeader(headers["x-forwarded-proto"]);
+    }
+    clientResponse.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+    upstreamResponse.pipe(clientResponse);
+  });
+  upstream.on("error", () => {
+    if (!clientResponse.headersSent) clientResponse.writeHead(502);
+    clientResponse.end("HTTPS proxy could not reach the control plane");
+  });
+  clientRequest.pipe(upstream);
+});
+await new Promise((resolveProxy, rejectProxy) => {
+  tlsProxy.once("error", rejectProxy);
+  tlsProxy.listen(e2ePort, "127.0.0.1", resolveProxy);
+});
+
 const worker = spawn(
   workerBinary,
   ["--config", workerConfig],
@@ -356,6 +433,82 @@ const worker = spawn(
   },
 );
 
+async function serverJSON(path, init = {}) {
+  const response = await fetch(`${e2eServerOrigin}${path}`, init);
+  if (!response.ok) throw new Error(`fixture API ${path} returned ${response.status}: ${await response.text()}`);
+  return response.json();
+}
+
+async function waitForFixtureWorker() {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      const body = await serverJSON("/api/v1/workers");
+      const worker = body.workers?.find((candidate) => candidate.id === workerID);
+      if (worker?.online && worker.health === "healthy") return worker;
+    } catch {
+      // The Go listener and worker registration start independently.
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error("HTTPS proxy fixture worker did not become healthy");
+}
+
+async function waitForFixtureTask(taskID) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const detail = await serverJSON(`/api/v1/tasks/${taskID}`);
+    if (detail.task.state === "succeeded") return detail;
+    if (detail.task.state === "failed" || detail.task.state === "cancelled") {
+      throw new Error(`HTTPS proxy fixture task ${taskID} ended ${detail.task.state}`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error(`HTTPS proxy fixture task ${taskID} did not finish`);
+}
+
+async function createHTTPSProxyFixture() {
+  const realWorker = await waitForFixtureWorker();
+  const repository = realWorker.repositories.find((candidate) => candidate.key === "factory-demo");
+  if (!repository) throw new Error("HTTPS proxy fixture could not find factory-demo repository");
+  const revisions = new Map();
+  for (const stage of pilotStages) {
+    const workflow = await serverJSON("/api/v1/workflows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_key: `https-proxy-${stage}`, title: stage,
+        summary: `HTTPS proxy fixture for ${stage}`,
+        instructions: `Complete ${stage} for the HTTPS proxy browser fixture.`,
+      }),
+    });
+    revisions.set(stage, workflow.workflow.current_revision.id);
+  }
+  let sequence = 0;
+  async function completeStage(base, stage) {
+    sequence += 1;
+    const created = await serverJSON("/api/v1/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_key: `https-proxy-${sequence}`,
+        title: `[auto] [${pilotStages.indexOf(stage) + 1}/${pilotStages.length} ${stage}] ${base}`,
+        context: "A deterministic pipeline history for HTTPS reverse-proxy proof.",
+        worker_id: workerID,
+        repository_id: repository.id,
+        timeout_seconds: 60,
+        workflow_revision_id: revisions.get(stage),
+      }),
+    });
+    const detail = await waitForFixtureTask(created.task.id);
+    if (stage === "Review" || stage === "Verify") {
+      await writeFile(join(temporary, "pilot", "verdicts", `${detail.task.id}.json`), JSON.stringify({ action: "advance" }));
+    }
+  }
+  await completeStage(pausedHTTPSWork, "Triage");
+  for (const stage of pilotStages) await completeStage(completedHTTPSWork, stage);
+}
+
+await createHTTPSProxyFixture();
+
 let stopping = false;
 async function stopChild(child, signal) {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -365,10 +518,15 @@ async function stopChild(child, signal) {
   });
 }
 
+async function stopProxy() {
+  await new Promise((resolveStop) => tlsProxy.close(resolveStop));
+}
+
 async function stop(signal = "SIGTERM", exitCode = 0) {
   if (stopping) return;
   stopping = true;
   await stopChild(worker, signal);
+  await stopProxy();
   await stopChild(server, signal);
   await rm(temporary, { recursive: true, force: true });
   await rm(legacyRoot, { recursive: true, force: true });

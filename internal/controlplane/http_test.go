@@ -1001,6 +1001,19 @@ func TestValidateListenAddressRejectsPublicBindingsAndExternalHostnames(t *testi
 			t.Errorf("%s should be rejected", address)
 		}
 	}
+	t.Run("duplicate forwarded header values", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7337/api/v1/works/resume", strings.NewReader(`{}`))
+		request.RemoteAddr = "127.0.0.1:42123"
+		request.Header["X-Forwarded-Host"] = []string{"factory.timafen.com", "factory.timafen.com"}
+		request.Header.Set("X-Forwarded-Proto", "https")
+		request.Header.Set("Origin", "https://factory.timafen.com")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		if prepareMutation(response, request, protocol.MaxBodyBytes) {
+			t.Fatal("duplicate forwarded headers were accepted")
+		}
+		requireStatus(t, response.Result(), http.StatusForbidden)
+	})
 }
 
 func TestResolveListenAddressUsesOneValidatedDNSAnswer(t *testing.T) {
