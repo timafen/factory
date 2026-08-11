@@ -854,9 +854,11 @@ def cleanup_work_archive(conf, tasks):
         live = any(task.get("state") in PIPELINE_LIVE_STATES for task in group)
         open_question = any(task.get("id") in open_question_tasks for task in group)
         status_state = (statuses.get(base) or {}).get("state")
-        protected = live or open_question or base in stopped or status_state == "stopped_owner"
-        # A genuine dead end stays visible.  A newer live generation already
-        # wins above and clears stale stuck state through pipeline_watch.
+        protected = (live or open_question or base in stopped or
+                     status_state in ("stopped_owner", "release_failed"))
+        # A genuine dead end and a failed post-merge delivery stay visible.
+        # A newer live generation already wins above and clears stale stuck
+        # state through pipeline_watch.
         if status_state == "stuck" and not live:
             protected = True
         if protected:
@@ -5464,6 +5466,8 @@ def _complete_delivery_waits(conf, state, command_key, generation):
     """Finish exactly the tasks whose promised release generation succeeded."""
     waits = state.setdefault(DELIVERY_WAIT_KEY, [])
     remaining = []
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    statuses_changed = False
     for wait in waits:
         if (wait.get("command_key") != command_key or
                 int(wait.get("generation", generation + 1)) > int(generation)):
@@ -5486,6 +5490,10 @@ def _complete_delivery_waits(conf, state, command_key, generation):
                 remaining.append(wait)
                 continue
         mark_final(task_id, wait.get("stage", "Verify"), True)
+        base = wait.get("base", "")
+        if base and (statuses.get(base) or {}).get("state") == "release_failed":
+            statuses.pop(base, None)
+            statuses_changed = True
         if not newly_delivered:
             # A restart may replay a saved wait after the durable receipt was
             # written. Restore the PASS, but never send its owner message twice.
@@ -5498,6 +5506,43 @@ def _complete_delivery_waits(conf, state, command_key, generation):
         notify(conf, "Задача выполнена", wait.get("base", "") + body,
                tags="white_check_mark", click=link or f"{UI_BASE}/tasks/{task_id}")
     state[DELIVERY_WAIT_KEY] = remaining
+    if statuses_changed:
+        os.makedirs(f"{HOME}/pilot", exist_ok=True)
+        save(f"{HOME}/pilot/work_status.json", statuses)
+    save(STATE_PATH, state)
+
+
+def _fail_delivery_waits(state, command_key, generation, rc, output):
+    """Make a terminal release failure visible to every affected Work card.
+
+    A non-zero release is not an implementation retry: main already contains
+    the change, but its promised delivery did not happen.  Remove the wait so
+    a later unrelated release cannot silently turn this Verify PASS green.
+    """
+    waits = state.setdefault(DELIVERY_WAIT_KEY, [])
+    remaining = []
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    changed = False
+    reason = ("Выпуск остановился с кодом " + str(rc) + ". Причина: " +
+              (output or RELEASE_DIAGNOSTICS_OMITTED))
+    for wait in waits:
+        if (wait.get("command_key") != command_key or
+                int(wait.get("generation", generation + 1)) > int(generation)):
+            remaining.append(wait)
+            continue
+        task_id = wait.get("task_id")
+        if task_id:
+            mark_final(task_id, wait.get("stage", "Verify"), False)
+        base = wait.get("base", "")
+        if base:
+            statuses[base] = {"state": "release_failed", "text": reason}
+            changed = True
+    state[DELIVERY_WAIT_KEY] = remaining
+    if changed:
+        os.makedirs(f"{HOME}/pilot", exist_ok=True)
+        save(f"{HOME}/pilot/work_status.json", statuses)
+    # The de-duplication marker and failed waits must survive a restart before
+    # the next cycle gets a chance to save its normal cursor.
     save(STATE_PATH, state)
 
 
@@ -6241,6 +6286,7 @@ def poll_post_merge_deploys(conf, state, now=None):
                     notify(conf, "Выпуск после слияния не прошёл",
                            "Работа остаётся незавершённой; выпуск завершился с ошибкой. " + output,
                            priority="high", tags="warning")
+                _fail_delivery_waits(state, command_key, release.get("generation", 0), rc, output)
             elif rc == 0:
                 _complete_delivery_waits(conf, state, command_key, release.get("generation", 0))
             releases.pop(command_key, None)

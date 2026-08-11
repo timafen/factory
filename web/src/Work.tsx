@@ -295,6 +295,13 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         next: "Автоматический следующий шаг не запланирован.",
         owner: "Нужно твоё решение.",
       };
+    } else if (ws.state === "release_failed") {
+      g.status = {
+        kind: "stuck", label: "Выпуск остановлен", tone: "bad",
+        happened: ws.text || "Выпуск после слияния завершился с ошибкой.",
+        next: "Выпуск не подтверждён; работа остаётся незавершённой.",
+        owner: "Проверь причину выпуска в уведомлении и запусти выпуск повторно после исправления.",
+      };
     }
   }
 
