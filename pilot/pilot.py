@@ -4065,9 +4065,12 @@ def record_new_works(conf, tasks, max_age_min=180):
                           t.get("work_id") or "", t)
     for _key, (n, _at, base, work_id, task) in first.items():
         skipped = stages[: n - 1]
-        origin = planned_origins.get(base.strip().casefold())
-        if not origin and str(task.get("request_key") or "").startswith("automation:"):
+        # The durable request key is the strongest evidence: an Automation ran
+        # the task even if an older Plan card for the same title says "owner".
+        if str(task.get("request_key") or "").startswith("automation:"):
             origin = ORIGIN_ORCHESTRATOR
+        else:
+            origin = planned_origins.get(base.strip().casefold())
         origin = origin or ORIGIN_OWNER
         skipped_reason = {
             ORIGIN_OWNER: "владелец завёл работу сразу с этого шага",

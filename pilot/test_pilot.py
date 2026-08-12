@@ -2371,6 +2371,11 @@ class WorkOriginAttributionTests(unittest.TestCase):
         self.assertEqual(work["origin"], "assistant")
 
     def test_automation_task_is_not_attributed_to_owner(self):
+        pilot.save(self.ideas_path, [{
+            "id": "old-owner-card", "title": "Scheduled patrol",
+            "origin": "owner", "state": "in_work",
+        }])
+
         pilot.record_new_works(
             self.conf,
             [self.task("Scheduled patrol", "automation:patrol:schedule:one")],
