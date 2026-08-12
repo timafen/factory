@@ -2,15 +2,23 @@
 
 ## HEAD
 
-- Status: Verified — полный набор проверок PASS.
-- Branch: `factory/d750ff8f-877-b68002b2-395`.
+- Status: Implemented — целевые проверки PASS; общий staticcheck заблокирован внешним SA4000.
+- Branch: `factory/d33d57d1-1b9-d125b939-79a`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: f9c95aa5189294cd60ef1218f0c292a0234e4e4a — terminal-успех не принимается после ошибки fsync каталога.
-- What changed: terminal-запись получает durable pending/committed-маркеры; при restart terminal без committed-маркера становится `failed` без повторного executor.
-- Evidence: `go test -count=1 ./internal/releasebroker`, `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint` и `just check` — PASS.
-- Next action: Перед слиянием рассмотреть fail-closed recovery в broker.
+Implementation commit: f397bcf615f25ada8c0d22af3d1e6c3408cdeef2 — broker не содержит неиспользуемую проверку и проходит целевую проверку состояния.
+- What changed: broker fail-closed отклоняет повреждённые durable operation-записи и не публикует terminal до fsync каталога.
+- Evidence: Go broker, 10 процессных Pilot-сценариев и оба shell-fixture — PASS; `just build` — PASS.
+- Next action: Исправить внешний SA4000 в `internal/worker`, затем повторить полный `just check`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Перебазировано на свежий `origin/main`; удалена неиспользуемая проверка
+operation, найденная full staticcheck. `go test -count=1
+./internal/releasebroker`, 10 Pilot-сценариев и оба shell-fixture прошли.
+`just build` прошёл; `just check` останавливается только на прежнем SA4000 в
+неизменённом `internal/worker/attempt_lifecycle_test.go`.
 
 ### 2026-08-12 — Implement
 
