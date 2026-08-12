@@ -2,13 +2,12 @@
 
 ## HEAD
 
-Status: Реализовано и проверено; готово к повторному Review.
+Status: Verified PASS — ожидает человеческого слияния.
 Branch: `factory/27e7d7c5-57d-a1e62a3d-134`
-Implementation commit: 547894623cefee3d551a48c00baa336fe5f4776c — единый конечный лимит применяется к холодному HTTPS setup и проверяется исполняемой регрессией.
-What changed: 120-секундный лимит вынесен в единый контракт Playwright и применяется непосредственно в `beforeAll`; проверка исходного текста заменена проверкой фактического вызова.
-Evidence: `npm --prefix web test -- --run src/playwrightConfig.test.ts` → 12/12 PASS; `typecheck`, `lint`, production build и чистый `web/dist` → PASS.
-Evidence: холодный `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test --grep 'shows every project product and saves the overview'` → 1 PASS за 52.3 с.
-Next action: повторить Review кандидатной ветки относительно свежего `origin/main`.
+Implementation commit: 75f74f6cfc4f0ac53813d12ca679cf826ad8b277 — единый конечный лимит применяется к холодному HTTPS setup и проверяется исполняемой регрессией.
+What changed: холодная HTTPS-подготовка получает единый конечный лимит 120 секунд непосредственно в `beforeAll`; исполняемая регрессия подтверждает его применение и запас над обязательной 31-секундной паузой.
+Evidence: целевые unit 12/12, typecheck и lint — PASS; холодный HTTPS Playwright — 1 PASS за 50,5 с. Общий `just check` остановился на 5-минутном timeout незатронутого `internal/worker`.
+Next action: человеку слить проверенную ветку.
 
 ## LOG
 
@@ -108,3 +107,15 @@ Next action: повторить Review кандидатной ветки отн�
 - Кандидат теперь сам содержит реализацию: единый конечный лимит 120 секунд применяется к общему холодному HTTPS setup через исполняемый helper.
 - Регрессия вызывает helper и проверяет единственное конечное значение лимита вместо поиска строки в исходнике.
 - Unit 12/12, typecheck, lint, production build и clean `web/dist` прошли; холодный HTTPS Playwright-сценарий прошёл за 52.3 секунды.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+|---|---|---|
+| Сравнение закреплено относительно свежей удалённой базы | isolated bare fetch; `fc8548f244fe1eb2a1c653c224de668844e2f1a3...ffe62531adc90d5c7c9e27ce209cdc2b83c658e5` | PASS: default ref `refs/heads/main`, кандидат непустой, изменены три code/test-файла и эта карточка. |
+| Implementation commit стабилен | `git merge-base --is-ancestor 547894623cefee3d551a48c00baa336fe5f4776c HEAD`; `git show --stat 547894623...` | PASS: предок ветки, не documentation tip, меняет три файла вне `knowledge/cards/`. |
+| Честный конечный timeout применяется до холодного setup | `npm --prefix web test -- --run src/playwrightConfig.test.ts` | PASS: 12/12; helper применил единственное значение 120000 мс, оно конечно и больше обязательной паузы 31000 мс. |
+| Холодный HTTPS-старт укладывается в контракт | `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test --grep 'shows every project product and saves the overview'` | PASS: реальный HTTPS fixture и Chromium стартовали с нуля; 1 passed за 50,5 с при лимите 120 с. |
+| Смежная статическая корректность | `npm --prefix web run typecheck`; `npm --prefix web run lint`; `git diff --check` | PASS. |
+| Полный набор из чистого состояния | `go clean -testcache`; `npm --prefix web ci`; `FACTORY_BROWSER_LAUNCHER=/missing just check` | Общая краснота вне области: `internal/worker` исчерпал 5 минут; `TestSameRepositoryRuntimeAndCleanupCanOverlap` и `TestLostClaimAndCompletionResponsesAreIdempotent` упали. Кандидат не меняет Go-файлы; целевая область PASS. |
+| Чистота дерева | `git status --short --untracked-files=all`; проверка scope pinned diff | PASS до правки карточки: stray/debug-файлов нет; коммиты связны. |
