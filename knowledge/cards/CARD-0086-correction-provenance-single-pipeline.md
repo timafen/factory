@@ -2,20 +2,13 @@
 
 ## HEAD
 
-- Status: BLOCKED: required rebase onto fresh `origin/main` conflicts in `pilot/pilot.py`; Pilot remains operationally disabled.
-- Branch: `factory/69214378-750-e950d8ba-0df` (base `origin/main`
-  `36ce322e2b6685dd9a87f4d2c947f61538654ae1`).
-- Implementation commit: 4640ac31411c15b870c42da8860aa898bd282e44 — resume and Review durable state are isolated by `work_id`.
-- What changed: Work UI and `/api/v1/works/resume` pass `work_id`; pause,
-  metadata, history and child selection no longer merge same-title works.
-- What changed: Review promises, areas, return limits, dirty/gate state and
-  delivery artifacts use `work_id`; title fallback remains legacy-only.
-- Evidence: same-title resume isolation and legacy fallback passed in the
-  control-plane target; full Go exposed only pre-existing configuration schema
-  and worker-integration failures outside this change.
-- Next action: resolve the `pilot/pilot.py` rebase conflict against fresh `main`,
-  then repeat verification; keep Pilot disabled pending its separate safe
-  release-state-machine decision.
+- Status: PASS — implementation and card are ready for Review; Pilot remains operationally disabled.
+- Branch: `factory/546377fd-9f8-f6bdfccf-cec` (base `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`).
+- Implementation commit: 9132c9d10d08bb26a5b0b6b7870db615db2bc779 — same-title resume, Review state and merge receipts remain isolated by `work_id` on current `main`.
+- What changed: the previous implementation was reconciled with the current delivery intent model; Review promises, areas, rescue limits and archive receipts retain durable identity.
+- Evidence: targeted Go and five Pilot isolation regressions passed; full Pilot 222/222, web 161/161, lint, TypeScript, web build and Go build passed.
+- Evidence: full Go has one unrelated `internal/worker` polling timeout, reproduced alone without task files in its scope.
+- Next action: Review the rebased branch; keep Pilot disabled pending its separate release decision.
 
 ## LOG
 
@@ -97,3 +90,13 @@ migration tests passed; full Pilot passed 210/210, full UI 159/159, lint and all
 builds passed. Full Go has only the separately tracked current-main failure
 `TestPilotConfigExampleMatchesServerSchema`; all Go tests pass when excluding
 that exact test. Pilot remains disabled.
+
+### 2026-08-12 — Implement
+
+Rebased the work onto `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`
+and manually reconciled `pilot/pilot.py` with the current merge-intent delivery
+model. Durable Review state and merge/archive receipts now remain keyed by
+`work_id`; two same-title works resume, advance, merge and close independently.
+Targeted Go and Pilot checks passed; full Pilot passed 222 tests, web passed 161
+tests plus lint, explicit TypeScript and build, and `go build ./...` passed.
+`go test ./...` has one unrelated worker polling timeout, reproduced alone.
