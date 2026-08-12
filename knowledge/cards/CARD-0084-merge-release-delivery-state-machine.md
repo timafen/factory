@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — recovery merge и privileged release-driver закрыты fail-closed.
-- Branch: `factory/18090251-b0b-8a66e557-4ae`.
+- Status: Verified PASS — ожидает human merge.
+- Branch: `factory/9e22b404-e97-072764ad-7ef`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: a7551f370e221f9e0cf6293ee806e3f1df011e97 — проверка retry сверяет собственную долговечную операцию без panic.
+- Implementation commit: b90fefd973c4ce610fdea1f4152d95aae4259d43 — broker сохраняет fail-closed terminal state после объединения recovery и sync-защит.
 - What changed: Recovery сохраняет immutable merge identity; broker подтверждает PID/running до process-group gate и не публикует terminal без durable proof.
 - What changed: Повтор `rc=8` допускает только тот же адаптер и target; тест сверяет его счётчик POST после успешного повторного запуска.
-- Evidence: `go test -race ./internal/releasebroker`, Pilot recovery, shell fixtures, `just check`, `just build`, `git diff --check` → PASS.
-- Next action: Проверить ветку в Review и слить в `main`.
+- Evidence: `go test -count=1 ./internal/releasebroker`, Pilot recovery, shell fixtures, `npx tsc -p tsconfig.app.json --noEmit`, `just check`, `git diff --check` → PASS.
+- Next action: Влить проверенную ветку в `main`.
 
 ## LOG
 
@@ -75,3 +75,13 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Durable V2 и terminal recovery | `go test -count=1 ./internal/releasebroker` | PASS: immutable operations, restart, terminal persist/sync fail-closed и lock retry. |
+| Merge recovery, N/N+1, receipt/outbox и legacy | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | PASS. |
+| Реальный release-driver и установка | `bash ops/test-fx-factory-release.sh`; `bash ops/test-install-project-release-broker.sh` | PASS: повтор delivery id не запускает второй release; StateDirectory и upgrade проверены. |
+| Полный регресс и типы UI | `just check`; `cd web && npx tsc -p tsconfig.app.json --noEmit` | PASS. |
+| Изоляция и чистота | pinned `main...candidate`; `git diff --check` | PASS: только Pilot, broker, release-driver, их тесты и CARD-0084. |
