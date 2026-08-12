@@ -702,8 +702,16 @@ exit 0
 EOF
   cat >"$case_dir/bin/mv" <<'EOF'
 #!/bin/bash
-/bin/mv "$@" || exit
 target=${@: -1}
+if [ "$TEST_MODE" = final-delivery-status-write-fail ] \
+  && [[ "$target" = */delivery-state/*.status ]]; then
+  status_write_seen="$target.initial-write-seen"
+  if [ -e "$status_write_seen" ]; then
+    exit 1
+  fi
+  : >"$status_write_seen"
+fi
+/bin/mv "$@" || exit
 if [ "$TEST_MODE" = interrupt-between-install ] \
   && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
   : >"$TEST_INTERRUPT_MARK"
@@ -1141,6 +1149,26 @@ run_release "$path_shadow_success" parallel-success \
 ! grep -Fx 'untrusted-git-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
   || fail "PATH git entered the trusted source chain"
 assert_no_fixture_processes "$path_shadow_success"
+# The physical release has already completed when the authoritative final
+# driver status is written.  A real atomic-rename failure must therefore keep
+# the last durable non-terminal status and make the driver fail closed.
+final_status_failed="$temporary/final-delivery-status-write-fail"
+final_status_id=factory-1-fedcba9876543210fedcba9876543210
+make_fixture "$final_status_failed" final-delivery-status-write-fail
+set +e
+FACTORY_DELIVERY_ID="$final_status_id" \
+  run_release "$final_status_failed" final-delivery-status-write-fail
+final_status_rc=$?
+set -e
+[ "$final_status_rc" -eq 4 ] \
+  || fail "final delivery status write failure returned $final_status_rc instead of 4"
+final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_status_id.status")
+[ "$final_status_value" = launching ] \
+  || fail "failed final delivery status write published: $final_status_value"
+[ "$(grep -Fxc 'restart factory-server.service' "$final_status_failed/events")" -eq 1 ] \
+  || fail "final status fixture did not perform exactly one physical release"
+grep -F 'не смог надёжно подтвердить успешный выпуск' "$final_status_failed/output" >/dev/null \
+  || fail "final status write failure was not reported"
 
 metadata_mode="$temporary/metadata-mode-0644"
 make_fixture "$metadata_mode" metadata-mode-0644
