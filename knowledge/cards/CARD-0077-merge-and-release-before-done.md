@@ -3,17 +3,28 @@
 ## HEAD
 
 - Status: Implemented — проверено, ожидает слияния.
-- Branch: `factory/28bfcee3-7ad-31ae8911-ab6`.
-- Implementation commit: d3efe3801512d12d1c28cb722a45a3d87a18f9ca — проверка подтверждает, что merge не завершает работу до выпуска и не повторяется после рестарта.
-- What changed: ожидание выпуска сохраняется с задачей и поколением; `rc=0`
-  создаёт delivery receipt, а `rc=8`/коалесцирование сохраняют ожидание.
-- What changed: эпики и «Сделано недавно» признают готовность только по receipt
-  поставки; UI показывает «Ожидает слияния и выпуска».
-- Evidence: `python3 -m unittest -v pilot.test_pilot` → 191 OK.
-- Evidence: `cd web && npm run lint && npm run typecheck && npm run build` → PASS; полный Vitest повторно выявил нестабильные таймауты существующих Dialog/WorkView тестов.
-- Next action: Владелец может слить ветку; web-таймауты разобрать отдельно.
+- Branch: `factory/ccd1e717-41d-48b32756-1c2`.
+- Implementation commit: 9a537b0a79d0ba68ee2ff0cf03ba0363f9c80a72 — сохранены актуальные защиты Review, CARD и crash-safe delivery вместе с ожиданием выпуска.
+- What changed: terminal Verify до delivery receipt остаётся активным и показывает
+  «Ожидает слияния и выпуска»; успешный выпуск завершает работу единожды.
+- What changed: сохранены pinned fresh snapshot, резервирование/передача номера
+  карточки и восстановление merge intent до task cursor.
+- Evidence: целевые Python-регрессии snapshot/CARD/delivery → 18 OK;
+  `npm test -- --run src/Work.test.ts` → 11 OK.
+- Evidence: `npm run lint && npm run typecheck && npm run build` → PASS.
+- Next action: слить ветку; нестабильный таймаут полного Vitest в существующем
+  `WorkHistory.test.tsx` разобрать отдельно.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Изменение перебазировано на свежий `origin/main`: восстановлены обязательные
+fresh snapshot с pinned SHA и BLOCKED при инфраструктурной ошибке, резервирование
+и handoff CARD, а также crash-safe delivery state machine. Ожидание успешного
+выпуска и CARD-0077 сохранены. Целевые проверки дали 18 Python и 11 UI тестов;
+lint, typecheck и build прошли. Полный Vitest выявил один существующий таймаут
+`WorkHistory.test.tsx`, не затрагиваемого поставкой.
 
 ### 2026-08-11 — Specification
 
