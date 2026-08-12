@@ -3,11 +3,13 @@
 ## HEAD
 
 - Status: Implemented — ready for Review.
-- Branch: `factory/e795c02b-572-b4e02d6a-b29`.
-- Implementation commit: af01b667998b4b9617f093678c7186e95ccf2940 — Review-корректировка остаётся дочерней задачей исходной работы и не запускает второй конвейер.
-- What changed: добавлен сквозной регрессионный сценарий от создания дочерней
-  Review-корректировки до повторного обнаружения Pilot.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` — PASS, 7 tests.
+- Branch: `factory/a904c45d-6fd-edfbfaf9-d29`.
+- Implementation commit: af3363c0dd731ae18f1f890bcdaf096c3bf55b32 — Pilot проверяет Review-корректировку прямо по полному ответу API без ручной подстановки provenance.
+- What changed: регрессионный сценарий получает корректировку из
+  `create_child_task()` через API, проверяет возвращённые `work_id`,
+  `parent_task_id`, `correction_kind` и дважды передаёт тот же объект в Pilot.
+- Evidence: `CorrectionProvenanceStormTests` — PASS, 7 tests;
+  `TestTaskProvenanceHTTPCompatibilityAndLogging` — PASS; `just build` — PASS.
 - Next action: Review проверяет целевой сценарий и изменения относительно свежей `main`.
 
 ## LOG
@@ -50,3 +52,11 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 передаёт ответ API обратно в обнаружение Pilot и повторяет его после условного
 рестарта. Подтверждено: сохраняется только исходный `work_id`, а для
 корректировки остаётся единственная защитная запись; `CorrectionProvenanceStormTests` — 7 PASS.
+
+### 2026-08-12 — Implement
+
+После замечания Review сценарий больше не собирает ответ корректировки вручную:
+он вызывает клиентский путь `create_child_task()` → `create_task()` → API,
+берёт неизменённый `created["task"]`, проверяет в нём `work_id`, родителя и вид
+корректировки, затем дважды отдаёт этот объект в `record_new_works()`. Семь
+`CorrectionProvenanceStormTests`, серверный тест provenance API и сборка прошли.
