@@ -589,15 +589,25 @@ def _note_admitted_task(conf, response, body):
             tasks.append(task)
 
 
-def gh_merge(repo_identity, branch, title):
+def gh_merge(repo_identity, branch, title, expected_head=""):
     """Open (best-effort) and squash-merge the branch into the default branch."""
     repo = repo_identity.split("github.com/")[-1]
+    if expected_head:
+        current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+        actual = ((current or {}).get("commit") or {}).get("sha", "")
+        if actual != expected_head:
+            return False, "delivery branch changed after Verify"
     env = dict(os.environ, HOME=HOME)
     subprocess.run(
         ["gh", "pr", "create", "--repo", repo, "--head", branch,
          "--title", title or branch,
          "--body", "Automated by the Factory pipeline after Verify PASS."],
         capture_output=True, text=True, env=env, timeout=120)
+    if expected_head:
+        current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+        actual = ((current or {}).get("commit") or {}).get("sha", "")
+        if actual != expected_head:
+            return False, "delivery branch changed after Verify"
     r = subprocess.run(
         ["gh", "pr", "merge", branch, "--repo", repo, "--squash", "--delete-branch"],
         capture_output=True, text=True, env=env, timeout=180)
@@ -6733,7 +6743,8 @@ def recover_merge_intents(conf, state):
             if compare is not None and compare.get("ahead_by") == 0:
                 merged = True
             else:
-                ok, output = gh_merge(repo, branch, intent.get("base", branch))
+                ok, output = gh_merge(repo, branch, intent.get("base", branch),
+                                      intent.get("commit_sha", ""))
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
@@ -7205,9 +7216,19 @@ def cycle(conf, state):
                             verify_snapshot["note"], attempts_so_far=0, branch=branch)
                         continue
                     link = try_url(result, rid)
+                    verified_head = verify_snapshot.get("snapshot", {}).get("candidate_sha", "")
+                    if verified_head != implementation_head:
+                        route_question(
+                            conf, tid, "Verify", "Review", base_title(title), rid,
+                            "Ветка поставки изменилась после проверки.",
+                            "Повторить Review для нового снимка ветки?",
+                            ["Повтори Review", "Останови работу"],
+                            "Проверенный снимок больше не совпадает с текущей поставкой.",
+                            attempts_so_far=0, branch=branch)
+                        continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)

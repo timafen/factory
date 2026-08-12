@@ -2280,7 +2280,19 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
+        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, head)
+
+
+class ImmutableMergeTests(unittest.TestCase):
+    def test_force_push_after_verify_blocks_merge(self):
+        with mock.patch.object(pilot, "gh_json", return_value={
+                "commit": {"sha": "f" * 40}}), \
+                mock.patch("subprocess.run") as run:
+            ok, message = pilot.gh_merge("github.com/acme/repo", "factory/candidate",
+                                         "Работа", "a" * 40)
+        self.assertFalse(ok)
+        self.assertIn("changed after Verify", message)
+        run.assert_not_called()
 
 
 class ClosedWorkLifecycleTests(unittest.TestCase):
