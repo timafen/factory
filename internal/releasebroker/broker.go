@@ -231,17 +231,17 @@ type operation struct {
 }
 
 type Broker struct {
-	executor   Executor
-	stateDir   string
+	executor Executor
+	stateDir string
 	// persistTerminal is a test seam for a failed final state write.
 	persistTerminal func(*operation) error
-	syncFile   func(*os.File) error
-	closeFile  func(*os.File) error
-	renameFile func(string, string) error
-	syncDir    func(string) error
-	mu         sync.Mutex
-	active     string
-	items      map[string]*operation
+	syncFile        func(*os.File) error
+	closeFile       func(*os.File) error
+	renameFile      func(string, string) error
+	syncDir         func(string) error
+	mu              sync.Mutex
+	active          string
+	items           map[string]*operation
 }
 
 func (b *Broker) saveTerminal(item *operation) error {
