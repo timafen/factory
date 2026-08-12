@@ -2,17 +2,23 @@
 
 ## HEAD
 
-- Status: BLOCKED: rebased Pilot storm verification does not reach owner
-  completion for an unrecognised release target; Pilot remains disabled.
-- Branch: `factory/31b80853-0f0-095f6283-3e1`.
-- Implementation commit: 7cf62afcbec972a5c1266606161407efaf002829 — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- Evidence: pre-rebase clean-cache `go test ./...` → PASS; full Pilot suite →
-  PASS (209 tests); `go build ./...` → PASS. On fresh `main`, targeted Go
-  provenance tests pass, but two restart-cycle cases fail at owner completion.
-- Next action: integrate the provenance storm completion path with the new
-  release-state machine, then rerun full verification; keep Pilot disabled.
+- Status: IMPLEMENTED; Pilot protection is bound to the released migration path.
+- Branch: `factory/1b92c064-29e-675b3591-369`.
+- Implementation commit: 05cb6c1e3cc109dd718e62dacfb06541a947418e — durable
+  recovery persists only real release generations; storm tests use the supported
+  release target and verify completion after restart.
+- Evidence: targeted Pilot storm → PASS (5 tests); targeted control-plane
+  migration/provenance tests → PASS; `git diff --check` → PASS.
+- Next action: run the complete Verify-stage suite before merge.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Rebased the provenance implementation onto fresh `origin/main` and connected the
+restart storm fixture to the already released migration's supported Pilot
+release target. Recovery now ignores truthy non-dict delivery-hook sentinels so
+they cannot write non-serializable state. Targeted storm and migration tests pass.
 
 ### 2026-08-11 — Specification
 
