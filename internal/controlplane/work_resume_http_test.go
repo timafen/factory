@@ -82,9 +82,60 @@ func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository
 		if _, err := store.db.Exec(`UPDATE executions SET state=? WHERE task_id=?`, state, detail.Task.ID); err != nil {
 			t.Fatal(err)
 		}
+		// This helper models title-only records from before provenance migration.
+		if _, err := store.db.Exec(`UPDATE tasks SET work_id=NULL WHERE id=?`, detail.Task.ID); err != nil {
+			t.Fatal(err)
+		}
 		history[stage] = detail.Task
 	}
 	return history
+}
+
+func TestResumePausedWorkSeparatesSameTitleByWorkID(t *testing.T) {
+	const base = "Одинаковая работа"
+	store, pilot, server, repo, workflows := resumeFixture(t, base)
+	create := func(key string) protocol.Task {
+		workflow := workflows["Triage"]
+		detail, _, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
+			RequestKey: key, Title: "[auto] [1/5 Triage] " + base, Context: "context", ContextProvided: true,
+			WorkerID: "worker-1", RepositoryID: repo.ID, TimeoutSeconds: 60,
+			WorkflowRevisionID: workflow.CurrentRevision.ID, WorkflowRevisionIDProvided: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`UPDATE executions SET state='failed' WHERE task_id=?`, detail.Task.ID); err != nil {
+			t.Fatal(err)
+		}
+		return detail.Task
+	}
+	first, second := create("same-title-first"), create("same-title-second")
+	settings, err := pilot.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Settings.StoppedPipelines = []string{first.WorkID, second.WorkID}
+	if _, err := pilot.Write(settings.Version, settings.Settings); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(resumeWorkRequest{Title: base, WorkID: second.WorkID})
+	response, err := server.Client().Post(server.URL+"/api/v1/works/resume", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d", response.StatusCode)
+	}
+	var resumed resumeWorkResponse
+	_ = json.NewDecoder(response.Body).Decode(&resumed)
+	if resumed.Task.WorkID != second.WorkID || resumed.Task.ParentTaskID != second.ID {
+		t.Fatalf("resumed wrong work: %#v", resumed.Task)
+	}
+	settings, err = pilot.Read()
+	if err != nil || len(settings.Settings.StoppedPipelines) != 1 || settings.Settings.StoppedPipelines[0] != first.WorkID {
+		t.Fatalf("pauses = %#v, %v", settings, err)
+	}
 }
 
 func postResume(t *testing.T, server *httptest.Server, base string) (int, resumeWorkResponse) {
