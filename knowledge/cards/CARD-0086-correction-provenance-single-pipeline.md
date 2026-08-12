@@ -2,14 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains disabled.
+- Status: BLOCKED: final rebased Pilot provenance storm test has 3 errors.
 - Branch: `factory/ffb2f1bd-e35-41637e93-24a` (rebased onto current `main`).
 - Implementation commit: a65fb2e82af6e752555a02abbd5557283868e7e9 — durable
   `work_id` isolation for same-title artifact, delivery and lifecycle state.
-- Evidence: full project check, Go build, targeted provenance API/migration and
-  Pilot restart-storm checks passed; final diff has no whitespace errors.
-- Next action: human reviews and merges the correction; keep Pilot disabled pending
-  its separate safe release-state-machine decision.
+- Evidence: pre-rebase project check and focused provenance API/migration passed;
+  after rebase, three storm paths fail while serializing a `MagicMock` merge intent.
+- Next action: implementation fixes the rebased merge-intent test contract, then Verify reruns.
 
 ## LOG
 
@@ -19,9 +18,13 @@
 | --- | --- | --- |
 | Provenance create/replay/list/detail and parent deletion | focused `go test` control-plane provenance set | PASS |
 | Migration 027 dependency on 026 and atomic reopen | focused migration test | PASS |
-| Same-title correction after restart creates no duplicate root | `CorrectionProvenanceStormTests` (7 tests) | PASS |
+| Same-title correction after restart creates no duplicate root | final `CorrectionProvenanceStormTests` (7 tests) | BLOCKED: 3 errors |
 | Whole project and build | `just check`; `go build ./...` | PASS |
 | Delivery hygiene | rebase on current `main`; `git diff --check` | PASS |
+
+The rebase adopted the current main merge-intent path. Three corrections now fail
+because its state persistence receives a mocked non-serializable link. This is
+an implementation defect in the rebased result, not an infrastructure failure.
 
 ### 2026-08-11 — Specification
 
