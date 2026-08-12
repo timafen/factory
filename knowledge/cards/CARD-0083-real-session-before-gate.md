@@ -3,7 +3,7 @@
 ## HEAD
 
 Status: BLOCKED: требуется root-runner для обязательной живой проверки helper и bootstrap.
-Branch: factory/c2b4444a-532-38faf228-d12.
+Branch: factory/bdeb3b62-b1e-fc42a2f1-976.
 Implementation commit: 2b5c1d9a43e2a49029f45f2fff425a4de83a3a30 — cgroup helper ограничен собственным корнем, а bootstrap ставит проверенный helper до gate.
 What changed: helper отвергает `.`, `..`, separators и traversal; после канонизации допускает только путь строго ниже root-owned `CGROUP_ROOT`.
 What changed: trusted control bootstrap ставит helper и installer от root с mode `0755` и SHA-256; release не выполняет candidate installer и fail-closed проверяет owner/mode/hash до gate.
