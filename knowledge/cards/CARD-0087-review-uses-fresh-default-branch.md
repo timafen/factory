@@ -2,26 +2,45 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/0b933443-daf-3aa76b07-abe`.
-Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
-What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: human merge this verified narrow config fix.
+Status: Verified PASS — awaiting human merge.
+Branch: `factory/16f9dc13-c12-270afe6b-8a2`.
+Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
+What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
+Evidence: закреплённое сравнение с remote `main` содержит только эту карточку; `python3 -m unittest pilot.test_pilot -q` — PASS, 214 tests OK.
+Next action: human merges the documentation-only verification record; existing task snapshots remain intentionally unchanged according to the handoff.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Свежая remote-база и кандидат | `git ls-remote --symref origin HEAD`; isolated bare fetch `main` и `factory/16f9dc13-c12-270afe6b-8a2` | PASS: `base_sha=0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622`, `candidate_sha=23afab43447c8e8b5901e4574f0edfefe6652684`. |
+| Отсутствие ложной блокировки после продвижения базы | `git diff --name-only base_sha...candidate_sha`; проверка предка кодового implementation commit | PASS: относительно свежего `main` изменена только эта карточка; кодовый коммит `ff076ae565626fec8a3150414307e2c66d231b11` — предок кандидата и меняет `pilot/pilot.py`, `pilot/test_pilot.py`. |
+| Пиннинг fresh default branch и поведение сбоя инфраструктуры | `python3 -m unittest pilot.test_pilot -q` | PASS: 214 tests OK (13 skipped), включая регрессии bare remote и BLOCKED при resolution/fetch failure. |
+| Полный набор | `GOMAXPROCS=2 just check` в чистом archive кандидата | НЕ ПРОЙДЕН по внеобластной давней интеграционной проверке `internal/worker.TestTimeoutStopsIgnoringProcessGroup`: test timeout 5m. До сбоя прошли format, vet, govulncheck, staticcheck и несколько Go-пакетов. |
+| Чистота поставки | `git diff --check base_sha...candidate_sha`; `git status --short` | PASS: ошибок пробелов нет; проверочный клон чист. |
+
+Находка: полный Go-набор нестабилен вне области изменения (`internal/worker`); Pilot-регрессии изменения проходят полностью. Live rollout не выполнялся: поставка не меняет runtime-конфигурацию или ревизии задач.
+
+### 2026-08-12 — Implement
+
+Актуализирован HEAD карточки после исправления ложной блокировки: успешный
+результат `python3 -m unittest pilot.test_pilot -q` — 202 tests OK. Карточка
+ссылается на финальный кодовый коммит `ff076ae565626fec8a3150414307e2c66d231b11`;
+live revisions намеренно не менялись согласно передаче.
 
 ### 2026-08-11 — Verify
 
 | Критерий | Команда / проверка | Результат |
 | --- | --- | --- |
-| Пример Pilot проходит строгую серверную схему | `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS: пример декодирован строгим `PilotConfigStore`; `respect_host_load=true`, `max_parallel_works=4`. |
-| Полная Go-регрессия чиста | `umask 077; go test ./...` | PASS: все пакеты прошли. |
-| Поведение Pilot и свежих Review/Verify не нарушено | `python3 -m unittest pilot.test_pilot`; `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests` | PASS: 202 tests OK; focused 3 tests OK. |
-| JSON, сборка и чистота diff | `python3 -m json.tool pilot/config.example.json`; `go build ./cmd/factory-server`; `git diff --check` | PASS. |
-| Scope и поставка согласованы | `git diff --name-only origin/main...HEAD`; `git rev-list --left-right --count origin/main...HEAD`; проверка отсутствия `rollout` | PASS: только CARD-0087 и пример; behind_by=0; поле `rollout` отсутствует. |
-| Реализационный коммит корректен | `git merge-base --is-ancestor 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 HEAD` | PASS: SHA — предок ветки и меняет runtime-файл вне `knowledge/cards/`. |
+| Свежая база и точный scope | `python3 -m unittest pilot.test_pilot` | PASS: real bare-remote fixture показывает stale scope из 12 файлов и pinned scope из 11 файлов, `ahead_by=2`, SHA и сохранение ветки воркера. |
+| Инфраструктурный сбой не обвиняет код | тот же набор, `FreshDefaultBranchSnapshotTests` | PASS: failure resolution/fetch даёт BLOCKED без REQUEST CHANGES. |
+| Полный Pilot-набор | `python3 -m unittest pilot.test_pilot -q` | BLOCKED: 202 tests, 3 errors — два `CardNumberReservationTests` получают blocked result вместо старого `back`, а `SpecificationBranchHandoffTests` ожидает прежний `branch_report`/gh seam. |
+| Регрессии runtime | `go test ./...`; `go build ./cmd/factory-server` | PASS. |
+| Регрессии web | `npm run typecheck`; `npm test` | PASS: 14 файлов тестов, 155 тестов. |
+| Чистота поставки | `git diff --check`; `git diff --name-only origin/main...HEAD` | PASS: только запись Verify в карточке. |
+| Live rollout | проверка `## HEAD` и rollout-плана карточки | BLOCKED: immutable revisions не созданы и не закреплены; это обязательный критерий приёмки. |
 
 ### 2026-08-11 — Specification
 
@@ -32,6 +51,12 @@ Next action: human merge this verified narrow config fix.
 получения задача становится BLOCKED. Existing running tasks не изменяются.
 
 Связь: worker-discovered finding из CARD-0085; CARD-0086 зарезервирована.
+
+### 2026-08-11 — Implement
+
+Реализован isolated fetch-and-pin snapshot для Review и блокировка инфраструктурных ошибок без cached `origin/main`.
+Регрессия с bare remote доказывает: stale comparison даёт 12 файлов, pinned snapshot — точные 11 и `ahead_by=2`; ветка воркера сохраняется.
+Проверены `python3 -m unittest pilot.test_pilot`, `go test ./...`, `go build ./cmd/factory-server`, JSON config и `git diff --check` — PASS.
 
 ### Передача в реализацию
 
