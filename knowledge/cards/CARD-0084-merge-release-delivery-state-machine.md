@@ -3,15 +3,21 @@
 ## HEAD
 
 - Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Branch: `factory/2ba87248-032-52d6e999-4fc`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- Implementation commit: 810512e2a600fab4d5aa96159b240255fa116dcb — повреждённое состояние и неопределённый выпуск не запускают executor повторно, locked сохраняется durable.
+- What changed: Broker fail-closed останавливает восстановление при ошибке чтения, JSON или валидации записи; `running` не повторяется.
+- What changed: Занятый release lock перед выходом durable сохраняет `locked`; добавлены проверки повреждённого состояния, retry и lock.
+- Evidence: `bash ops/test-fx-factory-release.sh`, `go test -race ./internal/releasebroker`, `just check`, `just build`, `git diff --check` → PASS.
+- Next action: Человеку принять решение о слиянии.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Исправлены три блокирующих замечания Review: fail-closed восстановление broker,
+запрет повторного физического выпуска из `running` и durable `locked` при занятом lock.
+Профильные shell и Go race-тесты прошли.
 
 ### 2026-08-11 — Specification
 
