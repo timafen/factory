@@ -2,20 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented and tested; migration 026 is present in `main`;
-  Pilot remains operationally disabled.
+- Status: Verified PASS — awaiting human merge; Pilot remains operationally
+  disabled.
 - Branch: `factory/31b80853-0f0-095f6283-3e1`.
 - Implementation commit: 7cd603288a2e666cb261248649fa3bba871f744a — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- What changed: 027 validates the exact 026 reconciliation schema before ALTER,
-  and the runner derives ledger versions from migration filenames.
-- What changed: Review/Verify corrections persist across a recreated Pilot
-  state and complete one `work_id` through Implement, Review, Verify and merge.
-- What changed: `pilot_duplicate_root_prevented` is a stable-ID durable outbox
-  event retained across crashes before/after journal and acknowledgement.
-- Evidence: focused provenance migration tests → PASS; full Pilot → PASS (204 tests);
-  `go test ./...` → PASS; `go build ./...` and diff check → PASS.
-- Next action: review and merge this correction; keep Pilot disabled until its
-  separate safe release-state-machine decision.
+- Evidence: clean-cache `go test ./...` → PASS; full Pilot suite → PASS
+  (209 tests); `go build ./...` and whitespace check → PASS. The provenance
+  API/migration tests and the restart-storm/outbox tests cover all ten
+  acceptance criteria.
+- Next action: human reviews and merges the correction; Pilot stays disabled
+  until its separate safe release-state-machine decision.
 
 ## LOG
 
@@ -61,3 +57,20 @@ CARD-0085 migration 026 is now in `origin/main` at
 cherry-picked onto that base. The focused provenance migration tests, all 204
 Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
 passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
+
+### 2026-08-11 — Verify
+
+| Acceptance criterion | Command/check | Observed result |
+| --- | --- | --- |
+| 1–3: root/child provenance, validation, replay, persistence and legacy rows | `go test ./...` including provenance store and HTTP tests | PASS |
+| 4–6: Review/Verify correction stays one pipeline across restart | `python3 -B -m unittest -v pilot.test_pilot` including `CorrectionProvenanceStormTests` | PASS; both correction kinds complete Review, Verify, merge and owner completion with one root |
+| 7: prevented-root durable event is idempotent through crash boundaries | full Pilot suite, `test_duplicate_root_outbox_converges_at_every_crash_boundary` | PASS; one stable outbox event before/after restart and acknowledgement |
+| 8–9: legacy fallback and atomic 025/026/027 migration dependency | full Go suite including provenance migration test | PASS |
+| 10: Pilot remains disabled | code/card review; no enablement change in diff | PASS |
+| Adjacent build and patch hygiene | `go build ./...`; `git diff --check origin/main...HEAD` | PASS |
+
+Clean-cache full verification completed: `go test ./...` (PASS),
+`python3 -B -m unittest -v pilot.test_pilot` (209 tests, PASS), and
+`go build ./...` (PASS). The tree had no unrelated changes before the card
+update; the implementation commit is an ancestor and changes code outside
+`knowledge/cards/`.
