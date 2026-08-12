@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const MaxBodyBytes = 64 << 10
@@ -50,7 +55,17 @@ type PIDDeliveryExecutor interface {
 	ExecuteDeliveryWithPID(context.Context, string, string, string, func(int) bool) string
 }
 
-type FXExecutor struct{ Executable string }
+// DurableStatusExecutor is the release-driver proof boundary.  Exit status is
+// not enough to claim a completed delivery: the driver must have stored its
+// own generation-specific terminal status below the broker-owned directory.
+type DurableStatusExecutor interface {
+	DurableDeliveryStatus(operationID string) (string, bool)
+}
+
+type FXExecutor struct {
+	Executable       string
+	DeliveryStateDir string
+}
 
 func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
 	return e.ExecuteDelivery(ctx, adapter, sha, "")
@@ -69,21 +84,58 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 	if !ok {
 		return "failed"
 	}
-	command := exec.CommandContext(ctx, executable, args...)
+	if e.DeliveryStateDir != "" {
+		if err := validateSecureDirectory(e.DeliveryStateDir); err != nil {
+			return "failed"
+		}
+	}
+	// The shell is deliberately only a small exec gate.  It joins a dedicated
+	// process group and cannot exec the real driver until the broker has
+	// durably recorded both its PID and running status.  This removes the
+	// start-before-persist race in which a child could grab the release lock.
+	gateRead, gateWrite, err := os.Pipe()
+	if err != nil {
+		return "rollback_failed"
+	}
+	defer gateWrite.Close()
+	commandArgs := append([]string{"-c", `IFS= read -r _ <&3 || exit 125; exec "$@"`, "factory-release-gate", executable}, args...)
+	command := exec.CommandContext(ctx, "/bin/sh", commandArgs...)
+	command.ExtraFiles = []*os.File{gateRead}
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Env = []string{
 		"LANG=C.UTF-8", "LC_ALL=C.UTF-8",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"FACTORY_DELIVERY_ID=" + operationID,
 	}
+	if e.DeliveryStateDir != "" {
+		command.Env = append(command.Env, "FACTORY_DELIVERY_STATE_DIR="+e.DeliveryStateDir)
+	}
 	if err := command.Start(); err != nil {
+		_ = gateRead.Close()
 		return "rollback_failed"
 	}
+	_ = gateRead.Close()
 	if started != nil && !started(command.Process.Pid) {
-		_ = command.Process.Kill()
-		_ = command.Wait()
+		_ = gateWrite.Close()
+		stopAndReapProcessGroup(command)
 		return "failed"
 	}
-	err := command.Wait()
+	if _, err := io.WriteString(gateWrite, "go\n"); err != nil {
+		_ = gateWrite.Close()
+		stopAndReapProcessGroup(command)
+		return "failed"
+	}
+	_ = gateWrite.Close()
+	err = command.Wait()
+	if adapter == "tarser-staging-deploy-release" || adapter == "tarser-staging-auto-rollback" {
+		// Tarser has no generation-aware durable driver status contract yet.
+		// Its exit code is therefore never a completion proof.
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 8 {
+			return "locked"
+		}
+		return "failed"
+	}
 	if err == nil {
 		return "succeeded"
 	}
@@ -91,10 +143,59 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 	if errors.As(err, &exitError) && exitError.ExitCode() == 8 {
 		return "locked"
 	}
-	if (adapter == "fx-factory-release" || adapter == "tarser-staging-deploy-release") && errors.As(err, &exitError) && exitError.ExitCode() == 6 {
+	if adapter == "fx-factory-release" && errors.As(err, &exitError) && exitError.ExitCode() == 6 {
 		return "release_failed_rolled_back"
 	}
 	return "rollback_failed"
+}
+
+// stopAndReapProcessGroup terminates every process that could have inherited
+// the launch gate.  A failed PID/running persistence callback must never
+// leave a delayed shell or helper able to reach the privileged release lock.
+func stopAndReapProcessGroup(command *exec.Cmd) {
+	if command == nil || command.Process == nil {
+		return
+	}
+	pid := command.Process.Pid
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case <-done:
+		// A background helper may have outlived the shell.  It is still in the
+		// dedicated group, so make the cleanup terminal before returning.
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-done
+	}
+}
+
+// DurableDeliveryStatus reads only a root-owned, private driver status.  The
+// broker supplies this directory itself, so a factory-server Unix-socket
+// client has no path through which it can pre-seed a completed operation.
+func (e FXExecutor) DurableDeliveryStatus(operationID string) (string, bool) {
+	if e.DeliveryStateDir == "" || !operationIDPattern.MatchString(operationID) {
+		return "", false
+	}
+	if err := validateSecureDirectory(e.DeliveryStateDir); err != nil {
+		return "", false
+	}
+	path := filepath.Join(e.DeliveryStateDir, operationID+".status")
+	if err := validateSecureFile(path); err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 128 {
+		return "", false
+	}
+	status := strings.TrimSpace(string(data))
+	switch status {
+	case "launching", "running", "locked", "succeeded", "failed", "release_failed_rolled_back", "rollback_failed":
+		return status, true
+	default:
+		return "", false
+	}
 }
 
 func invocation(adapter, sha string) ([]string, bool) {
@@ -158,8 +259,37 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return nil, errors.New("state directory must be absolute")
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	if err := prepareSecureDirectory(stateDir); err != nil {
 		return nil, err
+	}
+	// A real FX executor gets a status directory below the root-only broker
+	// state root.  It is intentionally not configurable by POST input or the
+	// factory-server process that can reach the Unix socket.
+	switch value := executor.(type) {
+	case FXExecutor:
+		if value.DeliveryStateDir == "" {
+			value.DeliveryStateDir = filepath.Join(stateDir, "driver-status")
+		}
+		if filepath.Clean(value.DeliveryStateDir) != filepath.Join(stateDir, "driver-status") {
+			return nil, errors.New("driver status directory must be inside broker state")
+		}
+		if err := prepareSecureDirectory(value.DeliveryStateDir); err != nil {
+			return nil, err
+		}
+		executor = value
+	case *FXExecutor:
+		if value == nil {
+			return nil, errors.New("missing FX executor")
+		}
+		if value.DeliveryStateDir == "" {
+			value.DeliveryStateDir = filepath.Join(stateDir, "driver-status")
+		}
+		if filepath.Clean(value.DeliveryStateDir) != filepath.Join(stateDir, "driver-status") {
+			return nil, errors.New("driver status directory must be inside broker state")
+		}
+		if err := prepareSecureDirectory(value.DeliveryStateDir); err != nil {
+			return nil, err
+		}
 	}
 	b := newBroker(stateDir, executor)
 	entries, err := os.ReadDir(stateDir)
@@ -167,13 +297,21 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		return nil, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
+		if entry.IsDir() {
+			return nil, fmt.Errorf("unsafe operation status %q: not a file", entry.Name())
+		}
+		path := filepath.Join(stateDir, entry.Name())
+		if err := validateSecureFile(path); err != nil {
+			return nil, fmt.Errorf("unsafe operation status %q: %w", entry.Name(), err)
+		}
 		var item operation
-		data, err := os.ReadFile(filepath.Join(stateDir, entry.Name()))
-		if err != nil || json.Unmarshal(data, &item) != nil || !operationIDPattern.MatchString(item.Request.OperationID) {
-			continue
+		data, err := os.ReadFile(path)
+		if err != nil || json.Unmarshal(data, &item) != nil || !valid(item.Request) ||
+			filepath.Base(item.Request.OperationID+".json") != entry.Name() {
+			return nil, fmt.Errorf("invalid operation status %q", entry.Name())
 		}
 		// A broker restart cannot prove an old in-process executor still exists.
 		// Fail closed instead of launching it again.
@@ -191,6 +329,69 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
+}
+
+// prepareSecureDirectory accepts a fresh path, but rejects an existing
+// writable/preseeded one.  StateDirectory normally creates it for root; the
+// explicit validation keeps a manual launch from silently trusting a socket
+// client's directory or symlink.
+func prepareSecureDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("state path is not a real directory")
+	}
+	return validateSecureDirectory(path)
+}
+
+func validateSecureDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("not a real directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("directory mode %04o is not 0700", info.Mode().Perm())
+	}
+	return validateSecureOwner(info)
+}
+
+func validateSecureFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("not a regular file")
+	}
+	if info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("file mode %04o is not 0600", info.Mode().Perm())
+	}
+	return validateSecureOwner(info)
+}
+
+func validateSecureOwner(info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("cannot inspect owner")
+	}
+	if stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("owner uid %d does not match broker uid %d", stat.Uid, os.Geteuid())
+	}
+	return nil
 }
 
 func newBroker(stateDir string, executor Executor) *Broker {
@@ -212,11 +413,21 @@ func (b *Broker) persist(item *operation) error {
 	if b.stateDir == "" {
 		return nil
 	}
+	if err := validateSecureDirectory(b.stateDir); err != nil {
+		return err
+	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
 	target := filepath.Join(b.stateDir, item.Request.OperationID+".json")
+	if _, err := os.Lstat(target); err == nil {
+		if err := validateSecureFile(target); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	previous, previousErr := os.ReadFile(target)
 	if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) {
 		return previousErr
@@ -421,6 +632,19 @@ func (b *Broker) execute(item *operation) {
 	default:
 		status = "failed"
 	}
+	if !b.terminalStatusProven(item, status) {
+		// A release driver can finish with a non-zero code after its final
+		// status write has failed.  Leaving the prior running record visible is
+		// safer than publishing a rollback/failed terminal result that is not
+		// backed by the driver.  A fresh broker later turns this uncertain
+		// operation into durable failed without retrying the executor.
+		b.mu.Lock()
+		if b.active == item.Request.OperationID {
+			b.active = ""
+		}
+		b.mu.Unlock()
+		return
+	}
 	b.mu.Lock()
 	// A terminal response is delivery proof.  Publish it only after the same
 	// value is durably represented by the operation record.  If persistence
@@ -435,6 +659,34 @@ func (b *Broker) execute(item *operation) {
 		b.active = ""
 	}
 	b.mu.Unlock()
+}
+
+func (b *Broker) terminalStatusProven(item *operation, status string) bool {
+	if status == "locked" {
+		return true
+	}
+	prover, ok := b.executor.(DurableStatusExecutor)
+	if !ok {
+		// Test and in-memory executors represent their terminal callback
+		// directly.  The production FX executor always implements the proof
+		// interface and cannot take this compatibility path.
+		return true
+	}
+	proof, ok := prover.DurableDeliveryStatus(item.Request.OperationID)
+	if !ok {
+		return false
+	}
+	switch status {
+	case "succeeded":
+		return proof == "succeeded"
+	case "failed", "release_failed_rolled_back", "rollback_failed":
+		// The Factory driver records one conservative failure value before it
+		// exits; the broker may add rollback detail only after that durable
+		// proof exists.  Future drivers may store the precise terminal value.
+		return proof == "failed" || proof == status
+	default:
+		return false
+	}
 }
 
 // runnerStarted creates the real durable boundaries after the wrapper starts:

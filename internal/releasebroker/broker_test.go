@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -133,6 +134,20 @@ func waitForBrokerIdle(t *testing.T, broker *Broker) {
 			t.Fatal("broker did not become idle")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func secureTestDirectory(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nset -eu\n"+body), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -288,6 +303,7 @@ func TestBrokerDoesNotPublishTerminalSuccessWhenPersistFails(t *testing.T) {
 
 func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
+	secureTestDirectory(t, dir)
 	blocked := make(chan struct{})
 	executor := &recordingExecutor{done: blocked}
 	broker, err := NewAt(dir, executor)
@@ -321,6 +337,9 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	blocked := make(chan struct{})
 	executor := &recordingExecutor{done: blocked}
 	broker, err := NewAt(dir, executor)
@@ -430,6 +449,7 @@ func TestTerminalSyncFailuresStayFailClosedAcrossRestart(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
+			secureTestDirectory(t, dir)
 			blocked := make(chan struct{})
 			executor := &recordingExecutor{done: blocked}
 			broker, err := NewAt(dir, executor)
@@ -476,6 +496,7 @@ func TestTerminalSyncFailuresStayFailClosedAcrossRestart(t *testing.T) {
 
 func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
 	dir := t.TempDir()
+	secureTestDirectory(t, dir)
 	blocked := make(chan struct{})
 	broker, err := NewAt(dir, &recordingExecutor{done: blocked})
 	if err != nil {
@@ -492,6 +513,193 @@ func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
 	}
 	close(blocked)
 	waitForOperationStatus(t, server, "delivery-2", "succeeded")
+}
+
+func TestDiskBrokerRejectsHostilePreseededStatusAndPermissions(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{name: "writable state root", setup: func(t *testing.T, dir string) {
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "preseeded operation status", setup: func(t *testing.T, dir string) {
+			secureTestDirectory(t, dir)
+			body := `{"request":{"operation_id":"hostile-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"},"status":"succeeded","posts":1}`
+			path := filepath.Join(dir, "hostile-1.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			test.setup(t, dir)
+			executor := &recordingExecutor{}
+			if _, err := NewAt(dir, executor); err == nil {
+				t.Fatal("hostile durable state was accepted")
+			}
+			if executor.callCount() != 0 {
+				t.Fatalf("hostile state reached executor: calls=%d", executor.callCount())
+			}
+		})
+	}
+}
+
+func TestFXExecutorLaunchGatePersistsRunningBeforeDriverLock(t *testing.T) {
+	dir := t.TempDir()
+	secureTestDirectory(t, dir)
+	lockCounter := filepath.Join(t.TempDir(), "lock-count")
+	fx := filepath.Join(t.TempDir(), "fx")
+	writeTestExecutable(t, fx, `
+printf 'lock\n' >>"`+lockCounter+`"
+umask 077
+printf 'succeeded\n' >"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status"
+`)
+	broker, err := NewAt(dir, FXExecutor{Executable: fx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := broker.syncFile
+	pidPersisted := make(chan struct{})
+	allowRunning := make(chan struct{})
+	var syncCalls int
+	broker.syncFile = func(file *os.File) error {
+		syncCalls++
+		if syncCalls == 2 { // initial launching is first; PID persistence is second.
+			close(pidPersisted)
+			<-allowRunning
+		}
+		return originalSync(file)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"gated-lock-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	select {
+	case <-pidPersisted:
+	case <-time.After(time.Second):
+		t.Fatal("PID persistence did not reach its durable boundary")
+	}
+	if _, err := os.Stat(lockCounter); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("driver reached release lock before running was durable: %v", err)
+	}
+	close(allowRunning)
+	waitForOperationStatus(t, server, "gated-lock-1", "succeeded")
+	data, err := os.ReadFile(lockCounter)
+	if err != nil || strings.Count(string(data), "lock\n") != 1 {
+		t.Fatalf("physical lock entries=%q read_error=%v", data, err)
+	}
+}
+
+func TestFXExecutorKillsLaunchGroupWhenPIDOrRunningPersistenceFails(t *testing.T) {
+	for _, phase := range []string{"pid", "running"} {
+		t.Run(phase, func(t *testing.T) {
+			dir := t.TempDir()
+			secureTestDirectory(t, dir)
+			lockCounter := filepath.Join(t.TempDir(), "lock-count")
+			fx := filepath.Join(t.TempDir(), "fx")
+			writeTestExecutable(t, fx, `printf 'lock\n' >>"`+lockCounter+`"`)
+			broker, err := NewAt(dir, FXExecutor{Executable: fx})
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalSync := broker.syncFile
+			var syncCalls int
+			broker.syncFile = func(file *os.File) error {
+				syncCalls++
+				failAt := 2 // initial launching is first, then durable PID.
+				if phase == "running" {
+					failAt = 3
+				}
+				if syncCalls == failAt {
+					return errors.New("injected " + phase + " persistence failure")
+				}
+				return originalSync(file)
+			}
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"gate-failure-` + phase + `","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			waitForBrokerIdle(t, broker)
+			if _, err := os.Stat(lockCounter); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed %s persistence reached the driver lock: %v", phase, err)
+			}
+			item, ok := operationSnapshot(broker, "gate-failure-"+phase)
+			if !ok {
+				t.Fatalf("missing operation after %s failure", phase)
+			}
+			if phase == "pid" {
+				if item.PID != 0 {
+					t.Fatalf("failed PID write became visible: %+v", item)
+				}
+				return
+			}
+			if item.PID <= 0 {
+				t.Fatalf("missing persisted PID before running failure: %+v", item)
+			}
+			deadline := time.Now().Add(time.Second)
+			for err := syscall.Kill(item.PID, 0); !errors.Is(err, syscall.ESRCH); err = syscall.Kill(item.PID, 0) {
+				if time.Now().After(deadline) {
+					t.Fatalf("launch process group leader survived %s persistence failure: %v", phase, err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		})
+	}
+}
+
+func TestTarserAndUnconfirmedDriverTerminalsFailClosed(t *testing.T) {
+	for _, adapter := range []string{"tarser-staging-deploy-release", "fx-factory-release"} {
+		t.Run(adapter, func(t *testing.T) {
+			dir := t.TempDir()
+			secureTestDirectory(t, dir)
+			fx := filepath.Join(t.TempDir(), "fx")
+			body := "exit 0\n"
+			if adapter == "fx-factory-release" {
+				// A driver that has only reached running and then loses its
+				// terminal write must not let rc=6 publish rollback success.
+				body = `umask 077
+printf 'running\n' >"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status"
+exit 6
+`
+			}
+			writeTestExecutable(t, fx, body)
+			broker, err := NewAt(dir, FXExecutor{Executable: fx})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			id := "unconfirmed-" + strings.ReplaceAll(adapter, "_", "-")
+			bodyJSON := `{"operation_id":"` + id + `","adapter":"` + adapter + `","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, bodyJSON); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			waitForBrokerIdle(t, broker)
+			if got := operationStatus(t, server, id).Status; got != "running" {
+				t.Fatalf("unproven %s terminal was published as %q", adapter, got)
+			}
+			restarted, err := NewAt(dir, FXExecutor{Executable: fx})
+			if err != nil {
+				t.Fatal(err)
+			}
+			restartedServer := httptest.NewServer(restarted.Handler())
+			defer restartedServer.Close()
+			if got := operationStatus(t, restartedServer, id).Status; got != "failed" {
+				t.Fatalf("fresh broker status=%q, want failed", got)
+			}
+		})
+	}
 }
 
 func TestLockedOperationRetriesWithNewerSHAOnlyForSameAdapter(t *testing.T) {

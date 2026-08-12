@@ -2119,6 +2119,10 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                     return {"name": original, "commit": {"sha": head}}
                 if "/compare/main..." in path:
                     return {"files": [{"filename": "pilot/pilot.py"}], "ahead_by": 1}
+                if args[:2] == ["pr", "view"]:
+                    return {"number": 91, "id": "PR_kwDOrebuilt",
+                            "headRefName": rebuilt, "headRefOid": head,
+                            "baseRefName": "main", "state": "OPEN"}
                 raise AssertionError(path)
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
@@ -2158,7 +2162,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
+        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, mock.ANY)
 
 
 class ClosedWorkLifecycleTests(unittest.TestCase):
@@ -5042,10 +5046,11 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "if [ -f \"" + lock_once + "\" ]; then rm -f \"" + lock_once + "\"; exit 8; fi\n"
                          "printf '%s\\n' \"$$\" > \"" + pid + "\"\n"
                          ": > \"" + started + "\"\n"
+                         "umask 077\nprintf 'running\\n' > \"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status\"\n"
                          "while [ ! -f \"" + release_gate + "\" ]; do sleep 0.01; done\n"
                          "case \"" + outcome + "\" in\n"
-                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
-                         "  rollback_failed) exit 1 ;;\n"
+                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; printf 'succeeded\\n' > \"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status\"; exit 0 ;;\n"
+                         "  rollback_failed) printf 'failed\\n' > \"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status\"; exit 1 ;;\n"
                          "  final_driver_status_write_failed) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 4 ;;\n"
                          "  *) exit 7 ;;\n"
                          "esac\n")
@@ -5279,7 +5284,10 @@ pilot.save(pilot.STATE_PATH, state)
         with open(paths["success"], encoding="utf-8") as stream:
             successful = [line.strip() for line in stream if line.strip()]
         self.assertEqual(generation["phase"], "failed")
-        self.assertEqual(broker_state["status"], "rollback_failed")
+        # The real driver kept only `running` after its terminal status write
+        # failed.  Broker restart fail-closes that uncertainty; it must not
+        # publish the richer rollback outcome from an exit code alone.
+        self.assertEqual(broker_state["status"], "failed")
         self.assertEqual(attempts, [generation["id"]])
         self.assertEqual(successful, [generation["id"]])
         self.assertFalse(os.path.exists(paths["receipts"]))
@@ -5417,7 +5425,7 @@ pilot.save(pilot.STATE_PATH, state)
         fx = os.path.join(self.temporary.name, "fx")
         calls = os.path.join(self.temporary.name, "fx-calls")
         with open(fx, "w", encoding="utf-8") as stream:
-            stream.write("#!/bin/sh\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\n")
+            stream.write("#!/bin/sh\numask 077\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\nprintf 'succeeded\\n' > \"$FACTORY_DELIVERY_STATE_DIR/$FACTORY_DELIVERY_ID.status\"\n")
         os.chmod(fx, 0o700)
         subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
                        check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
@@ -5477,6 +5485,119 @@ pilot.save(pilot.STATE_PATH, state)
         with open(journal, encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
         self.assertTrue(pilot._intent_has_wait(restored, "verify-1"))
+
+    def test_merge_identity_is_saved_before_gh_merge(self):
+        merge_sha = "b" * 40
+        state = {"merge_intents": {"verify-identity": {
+            "phase": "intent", "base": "Единый выпуск", "branch": "topic",
+            "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
+        journal = os.path.join(self.temporary.name, "merges.jsonl")
+        snapshot = {"number": 71, "id": "PR_kwDOidentity", "headRefName": "topic",
+                    "headRefOid": self.sha, "baseRefName": "main", "state": "OPEN"}
+        calls = []
+        number_views = 0
+
+        def github(args, **_kwargs):
+            nonlocal number_views
+            calls.append(args)
+            if str(args[2]) == "topic":
+                return snapshot
+            number_views += 1
+            if number_views == 1:
+                return snapshot
+            merged = dict(snapshot, state="MERGED", mergedAt="2026-08-11T22:00:00Z",
+                          mergeCommit={"oid": merge_sha})
+            return merged
+
+        def merge(repo, branch, title, identity):
+            persisted = pilot.load(self.state_path, {})["merge_intents"]["verify-identity"]
+            self.assertEqual(persisted["merge_identity"], identity)
+            self.assertEqual(persisted["phase"], "merge_submitted")
+            self.assertEqual((repo, branch, title),
+                             ("github.com/timafen/factory", "topic", "Единый выпуск"))
+            return True, "merged"
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge", side_effect=merge) as gh_merge:
+            pilot.save(self.state_path, state)
+            pilot.recover_merge_intents({}, state)
+        gh_merge.assert_called_once()
+        intent = state["merge_intents"]["verify-identity"]
+        self.assertEqual(intent["merge_commit_sha"], merge_sha)
+        self.assertEqual(intent["merge_receipt"]["pull_number"], 71)
+        self.assertTrue(pilot._intent_has_wait(state, "verify-identity"))
+        self.assertEqual(len(calls), 3)
+
+    def test_deleted_squash_pr_recovers_once_without_branch_merge_retry(self):
+        merge_sha = "b" * 40
+        identity = {"repository": "timafen/factory", "pull_number": 72,
+                    "pull_node_id": "PR_kwDOdeleted", "head_ref": "deleted-topic",
+                    "head_sha": self.sha, "base_ref": "main"}
+        state = {"merge_intents": {"verify-deleted": {
+            "phase": "merge_submitted", "base": "Единый выпуск", "branch": "deleted-topic",
+            "repository": "github.com/timafen/factory", "commit_sha": self.sha,
+            "merge_identity": identity, "link": ""}}}
+        journal = os.path.join(self.temporary.name, "merges.jsonl")
+        snapshot = {"number": 72, "id": "PR_kwDOdeleted", "headRefName": "deleted-topic",
+                    "headRefOid": self.sha, "baseRefName": "main", "state": "MERGED",
+                    "mergedAt": "2026-08-11T22:00:00Z", "mergeCommit": {"oid": merge_sha}}
+
+        def github(args, **_kwargs):
+            # Recovery must address the durable PR number.  Any branch lookup
+            # would fail after --delete-branch and is a second-merge hazard.
+            self.assertEqual(str(args[2]), "72")
+            return snapshot
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
+                mock.patch.object(pilot, "NOTIFY_LOG_PATH", os.path.join(self.temporary.name, "notifications.jsonl")), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge") as gh_merge, \
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "mark_final") as mark_final, \
+                mock.patch.object(pilot, "notify") as owner_done:
+            pilot.save(self.state_path, state)
+            pilot.recover_merge_intents({}, state)
+            pilot.recover_merge_intents({}, state)
+            pilot.poll_delivery_state({}, state)
+            pilot.poll_delivery_state({}, state)
+        gh_merge.assert_not_called()
+        with open(journal, encoding="utf-8") as stream:
+            records = [json.loads(line) for line in stream]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["merge_commit_sha"], merge_sha)
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        self.assertEqual(generation["commit_sha"], merge_sha)
+        self.assertEqual(set(generation["waits"]), {"verify-deleted"})
+        mark_final.assert_called_once_with("verify-deleted", "Verify", True)
+        owner_done.assert_called_once()
+
+    def test_unknown_authoritative_pr_never_retries_merge(self):
+        identity = {"repository": "timafen/factory", "pull_number": 73,
+                    "pull_node_id": "PR_kwDOunknown", "head_ref": "gone-topic",
+                    "head_sha": self.sha, "base_ref": "main"}
+        state = {"merge_intents": {"verify-unknown": {
+            "phase": "merge_submitted", "base": "Единый выпуск", "branch": "gone-topic",
+            "repository": "github.com/timafen/factory", "commit_sha": self.sha,
+            "merge_identity": identity, "link": ""}}}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", return_value=None), \
+                mock.patch.object(pilot, "gh_merge") as gh_merge:
+            pilot.recover_merge_intents({}, state)
+        gh_merge.assert_not_called()
+        self.assertEqual(state["merge_intents"]["verify-unknown"]["phase"], "merge_submitted")
+
+    def test_gh_merge_refuses_an_untracked_branch(self):
+        with mock.patch.object(pilot.subprocess, "run") as run:
+            ok, detail = pilot.gh_merge("github.com/timafen/factory", "gone-topic", "Единый выпуск")
+        self.assertFalse(ok)
+        self.assertIn("immutable", detail)
+        run.assert_not_called()
 
     def test_outbox_and_notification_journals_are_immutable(self):
         state = {}
