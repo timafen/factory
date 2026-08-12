@@ -24,6 +24,16 @@ function statusTone(status: string | undefined): string {
   return "status-running";
 }
 
+function statusLabel(status: string | undefined): string {
+  const value = (status ?? "").toLowerCase();
+  const labels: Record<string, string> = {
+    active: "в работе", archived: "в архиве", blocked: "заблокирована", complete: "завершена",
+    completed: "завершена", done: "завершена", failed: "с ошибкой", planned: "в плане",
+    ready: "готова", review: "на проверке", stalled: "остановлена", succeeded: "завершена",
+  };
+  return labels[value] ?? status ?? "нет статуса";
+}
+
 export function CardsView() {
   const [selected, setSelected] = useState<CardSummary | null>(null);
   const cards = useQuery({ queryKey: ["cards"], queryFn: api.cards, staleTime: 60_000 });
@@ -43,13 +53,13 @@ export function CardsView() {
   if (selected) {
     return <CardDetail card={selected} onBack={() => setSelected(null)} />;
   }
-  if (cards.isPending) return <LoadingState label="Loading cards" />;
+  if (cards.isPending) return <LoadingState label="Загружаем карточки" />;
   if (!cards.data) return <ErrorState error={cards.error} onRetry={() => void cards.refetch()} />;
 
   return (
     <div className="page">
       <ViewHeader
-        title="Cards"
+        title="Карточки"
         fetching={cards.isFetching}
         updatedAt={cards.dataUpdatedAt}
         onRefresh={() => void cards.refetch()}
@@ -79,7 +89,7 @@ export function CardsView() {
                   </span>
                   <span className={`status-badge ${statusTone(card.status)}`}>
                     <span className="status-dot" />
-                    {card.status ? card.status.slice(0, 60) : "нет статуса"}
+                    {statusLabel(card.status).slice(0, 60)}
                   </span>
                 </button>
               ))}
@@ -103,7 +113,7 @@ function CardDetail({ card, onBack }: { card: CardSummary; onBack: () => void })
       <div className="detail-heading">
         <div>
           <span className={`status-badge ${statusTone(card.status)}`}>
-            <span className="status-dot" />{card.status || "нет статуса"}
+            <span className="status-dot" />{statusLabel(card.status)}
           </span>
           <h1>{card.name}</h1>
           <p>{card.repository_identity} · {(card.size / 1024).toFixed(1)} KiB</p>

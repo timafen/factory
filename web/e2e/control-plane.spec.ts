@@ -412,7 +412,7 @@ async function expectInteractiveOverflowRegression(page: Page) {
 }
 
 async function exerciseMobileNavigation(page: Page) {
-  const toggle = page.getByRole("button", { name: "Toggle navigation" });
+  const toggle = page.getByRole("button", { name: "Открыть навигацию" });
   const sidebar = page.locator(".sidebar");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -423,7 +423,7 @@ async function exerciseMobileNavigation(page: Page) {
   await expect(sidebar).not.toBeInViewport();
 
   await toggle.click();
-  const scrim = page.getByRole("button", { name: "Close navigation" });
+  const scrim = page.getByRole("button", { name: "Закрыть навигацию" });
   await expect(scrim).toBeVisible();
   await scrim.click({ position: { x: 380, y: 100 } });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -681,30 +681,30 @@ test("shows project readiness card", async ({ page }) => {
 test("creates, pins, revises, and disables a reusable Workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");
-  await expect(page.getByRole("heading", { name: "Runbooks", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Create runbook" }).first().click();
-  const create = page.getByRole("dialog", { name: "Create runbook" });
-  await create.getByLabel("Title").fill("E2E pinned review");
-  await create.getByLabel("Summary").fill("Prove immutable prompt snapshots.");
-  const instructions = create.getByLabel("Markdown instructions");
+  await expect(page.getByRole("heading", { name: "Сценарии", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Создать сценарий" }).first().click();
+  const create = page.getByRole("dialog", { name: "Создать сценарий" });
+  await create.getByLabel("Название").fill("E2E pinned review");
+  await create.getByLabel("Описание").fill("Prove immutable prompt snapshots.");
+  const instructions = create.getByLabel("Инструкции Markdown");
   await instructions.fill("Use revision one instructions exactly.");
   await Promise.all([
     page.waitForResponse((response) => response.url().includes("/api/v1/workflows?") && response.ok()),
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))"),
   ]);
   await expect(instructions).toBeFocused();
-  await create.getByRole("button", { name: "Create runbook" }).click();
+  await create.getByRole("button", { name: "Создать сценарий" }).click();
   await expect(page.getByRole("heading", { name: "E2E pinned review" })).toBeVisible();
   const workflowURL = page.url();
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
-  const delegate = page.getByRole("dialog", { name: "Delegate task" });
-  await delegate.getByLabel("Workflow").selectOption({ label: "E2E pinned review · revision 1" });
-  await delegate.getByLabel("Title").fill("Pinned Workflow browser task");
-  await delegate.getByLabel("Context").fill("JIRA-183 stays free text.");
-  await delegate.getByLabel("Worker").selectOption(workerOffline);
-  await delegate.getByLabel("Repository").selectOption(identifiers.offlineRepository);
-  await delegate.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
+  const delegate = page.getByRole("dialog", { name: "Поставить задачу" });
+  await delegate.getByLabel("Сценарий").selectOption({ label: "E2E pinned review · версия 1" });
+  await delegate.getByLabel("Название").fill("Pinned Workflow browser task");
+  await delegate.getByLabel("Контекст").fill("JIRA-183 stays free text.");
+  await delegate.getByLabel("Исполнитель").selectOption(workerOffline);
+  await delegate.getByLabel("Репозиторий").selectOption(identifiers.offlineRepository);
+  await delegate.getByRole("button", { name: "Поставить задачу" }).click();
   await expect(page.getByRole("heading", { name: "Pinned Workflow browser task" })).toBeVisible();
   await page.locator("details").filter({ hasText: "Задание агенту" }).locator("summary").click();
   await expect(page.getByText("JIRA-183 stays free text.", { exact: true })).toBeVisible();
@@ -713,11 +713,11 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   const taskID = new URL(page.url()).pathname.split("/").at(-1)!;
 
   await page.goto(workflowURL);
-  await page.getByRole("button", { name: "New revision" }).click();
-  const revise = page.getByRole("dialog", { name: "Create revision" });
-  await revise.getByLabel("Markdown instructions").fill("Use revision two instructions instead.");
-  await revise.getByRole("button", { name: "Create revision" }).click();
-  await expect(page.getByText("Revision 2", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Новая редакция" }).click();
+  const revise = page.getByRole("dialog", { name: "Создать редакцию" });
+  await revise.getByLabel("Инструкции Markdown").fill("Use revision two instructions instead.");
+  await revise.getByRole("button", { name: "Создать редакцию" }).click();
+  await expect(page.getByText("Редакция 2", { exact: true }).first()).toBeVisible();
 
   const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const pinned = await json<TaskDetail>(await api.get(`/api/v1/tasks/${taskID}`));
@@ -728,11 +728,11 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   expect(pinned.resolved_prompt).not.toContain("Use revision two instructions instead.");
   await api.dispose();
 
-  await page.getByRole("button", { name: "Disable" }).click();
-  await page.getByRole("button", { name: "Confirm disable" }).click();
-  await expect(page.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Delegate task" }).click();
-  await expect(page.getByRole("dialog").getByLabel("Workflow").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Выключить" }).click();
+  await page.getByRole("button", { name: "Подтвердить: выключить" }).click();
+  await expect(page.getByRole("button", { name: "Включить", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
+  await expect(page.getByRole("dialog").getByLabel("Сценарий").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   browser.assertClean();
 });
@@ -740,28 +740,28 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
 test("runs the complete UI to real-worker and Git-worktree workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Delegate task" });
-  await dialog.getByLabel("Worker").selectOption(realWorker);
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Поставить задачу" });
+  await dialog.getByLabel("Исполнитель").selectOption(realWorker);
   await expect(
-    dialog.getByLabel("Repository").getByRole("option", { name: /factory-demo/ }),
+    dialog.getByLabel("Репозиторий").getByRole("option", { name: /factory-demo/ }),
   ).toHaveCount(1);
   await expect(
-    dialog.getByLabel("Repository").getByRole("option", { name: /handbook-demo/ }),
+    dialog.getByLabel("Репозиторий").getByRole("option", { name: /handbook-demo/ }),
   ).toHaveCount(1);
-  await dialog.getByLabel("Title").fill("Prove the complete local workflow");
+  await dialog.getByLabel("Название").fill("Prove the complete local workflow");
   await dialog
-    .getByLabel("Context")
+    .getByLabel("Контекст")
     .fill("Create deterministic evidence in the assigned real Git worktree.");
-  await dialog.getByLabel("Repository").selectOption(identifiers.realFactoryRepository);
+  await dialog.getByLabel("Репозиторий").selectOption(identifiers.realFactoryRepository);
   await page.screenshot({
     path: "test-results/screenshots/delegate-desktop.png",
     fullPage: true,
   });
-  await dialog.getByRole("button", { name: "Delegate task" }).click();
+  await dialog.getByRole("button", { name: "Поставить задачу" }).click();
 
   await expect(page.getByRole("heading", { name: "Prove the complete local workflow" })).toBeVisible();
-  await expect(page.getByText("Succeeded", { exact: true }).first()).toBeVisible({
+  await expect(page.getByText("Успешно", { exact: true }).first()).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByText("Created deterministic worktree evidence.")).toBeVisible();
@@ -798,23 +798,23 @@ test("runs the complete UI to real-worker and Git-worktree workflow", async ({ p
 test("cancels active work running in the real worker", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Delegate task" });
-  await dialog.getByLabel("Worker").selectOption(realWorker);
-  await dialog.getByLabel("Title").fill("Cancel a real active Codex process");
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Поставить задачу" });
+  await dialog.getByLabel("Исполнитель").selectOption(realWorker);
+  await dialog.getByLabel("Название").fill("Cancel a real active Codex process");
   await dialog
-    .getByLabel("Context")
+    .getByLabel("Контекст")
     .fill("FACTORY_E2E_WAIT until the operator cancels this task.");
-  await dialog.getByLabel("Repository").selectOption(identifiers.realHandbookRepository);
-  await dialog.getByRole("button", { name: "Delegate task" }).click();
+  await dialog.getByLabel("Репозиторий").selectOption(identifiers.realHandbookRepository);
+  await dialog.getByRole("button", { name: "Поставить задачу" }).click();
 
-  await expect(page.getByText("Running", { exact: true }).first()).toBeVisible({
+  await expect(page.getByText("В работе", { exact: true }).first()).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByText("Waiting for operator cancellation.")).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Confirm cancel" }).click();
-  await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible({
+  await page.getByRole("button", { name: "Отменить" }).click();
+  await page.getByRole("button", { name: "Подтвердить отмену" }).click();
+  await expect(page.getByText("Отменено", { exact: true }).first()).toBeVisible({
     timeout: 20_000,
   });
   await expect(page.locator(".attempt-output.error-output")).toContainText("attempt cancelled");
@@ -825,7 +825,7 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   const browser = observeBrowser(page);
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Work", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("button", { name: "Работы", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
@@ -968,9 +968,9 @@ test("confirms and deletes terminal task history", async ({ page, baseURL }) => 
   await page.goto(`/tasks/${identifiers.succeededTask}`);
   await expect(page.getByRole("heading", { name: "Ship the stable API client" })).toBeVisible();
   await page.waitForLoadState("networkidle");
-  await page.getByRole("button", { name: "Delete history" }).click();
-  await expect(page.getByText(/Permanently delete this task, prompt, attempts, and events/)).toBeVisible();
-  await page.getByRole("button", { name: "Confirm delete" }).click();
+  await page.getByRole("button", { name: "Удалить историю" }).click();
+  await expect(page.getByText(/Удалить задачу, промпт, попытки и события/)).toBeVisible();
+  await page.getByRole("button", { name: "Подтвердить удаление" }).click();
   await expect(page).toHaveURL("/work");
   await expect(page.getByText("Ship the stable API client")).toHaveCount(0);
   browser.assertClean();
@@ -1001,13 +1001,13 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   );
   await api.dispose();
   await page.goto("/workers");
-  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
-  const workersNavigation = page.getByRole("button", { name: "Workers", exact: true });
+  await expect(page.getByRole("heading", { name: "Исполнители" })).toBeVisible();
+  const workersNavigation = page.getByRole("button", { name: "Исполнители", exact: true });
   await expect(workersNavigation).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
   const offlineRow = page.getByRole("button", { name: /Archive Mac/ });
   await expect(offlineRow).toBeVisible();
-  await expect(offlineRow).toContainText("Offline");
+  await expect(offlineRow).toContainText("Не в сети");
   await expect(offlineRow).toContainText("Claude Code");
   await page.screenshot({ path: "test-results/screenshots/workers-desktop.png", fullPage: true });
 
@@ -1015,25 +1015,25 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   await expect(page.getByRole("heading", { name: "Build Mac" })).toBeVisible();
   await expect(workersNavigation).toHaveClass(/active/);
   await expect(workersNavigation).not.toHaveAttribute("aria-current");
-  const profileTabs = page.getByRole("tablist", { name: "Worker profile" });
-  await expect(profileTabs.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("region", { name: "Worker summary" })).toBeVisible();
+  const profileTabs = page.getByRole("tablist", { name: "Профиль исполнителя" });
+  await expect(profileTabs.getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: "Сводка исполнителя" })).toBeVisible();
 
-  await profileTabs.getByRole("tab", { name: "Work" }).click();
+  await profileTabs.getByRole("tab", { name: "Работа" }).click();
   await expect(page.getByText("factory-worker cleanup attempt-retained-001 --confirm")).toBeVisible();
 
-  await profileTabs.getByRole("tab", { name: "Capabilities" }).click();
+  await profileTabs.getByRole("tab", { name: "Возможности" }).click();
   await expect(page.getByRole("tabpanel")).toContainText("0.42.0-test");
   await expect(page.getByRole("tabpanel")).toContainText("github.com/example/factory");
 
-  await profileTabs.getByRole("tab", { name: "Settings" }).click();
-  await expect(page.getByRole("heading", { name: "Execution" })).toBeVisible();
-  await expect(page.getByText("Read only")).toBeVisible();
-  await expect(page.getByRole("meter", { name: "Worker concurrency" })).toHaveAttribute("max", "2");
-  await expect(page.getByRole("tabpanel")).toContainText("restart the worker");
-  const assign = page.getByRole("button", { name: "Assign work" });
+  await profileTabs.getByRole("tab", { name: "Настройки" }).click();
+  await expect(page.getByRole("heading", { name: "Исполнение" })).toBeVisible();
+  await expect(page.getByText("Только чтение")).toBeVisible();
+  await expect(page.getByRole("meter", { name: "Параллельность исполнителя" })).toHaveAttribute("max", "2");
+  await expect(page.getByRole("tabpanel")).toContainText("Обнови файл и перезапусти исполнителя");
+  const assign = page.getByRole("button", { name: "Назначить работу" });
   await assign.click();
-  await expect(page.getByRole("dialog").getByLabel("Worker")).toHaveValue(workerOnline);
+  await expect(page.getByRole("dialog").getByLabel("Исполнитель")).toHaveValue(workerOnline);
   await page.keyboard.press("Escape");
   await expect(assign).toBeFocused();
   browser.assertClean();
@@ -1042,17 +1042,17 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
 test("delegates with worker-specific repositories and preserves the task on refresh", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Delegate task" });
-  await dialog.getByLabel("Worker").selectOption(workerOffline);
-  await expect(dialog.getByText(/task will queue until it returns/i)).toBeVisible();
-  await expect(dialog.getByText("This becomes the Claude Code prompt.")).toBeVisible();
-  await expect(dialog.getByLabel("Repository").getByRole("option", { name: /archive/ })).toHaveCount(1);
-  await expect(dialog.getByLabel("Repository").locator(`option[value="${identifiers.factoryRepository}"]`)).toBeDisabled();
-  await dialog.getByLabel("Title").fill("Durable delegated browser task");
-  await dialog.getByLabel("Context").fill("Created in the real UI and stored by the real Go server.");
-  await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
-  await dialog.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Поставить задачу" });
+  await dialog.getByLabel("Исполнитель").selectOption(workerOffline);
+  await expect(dialog.getByText("Исполнитель не в сети. Задача будет ждать в очереди до его возвращения.")).toBeVisible();
+  await expect(dialog.getByText("Это станет промптом для Claude Code.")).toBeVisible();
+  await expect(dialog.getByLabel("Репозиторий").getByRole("option", { name: /archive/ })).toHaveCount(1);
+  await expect(dialog.getByLabel("Репозиторий").locator(`option[value="${identifiers.factoryRepository}"]`)).toBeDisabled();
+  await dialog.getByLabel("Название").fill("Durable delegated browser task");
+  await dialog.getByLabel("Контекст").fill("Created in the real UI and stored by the real Go server.");
+  await dialog.getByLabel("Репозиторий").selectOption(identifiers.offlineRepository);
+  await dialog.getByRole("button", { name: "Поставить задачу" }).click();
   await expect(page.getByRole("heading", { name: "Durable delegated browser task" })).toBeVisible();
   await expect(page.getByText("Claude Code", { exact: true })).toBeVisible();
   await page.reload();
@@ -1063,14 +1063,14 @@ test("delegates with worker-specific repositories and preserves the task on refr
 test("confirms queued cancellation and explicitly retries a failure", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto(`/tasks/${identifiers.queuedTask}`);
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByText("Cancel this task?")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm cancel" }).click();
-  await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Отменить" }).click();
+  await expect(page.getByText("Отменить эту задачу?")).toBeVisible();
+  await page.getByRole("button", { name: "Подтвердить отмену" }).click();
+  await expect(page.getByText("Отменено", { exact: true }).first()).toBeVisible();
 
   await page.goto(`/tasks/${identifiers.failedTask}`);
-  await page.getByRole("button", { name: "Retry task" }).click();
-  await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Повторить задачу" }).click();
+  await expect(page.getByText("В очереди", { exact: true }).first()).toBeVisible();
   browser.assertClean();
 });
 
@@ -1084,16 +1084,16 @@ test("shows ordered progress and long task detail", async ({ page }) => {
     }
   });
   await page.goto(`/tasks/${identifiers.runningTask}`);
-  const workNavigation = page.getByRole("button", { name: "Work", exact: true });
+  const workNavigation = page.getByRole("button", { name: "Работы", exact: true });
   await expect(workNavigation).toHaveClass(/active/);
   await expect(workNavigation).not.toHaveAttribute("aria-current");
   const events = page.locator(".event-list li");
   await expect(events).toHaveCount(3);
   await expect(events.nth(0)).toContainText("Inspected the control-plane contract.");
-  await expect(events.nth(1)).toContainText("Succeeded: npm test");
+  await expect(events.nth(1)).toContainText("Успешно: npm test");
   await expect(events.nth(2)).toContainText("Running browser verification.");
   await expect(page.getByText("RAW_COMMAND_OUTPUT_SHOULD_NOT_RENDER")).toHaveCount(0);
-  await expect(page.getByText("3 updates")).toBeVisible();
+  await expect(page.getByText("3 обновл.")).toBeVisible();
   await expect.poll(() => eventAfters).toContain("-1");
   await expect.poll(() => eventAfters, { timeout: 8_000 }).toContain("3");
 
@@ -1135,15 +1135,15 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");
-  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Исполнители" })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/workers-narrow.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
-  const dialog = page.getByRole("dialog", { name: "Delegate task" });
-  await dialog.getByLabel("Worker").selectOption(realWorker);
-  await dialog.getByLabel("Title").fill("Narrow viewport delegation");
-  await dialog.getByLabel("Context").fill("Review the complete narrow task form.");
-  await dialog.getByLabel("Repository").selectOption(identifiers.realFactoryRepository);
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
+  const dialog = page.getByRole("dialog", { name: "Поставить задачу" });
+  await dialog.getByLabel("Исполнитель").selectOption(realWorker);
+  await dialog.getByLabel("Название").fill("Narrow viewport delegation");
+  await dialog.getByLabel("Контекст").fill("Review the complete narrow task form.");
+  await dialog.getByLabel("Репозиторий").selectOption(identifiers.realFactoryRepository);
   await page.screenshot({ path: "test-results/screenshots/delegate-narrow.png", fullPage: true });
   await page.keyboard.press("Escape");
 
@@ -1193,13 +1193,13 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     { name: "access", path: "/access", ready: (page) => page.getByRole("heading", { name: "Доступы" }) },
     { name: "sandbox-keys", path: "/sandbox-keys", ready: (page) => page.getByRole("heading", { name: "Ключи песочницы" }) },
     { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа агентов" }) },
-    { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Execution capacity" }) },
-    { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Managed repositories" }) },
+    { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Исполнители" }) },
+    { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Репозитории" }) },
     { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },
-    { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Runbooks", exact: true }) },
+    { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Сценарии", exact: true }) },
     { name: "pipeline", path: "/pipeline", ready: (page) => page.getByRole("heading", { name: "Pipeline", exact: true }) },
-    { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Cards", exact: true }) },
-    { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Automations", exact: true }) },
+    { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Карточки", exact: true }) },
+    { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Автоматизации", exact: true }) },
     { name: "settings", path: "/settings", ready: (page) => page.getByRole("heading", { name: "Настройки" }) },
     { name: "dialog", path: "/dialog", ready: (page) => page.getByRole("heading", { name: "Диалог", exact: true }) },
   ];
@@ -1241,13 +1241,13 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
     if (viewport.name === "phone") await exerciseMobileNavigation(page);
-    await page.getByRole("button", { name: "Delegate task" }).click();
-    const dialog = page.getByRole("dialog", { name: "Delegate task" });
+    await page.getByRole("button", { name: "Поставить задачу" }).click();
+    const dialog = page.getByRole("dialog", { name: "Поставить задачу" });
     await expect(dialog).toBeVisible();
-    await dialog.getByLabel("Worker").selectOption(workerOffline);
-    await dialog.getByLabel("Repository").selectOption(identifiers.offlineRepository);
-    await dialog.getByLabel("Title").fill("Delegate from the full desktop and phone visual audit");
-    await dialog.getByLabel("Context").fill("All fields and actions remain reachable without page-level horizontal scrolling.");
+    await dialog.getByLabel("Исполнитель").selectOption(workerOffline);
+    await dialog.getByLabel("Репозиторий").selectOption(identifiers.offlineRepository);
+    await dialog.getByLabel("Название").fill("Delegate from the full desktop and phone visual audit");
+    await dialog.getByLabel("Контекст").fill("All fields and actions remain reachable without page-level horizontal scrolling.");
     await expectAuditedLayout(page, viewport.name === "desktop");
     await page.screenshot({
       path: `test-results/screenshots/delegate-task-${viewport.name}.png`,
@@ -1262,10 +1262,10 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
 test("opens and closes delegation from the keyboard", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  const delegate = page.getByRole("button", { name: "Delegate task" }).first();
+  const delegate = page.getByRole("button", { name: "Поставить задачу" }).first();
   await delegate.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Title")).toBeFocused();
+  await expect(page.getByLabel("Название")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(delegate).toBeFocused();
@@ -1298,27 +1298,27 @@ test("manages repository routing end to end and preserves add input while pollin
   );
 
   await page.goto("/repositories");
-  const repositoriesNavigation = page.getByRole("button", { name: "Repositories", exact: true });
+  const repositoriesNavigation = page.getByRole("button", { name: "Репозитории", exact: true });
   await expect(repositoriesNavigation).toHaveAttribute("aria-current", "page");
-  const input = page.getByLabel("Canonical identity");
+  const input = page.getByLabel("Точная идентичность");
   await input.fill("github.com/example/browser-managed");
   await expect(input).toBeFocused();
   await page.waitForTimeout(10_500);
   await expect(input).toHaveValue("github.com/example/browser-managed");
   await expect(input).toBeFocused();
-  await page.getByRole("button", { name: "Add repository" }).click();
+  await page.getByRole("button", { name: "Добавить репозиторий" }).click();
 
   await expect(page.getByRole("heading", { name: "github.com/example/browser-managed" })).toBeVisible();
   await expect(repositoriesNavigation).toHaveClass(/active/);
   await expect(repositoriesNavigation).not.toHaveAttribute("aria-current");
-  await expect(page.getByText(/\d+ workers? (?:is|are) ready to acquire routed work/)).toBeVisible();
+  await expect(page.getByText(/^\d+ исполнител(?:ь готов|ей готовы) взять работу$/)).toBeVisible();
   await expect(page.getByText("Managed repository worker")).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/repository-detail-desktop.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Disable repository" }).click();
-  await expect(page.getByText(/Disabling rejects new routed work/)).toBeVisible();
-  await page.getByRole("button", { name: "Disable routing" }).click();
-  await expect(page.getByText("Routing disabled")).toBeVisible();
+  await page.getByRole("button", { name: "Выключить репозиторий" }).click();
+  await expect(page.getByText(/После выключения новые работы не будут направляться сюда/)).toBeVisible();
+  await page.getByRole("button", { name: "Выключить маршрутизацию" }).click();
+  await expect(page.getByText("Маршрутизация выключена")).toBeVisible();
 
   const disabledRoute = await api.post("/api/v1/tasks", {
     data: {
@@ -1335,8 +1335,8 @@ test("manages repository routing end to end and preserves add input while pollin
   expect(disabledRoute.status()).toBe(409);
   expect(await disabledRoute.json()).toMatchObject({ error: { code: "repository_not_managed" } });
 
-  await page.getByRole("button", { name: "Enable repository" }).click();
-  await expect(page.getByRole("button", { name: "Disable repository" })).toBeVisible();
+  await page.getByRole("button", { name: "Включить репозиторий" }).click();
+  await expect(page.getByRole("button", { name: "Выключить репозиторий" })).toBeVisible();
   const enabledRoute = await api.post("/api/v1/tasks", {
     data: {
       request_key: "e2e-enabled-managed-route",
@@ -1353,17 +1353,17 @@ test("manages repository routing end to end and preserves add input while pollin
   const enabledTask = await enabledRoute.json() as { execution: { assigned_worker_id: string } };
   expect([managedWorker, realWorker]).toContain(enabledTask.execution.assigned_worker_id);
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
-  const delegate = page.getByRole("dialog", { name: "Delegate task" });
-  await delegate.getByLabel("Title").fill("Delegate configured managed repository");
-  await delegate.getByLabel("Context").fill("Acquire this repository on the selected worker.");
-  await delegate.getByLabel("Worker").selectOption(managedWorker);
-  const repositoryPicker = delegate.getByLabel("Repository");
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
+  const delegate = page.getByRole("dialog", { name: "Поставить задачу" });
+  await delegate.getByLabel("Название").fill("Delegate configured managed repository");
+  await delegate.getByLabel("Контекст").fill("Acquire this repository on the selected worker.");
+  await delegate.getByLabel("Исполнитель").selectOption(managedWorker);
+  const repositoryPicker = delegate.getByLabel("Репозиторий");
   const managedOption = repositoryPicker.locator("option").filter({ hasText: "github.com/example/browser-managed" });
   await expect(managedOption).toBeEnabled();
-  await expect(managedOption).toContainText("acquired on demand");
+  await expect(managedOption).toContainText("получается по запросу");
   await repositoryPicker.selectOption((await managedOption.getAttribute("value"))!);
-  await delegate.getByRole("button", { name: "Delegate task" }).click();
+  await delegate.getByRole("button", { name: "Поставить задачу" }).click();
   await expect(page.getByRole("heading", { name: "Delegate configured managed repository" })).toBeVisible();
   const delegatedTaskID = new URL(page.url()).pathname.split("/").at(-1)!;
   const delegatedTask = await json<TaskDetail>(await api.get(`/api/v1/tasks/${delegatedTaskID}`));
@@ -1392,42 +1392,42 @@ test("previews and dispatches one typed GitHub issue Automation without duplicat
     [{ provider: "github", hostname: "github.com" }],
   );
   await page.goto("/workflows");
-  await page.getByRole("button", { name: "Create runbook" }).first().click();
-  const workflow = page.getByRole("dialog", { name: "Create runbook" });
-  await workflow.getByLabel("Title").fill("E2E issue Automation");
-  await workflow.getByLabel("Summary").fill("Dispatch the safe issue fixture.");
-  await workflow.getByLabel("Markdown instructions").fill("Fetch the live issue, implement it, and verify the result.");
-  await workflow.getByRole("button", { name: "Create runbook" }).click();
+  await page.getByRole("button", { name: "Создать сценарий" }).first().click();
+  const workflow = page.getByRole("dialog", { name: "Создать сценарий" });
+  await workflow.getByLabel("Название").fill("E2E issue Automation");
+  await workflow.getByLabel("Описание").fill("Dispatch the safe issue fixture.");
+  await workflow.getByLabel("Инструкции Markdown").fill("Fetch the live issue, implement it, and verify the result.");
+  await workflow.getByRole("button", { name: "Создать сценарий" }).click();
   await expect(page.getByRole("heading", { name: "E2E issue Automation" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Automations", exact: true }).click();
-  await page.getByRole("button", { name: "Create Automation" }).first().click();
-  const automation = page.getByRole("dialog", { name: "Create Automation" });
-  await automation.getByLabel("Title").fill("E2E ready issues");
-  await automation.getByLabel("Runbook").selectOption({ label: "E2E issue Automation" });
-  await automation.getByLabel("Repository").selectOption(identifiers.automationRepository);
-  await automation.getByLabel("Context for this Automation").fill("Use only the safe browser fixture repository.");
-  await automation.getByRole("button", { name: "Create Automation" }).click();
+  await page.getByRole("button", { name: "Автоматизации", exact: true }).click();
+  await page.getByRole("button", { name: "Создать автоматизацию" }).first().click();
+  const automation = page.getByRole("dialog", { name: "Создать автоматизацию" });
+  await automation.getByLabel("Название").fill("E2E ready issues");
+  await automation.getByLabel("Сценарий").selectOption({ label: "E2E issue Automation" });
+  await automation.getByLabel("Репозиторий").selectOption(identifiers.automationRepository);
+  await automation.getByLabel("Контекст автоматизации").fill("Use only the safe browser fixture repository.");
+  await automation.getByRole("button", { name: "Создать автоматизацию" }).click();
   await expect(page.getByRole("heading", { name: "E2E ready issues" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Test trigger" }).click();
+  await page.getByRole("button", { name: "Проверить триггер" }).click();
   await expect(page.getByText("#184 Typed Automation browser fixture")).toBeVisible();
-  await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
-  await expect(page.getByText("No runs yet.")).toBeVisible();
+  await expect(page.getByText("Проверка не создаёт задачу или постоянный запуск.")).toBeVisible();
+  await expect(page.getByText("Постоянного запуска ещё не было.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Включить", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "Confirm enable" }).click();
-  await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Подтвердить: включить" }).click();
+  await expect(page.locator(".automation-health").getByText("исправна", { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".occurrence-list").getByText("#184 Typed Automation browser fixture", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open task" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Открыть задачу" })).toBeVisible();
 
   const before = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   const automationTasksBefore = before.tasks.filter((task) => task.request_key.includes(":github_issue:184"));
   expect(automationTasksBefore).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Check now" }).click();
-  await expect(page.locator(".automation-metrics > div").filter({ hasText: "Matched" }).locator("strong")).toHaveText("2", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Проверить сейчас" }).click();
+  await expect(page.locator(".automation-metrics > div").filter({ hasText: "Совпало" }).locator("strong")).toHaveText("2", { timeout: 15_000 });
   const after = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   const automationTasksAfter = after.tasks.filter((task) => task.request_key.includes(":github_issue:184"));
   expect(automationTasksAfter).toHaveLength(1);
@@ -1453,44 +1453,44 @@ test("previews and dispatches one typed GitHub pull-request Automation without d
     [{ provider: "github", hostname: "github.com" }],
   );
   await page.goto("/workflows");
-  await page.getByRole("button", { name: "Create runbook" }).first().click();
-  const workflow = page.getByRole("dialog", { name: "Create runbook" });
-  await workflow.getByLabel("Title").fill("E2E pull-request review");
-  await workflow.getByLabel("Summary").fill("Review the safe pull-request fixture.");
-  await workflow.getByLabel("Markdown instructions").fill("Fetch and revalidate the live pull request, review it, and do not merge it.");
-  await workflow.getByRole("button", { name: "Create runbook" }).click();
+  await page.getByRole("button", { name: "Создать сценарий" }).first().click();
+  const workflow = page.getByRole("dialog", { name: "Создать сценарий" });
+  await workflow.getByLabel("Название").fill("E2E pull-request review");
+  await workflow.getByLabel("Описание").fill("Review the safe pull-request fixture.");
+  await workflow.getByLabel("Инструкции Markdown").fill("Fetch and revalidate the live pull request, review it, and do not merge it.");
+  await workflow.getByRole("button", { name: "Создать сценарий" }).click();
   await expect(page.getByRole("heading", { name: "E2E pull-request review" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Automations", exact: true }).click();
-  await page.getByRole("button", { name: "Create Automation" }).first().click();
-  const automation = page.getByRole("dialog", { name: "Create Automation" });
-  await automation.getByLabel("Title").fill("E2E pull-request Automation");
-  await automation.getByLabel("Runbook").selectOption({ label: "E2E pull-request review" });
-  await automation.getByLabel("Repository").selectOption(identifiers.automationRepository);
-  await automation.getByLabel("Trigger").selectOption("github_pull_request");
-  await automation.getByLabel("Required labels").fill("factory:review");
-  await automation.getByLabel("Base branches").fill("main");
-  await automation.getByLabel("Context for this Automation").fill("Review only the safe synthetic pull request and never merge it.");
-  await automation.getByRole("button", { name: "Create Automation" }).click();
+  await page.getByRole("button", { name: "Автоматизации", exact: true }).click();
+  await page.getByRole("button", { name: "Создать автоматизацию" }).first().click();
+  const automation = page.getByRole("dialog", { name: "Создать автоматизацию" });
+  await automation.getByLabel("Название").fill("E2E pull-request Automation");
+  await automation.getByLabel("Сценарий").selectOption({ label: "E2E pull-request review" });
+  await automation.getByLabel("Репозиторий").selectOption(identifiers.automationRepository);
+  await automation.getByLabel("Триггер").selectOption("github_pull_request");
+  await automation.getByLabel("Обязательные метки").fill("factory:review");
+  await automation.getByLabel("Базовые ветки").fill("main");
+  await automation.getByLabel("Контекст автоматизации").fill("Review only the safe synthetic pull request and never merge it.");
+  await automation.getByRole("button", { name: "Создать автоматизацию" }).click();
   await expect(page.getByRole("heading", { name: "E2E pull-request Automation" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Test trigger" }).click();
+  await page.getByRole("button", { name: "Проверить триггер" }).click();
   await expect(page.getByText("#185 Typed pull-request Automation browser fixture")).toBeVisible();
-  await expect(page.getByText("Testing creates no task or durable run.")).toBeVisible();
-  await expect(page.getByText("No runs yet.")).toBeVisible();
+  await expect(page.getByText("Проверка не создаёт задачу или постоянный запуск.")).toBeVisible();
+  await expect(page.getByText("Постоянного запуска ещё не было.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Включить", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "Confirm enable" }).click();
-  await expect(page.locator(".automation-health").getByText("healthy", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Подтвердить: включить" }).click();
+  await expect(page.locator(".automation-health").getByText("исправна", { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".occurrence-list").getByText("#185 Typed pull-request Automation browser fixture", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open task" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Открыть задачу" })).toBeVisible();
 
   const before = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   expect(before.tasks.filter((task) => task.request_key.includes(":github_pull_request:185"))).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Check now" }).click();
-  await expect(page.locator(".automation-metrics > div").filter({ hasText: "Matched" }).locator("strong")).toHaveText("2", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Проверить сейчас" }).click();
+  await expect(page.locator(".automation-metrics > div").filter({ hasText: "Совпало" }).locator("strong")).toHaveText("2", { timeout: 15_000 });
   const after = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   expect(after.tasks.filter((task) => task.request_key.includes(":github_pull_request:185"))).toHaveLength(1);
   await api.dispose();
@@ -1515,45 +1515,45 @@ test("previews, enables, and runs a schedule Automation through the ordinary tas
     [],
   );
   await page.goto("/workflows");
-  await page.getByRole("button", { name: "Create runbook" }).first().click();
-  const workflow = page.getByRole("dialog", { name: "Create runbook" });
-  await workflow.getByLabel("Title").fill("E2E scheduled maintenance");
-  await workflow.getByLabel("Summary").fill("Run safe scheduled maintenance.");
-  await workflow.getByLabel("Markdown instructions").fill("Inspect the fixture repository and report the scheduled maintenance result.");
-  await workflow.getByRole("button", { name: "Create runbook" }).click();
+  await page.getByRole("button", { name: "Создать сценарий" }).first().click();
+  const workflow = page.getByRole("dialog", { name: "Создать сценарий" });
+  await workflow.getByLabel("Название").fill("E2E scheduled maintenance");
+  await workflow.getByLabel("Описание").fill("Run safe scheduled maintenance.");
+  await workflow.getByLabel("Инструкции Markdown").fill("Inspect the fixture repository and report the scheduled maintenance result.");
+  await workflow.getByRole("button", { name: "Создать сценарий" }).click();
   await expect(page.getByRole("heading", { name: "E2E scheduled maintenance" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Automations", exact: true }).click();
-  await page.getByRole("button", { name: "Create Automation" }).first().click();
-  const automation = page.getByRole("dialog", { name: "Create Automation" });
-  await automation.getByLabel("Title").fill("E2E schedule Automation");
-  await automation.getByLabel("Runbook").selectOption({ label: "E2E scheduled maintenance" });
-  await automation.getByLabel("Repository").selectOption(identifiers.automationRepository);
-  await automation.getByLabel("Trigger").selectOption("schedule");
-  await automation.getByLabel("Frequency").selectOption("custom");
-  await automation.getByText("Expert settings").click();
-  await automation.getByLabel("Cron (five fields)").fill("0 0 1 JAN *");
-  await automation.getByLabel("Timezone").fill("Europe/London");
-  await automation.getByLabel("Context for this Automation").fill("Use only the safe synthetic repository.");
-  await automation.getByRole("button", { name: "Create Automation" }).click();
+  await page.getByRole("button", { name: "Автоматизации", exact: true }).click();
+  await page.getByRole("button", { name: "Создать автоматизацию" }).first().click();
+  const automation = page.getByRole("dialog", { name: "Создать автоматизацию" });
+  await automation.getByLabel("Название").fill("E2E schedule Automation");
+  await automation.getByLabel("Сценарий").selectOption({ label: "E2E scheduled maintenance" });
+  await automation.getByLabel("Репозиторий").selectOption(identifiers.automationRepository);
+  await automation.getByLabel("Триггер").selectOption("schedule");
+  await automation.getByLabel("Частота").selectOption("custom");
+  await automation.getByText("Дополнительные настройки").click();
+  await automation.getByLabel("Cron (пять полей)").fill("0 0 1 JAN *");
+  await automation.getByLabel("Часовой пояс").fill("Europe/London");
+  await automation.getByLabel("Контекст автоматизации").fill("Use only the safe synthetic repository.");
+  await automation.getByRole("button", { name: "Создать автоматизацию" }).click();
   await expect(page.getByRole("heading", { name: "E2E schedule Automation" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Test trigger" }).click();
-  await expect(page.getByText(/next matching UTC instant/i)).toBeVisible();
-  await expect(page.getByText("No runs yet.")).toBeVisible();
-  await page.getByRole("button", { name: "Enable", exact: true }).click();
+  await page.getByRole("button", { name: "Проверить триггер" }).click();
+  await expect(page.getByText(/Следующий подходящий момент UTC/)).toBeVisible();
+  await expect(page.getByText("Постоянного запуска ещё не было.")).toBeVisible();
+  await page.getByRole("button", { name: "Включить", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /factory-poller is stopped/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "Confirm enable" }).click();
-  const nextDue = page.getByText("Next due UTC").locator("..").locator("dd");
+  await page.getByRole("button", { name: "Подтвердить: включить" }).click();
+  const nextDue = page.getByText("Следующий срок UTC").locator("..").locator("dd");
   await expect.poll(async () => {
     const instant = Date.parse((await nextDue.textContent()) ?? "");
     return Number.isFinite(instant) && instant > Date.now();
   }).toBe(true);
 
-  await page.getByRole("button", { name: "Run now" }).click();
-  await expect(page.locator(".occurrence-list").getByText("Run now", { exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("button", { name: "Open task" })).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator(".automation-latest-task").getByText("Run now", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Запустить сейчас" }).click();
+  await expect(page.locator(".occurrence-list").getByText("Запущен вручную", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Открыть задачу" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".automation-latest-task").getByText("Запущен вручную", { exact: true })).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: "test-results/screenshots/automation-detail-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".sidebar")).not.toBeInViewport();
@@ -1573,35 +1573,35 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
   const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   const legacyRoot = `${process.cwd()}/test-results/legacy-poller`;
   await page.goto("/automations");
-  await page.getByRole("button", { name: "Migrate legacy poller" }).click();
-  const migration = page.getByRole("dialog", { name: "Migrate legacy poller" });
-  await migration.getByLabel("Legacy poller.toml").fill(`${legacyRoot}/poller.toml`);
-  await migration.getByLabel("Legacy data home").fill(legacyRoot);
-  await migration.getByLabel("Original working directory").fill(legacyRoot);
-  await migration.getByRole("checkbox", { name: /I stopped every factory-poller process/ }).check();
+  await page.getByRole("button", { name: "Перенести старый опросчик" }).click();
+  const migration = page.getByRole("dialog", { name: "Перенести старый опросчик" });
+  await migration.getByLabel("Старый poller.toml").fill(`${legacyRoot}/poller.toml`);
+  await migration.getByLabel("Каталог данных старого опросчика").fill(legacyRoot);
+  await migration.getByLabel("Исходный рабочий каталог").fill(legacyRoot);
+  await migration.getByRole("checkbox", { name: /Я остановил все процессы factory-poller/ }).check();
   const previewResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/v1/migrations/legacy-poller/preview") && response.request().method() === "POST",
   );
-  await migration.getByRole("button", { name: "Preview locked snapshot" }).click();
+  await migration.getByRole("button", { name: "Просмотреть заблокированный снимок" }).click();
   const previewResult = await previewResponse;
   expect(previewResult.ok(), await previewResult.text()).toBe(true);
 
-  await expect(migration.getByText("1 supported · 0 unsupported")).toBeVisible();
-  await expect(migration.getByText("0 submitted · 1 pending", { exact: true })).toBeVisible();
+  await expect(migration.getByText("1 поддержано · 0 не поддержано")).toBeVisible();
+  await expect(migration.getByText("0 отправлено · 1 ожидает", { exact: true })).toBeVisible();
   await expect(migration.getByText(`${legacyRoot}/poller/poller.sqlite3`, { exact: true })).toBeVisible();
-  await expect(migration.getByText(/Repository mapping:/)).toContainText("github.com/example/automation-fixture");
-  await migration.getByLabel("Runbook title").fill("E2E imported legacy workflow");
-  await migration.getByLabel("Automation title").fill("E2E imported legacy issues");
+  await expect(migration.getByText(/Связанный репозиторий:/)).toContainText("github.com/example/automation-fixture");
+  await migration.getByLabel("Название сценария").fill("E2E imported legacy workflow");
+  await migration.getByLabel("Название автоматизации").fill("E2E imported legacy issues");
   const importedResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/v1/migrations/legacy-poller/import") && response.request().method() === "POST",
   );
-  await migration.getByRole("button", { name: "Import disabled Automations" }).click();
+  await migration.getByRole("button", { name: "Импортировать выключенные автоматизации" }).click();
   const status = await (await importedResponse).json() as {
     id: string;
     automations: Array<{ id: string }>;
   };
-  await expect(migration.getByText("1 unresolved")).toBeVisible();
-  await expect(migration.getByRole("button", { name: "Finalize and archive" })).toBeDisabled();
+  await expect(migration.getByText("1 не разобрано")).toBeVisible();
+  await expect(migration.getByRole("button", { name: "Завершить и архивировать" })).toBeDisabled();
 
   const blockedEnable = await api.put(`/api/v1/automations/${status.automations[0].id}/enabled`, {
     data: { enabled: true },
@@ -1610,16 +1610,16 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
   expect(await blockedEnable.text()).toContain("migration_not_finalized");
 
   await page.reload();
-  await page.getByRole("button", { name: "Migrate legacy poller" }).click();
-  await expect(migration.getByText("1 unresolved")).toBeVisible();
-  const recoveredResume = migration.getByRole("button", { name: "Resume" });
+  await page.getByRole("button", { name: "Перенести старый опросчик" }).click();
+  await expect(migration.getByText("1 не разобрано")).toBeVisible();
+  const recoveredResume = migration.getByRole("button", { name: "Возобновить" });
   await expect(recoveredResume).toBeDisabled();
-  await migration.getByRole("checkbox", { name: /I reconfirmed every factory-poller process/ }).check();
+  await migration.getByRole("checkbox", { name: /Я ещё раз подтвердил, что все процессы factory-poller остановлены/ }).check();
   await expect(recoveredResume).toBeEnabled();
   await recoveredResume.click();
-  await expect(migration.getByText("0 unresolved")).toBeVisible();
-  await migration.getByRole("button", { name: "Finalize and archive" }).click();
-  await expect(migration.getByText("Migration finalized")).toBeVisible();
+  await expect(migration.getByText("0 не разобрано")).toBeVisible();
+  await migration.getByRole("button", { name: "Завершить и архивировать" }).click();
+  await expect(migration.getByText("Перенос завершён")).toBeVisible();
   await expect(migration.getByText(`${legacyRoot}/archive/poller/${status.id}`)).toBeVisible();
 
   const tasks = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));

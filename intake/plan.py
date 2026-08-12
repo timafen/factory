@@ -6,6 +6,7 @@
 и помощник вручную заводят только предложения и видят тот же общий список.
 """
 import html
+import os
 import sys
 import uuid
 
@@ -23,6 +24,7 @@ STATE_RU = {"new": "новое", "planned": "в плане", "in_work": "в ра
 STATE_ORDER = {"in_work": 0, "planned": 1, "new": 2, "done": 3, "rejected": 4}
 ORIGIN_RU = {"owner": "хозяин", "assistant": "помощник", "agent": "агент",
              "orchestrator": "фабрика"}
+PUBLIC_PLAN_PATH = "/intake/plan"
 
 
 def repos_map():
@@ -39,6 +41,20 @@ def repo_name(rid, rmap):
     if not rid:
         return "без проекта"
     return rmap.get(rid) or ("проект " + rid[:8])
+
+
+def public_plan_back(back: str = "") -> str:
+    """Возвращает внешний путь Плана, даже когда router видит /plan.
+
+    Intake проксируется под /intake, тогда как FastAPI получает путь без этого
+    префикса. Не позволяем внутреннему адресу или произвольному back попасть в
+    Location после действия владельца.
+    """
+    if back.startswith(PUBLIC_PLAN_PATH + "?") or back == PUBLIC_PLAN_PATH:
+        return back
+    if back.startswith("/plan?") or back == "/plan":
+        return f"/intake{back}"
+    return PUBLIC_PLAN_PATH
 
 
 # ------------------------------------------------------------------ JSON ---
@@ -146,7 +162,7 @@ def idea_action(idea_id: str, action: str = Form(...), reason: str = Form(""),
     else:
         raise HTTPException(400, "неизвестное действие")
     if back:
-        return RedirectResponse(back, status_code=303)
+        return RedirectResponse(public_plan_back(back), status_code=303)
     return {"ok": True}
 
 
@@ -180,10 +196,12 @@ h1{font-size:19px;margin:6px 0 2px}
 h2{font-size:15px;margin:22px 0 8px;color:#9fb4d8;
  border-bottom:1px solid #1e2532;padding-bottom:6px}
 .card{background:#121722;border:1px solid #1e2532;border-radius:12px;
- padding:11px 12px;margin:8px 0}
+ padding:11px 12px;margin:8px 0;min-width:0}
 .card.done,.card.rejected{opacity:.55}
 .t{font-weight:600;margin:0 0 4px}
 .why{color:#a8b3c7;font-size:13.5px;margin:0 0 8px;white-space:pre-wrap}
+.why-details{margin:0 0 8px;padding:0;border:0;background:transparent}
+.why-details summary{padding:6px 0}
 .meta{color:#7b8699;font-size:12px;margin:0 0 9px}
 .badge{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11.5px;
  margin-right:6px;border:1px solid #2a3346;background:#182031;color:#9fb4d8}
@@ -191,9 +209,9 @@ h2{font-size:15px;margin:22px 0 8px;color:#9fb4d8;
 .b-in_work{background:#12291c;border-color:#245c39;color:#79d69b}
 .b-planned{background:#171f33;border-color:#2c3c63;color:#8fabe6}
 .b-rejected{background:#2a1717;border-color:#5c2424;color:#e08b8b}
-form.row{display:inline}
+form.row{display:inline-flex;max-width:100%}
 button{background:#1b2333;color:#cfe0ff;border:1px solid #2c3648;border-radius:9px;
- padding:7px 11px;font-size:13px;margin:0 5px 5px 0;cursor:pointer}
+ padding:7px 11px;font-size:13px;margin:0 5px 5px 0;cursor:pointer;max-width:100%;overflow-wrap:anywhere}
 button.p{background:#1d3a5c;border-color:#2f5c8f;color:#dbeaff}
 button.d{background:#2c1c1c;border-color:#5c2c2c;color:#ffd7d7}
 input,select,textarea{width:100%;background:#0f141d;color:#e8ecf4;
@@ -202,13 +220,26 @@ input,select,textarea{width:100%;background:#0f141d;color:#e8ecf4;
 textarea{min-height:64px}
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px}
 .tabs a{text-decoration:none;font-size:13px;padding:6px 11px;border-radius:20px;
- background:#131a26;color:#9aa7bd;border:1px solid #202939}
+ background:#131a26;color:#9aa7bd;border:1px solid #202939;min-width:0;overflow-wrap:anywhere}
 .tabs a.on{background:#1d3a5c;color:#dbeaff;border-color:#2f5c8f}
 details{background:#121722;border:1px solid #1e2532;border-radius:12px;
- padding:10px 12px;margin:18px 0 0}
-summary{cursor:pointer;color:#9fb4d8;font-size:14px}
+ padding:10px 12px;margin:18px 0 0;min-width:0}
+summary{cursor:pointer;color:#9fb4d8;font-size:14px;min-height:28px;overflow-wrap:anywhere}
+.alert-group{margin:10px 0 0}
+.alert-group>summary{display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+.alert-group>summary span:first-child{min-width:0}
+.alert-freshness{flex:none;color:#7b8699;font-size:12px;overflow-wrap:anywhere}
+.alert-event{margin:9px 0 0}
 .empty{color:#7b8699;font-size:13.5px;padding:10px 2px}
 a.back{color:#8fabe6;text-decoration:none;font-size:13px}
+@media(max-width:420px){
+ body{padding:10px 10px 48px;overflow-x:hidden}
+ .tabs{gap:5px}
+ .tabs a{padding:7px 9px}
+ .card,details{padding:10px}
+ .alert-group>summary{align-items:flex-start;flex-direction:column;gap:2px}
+ button{min-height:36px}
+}
 """
 
 HELP = ("Здесь ничего не теряется: предложения добавляешь ты или помощник, "
@@ -240,7 +271,8 @@ def card_html(it, back):
                 f'<span class="badge b-{st}">{STATE_RU.get(st, st)}</span>')
     bits.append(f'<div class="t">{esc(it.get("title"))}</div>')
     if it.get("why"):
-        bits.append(f'<div class="why">{esc(it["why"])}</div>')
+        bits.append('<details class="why-details"><summary>Показать обоснование</summary>'
+                    f'<div class="why">{esc(it["why"])}</div></details>')
     meta = f'завёл: {ORIGIN_RU.get(it.get("origin"), it.get("origin"))} · {esc(it.get("created"))}'
     if it.get("source"):
         meta += f' · из работы «{esc(it["source"])}»'
@@ -272,7 +304,7 @@ def card_html(it, back):
 def plan_page(repo: str = "", show: str = "open"):
     rmap = repos_map()
     all_items = pilot.ideas_all()
-    back = f"/intake/plan?repo={repo}&show={show}"
+    back = f"{PUBLIC_PLAN_PATH}?repo={repo}&show={show}"
 
     items = [i for i in all_items if not repo or i.get("repo") == repo]
     if show == "open":
@@ -340,9 +372,9 @@ def plan_page(repo: str = "", show: str = "open"):
 
 @router.post("/plan/add")
 def plan_add(title: str = Form(...), why: str = Form(""), repo: str = Form(""),
-             kind: str = Form("idea"), back: str = Form("/intake/plan")):
+             kind: str = Form("idea"), back: str = Form(PUBLIC_PLAN_PATH)):
     pilot.add_idea(kind, title, repo, why, origin="owner")
-    return RedirectResponse(back, status_code=303)
+    return RedirectResponse(public_plan_back(back), status_code=303)
 
 
 # ------------------------------------------------------------- уведомления ---
@@ -350,25 +382,46 @@ def plan_add(title: str = Form(...), why: str = Form(""), repo: str = Form(""),
 GROUP_RU = {"questions": "вопрос ко мне", "stuck": "работа встала",
             "money": "деньги и лимиты", "done": "завершения и запуски",
             "escalate": "исполнитель повышен", "routine": "рутина"}
+ALERTS_LOG_PATH = "/opt/factory-data/pilot/notifications.jsonl"
+ALERTS_DEFAULT_N = 30
+ALERTS_MIN_N = 10
+ALERTS_MAX_N = 300
 
 
-@router.get("/alerts", response_class=HTMLResponse)
-def alerts_page(group: str = "", n: int = 100):
+def _alerts_path():
+    """Позволяет browser-фикстуре подать журнал без изменения production path."""
+    return os.environ.get("FACTORY_INTAKE_ALERTS_PATH", ALERTS_LOG_PATH)
+
+
+def _alert_limit(n):
+    return max(ALERTS_MIN_N, min(n, ALERTS_MAX_N))
+
+
+def _alert_items():
     import json as _json
-    path = "/opt/factory-data/pilot/notifications.jsonl"
+
     items = []
     try:
-        for line in open(path, encoding="utf-8").readlines()[-800:]:
-            try:
-                items.append(_json.loads(line))
-            except Exception:
-                continue
+        with open(_alerts_path(), encoding="utf-8") as stream:
+            for line in stream.readlines()[-800:]:
+                try:
+                    record = _json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(record, dict):
+                    items.append(record)
     except Exception:
         pass
     items.reverse()
+    return items
+
+
+@router.get("/alerts", response_class=HTMLResponse)
+def alerts_page(group: str = "", n: int = ALERTS_DEFAULT_N):
+    items = _alert_items()
     if group:
         items = [i for i in items if i.get("group") == group]
-    items = items[:max(10, min(n, 300))]
+    items = items[:_alert_limit(n)]
 
     tabs = ['<div class="tabs">',
             f'<a class="{"on" if not group else ""}" href="alerts">Все</a>']
@@ -376,17 +429,30 @@ def alerts_page(group: str = "", n: int = 100):
         tabs.append(f'<a class="{"on" if group == k else ""}" href="alerts?group={k}">{v}</a>')
     tabs.append("</div>")
 
+    grouped = {}
+    for item in items:
+        key = item.get("group") or "other"
+        grouped.setdefault(key, []).append(item)
+
     body = []
-    for i in items:
-        quiet = "" if i.get("delivered") else " (тихое: группа выключена)"
-        click = i.get("click") or ""
-        link = (f'<a class="back" href="{esc(click)}">открыть</a>' if click else "")
-        body.append(
-            f'<div class="card{"" if i.get("delivered") else " done"}">'
-            f'<div class="t">{esc(i.get("title"))}</div>'
-            f'<div class="why">{esc(i.get("message"))}</div>'
-            f'<div class="meta">{esc(i.get("at"))} · {GROUP_RU.get(i.get("group"), i.get("group"))}'
-            f'{quiet} {link}</div></div>')
+    for key, events in grouped.items():
+        group_name = GROUP_RU.get(key, key)
+        last_at = events[0].get("at") or ""
+        open_attr = " open" if group and key == group else ""
+        body.append(f'<details class="alert-group"{open_attr}><summary>'
+                    f'<span>{esc(group_name)} · {len(events)}</span>'
+                    f'<span class="alert-freshness">{esc(last_at)}</span></summary>')
+        for item in events:
+            quiet = "" if item.get("delivered") else " · тихое: группа выключена"
+            click = item.get("click") or ""
+            link = (f' <a class="back" href="{esc(click)}">открыть</a>' if click else "")
+            body.append(
+                f'<article class="card alert-event{"" if item.get("delivered") else " done"}">'
+                f'<div class="t">{esc(item.get("title"))}</div>'
+                f'<div class="why">{esc(item.get("message"))}</div>'
+                f'<div class="meta">{esc(item.get("at"))} · {esc(group_name)}{quiet}{link}</div>'
+                '</article>')
+        body.append('</details>')
     if not body:
         body.append('<div class="empty">Уведомлений пока нет.</div>')
 

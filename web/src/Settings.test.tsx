@@ -33,6 +33,10 @@ function renderSettings(fetchImpl: ReturnType<typeof vi.fn>) {
   return render(<QueryClientProvider client={client}><Settings/></QueryClientProvider>);
 }
 
+function primarySave() {
+  return screen.getAllByRole("button", { name: "Сохранить настройки" })[0];
+}
+
 it("shows all pilot sections, warnings, and saves an edited value without losing notes", async () => {
   const fetchMock=vi.fn(async (_input:RequestInfo|URL, init?:RequestInit) => {
     if(init?.method==="PUT") return new Response(JSON.stringify({...response,version:"version-two",settings:JSON.parse(String(init.body)).settings}),{status:200,headers:{"Content-Type":"application/json"}});
@@ -41,8 +45,10 @@ it("shows all pilot sections, warnings, and saves an edited value without losing
   renderSettings(fetchMock); const user=userEvent.setup();
   expect(await screen.findByRole("heading",{name:"Настройки"})).toBeVisible();
   expect(screen.getByText("Автоматизация и бюджеты")).toBeVisible(); expect(screen.getByText("Уведомления и ссылки владельца")).toBeVisible(); expect(screen.getByText("Цепочка моделей")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Уведомления" })).toHaveAttribute("href", "#settings-notifications");
+  expect(screen.getByRole("link", { name: "Заметка" })).toHaveAttribute("href", "#settings-note");
   expect(screen.getByText("Unknown worker: worker-new")).toBeVisible();
-  const poll=screen.getByLabelText("Интервал проверки, секунд"); await user.clear(poll); await user.type(poll,"15"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  const poll=screen.getByLabelText("Интервал проверки, секунд"); await user.clear(poll); await user.type(poll,"15"); await user.click(primarySave());
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT"); expect(put).toBeDefined();
   const body=JSON.parse(String(put![1]!.body)); expect(body.version).toBe("version-one"); expect(body.settings.poll_seconds).toBe(15); expect(body.settings._note).toBe("owner note"); expect(body.settings.brain_chain[0].note).toBe("first"); expect(body.settings.deploy_factory_cmd).toBe("deploy factory");
@@ -56,7 +62,7 @@ it("edits and saves only a known product provider type", async () => {
   renderSettings(fetchMock); const user=userEvent.setup();
   expect(await screen.findByText("Источники данных о продуктах")).toBeVisible();
   await user.selectOptions(screen.getByLabelText("Тип источника"),"trade");
-  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await user.click(primarySave());
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings.project_providers).toEqual([{remote_identity:"github.com/acme/factory",type:"trade"}]);
@@ -91,7 +97,7 @@ it("shows every notification group in Russian with a hint and saves the changed 
   for(const label of ["Вопросы ко мне","Работа встала","Деньги и лимиты","Завершения и запуски задач","Рабочая рутина"]) expect(await screen.findByLabelText(label)).toBeVisible();
   expect(screen.getByText("Присылать уведомление, если задача остановилась и требует вмешательства.")).toBeVisible();
   expect(screen.getByLabelText("Работа встала")).not.toBeChecked();
-  await user.click(screen.getByLabelText("Работа встала")); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await user.click(screen.getByLabelText("Работа встала")); await user.click(primarySave());
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings.notify_groups).toEqual({questions:true,stuck:true,money:true,done:true,routine:false,escalate:true});
@@ -107,8 +113,8 @@ it("uses pilot defaults when notification groups are absent", async () => {
 it("blocks strict routing to a worker outside the editable allow-list", async () => {
   const strict={...response,settings:{...response.settings,allow_any_worker:false}};
   renderSettings(vi.fn(async()=>new Response(JSON.stringify(strict),{status:200,headers:{"Content-Type":"application/json"}})));
-  expect(await screen.findByText(/Every routed worker must be in the allowed list/)).toBeVisible();
-  expect(screen.getByRole("button",{name:"Сохранить настройки"})).toBeDisabled();
+  expect(await screen.findByText(/Каждый назначаемый исполнитель должен быть в разрешённом списке/)).toBeVisible();
+  expect(primarySave()).toBeDisabled();
 });
 
 it("allows adding a configuration note when the API omits it", async () => {
@@ -120,7 +126,7 @@ it("allows adding a configuration note when the API omits it", async () => {
   });
   renderSettings(fetchMock); const user=userEvent.setup();
   const note=await screen.findByLabelText("Заметка о конфигурации"); expect(note).toHaveValue("");
-  await user.type(note,"new owner note"); await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await user.type(note,"new owner note"); await user.click(primarySave());
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings._note).toBe("new owner note");
@@ -134,7 +140,7 @@ it("changes the brain-chain order and saves notes with that order", async () => 
   renderSettings(fetchMock); const user=userEvent.setup();
   const moveUp=await screen.findAllByRole("button",{name:"Поднять"});
   await user.click(moveUp[1]);
-  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await user.click(primarySave());
   await screen.findByText(/Настройки сохранены/);
   const put=fetchMock.mock.calls.find(([,init])=>init?.method==="PUT");
   expect(JSON.parse(String(put![1]!.body)).settings.brain_chain).toEqual([
@@ -150,7 +156,7 @@ it("offers to reload current settings after a version conflict", async () => {
   });
   renderSettings(fetchMock); const user=userEvent.setup();
   await screen.findByRole("heading",{name:"Настройки"});
-  await user.click(screen.getByRole("button",{name:"Сохранить настройки"}));
+  await user.click(primarySave());
   expect(await screen.findByText("Настройки уже изменились. Загрузите свежую версию.")).toBeVisible();
   await user.click(screen.getByRole("button",{name:"Загрузить свежие настройки"}));
   expect(fetchMock.mock.calls.filter(([,init])=>!init?.method)).toHaveLength(2);
