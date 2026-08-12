@@ -1918,7 +1918,7 @@ def run_full_cycle(fixture):
             return {"workers": list(fixture["workers"].values())}
         if path == "/repositories":
             return {"repositories": [{"id": "repo-id",
-                                      "remote_identity": "github.com/timafen/factory"}]}
+                                      "remote_identity": "github.com/acme/repo"}]}
         if path == "/workflows":
             return {"workflows": [{"id": stage, "enabled": True,
                 "current_revision": {"id": data["revision_id"], "title": stage}}
@@ -2222,6 +2222,16 @@ else:
         with open(self.merges_path, encoding="utf-8") as stream:
             merged = [json.loads(line)["task_id"] for line in stream if line.strip()]
         self.assertEqual(merged, [verify["id"]])
+        state = pilot.load(self.state_path, {})
+        target_key, adapter = pilot._delivery_target("github.com/acme/repo")
+        self.assertEqual(adapter, "external-merge")
+        delivery = state[pilot.DELIVERY_STATE_KEY]["targets"][target_key]
+        generation = delivery["generations"][delivery["current_generation"]]
+        self.assertEqual(generation["phase"], "completed")
+        self.assertEqual(set(generation["completed_waits"]), {verify["id"]})
+        self.assertEqual(
+            state[pilot.DELIVERY_STATE_KEY]["outbox"][generation["id"] + ":done"]["status"],
+            "sent")
 
     def test_review_and_verify_discovery_survives_real_process_restart(self):
         for kind in ("review_return", "verify_return"):

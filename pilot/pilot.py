@@ -21,6 +21,7 @@ Planner layer (epics):
 import base64
 import calendar
 import datetime
+import hashlib
 import io
 import glob
 import hashlib
@@ -7247,6 +7248,11 @@ def _delivery_target(repo_identity):
         return "factory", "fx-factory-release"
     if identity.endswith("timafen/tarser-operations"):
         return "tarser-staging", "tarser-staging-deploy-release"
+    if identity:
+        # An ordinary repository has no Factory-owned release adapter.  Its
+        # durable delivery boundary is the accepted merge itself, but it must
+        # still enter the same state machine so owner completion is replayable.
+        return "external-" + hashlib.sha256(identity.encode()).hexdigest()[:16], "external-merge"
     return "", ""
 
 
@@ -7282,6 +7288,10 @@ def _delivery_generation(state, repo_identity, commit_sha, wait, now=None):
         "merge_receipts": [wait["merge_receipt"]],
         "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(
             time.time() if now is None else now))}
+    if adapter == "external-merge":
+        # The merge receipt is the terminal delivery proof for a repository
+        # whose deployment is not operated by Factory.
+        generation["phase"] = "completed"
     target["current_generation"] = gid
     target["generations"][gid] = generation
     return generation
@@ -7457,6 +7467,9 @@ def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None
     generation = _delivery_generation(state, repo_identity, commit_sha, wait, now)
     if generation:
         save(STATE_PATH, state)
+        if generation["phase"] == "completed":
+            _complete_generation(conf, state, generation)
+            dispatch_delivery_outbox(conf, state)
     return generation
 
 
