@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Status: Implemented — устранены замечания повторного Review.
+- Branch: `factory/09cf574e-c91-b21d68fc-de1`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- Implementation commit: 71e8a9661844e215691a4001187cc446def4830f — broker fail-closed обрабатывает повреждённые records и ошибки `fsync`.
+- What changed: Broker отказывается запускаться при нечитаемой или недостоверной `.json`-записи вместо риска повторного физического выпуска.
+- What changed: Atomic persist синхронизирует временный файл до `rename` и каталог после него; ошибки не публикуют неподтверждённый результат.
+- Evidence: `go test ./internal/releasebroker -count=1 -race` → OK; `just check` → OK; `just build` → OK; `git diff --check` → passed.
+- Next action: Strict Review повторно проверить исправления durability CARD-0084.
 
 ## LOG
 
@@ -62,3 +62,11 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-11 — Implement
+
+Broker now refuses startup when any durable JSON operation record is corrupt or
+inconsistent. Persistence fsyncs the temporary record before rename and the state
+directory afterwards; injected file and directory synchronization failures prove
+that neither a new operation nor an unconfirmed terminal success becomes visible.
+Targeted race tests, the full `just check`, `just build`, and diff checks pass.
