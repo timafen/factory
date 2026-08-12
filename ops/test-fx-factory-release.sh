@@ -936,6 +936,7 @@ r=sys.argv[1]; raw=open(r+'/manifest.json','rb').read(); d=json.loads(raw)
 assert hashlib.sha256(raw).hexdigest()==open(r+'/manifest.sha256').read().strip()
 names={x['source'] for x in d['artifacts']}
 assert {'payload/factory-server','payload/factory-worker','payload/factory-release-broker','payload/fx','payload/fx-factory-release','payload/pilot.py','payload/context.md','payload/intake-app.py','payload/intake-plan.py','release-info.json'} <= names
+assert d['candidate_sha']=='1234567890abcdef'
 assert d['database']['sha256']==hashlib.sha256(open(r+'/database.sqlite3','rb').read()).hexdigest()
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
