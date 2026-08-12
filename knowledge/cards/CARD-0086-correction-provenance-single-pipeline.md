@@ -2,15 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented — awaiting Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/d40c77cd-34c-8ddd7926-bf0`.
 - Implementation commit: c9c10250e80beaa6b12b8dcd711ee948e0a1aab9 — сохранено
   происхождение задач для корректировок.
 - What changed: control plane сохраняет `work_id`, родителя и причину
   корректировки; Pilot не принимает явного потомка за новый root.
-- Evidence: `go test ./internal/controlplane` → PASS; `python3 -m unittest -v
-  pilot.test_pilot` → PASS.
-- Next action: Review проверяет полный contract provenance и storm/restart cases.
+- Evidence: закреплённая проверка `go test ./...` → PASS; `python3 -m unittest -v
+  pilot.test_pilot` → PASS; веб-проверки `npm run lint`, `npm run typecheck`,
+  `npm test`, `npm run test:browser` → PASS.
+- Next action: Владелец выполняет merge после просмотра доказательств проверки.
 
 ## LOG
 
@@ -35,3 +36,13 @@ was not reused; old conflicted CARD-0079 remains untouched.
 из root discovery и передаёт parent в обычном продолжении, resume и watcher.
 `go test ./internal/controlplane` и `python3 -m unittest -v pilot.test_pilot`
 завершились успешно.
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Корень получает собственный `work_id` | `go test ./internal/controlplane` | PASS: `work_id == task_id` |
+| Корректировка сохраняет parent и общий `work_id` | `TestTaskProvenanceValidationAndReplay` | PASS: child и replay остаются в одной работе |
+| Некорректное provenance отклоняется | `TestTaskProvenanceValidationAndReplay` | PASS: нет parent и неизвестный kind не принимаются |
+| Pilot не создаёт второй pipeline для потомка | `python3 -m unittest -v pilot.test_pilot` | PASS: полный набор Pilot |
+| Сборка и регрессии интерфейса | `go test ./...`; npm lint/typecheck/test/browser | PASS |
