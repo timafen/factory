@@ -2,15 +2,24 @@
 
 ## HEAD
 
-Status: Done — реализация влита в `main` через PR #135; отдельная поставка Verify закрыта как ненужная.
+Status: Verified PASS — awaiting human merge.
 Branch: `factory/56e8a2c8-266-c4b7a5ba-fa9`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
 What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: реализационный коммит — предок свежего `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`; до этой записи `origin/main...HEAD` был пуст.
-Evidence: JSON validation и `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Next action: закрыть текущую задачу без повторного этапа Verify.
+Evidence: pinned remote comparison base `fc8548f244fe1eb2a1c653c224de668844e2f1a3` → candidate `e588a52a81dc0718dc3a91ad005b906f64cf649f`; implementation commit is an ancestor and changes `pilot/config.example.json`.
+Evidence: `go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, build, and `git diff --check` → PASS.
+Next action: human merge the verified branch.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Удалено неподдерживаемое поле Pilot | проверка implementation commit `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` и `pilot/config.example.json` | PASS: runtime-конфигурация меняется; `rollout` отсутствует. |
+| Кандидат проверен относительно свежей базы | `git ls-remote --symref origin HEAD`; isolated bare fetch; pinned comparison | PASS: `base_sha=fc8548f244fe1eb2a1c653c224de668844e2f1a3`, `candidate_sha=e588a52a81dc0718dc3a91ad005b906f64cf649f`; код уже в базе, кандидат меняет только карточку. |
+| Полная регрессия и смежное поведение | `umask 077; go test ./...`; `python3 -m unittest pilot.test_pilot` | PASS: Go suite; 229 Python tests OK (13 skipped). |
+| Конфигурация, сборка и чистота | `python3 -m json.tool pilot/config.example.json`; `go build ./cmd/factory-server`; `git diff --check` | PASS. |
 
 ### 2026-08-11 — Verify
 
