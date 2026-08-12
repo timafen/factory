@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and targeted checks pass; ready for Review.
+- Branch: `factory/0c8206c2-db3-5816087b-ae8`.
+- Implementation commit: 096760345e95e85f5871e57d5a7fdc68f56c8e30 — resume by `work_id` alone resolves the selected pipeline title.
+- What changed: same-title work remains separated by durable `work_id`, including
+  HTTP resume requests that omit `title`; Review keeps pinned SHA comparison and
+  merge keeps persist-before-action recovery across restart.
+- Evidence: targeted control-plane test PASS; full `pilot.test_pilot` PASS; build
+  PASS. `just check` reached the broad suite but unrelated control-plane/worker
+  packages timed out after five minutes under concurrent host load.
+- Next action: review the fixed-SHA Review, merge recovery, and work-only resume paths.
 
 ## LOG
 
@@ -47,3 +46,14 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Restored the current `main` protections removed by the earlier candidate:
+Review compares an isolated pinned base/candidate snapshot, and merge intent is
+persisted before the external merge and recovered after restart. Resume now
+accepts `work_id` without `title`, derives the selected pipeline title, and a
+same-title regression proves that only the requested work resumes. The targeted
+control-plane test, full Pilot suite, and build passed. The one full `just check`
+run timed out in unrelated control-plane and worker tests amid concurrent host
+load; the task-specific control-plane test passed independently in 12.7 seconds.
