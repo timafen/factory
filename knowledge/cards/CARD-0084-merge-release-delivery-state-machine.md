@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
+- Status: Выпуск из свежего `main` запущен; ожидает завершения штатных test gates.
 - Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
 - Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
 - What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
 - What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+- Evidence: PR #150 слит в `main`; `fx factory release` взял `main` с этим изменением. Пока выполняются UI и Go test gates, действующий сервис остаётся `active`, health → HTTP 200.
+- Next action: Дождаться окончания текущего `fx factory release`, затем снять release-info, status, health и логи.
 
 ## LOG
 
@@ -69,3 +69,10 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Release
+
+Изменение слито через PR #150 в свежий `main`, после чего запущен штатный
+`fx factory release`. Driver собрал исходники из `main` и перешёл к параллельным
+UI/Go test gates; до их завершения старый release-info сохраняется, а service
+остаётся active и отвечает HTTP 200. Нужны финальные release-info/status/health/logs.
