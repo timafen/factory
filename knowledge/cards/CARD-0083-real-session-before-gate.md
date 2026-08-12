@@ -1,16 +1,18 @@
 # Реальная session регистрируется до запуска gate
 
+Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
+
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/b3052294-9b9-63503efd-ec9.
-Implementation commit: d6cda20403b9f72494c7cbf4b20decd16ccbae17 — вся gate-цепочка закреплена за проверенными абсолютными путями и живой session.
-What changed: `/usr/bin/setsid --fork --wait → /usr/bin/sudo → /bin/bash → абсолютный gate script`; системные executables проверяются как root-owned и не writable для group/other.
-What changed: nonce-handshake принимается только от живого session leader — прямого ребёнка запущенного supervisor; gate ждёт одноразовый ack, а итогом остаётся kernel wait status.
-Threat model: PATH/function/alias/env/config shadow, prewritten/replayed/forged handshake и исчезнувшая PGID не могут дать успех; `$AS` исключён из цепочки результата.
-Evidence: malicious PATH `setsid` с `sid=999999 pgid=999999 ready=1` + `0`, forged file и missing session → release `5`, installs/restarts/build replacements `0`; real fork fail/success и signal cleanup → PASS; shell-suite ×3 → PASS.
-Evidence: `go test -timeout 5m ./...`, `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS.
-One next action: human merge into main.
+Status: Implemented — gate criteria PASS; merge waits for the unrelated browser regression to become green.
+Branch: factory/4c92c207-803-93fc28aa-d9e.
+Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
+What changed: UI gate invokes trusted `npm`/`npx` scripts through validated `/usr/bin/node`; a caller-controlled `PATH/node` cannot supply the runtime.
+What changed: the cloned release fixture contains a bounded gate stub, so the outer self-test validates nested success/failure without recursively starting its whole driver.
+Evidence: trusted-Node PATH-probe → `npm=1`, `npx=1`, shebang control `=0`; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS in 150s.
+Evidence: UI (158 tests), embedded UI, tooling, build, release, launcher, format, vet, vuln, staticcheck, boundary, Go and worker race → PASS.
+Known finding: unchanged browser HTTPS pause/resume scenario expects `работа завершена`, while main renders `ждёт подтверждённый выпуск`; full and targeted browser runs fail outside gate scope.
+One next action: resolve the browser contract on its own task, rerun that tail, then merge.
 
 ## LOG
 
@@ -48,3 +50,11 @@ Review-воспроизведение показало PATH bypass: подмен
 session и её прямую связь с конкретным `setsid --fork --wait` supervisor до старта
 gate. PATH-shadow, forged/prewritten handshake, missing session, real fork fail/success
 и HUP/INT/TERM cleanup прошли shell-suite трижды; Go test/build и UI test/build зелёные.
+
+### 2026-08-12 — Implement
+
+UI gate теперь передаёт проверенные `npm` и `npx` закреплённому абсолютному Node,
+поэтому подложенный `PATH/node` больше не превращает невозможную команду в успех.
+Вложенный release gate в фикстуре заменён bounded stub: целевой self-test завершился
+с PASS за 150 секунд без рекурсивного роста процессов. Полный Verify зелёный до
+неизменённого browser-контракта pause/resume; его отдельный повтор воспроизвёл дефект main.
