@@ -2,14 +2,21 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
+Status: Verified PASS — deployed from main
+Branch: factory/8d74f2e0-c74-770a846b-fd7
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — второй независимый невалидный Specification HEAD не создаёт Implement.
-What changed: cycle-test использует новые task/execution/attempt ID и новый невалидный HEAD; после исчерпания rescue работа получает SPEC HEAD STOP и не меняется в следующем цикле.
-Evidence summary: `just check`, сборка, UI unit/browser и целевые 23 Python-теста прошли; без production guard тест падает (`2 != 1`).
-One next action: human merge into main.
+What changed: Factory выложена из `main` с точной передачей Specification HEAD и жёсткой остановкой после исчерпания rescue.
+Evidence: `fx factory release-info --technical` → `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`; Pilot → 196 tests, UI → 158 tests, typecheck/build → OK; `go build ./...` → OK.
+One next action: merge the card evidence update into main.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+После подтверждения, что `bee395269e7fc5e6aeba0c3a44077442f48ea968` входит в
+свежий `origin/main`, Factory выложена из `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`.
+Повторный Verify подтвердил 196 Pilot-тестов, 158 UI-тестов,
+UI typecheck/build и Go build; для перегруженного хоста UI timeout увеличен до 30 секунд.
 
 ### 2026-08-11 — Verify
 
