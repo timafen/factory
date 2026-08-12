@@ -298,6 +298,21 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	if executor.callCount() != 1 {
 		t.Fatalf("executor repeated after ambiguous durability: calls=%d", executor.callCount())
 	}
+
+	// The first recovery must durably close the ambiguous operation.  A later
+	// broker process must observe the same failed proof without recovery work
+	// or another physical delivery.
+	restartedAgain, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, ok := operationSnapshot(restartedAgain, "delivery-write-failure")
+	if !ok || item.Status != "failed" {
+		t.Fatalf("second restart item=%+v", item)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor repeated on second restart: calls=%d", executor.callCount())
+	}
 }
 
 func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
