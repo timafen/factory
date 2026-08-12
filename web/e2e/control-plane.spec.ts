@@ -1197,7 +1197,7 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Репозитории" }) },
     { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },
     { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Сценарии", exact: true }) },
-    { name: "pipeline", path: "/pipeline", ready: (page) => page.getByRole("heading", { name: "Pipeline", exact: true }) },
+    { name: "pipeline", path: "/pipeline", ready: (page) => page.getByRole("heading", { name: "Конвейер", exact: true }) },
     { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Карточки", exact: true }) },
     { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Автоматизации", exact: true }) },
     { name: "settings", path: "/settings", ready: (page) => page.getByRole("heading", { name: "Настройки" }) },
