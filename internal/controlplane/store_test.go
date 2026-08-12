@@ -113,6 +113,13 @@ func TestRegistrationAuditsCachedCapacityBeforeReplacingIt(t *testing.T) {
 	if _, err := store.RegisterWorker(context.Background(), workerA, registration); err != nil {
 		t.Fatal(err)
 	}
+	registered, err := store.Worker(context.Background(), workerA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registered.ActiveCount != 0 {
+		t.Fatalf("registration active count = %d; want 0 from server leases", registered.ActiveCount)
+	}
 	var count, previous, derived int
 	if err := store.db.QueryRow(`
 		SELECT COUNT(*), COALESCE(MAX(previous_active_count), -1), COALESCE(MAX(derived_active_count), -1)
