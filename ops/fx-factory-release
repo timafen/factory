@@ -315,6 +315,8 @@ gate_logs=()
 gate_names=()
 test_gates_stopped=1
 test_gates_reaped=1
+read -r release_pgid < <(ps -o pgid= -p "$$") \
+  || { fail "не смог определить process group релиза"; exit 4; }
 cleanup() {
   stop_test_gates
   wait_for_test_gates
@@ -344,7 +346,7 @@ read_test_gate_handshake() { # read_test_gate_handshake <файл>; sets gate_si
   esac
   # A setsid wrapper is the session and process-group leader. Rejecting any
   # other record prevents a stale launcher PID from becoming a kill target.
-  [ "$gate_sid" = "$gate_pgid" ]
+  [ "$gate_sid" = "$gate_pgid" ] && [ "$gate_pgid" != "$release_pgid" ]
 }
 
 wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <файл>
@@ -443,13 +445,18 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
   rm -f -- "$handshake"
   setsid --wait bash -c '
     handshake=$1
-    shift
+    release_pgid=$2
+    shift 2
     trap - HUP INT TERM
     read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 125
     case "$sid:$pgid" in
       *[!0-9:]*|:*|*:) exit 125 ;;
     esac
     [ "$sid" = "$pgid" ] || exit 125
+    # Do not publish readiness or exec the gate if a broken setsid left this
+    # wrapper in the release process group. Cleanup can then stop its tree by
+    # PID without ever signalling the release itself.
+    [ "$pgid" != "$release_pgid" ] || exit 125
     temporary_handshake=$(mktemp "${handshake}.tmp.XXXXXX") || exit 125
     if ! printf "sid=%s pgid=%s ready=1\\n" "$sid" "$pgid" >"$temporary_handshake" \
       || ! mv -f -- "$temporary_handshake" "$handshake"; then
@@ -457,7 +464,7 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
       exit 125
     fi
     exec "$@"
-  ' bash "$handshake" "${as_command[@]}" "$@" >"$log" 2>&1 &
+  ' bash "$handshake" "$release_pgid" "${as_command[@]}" "$@" >"$log" 2>&1 &
   launcher=$!
   gate_pids+=("$launcher")
   gate_handshakes+=("$handshake")

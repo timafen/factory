@@ -334,8 +334,29 @@ case "$TEST_MODE" in
     : >"$TEST_SETSID_STARTED"
     wait "$!"
     ;;
+  release-pgid-handshake)
+    printf 'release-pgid-wrapper\n' >>"$TEST_HANDSHAKE_EVENTS"
+    (
+      cd "$TEST_STUCK_CWD"
+      trap 'printf "release-pgid-child-term\n" >>"$TEST_GATE_CHILDREN"' TERM
+      trap '' HUP INT
+      while :; do /bin/sleep 1; done
+    ) &
+    read -r TEST_RELEASE_PGID < <(/bin/ps -o pgid= -p "$PPID")
+    export TEST_RELEASE_PGID
+    exec "$@"
+    ;;
   *) exec /usr/bin/setsid --wait "$@" ;;
 esac
+EOF
+  cat >"$case_dir/bin/ps" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = release-pgid-handshake ] \
+  && [[ "$*" = '-o sid= -o pgid= -p '* ]]; then
+  printf '%s %s\n' "$TEST_RELEASE_PGID" "$TEST_RELEASE_PGID"
+  exit 0
+fi
+exec /bin/ps "$@"
 EOF
   cat >"$case_dir/bin/as-fork" <<'EOF'
 #!/bin/bash
@@ -391,7 +412,7 @@ EOF
   cat >"$case_dir/bin/sleep" <<'EOF'
 #!/bin/bash
 case "$TEST_MODE" in
-  ui-test-fail|signal-forked-gates|signal-before-ready) exec /bin/sleep "$@" ;;
+  ui-test-fail|signal-forked-gates|signal-before-ready|release-pgid-handshake) exec /bin/sleep "$@" ;;
 esac
 exit 0
 EOF
@@ -441,7 +462,7 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|signal-forked-gates|signal-before-ready)
+    ui-test-fail|signal-forked-gates|signal-before-ready|release-pgid-handshake)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
@@ -719,6 +740,24 @@ for signal in HUP INT TERM; do
     || fail "pre-ready signal $signal allowed a gate to start"
   assert_no_fixture_processes "$before_ready"
 done
+
+same_pgid="$temporary/release-pgid-handshake"
+make_fixture "$same_pgid" release-pgid-handshake
+SECONDS=0
+set +e
+run_release "$same_pgid" release-pgid-handshake
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "release PGID handshake returned $status instead of build error 5"
+[ "$SECONDS" -lt 3 ] || fail "release PGID handshake cleanup was not bounded"
+grep -Fx 'release-pgid-wrapper' "$same_pgid/handshake-events" >/dev/null \
+  || fail "release PGID fixture did not bypass setsid"
+! grep -F 'after-handshake' "$same_pgid/handshake-events" >/dev/null \
+  || fail "a gate started after reporting the release PGID"
+grep -Fx 'release-pgid-child-term' "$same_pgid/gate-children" >/dev/null \
+  || fail "release PGID cleanup did not TERM the launcher child before KILL"
+[ ! -s "$same_pgid/events" ] || fail "release PGID handshake touched services"
+assert_no_fixture_processes "$same_pgid"
 
 missing="$temporary/missing-artifact"
 make_fixture "$missing" missing-artifact
