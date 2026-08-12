@@ -7,6 +7,7 @@ REPO="${FACTORY_RELEASE_REPO:-https://github.com/timafen/factory.git}"
 SERVER_BIN="${FACTORY_SERVER_BIN:-/opt/factory-data/bin/factory-server}"
 WORKER_BIN="${FACTORY_WORKER_BIN:-/opt/factory-data/bin/factory-worker}"
 REL="${FACTORY_RELEASE_DIR:-/opt/factory-data/releases/factory}"
+TRUSTED_GATE_PARENT="${FACTORY_RELEASE_TRUSTED_GATE_DIR:-/run/factory-release-gate}"
 INFO="${FACTORY_RELEASE_INFO:-/opt/factory-data/releases/factory-current.json}"
 AS="${FACTORY_RELEASE_AS-sudo -H -u factory}"
 OWNER="${FACTORY_RELEASE_OWNER-factory:factory}"
@@ -288,6 +289,10 @@ flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 umask 077
 mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
   || { fail "не смог подготовить папку релизов"; exit 4; }
+"$TRUSTED_MKDIR" -p -- "$TRUSTED_GATE_PARENT" \
+  && "$TRUSTED_CHMOD" 700 -- "$TRUSTED_GATE_PARENT" \
+  && [ "$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_PARENT")" = "$TRUSTED_OWNER_UID" ] \
+  || { fail "не смог подготовить закрытый root-owned каталог gate"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 
@@ -740,18 +745,18 @@ expected_gate_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src"
 expected_gate_release_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
   rev-parse "$sha:ops/fx-factory-release") \
   || { fail "в кандидате нет обязательного release helper для gate"; cleanup; exit 4; }
-trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$REL/trusted-gate-XXXXXX") \
+trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$TRUSTED_GATE_PARENT/trusted-gate-XXXXXX") \
   || { fail "не смог создать доверенный каталог gate"; cleanup; exit 4; }
-trusted_gate_root="$trusted_gate_dir/ops"
-trusted_gate_script="$trusted_gate_root/test-fx-factory-release.sh"
-if ! "$TRUSTED_MKDIR" -p -- "$trusted_gate_root/systemd" \
+trusted_gate_root="$trusted_gate_dir"
+trusted_gate_script="$trusted_gate_root/ops/test-fx-factory-release.sh"
+if ! "$TRUSTED_MKDIR" -p -- "$trusted_gate_root/ops/systemd" "$trusted_gate_root/pilot" "$trusted_gate_root/intake" \
   || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
     show "$sha:ops/test-fx-factory-release.sh" >"$trusted_gate_script" \
   || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
-    show "$sha:ops/fx-factory-release" >"$trusted_gate_root/fx-factory-release" \
-  || ! "$TRUSTED_CHMOD" 555 "$trusted_gate_script" "$trusted_gate_root/fx-factory-release" \
+    show "$sha:ops/fx-factory-release" >"$trusted_gate_root/ops/fx-factory-release" \
+  || ! "$TRUSTED_CHMOD" 555 "$trusted_gate_script" "$trusted_gate_root/ops/fx-factory-release" \
   || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ] \
-  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/fx-factory-release")" != "$expected_gate_release_blob" ]; then
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/ops/fx-factory-release")" != "$expected_gate_release_blob" ]; then
   fail "gate script не совпадает с криптографически проверенным Git-объектом"
   cleanup
   exit 4
@@ -763,9 +768,9 @@ while IFS= read -r -d '' trusted_gate_path; do
   expected_systemd_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
     rev-parse "$sha:$trusted_gate_path") || { fail "не смог проверить systemd tree для gate"; cleanup; exit 4; }
   if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
-      show "$sha:$trusted_gate_path" >"$trusted_gate_root/$trusted_gate_relative" \
-    || ! "$TRUSTED_CHMOD" 444 "$trusted_gate_root/$trusted_gate_relative" \
-    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/$trusted_gate_relative")" != "$expected_systemd_blob" ]; then
+      show "$sha:$trusted_gate_path" >"$trusted_gate_root/ops/$trusted_gate_relative" \
+    || ! "$TRUSTED_CHMOD" 444 "$trusted_gate_root/ops/$trusted_gate_relative" \
+    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/ops/$trusted_gate_relative")" != "$expected_systemd_blob" ]; then
     fail "не смог извлечь доверенное дерево systemd для gate"
     cleanup
     exit 4
@@ -775,9 +780,24 @@ done < <("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
   ls-tree -r -z --name-only "$sha" -- ops/systemd)
 [ "$trusted_systemd_files" -gt 0 ] \
   || { fail "в кандидате нет обязательного дерева systemd для gate"; cleanup; exit 4; }
-"$TRUSTED_CHMOD" 711 "$trusted_gate_dir" "$trusted_gate_root" "$trusted_gate_root/systemd" \
+for trusted_gate_path in ops/install-project-release-broker.sh ops/fx pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
+  expected_gate_dependency_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    rev-parse "$sha:$trusted_gate_path") || { fail "в кандидате нет обязательной зависимости gate: $trusted_gate_path"; cleanup; exit 4; }
+  if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+      show "$sha:$trusted_gate_path" >"$trusted_gate_root/$trusted_gate_path" \
+    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/$trusted_gate_path")" != "$expected_gate_dependency_blob" ]; then
+    fail "не смог извлечь доверенную зависимость gate: $trusted_gate_path"
+    cleanup
+    exit 4
+  fi
+done
+"$TRUSTED_CHMOD" 555 "$trusted_gate_root/ops/install-project-release-broker.sh" "$trusted_gate_root/ops/fx" \
+  && "$TRUSTED_CHMOD" 444 "$trusted_gate_root/pilot/pilot.py" "$trusted_gate_root/pilot/context.md" \
+    "$trusted_gate_root/intake/app.py" "$trusted_gate_root/intake/plan.py" \
+  && "$TRUSTED_CHMOD" 711 "$trusted_gate_dir" "$trusted_gate_root/ops" "$trusted_gate_root/ops/systemd" \
+    "$trusted_gate_root/pilot" "$trusted_gate_root/intake" \
   || { fail "не смог закрыть доверенный каталог gate"; cleanup; exit 4; }
-if [ -n "$OWNER" ] && { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
+if { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
   || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 711 ]; }; then
   fail "доверенный каталог gate допускает изменение рабочим пользователем"
   cleanup
