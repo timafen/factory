@@ -65,15 +65,24 @@ describe("server browser launcher", () => {
 });
 
 describe("browser fixture server address", () => {
-  it("extends the cold fixture setup timeout inside its beforeAll hook", () => {
+  it("gives the cold fixture work most of its extended beforeAll timeout", () => {
     const specification = readFileSync(
       join(process.cwd(), "e2e/control-plane.spec.ts"),
       "utf8",
     );
+    const fixtureServer = readFileSync(join(process.cwd(), "e2e/server.mjs"), "utf8");
 
     expect(specification).toMatch(
       /test\.beforeAll\(async \(\{ baseURL \}\) => \{\s+test\.setTimeout\(120_000\);/,
     );
+    expect(specification).toMatch(
+      /waitForHTTPSProxyFixture[\s\S]*?attempt < 360[\s\S]*?setTimeout\(resolveWait, 250\)/,
+    );
+    expect(fixtureServer).toMatch(
+      /waitForFixtureTask[\s\S]*?attempt < 260[\s\S]*?setTimeout\(resolveWait, 250\)/,
+    );
+    expect(fixtureServer).toContain('*"HTTPS proxy browser fixture"*)');
+    expect(fixtureServer).toContain('git commit -m "test: complete HTTPS fixture"');
   });
 
   it("uses an explicit valid port for every Playwright consumer", async () => {

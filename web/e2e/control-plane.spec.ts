@@ -182,7 +182,9 @@ async function waitForRealWorker(api: APIRequestContext) {
 
 async function waitForHTTPSProxyFixture(api: APIRequestContext) {
   const readyTitle = `[auto] [5/5 Verify] ${completedHTTPSWork}`;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // The fixture completes six real-worker tasks serially. Keep this wait below
+  // the hook's 120-second timeout, but do not truncate a cold setup at 30s.
+  for (let attempt = 0; attempt < 360; attempt += 1) {
     const response = await api.get("/api/v1/tasks?limit=200");
     if (response.ok()) {
       const body = await response.json() as { tasks: Array<{ title: string; state: string }> };
@@ -1095,7 +1097,9 @@ test("shows ordered progress and long task detail", async ({ page }) => {
   await expect(page.getByText("RAW_COMMAND_OUTPUT_SHOULD_NOT_RENDER")).toHaveCount(0);
   await expect(page.getByText("3 updates")).toBeVisible();
   await expect.poll(() => eventAfters).toContain("-1");
-  await expect.poll(() => eventAfters, { timeout: 8_000 }).toContain("3");
+  // The visible refresh interval is two seconds, but a loaded CI host can
+  // delay browser timers substantially after the events have rendered.
+  await expect.poll(() => eventAfters, { timeout: 30_000 }).toContain("3");
 
   await page.goto(`/tasks/${identifiers.longTask}`);
   const contextDetails = page.locator("details").filter({ hasText: "Задание агенту" });
@@ -1123,7 +1127,9 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
+  // The earlier worker-profile scenario deliberately stops the synthetic
+  // running attempt's heartbeat. Use the stable paused group for layout proof.
+  await expect(page.getByRole("heading", { name: "Поставлено на паузу" })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
   expect(await page.evaluate(

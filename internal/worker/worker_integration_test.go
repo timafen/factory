@@ -2355,7 +2355,7 @@ func TestTimeoutStopsIgnoringProcessGroup(t *testing.T) {
 	// Leave enough time for repository preparation even when the complete suite
 	// runs under load. This test exercises runtime process-group termination;
 	// TestTimeoutIncludesWorktreePreparation covers the pre-start boundary.
-	task := createTask(t, fixture.store, worker, "timeout", "fork", 5)
+	task := createTask(t, fixture.store, worker, "timeout", "fork", 15)
 	running := waitForTaskState(t, fixture.store, task.Task.ID, "running")
 	childPath := filepath.Join(os.Getenv("FACTORY_TEST_CODEX_LOG"), running.Attempts[0].ID+".child")
 	waitFor(t, 5*time.Second, func() bool {

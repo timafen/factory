@@ -136,6 +136,12 @@ esac
 
 printf '%s\\n' "Created by the Factory browser proof." > factory-proof.txt
 printf '%s\\n' '{"type":"progress","message":"Created deterministic worktree evidence."}'
+case "$prompt" in
+  *"HTTPS proxy browser fixture"*)
+    git add factory-proof.txt
+    git commit -m "test: complete HTTPS fixture" >/dev/null
+    ;;
+esac
 {
   printf '%s\\n' "Completed by deterministic fake Codex."
   printf 'Branch: %s\\n' "$branch"
@@ -454,7 +460,9 @@ async function waitForFixtureWorker() {
 }
 
 async function waitForFixtureTask(taskID) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // Task timeouts are 60 seconds. Let the worker report that terminal state
+  // instead of replacing it with a misleading 30-second fixture timeout.
+  for (let attempt = 0; attempt < 260; attempt += 1) {
     const detail = await serverJSON(`/api/v1/tasks/${taskID}`);
     if (detail.task.state === "succeeded") return detail;
     if (detail.task.state === "failed" || detail.task.state === "cancelled") {
