@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  coldHTTPSFixtureSetupTimeout,
+  configureColdHTTPSFixtureSetupTimeout,
   createE2EServerAddress,
   createPlaywrightConfig,
   httpsFixtureCertificate,
@@ -65,15 +67,14 @@ describe("server browser launcher", () => {
 });
 
 describe("browser fixture server address", () => {
-  it("extends the cold fixture setup timeout inside its beforeAll hook", () => {
-    const specification = readFileSync(
-      join(process.cwd(), "e2e/control-plane.spec.ts"),
-      "utf8",
-    );
+  it("bounds cold HTTPS fixture setup with an explicit finite timeout", () => {
+    const appliedTimeouts: number[] = [];
 
-    expect(specification).toMatch(
-      /test\.beforeAll\(async \(\{ baseURL \}\) => \{\s+test\.setTimeout\(120_000\);/,
-    );
+    configureColdHTTPSFixtureSetupTimeout((timeout) => appliedTimeouts.push(timeout));
+
+    expect(appliedTimeouts).toEqual([120_000]);
+    expect(Number.isFinite(coldHTTPSFixtureSetupTimeout)).toBe(true);
+    expect(coldHTTPSFixtureSetupTimeout).toBeGreaterThan(31_000);
   });
 
   it("uses an explicit valid port for every Playwright consumer", async () => {

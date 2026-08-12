@@ -6,10 +6,14 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
-import { testWorkerBootstrapCredential } from "../playwright.config";
+import {
+  coldHTTPSFixtureSetupTimeout,
+  configureColdHTTPSFixtureSetupTimeout,
+  testWorkerBootstrapCredential,
+} from "../playwright.config";
 
 test.describe.configure({ mode: "serial" });
-test.setTimeout(120_000);
+test.setTimeout(coldHTTPSFixtureSetupTimeout);
 
 const workerOnline = "worker-online-e2e";
 const workerOffline = "worker-offline-e2e";
@@ -432,7 +436,7 @@ async function exerciseMobileNavigation(page: Page) {
 }
 
 test.beforeAll(async ({ baseURL }) => {
-  test.setTimeout(120_000);
+  configureColdHTTPSFixtureSetupTimeout((timeout) => test.setTimeout(timeout));
   const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
   fixtureAPI = api;
   const real = await waitForRealWorker(api);
