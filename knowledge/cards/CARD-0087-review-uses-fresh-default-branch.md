@@ -2,15 +2,26 @@
 
 ## HEAD
 
-Status: implemented; Pilot/live Workflow revisions remain unchanged.
+Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
 Branch: `factory/0b933443-daf-3aa76b07-abe`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
 What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
 Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
 Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: создать и проверить новые immutable-ревизии Review/Verify перед их закреплением в live Pilot config.
+Next action: human merge this verified narrow config fix.
 
 ## LOG
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Пример Pilot проходит строгую серверную схему | `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS: пример декодирован строгим `PilotConfigStore`; `respect_host_load=true`, `max_parallel_works=4`. |
+| Полная Go-регрессия чиста | `umask 077; go test ./...` | PASS: все пакеты прошли. |
+| Поведение Pilot и свежих Review/Verify не нарушено | `python3 -m unittest pilot.test_pilot`; `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests` | PASS: 202 tests OK; focused 3 tests OK. |
+| JSON, сборка и чистота diff | `python3 -m json.tool pilot/config.example.json`; `go build ./cmd/factory-server`; `git diff --check` | PASS. |
+| Scope и поставка согласованы | `git diff --name-only origin/main...HEAD`; `git rev-list --left-right --count origin/main...HEAD`; проверка отсутствия `rollout` | PASS: только CARD-0087 и пример; behind_by=0; поле `rollout` отсутствует. |
+| Реализационный коммит корректен | `git merge-base --is-ancestor 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 HEAD` | PASS: SHA — предок ветки и меняет runtime-файл вне `knowledge/cards/`. |
 
 ### 2026-08-11 — Specification
 
