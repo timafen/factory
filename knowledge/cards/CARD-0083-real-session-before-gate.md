@@ -2,17 +2,24 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/7e7934c4-112-7ab1b699-725.
-Implementation commit: 0fdcbcc5148495bde3f579562e818b12efc362f7 — launcher исключён из решения о результате gate.
+Status: Implemented — awaiting Review.
+Branch: factory/3b2aaa3f-78b-137df0a1-68c.
+Implementation commit: b086029bd7dc8782e9daf894722a8db00478ee2d — launcher исключён из решения о результате gate.
 What changed: gate запускается в требуемой identity только фиксированным root-owned `/usr/bin/sudo`; `$AS` не получает result path и не входит в цепочку доверия.
 What changed: одноразовый результат — kernel wait status цепочки `setsid --wait → sudo → gate`; файловый running/finished protocol полностью удалён.
 Threat model: произвольный fork-capable `$AS` того же UID знает прежний путь и может атомарно писать valid/corrupt/stale/replayed status, но эти файлы больше не читаются.
-Evidence: spoofed `status=0` + реальный gate `1` → release `5`, install events `0`; fork-success → install `1`; shell-suite ×3 → PASS.
-Evidence: `go test -timeout 5m ./...`, `go build ./...`, `cd web && npm ci && npm run build`, `git diff --check` → PASS.
-One next action: human merge into main.
+Evidence: spoofed `status=0` + реальный gate `1` → release `5`, install events `0`; fork-success → install `1`; `bash ops/test-fx-factory-release.sh` → PASS.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go build ./...`, `git diff --check` → PASS.
+One next action: повторно отправить опубликованную ветку на Review.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Реализация перебазирована на свежий `origin/main`; актуальная модель запуска служб
+учтена в проверке однократной установки. Целевой shell-сценарий подтвердил, что
+launcher не может подменить результат настоящего gate, а сборка Go и проверки
+синтаксиса/диффа прошли.
 
 ### 2026-08-11 — Implement
 
