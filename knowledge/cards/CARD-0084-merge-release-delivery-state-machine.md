@@ -2,16 +2,22 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/56574781-e4b-7c963a00-510`.
+- Status: Verified — полный набор проверок PASS.
+- Branch: `factory/d750ff8f-877-b68002b2-395`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 5f2dca4e10002bfdc638736f4243a169fd5a65b6 — регрессия закрепляет fail-closed отказ NewAt для каталога `delivery-1.json`.
-- What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
-- What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
-- Evidence: `go test -count=1 -timeout 5m ./internal/releasebroker` → OK; `just check` подтвердил format/vet/vuln/staticcheck и broker-тесты; независимые `internal/controlplane` и `internal/worker` достигли общего пятиминутного timeout.
-- Next action: Human merge reviews the recorded unrelated full-suite timeouts and merges the verified release-broker change.
+Implementation commit: f9c95aa5189294cd60ef1218f0c292a0234e4e4a — terminal-успех не принимается после ошибки fsync каталога.
+- What changed: terminal-запись получает durable pending/committed-маркеры; при restart terminal без committed-маркера становится `failed` без повторного executor.
+- Evidence: `go test -count=1 ./internal/releasebroker`, `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint` и `just check` — PASS.
+- Next action: Перед слиянием рассмотреть fail-closed recovery в broker.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+В `web/` зависимости восстановлены через штатный `npm ci`, без глобальной
+установки `eslint` и изменений lockfile. После этого TypeScript, UI lint и
+`just check` завершились успешно; после rebase целевой broker-тест повторно
+подтвердил fail-closed recovery при ошибке fsync каталога.
 
 ### 2026-08-11 — Specification
 
