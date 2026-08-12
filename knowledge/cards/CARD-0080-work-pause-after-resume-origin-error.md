@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/f48d26e0-344-21705f71-21c`
+- Status: Implemented in `main`; delivery record refreshed and reverified.
+- Branch: `factory/f9f9e5e6-e02-ae24dcd3-c9d`
 - Implementation commit: 000084fd7cc008d8df69d62dedf02c00d91d93a8 — HTTPS resume идёт через Chromium/SPKI, а proxy фиксирует и проверяет очищенные backend-заголовки.
-- Evidence summary: чистый `just check` прошёл Go/UI/lint/typecheck/tooling/launcher (14 UI-файлов, 157 тестов); production build собрал три бинарника, committed `web/dist` воспроизводим.
-- Evidence summary: единственный полный HTTPS browser-прогон с обычным Chromium собрал и прошёл все 21 тест за 3.4 минуты; сценарий resume/Origin №7 прошёл, TLS/browser errors отсутствуют.
-- Evidence summary: после прогона не осталось scoped-процессов или listeners; дерево было чистым до обновления этой карточки.
-- Next action: человек сливает `factory/f48d26e0-344-21705f71-21c` в `main`.
+- Evidence summary: повторный Chromium HTTPS-сценарий resume/Origin прошёл (`1 passed`), runtime не использует недоверенный `route.fetch`.
+- Evidence summary: Playwright-config unit regression прошла (`12 passed`); production build собрал `factory-server`, `factory-worker` и `factory-release-broker`.
+- Evidence summary: общий `just check` дошёл до Go suite, но несвязанный `internal/worker` превысил общий 5-минутный timeout во время запуска `git`; целевые проверки зелёные.
+- Next action: слить обновление карточки в `main`.
 
 ## LOG
 
@@ -96,3 +96,9 @@
 | Desktop/390 resume, stale pause, safe retry и cross-origin | тот же сценарий №7 в полном suite | PASS: hostile Origin получил 403 `cross_origin_request`; безопасное сообщение и retry остались видимы; queued pause и completed stale pause очищены; desktop и 390px assertions/screenshots выполнены. |
 | Смежные browser/API/UI регрессии | оставшиеся 20 Playwright-сценариев; полный Go/UI suite; `npm --prefix web audit --omit=dev` | PASS: все 20 соседних browser-сценариев прошли, Go/UI regressions прошли, production dependencies — `found 0 vulnerabilities`. |
 | Cleanup и чистота дерева | `ps -eo pid,ppid,args`, `ss -ltnp` до/после; `git diff --check`; `git status --short --untracked-files=all` | PASS: scoped-процессов нет; listeners 27 → 27 без новых записей; до правки карточки tracked/untracked изменений не было. |
+
+### 2026-08-12 — Implement
+
+- Подтверждено, что реализация `000084fd7cc008d8df69d62dedf02c00d91d93a8` уже находится в свежем `main`; удалённая ветка остановленной стадии больше не существует.
+- `npm test -- --run src/playwrightConfig.test.ts` → PASS: 12/12; целевой Chromium HTTPS resume/Origin → PASS: 1 тест за 59.0 сек.; production `just build` → PASS: три бинарника.
+- Общий `FACTORY_BROWSER_LAUNCHER=/missing just check` не завершился: несвязанный пакет `internal/worker` исчерпал 5-минутный timeout при запуске `git`; риск для целевого HTTPS-сценария не обнаружен.
