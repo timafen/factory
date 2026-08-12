@@ -1628,7 +1628,7 @@ test("migrates a locked legacy snapshot through Resume and Finalize", async ({ p
 
   const tasks = await json<{ tasks: Array<{ request_key: string }> }>(await api.get("/api/v1/tasks?limit=200"));
   expect(tasks.tasks.filter((task) => task.request_key === "legacy-browser-request-187")).toHaveLength(1);
-  await expect(migration.getByRole("button", { name: "Review E2E imported legacy issues" })).toBeVisible();
+  await expect(migration.getByRole("button", { name: "Проверить E2E imported legacy issues", exact: true })).toBeVisible();
   await api.dispose();
   browser.assertClean();
 });
