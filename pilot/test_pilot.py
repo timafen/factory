@@ -1705,7 +1705,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
             "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
             "record_implementation_artifact", "save_stage_verdict",
-            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+            "retry_pending_factory_deploy", "autostart_plan",
         )
         notifications = mock.Mock()
         with contextlib.ExitStack() as stack:
@@ -1731,6 +1731,10 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                                                   return_value=("factory/correction", "a" * 40)))
             stack.enter_context(mock.patch.object(pilot, "pushed_branch",
                                                   return_value="factory/correction"))
+            stack.enter_context(mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH",
+                                                  os.path.join(self.temporary.name, "receipts.jsonl")))
+            stack.enter_context(mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH",
+                                                  os.path.join(self.temporary.name, "outbox.jsonl")))
             stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
             stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
             merge = stack.enter_context(mock.patch.object(pilot, "gh_merge",
@@ -1759,6 +1763,12 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         merge.assert_called_once_with("github.com/acme/repo", "factory/correction",
                                       "Изменённое человеком имя")
         final.assert_called_once_with(verify["id"], "Verify", True)
+        target_key, adapter = pilot._delivery_target("github.com/acme/repo")
+        self.assertEqual(adapter, "external-merge")
+        delivery = state[pilot.DELIVERY_STATE_KEY]["targets"][target_key]
+        generation = delivery["generations"][delivery["current_generation"]]
+        self.assertEqual(generation["phase"], "completed")
+        self.assertEqual(set(generation["waits"]), {verify["id"]})
         self.assertTrue(any(len(call.args) > 1 and call.args[1] == "Задача выполнена"
                             for call in notifications.call_args_list),
                         notifications.call_args_list)
