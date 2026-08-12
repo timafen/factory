@@ -2,17 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented — ready for Review.
+- Branch: `factory/e795c02b-572-b4e02d6a-b29`.
+- Implementation commit: af01b667998b4b9617f093678c7186e95ccf2940 — Review-корректировка остаётся дочерней задачей исходной работы и не запускает второй конвейер.
+- What changed: добавлен сквозной регрессионный сценарий от создания дочерней
+  Review-корректировки до повторного обнаружения Pilot.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` — PASS, 7 tests.
+- Next action: Review проверяет целевой сценарий и изменения относительно свежей `main`.
 
 ## LOG
 
@@ -47,3 +43,10 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Отдельный сквозной тест создаёт Review-корректировку через дочерний builder,
+передаёт ответ API обратно в обнаружение Pilot и повторяет его после условного
+рестарта. Подтверждено: сохраняется только исходный `work_id`, а для
+корректировки остаётся единственная защитная запись; `CorrectionProvenanceStormTests` — 7 PASS.
