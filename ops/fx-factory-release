@@ -51,60 +51,20 @@ TRUSTED_SLEEP=/bin/sleep
 TRUSTED_OD=/usr/bin/od
 TRUSTED_PS=/usr/bin/ps
 TRUSTED_AWK=/usr/bin/awk
-TRUSTED_NODE=/usr/bin/node
 TRUSTED_NPX=/usr/bin/npx
 TRUSTED_NPM=/usr/bin/npm
 TRUSTED_GO=/usr/bin/go
+TRUSTED_GIT=/usr/bin/git
+TRUSTED_CHMOD=/usr/bin/chmod
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
-as_user_private() {
-  if [ -n "$AS" ]; then
-    $AS "$TRUSTED_BASH" -c 'umask 077; exec "$@"' factory-release-private "$@"
-  else
-    (umask 077; exec "$@")
-  fi
-}
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
 start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
 restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
-
-case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
-  *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
-esac
-
-validate_trusted_executable() { # validate_trusted_executable <absolute path>
-  local executable=$1 owner mode
-  case "$executable" in /*) ;; *) return 1 ;; esac
-  [ -f "$executable" ] && [ -x "$executable" ] || return 1
-  owner=$("$TRUSTED_STAT" -Lc %u -- "$executable" 2>/dev/null) || return 1
-  mode=$("$TRUSTED_STAT" -Lc %a -- "$executable" 2>/dev/null) || return 1
-  [ "$owner" = "$TRUSTED_OWNER_UID" ] || return 1
-  (( (8#$mode & 0022) == 0 ))
-}
-
-for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
-  "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
-  "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
-  "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO"; do
-  validate_trusted_executable "$trusted_executable" \
-    || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
-done
-
-# $AS is a caller-controlled convenience wrapper, so it is excluded from the
-# trusted chain. Gate status comes only from the fixed root-owned launcher.
-gate_identity=()
-if [ -n "$OWNER" ]; then
-  gate_user=${OWNER%%:*}
-  if ! [[ "$gate_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
-    fail "некорректный пользователь для test gate"
-    exit 4
-  fi
-  gate_identity=("$TRUSTED_SUDO" -H -u "$gate_user" --)
-fi
 
 sync_path() {
   python3 - "$1" <<'PY'
@@ -281,6 +241,43 @@ rollback_to_generation() { # generation, owner-facing reason
   rm -f "$JOURNAL"
   sync_path "$REL"
 }
+case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
+  *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
+esac
+
+validate_trusted_executable() { # validate_trusted_executable <absolute path>
+  local executable=$1 owner mode
+  case "$executable" in /*) ;; *) return 1 ;; esac
+  [ -f "$executable" ] && [ -x "$executable" ] || return 1
+  owner=$("$TRUSTED_STAT" -Lc %u -- "$executable" 2>/dev/null) || return 1
+  mode=$("$TRUSTED_STAT" -Lc %a -- "$executable" 2>/dev/null) || return 1
+  [ "$owner" = "$TRUSTED_OWNER_UID" ] || return 1
+  (( (8#$mode & 0022) == 0 ))
+}
+
+for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
+  "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
+  "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
+  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD"; do
+  validate_trusted_executable "$trusted_executable" \
+    || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
+done
+
+# $AS is intentionally not accepted here. It is a convenience wrapper for
+# workspace operations and may be supplied by the caller, so it cannot be in
+# the trust chain that reports a gate result. The gate identity instead comes
+# from OWNER and is entered through one fixed, root-owned launcher whose wait
+# status is authoritative. OWNER='' is the explicit no-switch mode used by the
+# hermetic test fixture (and by an operator already running as the target UID).
+gate_identity=()
+if [ -n "$OWNER" ]; then
+  gate_user=${OWNER%%:*}
+  if ! [[ "$gate_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+    fail "некорректный пользователь для test gate"
+    exit 4
+  fi
+  gate_identity=("$TRUSTED_SUDO" -H -u "$gate_user" --)
+fi
 
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
@@ -363,12 +360,18 @@ if [ -e "$JOURNAL" ]; then
 fi
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
+gate_pids=()
+gate_pgids=()
+gate_ready=()
+gate_logs=()
 gate_names=()
+trusted_gate_dir=
 test_gates_stopped=1
 test_gates_reaped=1
 cleanup() {
   stop_test_gates
   wait_for_test_gates
+  [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   rm -rf "$work"
 }
 on_release_exit() { cleanup; }
@@ -656,8 +659,8 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal TERM' TERM
 
   if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
-    "$TRUSTED_BASH" -c 'cd "$1" && "$2" "$3" tsc -p tsconfig.app.json --noEmit && "$2" "$4" test' \
-    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
+    "$TRUSTED_BASH" -c 'cd "$1" && "$2" tsc -p tsconfig.app.json --noEmit && "$3" test' \
+    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -722,27 +725,33 @@ run_parallel_test_gates() {
 }
 
 step "беру исходники: $ref"
-as_user_private git clone --quiet "$REPO" "$work/src" \
+as_user git clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
-as_user_private git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || as_user_private git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
-trusted_gate_script="$work/src/ops/test-fx-factory-release.sh"
-case "$trusted_gate_script" in /*) ;; *) fail "gate script не имеет абсолютного пути"; cleanup; exit 4 ;; esac
-gate_script_owner=$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_script" 2>/dev/null) \
-  || { fail "не смог проверить gate script"; cleanup; exit 4; }
-work_owner=$("$TRUSTED_STAT" -Lc %u -- "$work" 2>/dev/null) \
-  || { fail "не смог проверить владельца сборки"; cleanup; exit 4; }
-gate_script_mode=$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_script" 2>/dev/null) \
-  || { fail "не смог проверить права gate script"; cleanup; exit 4; }
-if [ ! -f "$trusted_gate_script" ] || [ -L "$trusted_gate_script" ] \
-  || [ ! -r "$trusted_gate_script" ] || [ "$gate_script_owner" != "$work_owner" ] \
-  || (( (8#$gate_script_mode & 0022) != 0 )); then
-  fail "gate script не прошёл проверку доверенного пути"
+sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD) \
+  || { fail "не смог определить commit кандидата"; cleanup; exit 4; }
+expected_gate_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  rev-parse "$sha:ops/test-fx-factory-release.sh") \
+  || { fail "в кандидате нет обязательного gate script"; cleanup; exit 4; }
+trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$REL/trusted-gate-XXXXXX") \
+  || { fail "не смог создать доверенный каталог gate"; cleanup; exit 4; }
+trusted_gate_script="$trusted_gate_dir/test-fx-factory-release.sh"
+if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    show "$sha:ops/test-fx-factory-release.sh" >"$trusted_gate_script" \
+  || ! "$TRUSTED_CHMOD" 500 "$trusted_gate_script" \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ]; then
+  fail "gate script не совпадает с криптографически проверенным Git-объектом"
   cleanup
   exit 4
 fi
-sha=$(as_user git -C "$work/src" rev-parse HEAD)
+if [ -n "$OWNER" ] && { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
+  || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 700 ]; }; then
+  fail "доверенный каталог gate доступен рабочему пользователю"
+  cleanup
+  exit 4
+fi
 subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
 case "$subject" in
   "Merge pull request #"*)
@@ -870,34 +879,11 @@ chmod 600 "$services"
 printf 'services.tsv\t-\t600\t\n' >>"$inventory"
 
 step "создаю и повторно проверяю SQLite online snapshot"
-# The live database and all of its recovery-path ancestors belong to the
-# Factory service account.  Run the backup through the same account instead
-# of root, then copy the verified standalone snapshot into the root-managed
-# immutable generation.
-working_snapshot="$work/database.sqlite3"
-snapshot_errors="$work/snapshot-errors.log"
-if ! as_user "$SERVER_BIN" -database "$DATABASE" -backup "$working_snapshot" 2>"$snapshot_errors"; then
-  cat "$snapshot_errors" >&2 || true
-  if grep -Fq "backup schema is newer than this Factory binary supports" "$snapshot_errors"; then
-    # Живая база бывает новее установленного server: неудачный кандидат успел
-    # поднять схему, а откат вернул только бинарь. Такой base старый server
-    # честно не снимает — снимок делает свежесобранный кандидат: он только что
-    # прошёл все ворота и знает эту схему. Без этого выпуски заперты навсегда.
-    step "живая база новее текущего server — снимок делает свежесобранный кандидат"
-    as_user "$work/factory-server" -database "$DATABASE" -backup "$working_snapshot" \
-      || { fail "кандидатный server тоже отказался создать snapshot"; cleanup; exit 4; }
-  else
-    fail "текущий server отказался создать проверенный snapshot"
-    cleanup
-    exit 4
-  fi
-fi
-[ -f "$working_snapshot" ] && [ ! -e "$working_snapshot-wal" ] && [ ! -e "$working_snapshot-shm" ] \
-  || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
 snapshot="$stage/database.sqlite3"
-cp -f "$working_snapshot" "$snapshot" \
-  && cp -f "$working_snapshot.v2-control-plane" "$snapshot.v2-control-plane" \
-  || { fail "не удалось перенести snapshot в поколение выпуска"; cleanup; exit 4; }
+"$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
+  || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
+[ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
+  || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
 chmod 600 "$snapshot" "$snapshot.v2-control-plane"
 ledger=$(database_ledger "$snapshot") || { cleanup; exit 4; }
 schema_digest=$(python3 - "$snapshot" <<'PY'
