@@ -47,6 +47,10 @@ make_fixture() {
 case " $* " in
   *' version '*) echo 'factory-server test old-release-sha' ;;
   *' -backup '*)
+    if [ "${TEST_MODE:-}" = snapshot-schema-newer ]; then
+      echo 'factory-server: validate live Factory database: backup schema is newer than this Factory binary supports' >&2
+      exit 1
+    fi
     echo backup-snapshot >>"$TEST_EVENTS"
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
     case "$out" in */releases/.generation-*) exit 91;; esac
@@ -208,6 +212,15 @@ case "$output" in
 #!/bin/bash
 case " $* " in
   *' version '*) echo 'factory-server test 1234567890abcdef' ;;
+  *' -backup '*)
+    echo candidate-backup-snapshot >>"$TEST_EVENTS"
+    while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
+    python3 - "$db" "$out" <<'PY'
+import sqlite3,sys
+source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2]); source.backup(target); target.close(); source.close()
+open(sys.argv[2]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
+PY
+    ;;
   *' -restore '*)
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -restore) source=$2; shift 2;; *) shift;; esac; done
     python3 - "$source" "$db" <<'PY'
@@ -521,6 +534,22 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+# Живая база бывает новее установленного server: неудачный кандидат успел
+# поднять схему, а откат вернул только бинарь. Старый server такой снимок
+# честно не делает — выпуск обязан снять базу свежесобранным кандидатом,
+# иначе обновления заперты навсегда.
+schema_newer="$temporary/snapshot-schema-newer"
+make_fixture "$schema_newer" snapshot-schema-newer
+run_release "$schema_newer" snapshot-schema-newer \
+  || { cat "$schema_newer/output" >&2; fail "schema-newer release failed"; }
+grep -F 'снимок делает свежесобранный кандидат' "$schema_newer/output" >/dev/null \
+  || fail "schema-newer fallback was not reported"
+grep -Fx 'candidate-backup-snapshot' "$schema_newer/events" >/dev/null \
+  || fail "candidate did not create the snapshot"
+grep -F 'выкачено:' "$schema_newer/output" >/dev/null \
+  || fail "schema-newer release did not complete"
+assert_no_fixture_processes "$schema_newer"
 
 # A caller-controlled PATH can offer a plausible but fake setsid. The gate
 # must still run from its verified absolute path and complete normally.

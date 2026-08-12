@@ -875,8 +875,23 @@ step "создаю и повторно проверяю SQLite online snapshot"
 # of root, then copy the verified standalone snapshot into the root-managed
 # immutable generation.
 working_snapshot="$work/database.sqlite3"
-as_user "$SERVER_BIN" -database "$DATABASE" -backup "$working_snapshot" \
-  || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
+snapshot_errors="$work/snapshot-errors.log"
+if ! as_user "$SERVER_BIN" -database "$DATABASE" -backup "$working_snapshot" 2>"$snapshot_errors"; then
+  cat "$snapshot_errors" >&2 || true
+  if grep -Fq "backup schema is newer than this Factory binary supports" "$snapshot_errors"; then
+    # Живая база бывает новее установленного server: неудачный кандидат успел
+    # поднять схему, а откат вернул только бинарь. Такой base старый server
+    # честно не снимает — снимок делает свежесобранный кандидат: он только что
+    # прошёл все ворота и знает эту схему. Без этого выпуски заперты навсегда.
+    step "живая база новее текущего server — снимок делает свежесобранный кандидат"
+    as_user "$work/factory-server" -database "$DATABASE" -backup "$working_snapshot" \
+      || { fail "кандидатный server тоже отказался создать snapshot"; cleanup; exit 4; }
+  else
+    fail "текущий server отказался создать проверенный snapshot"
+    cleanup
+    exit 4
+  fi
+fi
 [ -f "$working_snapshot" ] && [ ! -e "$working_snapshot-wal" ] && [ ! -e "$working_snapshot-shm" ] \
   || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
 snapshot="$stage/database.sqlite3"
