@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
+- Status: BLOCKED — целевой release-driver fixture падает до проверки статусов, а rebase на свежий `main` конфликтует в broker.
 - Branch: `factory/12526369-3a4-e69c5117-acd`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
 - Implementation commit: 81d67ac49275d0fc24fa4380a246aa431d956f15 — повреждённый или неопределённый статус не запускает executor повторно, а release-driver сохраняет переходы durable.
 - What changed: Каждый статус driver проходит запись, file fsync, atomic rename и directory fsync; при неопределённом terminal-переходе сохранён `running`.
 - What changed: Broker fail-closed сохраняет `locked` и не повторяет физический выпуск после повреждённого состояния.
-- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go test -race ./internal/releasebroker`, `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests`, `npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- Next action: Человеку принять решение о слиянии.
+- Evidence: broker race, 10 process recovery и installer проходят; `bash ops/test-fx-factory-release.sh` падает на отсутствующем rollback artifact, полный `just check` прерван SIGTERM, rebase конфликтует.
+- Next action: Разработчику восстановить полный `make_fixture`, перебазировать реализацию на свежий `main` и передать на повторный Verify.
 
 ## LOG
 
@@ -75,3 +75,15 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Durable broker и terminal recovery | `go test -race -count=1 ./internal/releasebroker` | PASS: 11 broker-сценариев, включая write/fsync/rename failures и restart без второго executor. |
+| Merge/restart/outbox/legacy | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | PASS: 10 процессных сценариев. |
+| Установка broker | `bash ops/test-install-project-release-broker.sh` | PASS: установка и безопасное повторение. |
+| Каждый статус release-driver | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `bash ops/test-fx-factory-release.sh` | BLOCKED: syntax PASS, fixture падает до status-сценариев — отсутствует `install/factory-release-broker`; `make_fixture` не создаёт обязательные rollback artifacts. |
+| Полный регресс | `just check` | BLOCKED: format/vet/vuln/staticcheck и начальные Go-пакеты PASS; общий `go test ./...` принудительно завершён SIGTERM без test assertion. |
+| Актуальность базы | `git rebase origin/main` после fetch свежего `main` | BLOCKED: конфликт `internal/releasebroker/broker.go` при применении `2178fbd…`; rebase отменён без изменения реализации. |
+| Чистота и изоляция | pinned diff `fde77f86…38aea51d`; `git diff --check`; `git status --short` | 5 ожидаемых файлов, whitespace ошибок и stray-файлов нет; UI, migrations и control-plane не затронуты. |
