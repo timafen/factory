@@ -6682,7 +6682,9 @@ def _complete_generation(conf, state, generation):
         if task_id in completed:
             continue
         receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
-                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                   "task_id": task_id, "base": wait.get("base", ""),
+                   "work_id": wait.get("work_id", ""),
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
         completed[task_id] = receipt["id"]
         mark_final(task_id, "Verify", True)
@@ -6827,6 +6829,7 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "work_id": intent.get("work_id", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
@@ -6836,6 +6839,7 @@ def recover_merge_intents(conf, state):
             intent["phase"] = "journaled"
             save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
+                    "work_id": intent.get("work_id", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
             if generation:

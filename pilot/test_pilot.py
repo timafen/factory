@@ -1616,6 +1616,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.state_path = os.path.join(self.temporary.name, "state.json")
         self.tasks_path = os.path.join(self.temporary.name, "tasks.json")
         self.merges_path = os.path.join(self.temporary.name, "merges.jsonl")
+        self.receipts_path = os.path.join(self.temporary.name, "delivery-receipts.jsonl")
+        self.delivery_outbox_path = os.path.join(self.temporary.name, "delivery-outbox.jsonl")
         os.makedirs(self.questions_path)
         self.patches = (
             mock.patch.object(pilot, "WORKS_PATH", self.works_path),
@@ -1624,6 +1626,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             mock.patch.object(pilot, "QUESTION_DIR", self.questions_path),
             mock.patch.object(pilot, "STATE_PATH", self.state_path),
             mock.patch.object(pilot, "MERGES_PATH", self.merges_path),
+            mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts_path),
+            mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.delivery_outbox_path),
         )
         for patcher in self.patches:
             patcher.start()
@@ -1785,7 +1789,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
             "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
             "record_implementation_artifact", "save_stage_verdict",
-            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+            "retry_pending_factory_deploy", "autostart_plan",
         )
         notifications = mock.Mock()
         with contextlib.ExitStack() as stack:
@@ -1813,6 +1817,10 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                                                   return_value="factory/correction"))
             stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
             stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+            stack.enter_context(mock.patch.object(
+                pilot, "_delivery_target", return_value=("factory", "fx-factory-release")))
+            stack.enter_context(mock.patch.object(
+                pilot, "broker_operation", return_value={"status": "succeeded"}))
             merge = stack.enter_context(mock.patch.object(pilot, "gh_merge",
                                                            return_value=(True, "merged")))
             final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
@@ -2025,7 +2033,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "rescue_queued", "supersede_stale_questions",
             "cleanup_orphaned_paused_pipelines", "advance_epics",
             "area_extend", "collect_ideas", "retry_pending_factory_deploy",
-            "autostart_plan", "deploy_after_merge", "notify",
+            "autostart_plan", "notify",
         )
         state = {"processed": []}
         with contextlib.ExitStack() as stack:
@@ -2038,6 +2046,10 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
             stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
+            stack.enter_context(mock.patch.object(
+                pilot, "_delivery_target", return_value=("factory", "fx-factory-release")))
+            stack.enter_context(mock.patch.object(
+                pilot, "broker_operation", return_value={"status": "succeeded"}))
             stack.enter_context(mock.patch.object(
                 pilot, "codex_usage_snapshot", side_effect=lambda day, _week: {day: {}}))
             stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
@@ -2141,6 +2153,9 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         with open(self.merges_path, encoding="utf-8") as merge_file:
             merges = [json.loads(line) for line in merge_file]
         self.assertEqual({entry["work_id"] for entry in merges}, {work_a, work_b})
+        with open(self.receipts_path, encoding="utf-8") as receipt_file:
+            receipts = [json.loads(line) for line in receipt_file]
+        self.assertEqual({entry["work_id"] for entry in receipts}, {work_a, work_b})
 
     def test_legacy_parent_and_provenance_child_share_one_pipeline_after_restart(self):
         base = "Старый родитель"
