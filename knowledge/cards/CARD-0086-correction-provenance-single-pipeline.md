@@ -9,8 +9,8 @@
 - What changed: control plane сохраняет `work_id`, родителя и причину
   корректировки; Pilot не принимает явного потомка за новый root.
 - Evidence: закреплённая проверка `go test ./...` → PASS; `python3 -m unittest -v
-  pilot.test_pilot` → PASS; веб-проверки `npm run lint`, `npm run typecheck`,
-  `npm test`, `npm run test:browser` → PASS.
+  pilot.test_pilot` → PASS (214 tests); `npm run lint` и `npm run typecheck`
+  → PASS; `npm test` имеет посторонний timeout в `WorkHistory.test.tsx`.
 - Next action: Владелец выполняет merge после просмотра доказательств проверки.
 
 ## LOG
@@ -45,4 +45,4 @@ was not reused; old conflicted CARD-0079 remains untouched.
 | Корректировка сохраняет parent и общий `work_id` | `TestTaskProvenanceValidationAndReplay` | PASS: child и replay остаются в одной работе |
 | Некорректное provenance отклоняется | `TestTaskProvenanceValidationAndReplay` | PASS: нет parent и неизвестный kind не принимаются |
 | Pilot не создаёт второй pipeline для потомка | `python3 -m unittest -v pilot.test_pilot` | PASS: полный набор Pilot |
-| Сборка и регрессии интерфейса | `go test ./...`; npm lint/typecheck/test/browser | PASS |
+| Сборка и регрессии интерфейса | `go test ./...`; npm lint/typecheck/test/browser | Go/lint/typecheck PASS; `npm test` блокирован посторонним timeout `WorkHistory.test.tsx` |
