@@ -51,7 +51,7 @@ FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
-MAX_TERMINAL_TASKS_PER_CYCLE = 4
+MAX_TERMINAL_TASKS_PER_CYCLE = 1
 
 
 class ParallelWorkLimit(RuntimeError):
@@ -7310,12 +7310,11 @@ def cycle(conf, state):
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
-    if not activity["terminal_backlog"]:
-        try:
-            fresh_tasks = api("/tasks?limit=100").get("tasks") or []
-            autostart_plan(conf, fresh_tasks, workflows, workers)
-        except Exception as e:
-            log("plan_autostart_error", repr(e))
+    try:
+        fresh_tasks = api("/tasks?limit=100").get("tasks") or []
+        autostart_plan(conf, fresh_tasks, workflows, workers)
+    except Exception as e:
+        log("plan_autostart_error", repr(e))
 
     hint = next_poll_hint(
         conf, tasks,

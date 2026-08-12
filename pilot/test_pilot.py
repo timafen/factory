@@ -4253,6 +4253,7 @@ class AdaptivePollingTests(unittest.TestCase):
                     "created_at": "2026-08-10T11:00:00Z", "repository_id": "repo-id",
                 }
                 created.append(task)
+                tasks.append(task)
                 return {"task": task}
             if path == "/workers":
                 return {"workers": [{
@@ -4299,6 +4300,7 @@ class AdaptivePollingTests(unittest.TestCase):
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
+            pilot.cycle(conf, state)
             pilot.cycle(conf, state)
 
         self.assertEqual(len(created), 1)
@@ -4384,15 +4386,16 @@ class AdaptivePollingTests(unittest.TestCase):
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
-            first_hint = pilot.cycle(conf, state)
-            second_hint = pilot.cycle(conf, state)
+            handoff_hints = [pilot.cycle(conf, state) for _ in range(4)]
+            settled_hint = pilot.cycle(conf, state)
 
-        self.assertEqual(first_hint, {"seconds": 2, "reason": "handoff"})
-        self.assertEqual(second_hint, {"seconds": 10, "reason": "active"})
+        self.assertEqual(handoff_hints,
+                         [{"seconds": 2, "reason": "handoff"}] * 4)
+        self.assertEqual(settled_hint, {"seconds": 10, "reason": "active"})
         self.assertEqual(len(created), 4)
         self.assertEqual(len({task["title"] for task in created}), 4)
 
-    def test_terminal_backlog_is_limited_to_four_decisions_per_cycle(self):
+    def test_terminal_backlog_is_limited_to_one_decision_per_cycle(self):
         conf = {
             "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
             "poll_seconds": 30,
@@ -4474,9 +4477,9 @@ class AdaptivePollingTests(unittest.TestCase):
             hint = pilot.cycle(conf, state)
 
         self.assertEqual(hint, {"seconds": 2, "reason": "handoff"})
-        self.assertEqual(decide.call_count, 4)
-        self.assertEqual(len(created), 4)
-        self.assertEqual(len(state["processed"]), 4)
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(len(state["processed"]), 1)
 
 
 class HostLoadAdmissionTests(unittest.TestCase):
