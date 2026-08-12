@@ -2,16 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/da82a1cd-7c3-a77428a6-399`.
+- Status: Implemented — ready for repeat review.
+- Branch: `factory/754a64f9-0a5-82b4a0f4-197`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: d75788cbba43f8613a668c14c30a16e38ac6d4d4 — ранний
-  rollback сохраняет прежний `release-info` при отказе установки brain.
-- What changed: снимок наличия и содержимого `release-info` перенесён до
-  первой rollback-capable операции; добавлен ранний failure-тест.
-- Evidence: полный `just check`, `just test-worker-race`, `just test-browser`
-  и целевой shell-тест прошли; проверены порядок метаданных, общий lock и rollback.
-- Next action: человек принимает решение о слиянии.
+- Implementation commit: 1258a42e2579502f94c44b7ed1d0ff141ed385d9 — отказ
+  установки janitor откатывает выпуск до назначения restart Пилота.
+- What changed: обновлённый Пилот получает отложенный restart под общим
+  release-lock; janitor устанавливается раньше, а его ошибка запускает rollback.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`
+  и `bash ops/test-fx-factory-release.sh` → PASS.
+- Next action: Повторно проверить сценарий финальной ошибки janitor.
 
 ## LOG
 
@@ -52,3 +52,9 @@
 | Restart удерживает lock на всё выполнение | проверка захваченной команды shell-fixture | PASS: `/usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE"`. |
 | Отказы и rollback не оставляют новые метаданные | сценарии `brain-install-fail` и `systemd-run-fail` | PASS: прежний info восстановлен либо новый удалён. |
 | Смежные регрессии проекта | `just check`, `just test-worker-race`, `just test-browser` | PASS: Go, статанализ, UI и 20 browser-сценариев прошли. |
+
+### 2026-08-11 — Implement
+
+В поколенном выпуске janitor устанавливается до назначения отложенного restart
+Пилота. Финальный отказ установки вызывает rollback; регрессионный сценарий
+подтверждает ненулевой исход, возврат прежних бинарей и отсутствие `systemd-run`.
