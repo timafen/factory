@@ -1,17 +1,18 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-выпуск ставит restart Пилота после metadata под общим lock.
+Implementation commit: f451ee249b8d94593c1de8eb51195a373c34864c — rollback отменяет отложенный restart Пилота.
 
 ## HEAD
 
 - Status: Implemented — awaiting review.
-- Branch: `factory/99fcf773-995-eff220e2-9f2`.
+- Branch: `factory/1693d08b-4be-ca48b058-586`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: c695193793e93b9576602882918d0e206b859361 — restart
-  Пилота в generation-модели защищён общим lock.
-- What changed: обновлённый brain планирует restart после публикации
-  `release-info`; неизменённый brain его не ставит.
-- Evidence: `bash ops/test-fx-factory-release.sh` и `go test -p 1 ./... -count=1` — PASS.
+- Implementation commit: f451ee249b8d94593c1de8eb51195a373c34864c — rollback
+  отменяет созданный transient unit перезапуска Пилота.
+- What changed: имя unit сохраняется после успешного `systemd-run`; каждый путь
+  rollback останавливает его перед восстановлением выпуска.
+- Evidence: `bash ops/test-fx-factory-release.sh` — PASS, включая сбой после
+  постановки unit и модель его будущего срабатывания.
 - Next action: review изменения и merge.
 
 ## LOG
@@ -62,3 +63,11 @@ Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-�
 shell-тест проверил порядок, занятый и свободный lock, отсутствие restart при
 неизменённом brain и rollback при ошибке `systemd-run`; последовательный
 `go test -p 1 ./... -count=1` также прошёл.
+
+### 2026-08-12 — Implement
+
+После успешной постановки transient unit rollback теперь отменяет его через
+`systemctl stop` до восстановления предыдущего выпуска. Регрессия искусственно
+роняет замену `previous` после `systemd-run`, подтверждает старые артефакты и
+моделирует момент срабатывания: восстановленный выпуск не получает restart.
+`bash ops/test-fx-factory-release.sh` и `git diff --check` прошли.
