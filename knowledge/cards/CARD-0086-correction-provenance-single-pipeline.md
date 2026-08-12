@@ -3,12 +3,12 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/8493f4e1-e7f-d0bef795-c9b` (base `origin/main` `be3aece4f84b9432d6ffc0e77d4e6735b5b99140`).
+- Branch: `factory/8493f4e1-e7f-d0bef795-c9b` (pinned remote default base `d9dcf3cbee1fb902907b64f4e6118c8e9876303b`).
 - Implementation commit: f12fc67fc2d1497ad348dcdf77281f82dfeb3146 — same-title resume, Review and Verify remain isolated by durable `work_id` after rebase.
 - What changed: resume lookup and every Pilot delivery path retain the originating
   work identity; the restart regression covers both works under bounded polling.
-- Evidence: isolated controlplane/worker packages pass on both main and candidate;
-  full Go, static, UI (161), Pilot (232), tooling, launcher and build checks pass.
+- Evidence: full Go/static checks, UI (161), Pilot (232), browser, worker race,
+  release reproducibility, tooling, launcher and clean build checks pass.
 - Next action: human merges `factory/8493f4e1-e7f-d0bef795-c9b`.
 
 ## LOG
@@ -54,3 +54,18 @@ reported recovery/polling timeout was classified by isolated verbose runs:
 both packages pass on fresh main and candidate, and the full Go suite passes
 when allowed to finish. Targeted provenance tests, 232 Pilot tests, 161 UI
 tests, static checks, tooling, launcher and the complete build passed.
+
+### 2026-08-12 — Verify
+
+| Acceptance evidence | Command/check | Observed result |
+|---|---|---|
+| Root compatibility, inherited provenance, atomic validation/replay, reopen and 025→027 migration rules | `just check` (Go/static portion, pinned candidate) | PASS; all Go packages passed, including controlplane provenance and migration tests |
+| Review/Verify correction, title-independent classification, one pipeline after restart, durable duplicate-root event | `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` | PASS (8 tests) |
+| Legacy fallback and adjacent Pilot behavior remain compatible | `python3 -m unittest -v pilot.test_pilot` | PASS (232 tests, 13 skipped) |
+| UI/API presentation and real-server browser behavior | `just ui-check`; `just test-browser` after `just ui-install` | PASS (161 UI tests; browser suite passed) |
+| Worker coordination, release artifacts, tooling, launcher and binaries | `just test-worker-race`; `just test-release`; `just test-tooling`; `just test-launcher`; `FACTORY_BUILD_DIR=/tmp/card0086-build-82Q7aw just build` | PASS |
+| Delivery identity and hygiene | pinned `d9dcf3c…...0abbb976…`; implementation ancestry/code check; `git diff --check`; clean status | PASS; non-empty 19-file delivery, implementation commit changes code outside the card, no whitespace or stray-file findings |
+
+The initial UI/browser invocation stopped because a clean worktree had no
+`web/node_modules` (`tsc: not found`). After the repository-prescribed
+`just ui-install`, only the unexecuted UI/browser checks were rerun and passed.
