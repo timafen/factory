@@ -92,6 +92,11 @@ case "$*" in
       "$destination/ops/install-project-release-broker.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
       "$destination/ops/systemd/factory-release-broker.service"
+    cat >"$destination/ops/test-fx-factory-release.sh" <<'GATE'
+#!/bin/bash
+echo 'bash ops/test-fx-factory-release.sh' >>"$TEST_GATES"
+[ "$TEST_MODE" != release-test-fail ]
+GATE
     mkdir -p "$destination/pilot" "$destination/intake"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx" "$destination/ops/fx"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx-factory-release" "$destination/ops/fx-factory-release"
@@ -110,6 +115,7 @@ BRAIN
     chmod +x "$destination/ops/install-brain.sh"
     chmod +x "$destination/ops/install-project-release-broker.sh"
     chmod +x "$destination/ops/install-server-browser.sh"
+    chmod +x "$destination/ops/test-fx-factory-release.sh"
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
@@ -298,6 +304,16 @@ EOF
 #!/bin/bash
 exit 0
 EOF
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+# Если доверенная цепочка ошибочно ищет setsid в PATH, этот launcher подделает
+# корректный handshake и завершится успешно, не запуская ни одного gate.
+for argument in "$@"; do
+  [[ "$argument" != *.pid ]] || printf '999999\n' >"$argument"
+done
+: >"$TEST_SETSID_STARTED"
+exit 0
+EOF
   cat >"$case_dir/bin/df" <<'EOF'
 #!/bin/bash
 if [ "$TEST_MODE" = disk-full ]; then
@@ -349,6 +365,7 @@ run_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_SETSID_STARTED="$case_dir/setsid-started" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -534,6 +551,21 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+
+path_spoofed_setsid="$temporary/setsid-path-spoof"
+make_fixture "$path_spoofed_setsid" release-test-fail
+set +e
+run_release "$path_spoofed_setsid" release-test-fail
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "PATH-spoofed setsid returned $status instead of build error 5"
+[ ! -e "$path_spoofed_setsid/setsid-started" ] \
+  || fail "release invoked setsid from PATH instead of the trusted absolute path"
+assert_file "$path_spoofed_setsid/install/factory-server" old-server
+assert_file "$path_spoofed_setsid/install/factory-worker" old-worker
+[ ! -s "$path_spoofed_setsid/events" ] \
+  || fail "installation ran after PATH-spoofed setsid claimed a successful handshake"
+assert_no_fixture_processes "$path_spoofed_setsid"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 

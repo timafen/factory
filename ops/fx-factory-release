@@ -36,6 +36,9 @@ GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
 JOURNAL="$REL/transaction"
+GATE_SESSION_LAUNCHER=/usr/bin/setsid
+GATE_SHELL=/bin/bash
+GATE_IDENTITY_LAUNCHER=/usr/bin/sudo
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -45,6 +48,16 @@ worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
 start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
 restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
+
+# Результат gate доверяется только цепочке с фиксированными системными
+# бинарниками: PATH и удобный $AS принадлежат окружению вызывающего.
+for gate_binary in "$GATE_SESSION_LAUNCHER" "$GATE_SHELL" "$GATE_IDENTITY_LAUNCHER"; do
+  [ -x "$gate_binary" ] && [ "$(/usr/bin/stat -Lc %u "$gate_binary" 2>/dev/null)" = 0 ] \
+    || { fail "нет доверенного бинарника для test gate: $gate_binary"; exit 4; }
+  gate_binary_mode=$(/usr/bin/stat -Lc %a "$gate_binary") || exit 4
+  (( (8#$gate_binary_mode & 0022) == 0 )) \
+    || { fail "бинарник для test gate доступен на запись не только root: $gate_binary"; exit 4; }
+done
 
 sync_path() {
   python3 - "$1" <<'PY'
@@ -325,12 +338,12 @@ trap on_release_exit EXIT
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
   local name=$1 log=$2 pid_file=$3 i
   shift 3
-  as_user setsid bash -c '
+  "$GATE_SESSION_LAUNCHER" "$GATE_SHELL" -c '
     trap - INT
     printf "%s\\n" "$$" > "$1"
     shift
     exec "$@"
-  ' bash "$pid_file" "$@" >"$log" 2>&1 &
+  ' "$GATE_SHELL" "$pid_file" "$@" >"$log" 2>&1 &
   gate_pids+=("$!")
   gate_pid_files+=("$pid_file")
   gate_logs+=("$log")
@@ -399,11 +412,11 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal TERM' TERM
 
   start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.pid" \
-    bash -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
-    bash "$work/src/web"
+    "$GATE_SHELL" -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
+    "$GATE_SHELL" "$work/src/web"
   start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.pid" \
-    bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
-    bash "$work/src"
+    "$GATE_SHELL" -c 'umask 077; cd "$1" && go test ./... && /bin/bash ops/test-fx-factory-release.sh' \
+    "$GATE_SHELL" "$work/src"
 
   wait -n -p completed "${gate_pids[@]}"
   status=$?
