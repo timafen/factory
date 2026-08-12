@@ -132,9 +132,18 @@ type operation struct {
 type Broker struct {
 	executor Executor
 	stateDir string
-	mu       sync.Mutex
-	active   string
-	items    map[string]*operation
+	// persistTerminal is a test seam for a failed final state write.
+	persistTerminal func(*operation) error
+	mu              sync.Mutex
+	active          string
+	items           map[string]*operation
+}
+
+func (b *Broker) saveTerminal(item *operation) error {
+	if b.persistTerminal != nil {
+		return b.persistTerminal(item)
+	}
+	return b.persist(item)
 }
 
 // New is retained for callers that do not need restart recovery.  Production
@@ -348,7 +357,7 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
-	if err := b.persist(&updated); err == nil {
+	if err := b.saveTerminal(&updated); err == nil {
 		*item = updated
 	}
 	if b.active == item.Request.OperationID {
