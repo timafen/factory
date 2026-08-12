@@ -293,6 +293,7 @@ run_release() {
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_DELIVERY_ID="${FACTORY_DELIVERY_ID:-}" \
     FACTORY_DELIVERY_STATE_DIR="$case_dir/delivery-state" \
+    FACTORY_DELIVERY_STATUS_FAULT="${FACTORY_DELIVERY_STATUS_FAULT:-}" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
@@ -412,26 +413,55 @@ FACTORY_DELIVERY_ID=factory-1-0123456789abcdef0123456789abcdef run_release "$ide
 [ "$(tr -d '\r\n' <"$idempotent/delivery-state/factory-1-0123456789abcdef0123456789abcdef.status")" = succeeded ] \
   || fail "generation fixture did not keep accepted durable status"
 
-# The physical release has already completed when the authoritative final
-# driver status is written.  A real atomic-rename failure must therefore keep
-# the last durable non-terminal status and make the driver fail closed.
-final_status_failed="$temporary/final-delivery-status-write-fail"
-final_status_id=factory-1-fedcba9876543210fedcba9876543210
-make_fixture "$final_status_failed" final-delivery-status-write-fail
-set +e
-FACTORY_DELIVERY_ID="$final_status_id" \
-  run_release "$final_status_failed" final-delivery-status-write-fail
-final_status_rc=$?
-set -e
-[ "$final_status_rc" -eq 4 ] \
-  || fail "final delivery status write failure returned $final_status_rc instead of 4"
-final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_status_id.status")
-[ "$final_status_value" = launching ] \
-  || fail "failed final delivery status write published: $final_status_value"
-[ "$(grep -Fxc 'restart factory-server.service' "$final_status_failed/events")" -eq 1 ] \
-  || fail "final status fixture did not perform exactly one physical release"
-grep -F 'не смог надёжно подтвердить успешный выпуск' "$final_status_failed/output" >/dev/null \
-  || fail "final status write failure was not reported"
+# Every driver phase goes through the same durable helper.  Initial faults
+# must stop before the lock and physical executor; a fresh invocation may then
+# run exactly once and its next retry is a no-op from the durable success.
+for fault in write rename file-sync dir-sync; do
+  initial="$temporary/initial-delivery-status-$fault"
+  initial_id="factory-1-initial-$fault-0123456789abcdef"
+  make_fixture "$initial" "initial-delivery-status-$fault"
+  set +e
+  FACTORY_DELIVERY_ID="$initial_id" FACTORY_DELIVERY_STATUS_FAULT="launching:$fault" \
+    run_release "$initial" "initial-delivery-status-$fault"
+  initial_rc=$?
+  set -e
+  [ "$initial_rc" -eq 4 ] \
+    || fail "initial $fault fault returned $initial_rc instead of 4"
+  [ ! -e "$initial/delivery-state/$initial_id.status" ] \
+    || fail "initial $fault fault published a delivery status"
+  [ ! -s "$initial/events" ] \
+    || fail "initial $fault fault reached the physical release"
+  FACTORY_DELIVERY_ID="$initial_id" run_release "$initial" "initial-delivery-status-$fault" \
+    || { cat "$initial/output" >&2; fail "fresh retry after initial $fault fault failed"; }
+  [ "$(grep -Fxc 'restart factory-server.service' "$initial/events")" -eq 1 ] \
+    || fail "fresh retry after initial $fault fault ran the executor more than once"
+  FACTORY_DELIVERY_ID="$initial_id" run_release "$initial" "initial-delivery-status-$fault" \
+    || fail "durable retry after initial $fault fault failed"
+  [ "$(grep -Fxc 'restart factory-server.service' "$initial/events")" -eq 1 ] \
+    || fail "durable retry after initial $fault fault reran the executor"
+done
+
+# Terminal faults happen after the physical work.  They must leave the prior
+# durable running status, return non-success, and never publish `succeeded`.
+for fault in write rename file-sync dir-sync; do
+  terminal="$temporary/terminal-delivery-status-$fault"
+  terminal_id="factory-1-terminal-$fault-0123456789abcdef"
+  make_fixture "$terminal" "terminal-delivery-status-$fault"
+  set +e
+  FACTORY_DELIVERY_ID="$terminal_id" FACTORY_DELIVERY_STATUS_FAULT="succeeded:$fault" \
+    run_release "$terminal" "terminal-delivery-status-$fault"
+  terminal_rc=$?
+  set -e
+  [ "$terminal_rc" -eq 4 ] \
+    || fail "terminal $fault fault returned $terminal_rc instead of 4"
+  terminal_status=$(tr -d '\r\n' <"$terminal/delivery-state/$terminal_id.status")
+  [ "$terminal_status" = running ] \
+    || fail "terminal $fault fault published $terminal_status instead of running"
+  [ "$(grep -Fxc 'restart factory-server.service' "$terminal/events")" -eq 1 ] \
+    || fail "terminal $fault fault ran the physical executor more than once"
+  grep -F 'не смог надёжно подтвердить успешный выпуск' "$terminal/output" >/dev/null \
+    || fail "terminal $fault failure was not reported"
+done
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient

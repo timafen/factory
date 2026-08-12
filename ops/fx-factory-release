@@ -24,13 +24,94 @@ DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}
 
 # The broker supplies an immutable generation id.  A terminal driver status is
 # checked before the release lock, so a retried broker POST cannot install the
-# same Factory revision twice.
+# same Factory revision twice.  This is the driver-side durable boundary: no
+# phase is visible until both the file and its directory have been synced.
 delivery_status() {
   [ -n "$DELIVERY_ID" ] || return 0
-  local status=$1 tmp
-  tmp="$DELIVERY_FILE.tmp.$$"
-  umask 077
-  printf '%s\n' "$status" >"$tmp" && mv -f "$tmp" "$DELIVERY_FILE"
+  local status=$1
+  python3 - "$DELIVERY_DIR" "$DELIVERY_FILE" "$status" <<'PY'
+import os
+import sys
+
+directory, target, status = sys.argv[1:]
+fault = os.environ.get("FACTORY_DELIVERY_STATUS_FAULT", "")
+temporary = f"{target}.tmp.{os.getpid()}"
+previous = None
+had_previous = False
+
+def fail_at(stage):
+    if fault == f"{status}:{stage}":
+        raise OSError(f"injected delivery status {stage} failure")
+
+def sync_directory(inject_fault=True):
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+        if inject_fault:
+            fail_at("dir-sync")
+    finally:
+        os.close(fd)
+
+def restore_previous():
+    # A directory-sync error makes the rename ambiguous.  Restore the last
+    # durable view (or remove a newly-created record) before returning error.
+    if not had_previous:
+        try:
+            os.unlink(target)
+        except FileNotFoundError:
+            pass
+        sync_directory(False)
+        return
+    restore = f"{target}.restore.{os.getpid()}"
+    fd = os.open(restore, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, previous)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(restore, target)
+    sync_directory(False)
+
+try:
+    try:
+        with open(target, "rb") as stream:
+            previous = stream.read()
+            had_previous = True
+    except FileNotFoundError:
+        pass
+    fail_at("create")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        fail_at("write")
+        data = (status + "\n").encode("utf-8")
+        while data:
+            written = os.write(fd, data)
+            if written <= 0:
+                raise OSError("short delivery status write")
+            data = data[written:]
+        os.fsync(fd)
+        fail_at("file-sync")
+        os.close(fd)
+        fd = None
+        fail_at("close")
+        fail_at("rename")
+        os.replace(temporary, target)
+        try:
+            sync_directory()
+        except OSError:
+            restore_previous()
+            raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+except OSError as error:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    print(f"!! cannot durably write delivery status {status}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
 }
 
 if [ -n "$DELIVERY_ID" ]; then
@@ -44,7 +125,7 @@ if [ -n "$DELIVERY_ID" ]; then
       failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
     esac
   fi
-  delivery_status launching
+  delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
 fi
 
 step() { echo "== $*"; }
@@ -59,6 +140,7 @@ restart_workers() { local service; while read -r service; do systemctl restart "
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
+delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
 mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
@@ -270,7 +352,7 @@ rollback() {
   fi
   systemctl restart "$SERVER_SERVICE" || true
   restart_workers || true
-  delivery_status failed
+  delivery_status failed || fail "не смог надёжно записать неуспешный выпуск"
   cleanup
   exit "$2"
 }
