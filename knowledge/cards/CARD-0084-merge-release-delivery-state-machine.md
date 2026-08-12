@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented PASS — готово к Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/56574781-e4b-7c963a00-510`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
 Implementation commit: 5f2dca4e10002bfdc638736f4243a169fd5a65b6 — регрессия закрепляет fail-closed отказ NewAt для каталога `delivery-1.json`.
 - What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
 - What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK; `just build` → бинарники собраны.
-- Next action: Review повторно проверяет fail-closed обработку `.json` durable-записей.
+- Evidence: `go test -count=1 -timeout 5m ./internal/releasebroker` → OK; `just check` подтвердил format/vet/vuln/staticcheck и broker-тесты; независимые `internal/controlplane` и `internal/worker` достигли общего пятиминутного timeout.
+- Next action: Human merge reviews the recorded unrelated full-suite timeouts and merges the verified release-broker change.
 
 ## LOG
 
@@ -97,3 +97,12 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 Регрессия приведена к точному сценарию владельца с каталогом `delivery-1.json`.
 После перебазирования на свежий `origin/main` целевой Go-тест подтвердил отказ
 `NewAt` до вызова executor, а `just build` успешно собрал бинарники.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Повреждённая durable-запись не запускает выпуск | `go test -count=1 -timeout 5m ./internal/releasebroker` | OK: `delivery-1.json` как каталог отклонён до вызова executor. |
+| Прочие некорректные `.json`-записи fail-closed | тесты `TestDiskBrokerFailsClosedOnInvalidOperationState` и `TestDiskBrokerFailsClosedOnJSONDirectory` | OK: corrupt JSON, чужое имя, неверный adapter/status и каталог не восстанавливаются. |
+| Соседнее восстановление | тот же пакет | OK: terminal state сохраняется после restart, незавершённый запуск становится `failed`, повторный executor не запускается. |
+| Полный проектный регресс | `just check` | Форматирование, `vet`, `govulncheck`, `staticcheck` и `internal/releasebroker` OK; вне области timeout 5m: `internal/controlplane`, `internal/worker` (включая flaky worker integration tests). |
