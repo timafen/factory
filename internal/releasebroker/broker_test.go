@@ -3,6 +3,7 @@ package releasebroker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,6 +208,82 @@ func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 		t.Fatalf("POST status=%d", got)
 	}
 	waitForOperationStatus(t, server, "factory-rollback-1", "succeeded")
+}
+
+func TestBrokerDoesNotPublishTerminalSuccessWhenPersistFails(t *testing.T) {
+	dir := t.TempDir()
+	blocked := make(chan struct{})
+	broker, err := NewAt(dir, &recordingExecutor{done: blocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"persist-failure-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	response, err := http.Post(server.URL+"/v1/operations", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	running := false
+	for i := 0; i < 100; i++ {
+		broker.mu.Lock()
+		status := broker.items["persist-failure-1"].Status
+		broker.mu.Unlock()
+		if status == "running" {
+			running = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !running {
+		t.Fatal("operation did not enter running state")
+	}
+	persistAttempted := make(chan struct{})
+	broker.mu.Lock()
+	broker.persistTerminal = func(item *operation) error {
+		if item.Status == "succeeded" {
+			close(persistAttempted)
+			return errors.New("simulated terminal persist failure")
+		}
+		return broker.persist(item)
+	}
+	broker.mu.Unlock()
+	close(blocked)
+	select {
+	case <-persistAttempted:
+	case <-time.After(time.Second):
+		t.Fatal("terminal persist was not attempted")
+	}
+	broker.mu.Lock()
+	status := broker.items["persist-failure-1"].Status
+	broker.mu.Unlock()
+	if status != "running" {
+		t.Fatalf("published terminal status=%q after persist failure", status)
+	}
+	statusResponse, err := http.Get(server.URL + "/v1/operations/persist-failure-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statusResponse.Body.Close()
+	var responseStatus Response
+	if err := json.NewDecoder(statusResponse.Body).Decode(&responseStatus); err != nil {
+		t.Fatal(err)
+	}
+	if responseStatus.Status != "running" {
+		t.Fatalf("published API status=%q after persist failure", responseStatus.Status)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "persist-failure-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved operation
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != "running" {
+		t.Fatalf("durable status=%q, want running", saved.Status)
+	}
 }
 
 func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
