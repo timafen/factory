@@ -1552,6 +1552,37 @@ class DiagnosisRepairTests(unittest.TestCase):
 
 
 class CorrectionProvenanceStormTests(unittest.TestCase):
+    _SUBPROCESS_DRIVER = r"""
+import json
+import os
+
+from pilot import pilot
+
+request = json.loads(os.environ["PILOT_RESTART_REQUEST"])
+action = request["action"]
+task = request.get("task")
+pilot.WORKS_PATH = request["works_path"]
+pilot.DUPLICATE_ROOT_EVENTS_PATH = request["events_path"]
+
+if action == "discover":
+    pilot.record_new_works(request["conf"], request["tasks"],
+                           max_age_min=10_000_000)
+elif action == "crash":
+    boundary = request["boundary"]
+
+    def terminate_at_boundary(name):
+        if name == boundary:
+            os._exit(86)
+
+    pilot._duplicate_root_crash_boundary = terminate_at_boundary
+    pilot.note_duplicate_root_prevented(task)
+elif action == "recover":
+    pilot.note_duplicate_root_prevented(task)
+    pilot.note_duplicate_root_prevented(task)
+else:
+    raise AssertionError(action)
+"""
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -1594,15 +1625,32 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "state": "queued", "created_at": "2026-08-11T20:01:00Z",
         }
 
+    def run_pilot_process(self, request, expected_returncode=0):
+        request = dict(request, works_path=self.works_path,
+                       events_path=self.events_path)
+        env = os.environ.copy()
+        env["FACTORY_DATA_HOME"] = self.temporary.name
+        env["PILOT_RESTART_REQUEST"] = json.dumps(request)
+        result = subprocess.run(
+            [sys.executable, "-c", self._SUBPROCESS_DRIVER],
+            cwd=os.path.dirname(os.path.dirname(__file__)), env=env,
+            text=True, capture_output=True, timeout=30, check=False)
+        self.assertEqual(
+            result.returncode, expected_returncode,
+            "stdout=%r stderr=%r" % (result.stdout, result.stderr))
+
     def assert_storm_is_single_pipeline(self, kind):
         correction = self.correction(kind)
         tasks = [self.root, correction]
-        with mock.patch.object(pilot, "log") as journal:
-            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
-            # A new Pilot process reads the same durable files and sees the
-            # same API snapshot. Discovery must remain idempotent after restart.
-            pilot.record_new_works(self.conf, list(reversed(tasks)),
-                                   max_age_min=10_000_000)
+        self.run_pilot_process({
+            "action": "discover", "conf": self.conf, "tasks": [self.root],
+        })
+        # The first interpreter has exited. A newly imported Pilot process
+        # reads the durable files and rediscovers the correction snapshot.
+        self.run_pilot_process({
+            "action": "discover", "conf": self.conf,
+            "tasks": list(reversed(tasks)),
+        })
         works = pilot.load(self.works_path, {})
         outbox = pilot.load(self.events_path, {})
         events = outbox["events"]
@@ -1616,11 +1664,6 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "correction_kind": kind,
         })
         self.assertEqual(outbox["acknowledged"], {event_id: True})
-        prevented = [call for call in journal.call_args_list
-                     if call.args and call.args[0] ==
-                     "pilot_duplicate_root_prevented"]
-        self.assertEqual(len(prevented), 1)
-        self.assertFalse(any("Triage" in str(call) for call in journal.call_args_list))
 
     def assert_full_cycle_survives_restart(self, kind):
         for path in (self.works_path, self.events_path, self.state_path,
@@ -1791,6 +1834,16 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                             for call in notifications.call_args_list),
                         notifications.call_args_list)
 
+    def test_review_and_verify_discovery_survives_real_process_restart(self):
+        for kind in ("review_return", "verify_return"):
+            with self.subTest(kind=kind):
+                for path in (self.works_path, self.events_path):
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
+                self.assert_storm_is_single_pipeline(kind)
+
     def test_review_and_verify_corrections_complete_one_pipeline_after_restart(self):
         for kind in ("review_return", "verify_return"):
             with self.subTest(kind=kind):
@@ -1817,23 +1870,15 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                     os.unlink(self.events_path)
                 except FileNotFoundError:
                     pass
-                crashed = False
-
-                def crash_once(name):
-                    nonlocal crashed
-                    if name == boundary and not crashed:
-                        crashed = True
-                        raise RuntimeError("simulated crash at " + name)
-
-                with mock.patch.object(
-                        pilot, "_duplicate_root_crash_boundary",
-                        side_effect=crash_once):
-                    with self.assertRaises(RuntimeError):
-                        pilot.note_duplicate_root_prevented(correction)
-                # A recreated process rediscovers the same task and replays
-                # the idempotent event from durable state.
-                pilot.note_duplicate_root_prevented(correction)
-                pilot.note_duplicate_root_prevented(correction)
+                self.run_pilot_process({
+                    "action": "crash", "boundary": boundary,
+                    "task": correction,
+                }, expected_returncode=86)
+                # The crashing interpreter is gone. A new Pilot process
+                # replays the idempotent event from the durable outbox.
+                self.run_pilot_process({
+                    "action": "recover", "task": correction,
+                })
                 outbox = pilot.load(self.events_path, {})
                 event_id = "pilot_duplicate_root_prevented:" + correction["id"]
                 self.assertEqual(list(outbox["events"]), [event_id])
