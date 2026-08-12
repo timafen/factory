@@ -1707,25 +1707,26 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
 RESCUE_PATH = f"{HOME}/pilot/cap_rescues.json"
 
 
-def cap_rescues(base, stage):
-    return int((load(RESCUE_PATH, {}) or {}).get(f"{base}::{stage}", 0))
+def cap_rescues(base, stage, work_id=""):
+    key = work_storage_key(base, work_id)
+    return int((load(RESCUE_PATH, {}) or {}).get(f"{key}::{stage}", 0))
 
 
-def note_cap_rescue(base, stage):
+def note_cap_rescue(base, stage, work_id=""):
     rec = load(RESCUE_PATH, {}) or {}
-    key = f"{base}::{stage}"
+    key = f"{work_storage_key(base, work_id)}::{stage}"
     rec[key] = int(rec.get(key, 0)) + 1
     save(RESCUE_PATH, rec)
 
 
 def create_cap_rescue(base, stage, body, conf=None, parent=None,
-                      correction_kind="execution_retry"):
+                      correction_kind="execution_retry", work_id=""):
     """Create a return task before consuming its durable rescue allowance."""
     created = create_child_task(body, parent, conf, correction_kind)
     task = created.get("task") if isinstance(created, dict) else None
     if not isinstance(task, dict) or not task.get("id"):
         raise RuntimeError(f"{stage} return: create_task returned no task")
-    note_cap_rescue(base, stage)
+    note_cap_rescue(base, stage, work_id=work_id)
     return created
 
 
@@ -1834,11 +1835,12 @@ AREAS_PATH = f"{HOME}/pilot/areas.json"
 AREA_LINE = re.compile(r"^\s*ОБЛАСТЬ:\s*(.+)$", re.M)
 
 
-def area_of(base, context="", repo=""):
+def area_of(base, context="", repo="", work_id=""):
     """Какие файлы трогает работа. Берём из строки ОБЛАСТЬ в задании и помним."""
     known = load(AREAS_PATH, {}) or {}
-    if base in known:
-        return set(known[base])
+    key = work_storage_key(base, work_id)
+    if key in known:
+        return set(known[key])
     files = set()
     for m in AREA_LINE.finditer(context or ""):
         for p in m.group(1).replace(";", ",").split(","):
@@ -1850,7 +1852,7 @@ def area_of(base, context="", repo=""):
             files.add(repo + "::" + p)
     if not files:
         return set()
-    known[base] = sorted(files)
+    known[key] = sorted(files)
     save(AREAS_PATH, known)
     log("AREA " + repr(base[:50]) + " -> " + ", ".join(sorted(files))[:120])
     return files
@@ -1859,7 +1861,7 @@ def area_of(base, context="", repo=""):
 NOISE_PATHS = ("__pycache__", ".pyc", "node_modules/")
 
 
-def area_extend(base, result, repo=""):
+def area_extend(base, result, repo="", work_id=""):
     """Агент назвал свои файлы в отчёте — запоминаем их как область работы.
     Иначе машинная чистка выбрасывает то, что он же и сделал."""
     files = set()
@@ -1874,15 +1876,16 @@ def area_extend(base, result, repo=""):
     if not files:
         return set()
     known = load(AREAS_PATH, {}) or {}
-    was = set(known.get(base) or [])
+    key = work_storage_key(base, work_id)
+    was = set(known.get(key) or [])
     if files - was:
-        known[base] = sorted(was | files)
+        known[key] = sorted(was | files)
         save(AREAS_PATH, known)
         log(f"AREA+ {base[:40]!r}: +{len(files - was)} файлов из отчёта")
     return files
 
 
-def other_areas(base, active_tasks=None, repo=""):
+def other_areas(base, active_tasks=None, repo="", work_id=""):
     """Файлы живых ДРУГИХ работ в том же репозитории.
 
     areas.json — это журнал заявок, а не вечный список запретов.  Закончившаяся
@@ -1898,10 +1901,13 @@ def other_areas(base, active_tasks=None, repo=""):
                 continue
             m = STAGE_TITLE_RE.match(t.get("title", ""))
             if m:
-                active.add(m.group(2).strip())
+                other_base = m.group(2).strip()
+                other_work_id = task_durable_work_id(t, active_tasks)
+                active.add(work_storage_key(other_base, other_work_id))
+    mine_key = work_storage_key(base, work_id)
     out = set()
     for k, v in known.items():
-        if k == base or (active is not None and k not in active):
+        if k == mine_key or (active is not None and k not in active):
             continue
         for p in v or []:
             owner, path = (p.split("::", 1) if "::" in p else ("", p))
@@ -1911,19 +1917,20 @@ def other_areas(base, active_tasks=None, repo=""):
     return out
 
 
-def area_replace(base, files, repo=""):
+def area_replace(base, files, repo="", work_id=""):
     """Зафиксировать реальную, а не когда-то заявленную область поставки."""
     paths = sorted({p.strip() for p in files if p and p.strip()})
     known = load(AREAS_PATH, {}) or {}
-    known[base] = [(repo + "::" + p) if repo else p for p in paths]
+    key = work_storage_key(base, work_id)
+    known[key] = [(repo + "::" + p) if repo else p for p in paths]
     save(AREAS_PATH, known)
     log(f"AREA= {base[:40]!r}: {len(paths)} файлов по финальному diff")
-    return set(known[base])
+    return set(known[key])
 
 
-def area_busy(tasks, base, context="", repo=""):
+def area_busy(tasks, base, context="", repo="", work_id=""):
     """Кто уже занял тот же файл. Возвращает имя работы или пустую строку."""
-    mine = area_of(base, context, repo)
+    mine = area_of(base, context, repo, work_id=work_id)
     if not mine:
         return ""
     known = load(AREAS_PATH, {}) or {}
@@ -1934,9 +1941,11 @@ def area_busy(tasks, base, context="", repo=""):
         if not m:
             continue
         other = m.group(2).strip()
-        if other == base.strip():
+        other_work_id = task_durable_work_id(t, tasks)
+        other_key = work_storage_key(other, other_work_id)
+        if other_key == work_storage_key(base, work_id):
             continue
-        if mine & set(known.get(other) or []):
+        if mine & set(known.get(other_key) or []):
             return other
     return ""
 
@@ -2539,7 +2548,7 @@ PROMISE_LINE = re.compile(
     re.M | re.I)
 
 
-def save_promises(base, text):
+def save_promises(base, text, work_id=""):
     """Разбирает строки «ГОТОВО-КОГДА: файл …» и «ГОТОВО-КОГДА: команда …»."""
     files, cmds = [], []
     for kind, val in PROMISE_LINE.findall(text or ""):
@@ -2553,7 +2562,7 @@ def save_promises(base, text):
     if not files and not cmds:
         return
     d = load(PROMISES_PATH, {}) or {}
-    d[base] = {"files": files[:40], "commands": cmds[:5],
+    d[work_storage_key(base, work_id)] = {"files": files[:40], "commands": cmds[:5],
                "at": time.strftime("%Y-%m-%d %H:%M")}
     save(PROMISES_PATH, d)
     log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
@@ -2805,7 +2814,8 @@ def _git(cwd, *args, timeout=180, input_text=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo=""):
+def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo="",
+                         work_id=""):
     """Собрать ветку от свежей главной, сохранив весь diff задачи.
 
     Переносим патч, а не снимок файлов: так сохраняются удаления и все hunks
@@ -2869,7 +2879,8 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
                        "HEAD:" + clean)
         if rc:
             log("rebuild: push " + out[:200]); return ""
-        area_replace(base, final_paths, area_repo or repo_identity)
+        area_replace(base, final_paths, area_repo or repo_identity,
+                     work_id=work_id)
         log(f"REBUILD OK: {clean} собрана от главной, файлов {len(final_paths)}")
         return clean
     except Exception as e:
@@ -2883,7 +2894,7 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
-                expected_card=""):
+                expected_card="", work_id=""):
     """Create Review context only from a freshly fetched, pinned snapshot."""
     snapshot = fresh_branch_snapshot(repo_identity, branch)
     # Test-only/legacy callers without a remote identity retain the small
@@ -2905,7 +2916,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         state_ = "нет" if snapshot.get("state") == "missing" else "есть"
     files = snapshot.get("files") or []
     if state_ == "нет":
-        note_cap = cap_rescues(base, "GATE")
+        note_cap = cap_rescues(base, "GATE", work_id=work_id)
         if note_cap >= 2:
             return None  # дважды возвращали за то же — пусть решает Ревью
         log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
@@ -2939,7 +2950,8 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
 
         # Не даём очистке маскировать уже потерянный обещанный код карточкой
         # или любым другим файлом. Проверяем исходную ветку до rebuild.
-        prom = (load(PROMISES_PATH, {}) or {}).get(base) or {}
+        state_key = work_storage_key(base, work_id)
+        prom = (load(PROMISES_PATH, {}) or {}).get(state_key) or {}
         if not isinstance(prom, dict):
             prom = {}
         missing_promises = sorted(set(prom.get("files") or []) - set(files))
@@ -2957,8 +2969,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         # Область: файлы вне заявленной зоны — возврат кодом, без Ревью.
         known = load(AREAS_PATH, {}) or {}
         mine = {p.split("::", 1)[1] if "::" in p else p
-                for p in known.get(base) or []}
-        alien = other_areas(base, active_tasks, area_repo or repo_identity)
+                for p in known.get(state_key) or []}
+        alien = other_areas(base, active_tasks, area_repo or repo_identity,
+                            work_id=work_id)
         overlaps = sorted(f for f in files if f in alien)
         noise = sorted(f for f in files if any(n in f for n in NOISE_PATHS))
         if overlaps:
@@ -2970,9 +2983,13 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
             for t in active_tasks or []:
                 m = STAGE_TITLE_RE.match(t.get("title", ""))
                 if (t.get("state") in ("running", "queued") and m
-                        and m.group(2).strip() != base
+                        and work_storage_key(
+                            m.group(2).strip(), task_durable_work_id(t, active_tasks)
+                        ) != state_key
                         and set(overlaps) & {p.split("::", 1)[1] if "::" in p else p
-                                             for p in known.get(m.group(2).strip()) or []}):
+                                             for p in known.get(work_storage_key(
+                                                 m.group(2).strip(),
+                                                 task_durable_work_id(t, active_tasks))) or []}):
                     holder = m.group(2).strip()
                     break
             log(f"AREA WAIT {base!r} ждёт: пересечение с {holder!r}: "
@@ -2984,6 +3001,8 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         if foreign:
             keep = [f for f in files if f not in set(foreign)]
             kwargs = {"area_repo": area_repo} if area_repo else {}
+            if work_id:
+                kwargs["work_id"] = work_id
             clean = rebuild_clean_branch(repo_identity, branch, keep, base, **kwargs)
             if clean:
                 return {"back": False, "branch": clean,
@@ -2991,7 +3010,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                                  "в поставке остались только файлы области "
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
                                  "Проверяй ветку " + clean + ".")}
-        if foreign and cap_rescues(base, "DIRT") < 1:
+        if foreign and cap_rescues(base, "DIRT", work_id=work_id) < 1:
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
                     "cap_stage": "DIRT",
@@ -3517,10 +3536,10 @@ def recent_stage_text(tasks, base, limit=3):
     return "\n\n".join(out)[:9000]
 
 
-def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
+def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None, work_id=""):
     """Зовём сильную модель разобраться и говорим владельцу по-человечески.
     Один разбор на работу — дальше конвейер действует по найденному решению."""
-    diag_already_counted = cap_rescues(base, "DIAG") >= 1
+    diag_already_counted = cap_rescues(base, "DIAG", work_id=work_id) >= 1
     # Repair tasks used to bypass this guard. As a result, every later stage
     # return paid for another senior diagnosis even though begin_diag_repair()
     # would refuse a second repair for the same work. The only safe exception
@@ -3532,7 +3551,7 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
         if repair_task is None or base in repairs:
             return None
     if not diag_already_counted:
-        note_cap_rescue(base, "DIAG")
+        note_cap_rescue(base, "DIAG", work_id=work_id)
     tail = recent_stage_text(tasks, base)
     try:
         text, eng = brain(conf, DIAG_PROMPT.format(n=rounds, base=base, tail=tail),
@@ -3661,7 +3680,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         try:
             diag_tasks = load_tasks_safe()
             v = deep_diagnose(conf, base, stage, attempts_so_far, diag_tasks,
-                              repair_task=repair_task)
+                              repair_task=repair_task, work_id=work_id)
             if v and str(v.get("решение") or "").strip():
                 situation = (situation + "\n\nРАЗБОР СТАРШЕЙ МОДЕЛИ: "
                              + str(v.get("причина") or "") + " Решение: "
@@ -3681,7 +3700,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
-        if cap_rescues(base, "LOOP") >= int(conf.get("max_loop_rescues", 2)):
+        if cap_rescues(base, "LOOP", work_id=work_id) >= int(conf.get("max_loop_rescues", 2)):
             v = {"decision": "owner",
                  "reason": "orchestrator already broke this loop twice"}
         else:
@@ -3693,7 +3712,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch, work_id=work_id):
             return False
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-            note_cap_rescue(base, "LOOP")
+            note_cap_rescue(base, "LOOP", work_id=work_id)
             rec = write_question(task_id, stage,
                                  accept_forward(stage, v.get("answer", "")) or resume_stage,
                                  base, repo_id,
@@ -3749,7 +3768,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # Потолок — защита от бессмысленного повтора, а не признак того, что
         # решение стало владельческим. Сначала спрашиваем оркестратора, прямо
         # запретив ему отвечать «перезапусти».
-        used = cap_rescues(base, stage)
+        used = cap_rescues(base, stage, work_id=work_id)
         limit = conf.get("max_cap_rescues", 2)
         if used < limit:
             v = orchestrator_answer(conf, stage, base,
@@ -3761,7 +3780,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                     work_id=work_id):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-                note_cap_rescue(base, stage)
+                note_cap_rescue(base, stage, work_id=work_id)
                 rec = write_question(task_id, stage,
                                      accept_forward(stage, v.get("answer", "")) or resume_stage,
                                      base, repo_id,
@@ -4294,8 +4313,8 @@ def handle_answers(conf, workflows, workers, tasks):
                 selected_worker = candidate
                 log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: "
                     f"{rounds} провала — {was} -> {candidate}")
-                if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
-                    note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                if cap_rescues(q.get("title") or "", "ESCNOTE", work_id=work_id) < 1:
+                    note_cap_rescue(q.get("title") or "", "ESCNOTE", work_id=work_id)
                     notify(conf, "Исполнитель повышен",
                            (q.get("title") or "") + "\nЭтап «" + str(stage)
                            + "» провалился " + str(rounds)
@@ -4313,7 +4332,7 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base, work_id=work_id))
         br, implementation_head = selected_delivery(base, br, work_id=work_id)
-        branch_line = resume_branch_line(base, br, rounds)
+        branch_line = resume_branch_line(base, br, rounds, work_id=work_id)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
         context = (
@@ -4712,13 +4731,14 @@ def extract_branch(result, prev_context):
     return ""
 
 
-def resume_branch_line(base, br, rounds=0):
+def resume_branch_line(base, br, rounds=0, work_id=""):
     """Как продолжать работу: поверх старой ветки или с чистого листа.
     Ветка, которую уже возвращали за чужие файлы, тащит их в каждый круг —
     такую собираем заново от свежей главной и переносим только своё."""
     if not br:
         return ""
-    dirty = cap_rescues(base, "DIRT") > 0 or cap_rescues(base, "GATE") > 0
+    dirty = (cap_rescues(base, "DIRT", work_id=work_id) > 0
+             or cap_rescues(base, "GATE", work_id=work_id) > 0)
     if dirty or rounds >= 3:
         return (
             f"Прошлая работа лежит в ветке: {br}\n"
@@ -6941,7 +6961,7 @@ def cycle(conf, state):
                 continue
             # Сбой окружения, а не работы: вход в модель протух, сеть моргнула.
             # Владельцу тут делать нечего — повторяем этап сами.
-            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA") < 3:
+            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA", work_id=work_id) < 3:
                 try:
                     create_cap_rescue(base, "INFRA", {
                                  "request_key": str(uuid.uuid4()),
@@ -6953,7 +6973,7 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
                                      or (workflows.get(wf, {}) or {}).get("revision_id")},
-                                      conf, t, "execution_retry")
+                                      conf, t, "execution_retry", work_id=work_id)
                     log(f"INFRA RETRY task={tid} stage={wf}: сбой окружения, повторяю этап")
                     notify(conf, "Повторяю этап: сбой окружения",
                            base + chr(10) + "Вход в модель или сеть подвели — это не ошибка работы. "
@@ -6994,7 +7014,8 @@ def cycle(conf, state):
 
         try:
             area_extend(base_title(title), result,
-                        detail["task"].get("repository_id") or "")
+                        detail["task"].get("repository_id") or "",
+                        work_id=work_id)
         except Exception as e:
             log("area_extend_error", repr(e))
         try:
@@ -7004,7 +7025,7 @@ def cycle(conf, state):
             log("ideas_error", repr(e))
         if wf == "Specification":
             try:
-                save_promises(base_title(title), result)
+                save_promises(base_title(title), result, work_id=work_id)
             except Exception as e:
                 log("promises_error", repr(e))
         if wf == "Implement + Test":
@@ -7086,7 +7107,8 @@ def cycle(conf, state):
                         # работа шла, в main влилась соседняя. Возвращаем в
                         # разработку с прямым наказом перебазироваться. Один раз:
                         # если и после этого не влилось — зовём хозяина.
-                        if "conflict" in out.lower() and cap_rescues(base_title(title), "MERGE") < 1:
+                        if ("conflict" in out.lower()
+                                and cap_rescues(base_title(title), "MERGE", work_id=work_id) < 1):
                             try:
                                 card = extract_card(result, detail.get("context", ""))
                                 card_line = f"Card: {card}\n" if card else ""
@@ -7113,7 +7135,7 @@ def cycle(conf, state):
                                         "worker_id": bw["id"], "repository_id": rid,
                                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                                         "workflow_revision_id": bnw["revision_id"]},
-                                        conf, t, "merge_conflict_return")
+                                        conf, t, "merge_conflict_return", work_id=work_id)
                                     notify(conf, "Мёрж-конфликт: отправил на перебазирование",
                                            base_title(title), tags="wrench")
                                 else:
@@ -7176,7 +7198,8 @@ def cycle(conf, state):
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
         holder = area_busy(tasks, base_title(title), detail.get("context", ""),
-                           (detail.get("task") or {}).get("repository_id", ""))
+                           (detail.get("task") or {}).get("repository_id", ""),
+                           work_id=work_id)
         if holder:
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
             overlap_wait_decisions[tid] = verdict
@@ -7257,7 +7280,7 @@ def cycle(conf, state):
                 log(f"SPEC BRANCH WAIT {base[:40]!r}: состояние ветки неизвестно")
                 continue
             if branch_missing or branch_empty:
-                if cap_rescues(base, "SPEC_BRANCH") >= 1:
+                if cap_rescues(base, "SPEC_BRANCH", work_id=work_id) >= 1:
                     log(f"SPEC BRANCH STOP {base[:40]!r}: возврат уже использован, "
                         "разработку не запускаю")
                     continue
@@ -7282,7 +7305,7 @@ def cycle(conf, state):
                                  "workflow_revision_id": (detail.get("workflow") or {}).get(
                                      "revision_id") or workflows.get(wf, {}).get("revision_id")
                                      or nw["revision_id"]}, conf, t,
-                                      "machine_gate_return")
+                                      "machine_gate_return", work_id=work_id)
                     log(f"SPEC BRANCH GATE {base[:40]!r}: {reason} — вернул сохранить")
                     notify(conf, "Вернул сам: спецификация не сохранена",
                            base + chr(10) + reason.capitalize() +
@@ -7297,7 +7320,7 @@ def cycle(conf, state):
 
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
         if (wf == "Specification" and not PROMISE_LINE.search(result or "")
-                and cap_rescues(base, "SPEC") < 1):
+                and cap_rescues(base, "SPEC", work_id=work_id) < 1):
             back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
             nl = chr(10)
             spec_ctx = nl.join([
@@ -7323,7 +7346,7 @@ def cycle(conf, state):
                              "timeout_seconds": conf.get("timeout_seconds", 7200),
                              "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
                                  or nw["revision_id"]}, conf, t,
-                                  "machine_gate_return")
+                                  "machine_gate_return", work_id=work_id)
                 log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
                 notify(conf, "Вернул сам: спецификация без обещаний",
                        base + chr(10) + "Спецификация не назвала проверяемые признаки "
@@ -7341,7 +7364,7 @@ def cycle(conf, state):
         # same stage, so the next stage cannot guess which revision to use.
         if wf == "Specification":
             head_reason = specification_head_gate(result)
-            if head_reason and cap_rescues(base, "SPEC_HEAD") >= 1:
+            if head_reason and cap_rescues(base, "SPEC_HEAD", work_id=work_id) >= 1:
                 log(f"SPEC HEAD STOP {base[:40]!r}: возврат уже использован, "
                     "разработку не запускаю")
                 continue
@@ -7357,7 +7380,7 @@ def cycle(conf, state):
                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                         "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
                             or nw["revision_id"]}, conf, t,
-                        "machine_gate_return")
+                        "machine_gate_return", work_id=work_id)
                     log(f"SPEC HEAD GATE {base[:40]!r}: {head_reason}")
                     continue
                 except Exception as e:
@@ -7384,7 +7407,7 @@ def cycle(conf, state):
         if next_stage == "Review" and branch:
             rid_g = detail["task"].get("repository_id") or ""
             g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
-                            area_repo=rid_g, expected_card=card)
+                            area_repo=rid_g, expected_card=card, work_id=work_id)
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:
@@ -7398,7 +7421,8 @@ def cycle(conf, state):
                     "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
                     "Повторить проверку после восстановления доступа к репозиторию?",
                     ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
+                    g["note"], attempts_so_far=0, branch=branch,
+                    work_id=work_id)
                 continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
@@ -7414,7 +7438,7 @@ def cycle(conf, state):
                     if g.get("cap_stage"):
                         created_g = create_cap_rescue(
                             base, g["cap_stage"], return_body, conf,
-                            t, "machine_gate_return")
+                            t, "machine_gate_return", work_id=work_id)
                     else:
                         created_g = create_child_task(
                             return_body, t, conf,

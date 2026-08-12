@@ -16,9 +16,11 @@ import (
 )
 
 var resumeStageTitle = regexp.MustCompile(`^\[auto\]\s*\[(\d+)/(\d+)\s+([^\]]+)\]\s*(.*)$`)
+var resumeWorkID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type resumeWorkRequest struct {
-	Title string `json:"title"`
+	Title  string `json:"title"`
+	WorkID string `json:"work_id,omitempty"`
 }
 
 type resumeWorkResponse struct {
@@ -57,14 +59,19 @@ func (a *API) resumeWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := strings.TrimSpace(input.Title)
+	workID := strings.TrimSpace(input.WorkID)
 	if base == "" || len([]rune(base)) > 160 {
 		writeError(w, invalid("invalid_work_title", "work title is required and limited to 160 Unicode characters"))
+		return
+	}
+	if workID != "" && !resumeWorkID.MatchString(workID) {
+		writeError(w, invalid("invalid_work_id", "work_id must be a valid task identifier"))
 		return
 	}
 
 	a.resumeMu.Lock()
 	defer a.resumeMu.Unlock()
-	response, err := a.resumePausedWork(r.Context(), base)
+	response, err := a.resumePausedWork(r.Context(), base, workID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -72,15 +79,19 @@ func (a *API) resumeWork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResponse, error) {
+func (a *API) resumePausedWork(ctx context.Context, base, workID string) (resumeWorkResponse, error) {
 	settingsResponse, err := a.pilotConfig.Read()
 	if err != nil {
 		return resumeWorkResponse{}, err
 	}
 	settings := settingsResponse.Settings
-	pausedAt := pausedPipelineIndex(settings.StoppedPipelines, base)
+	pauseKey := workID
+	if pauseKey == "" {
+		pauseKey = base
+	}
+	pausedAt := pausedPipelineIndex(settings.StoppedPipelines, pauseKey)
 
-	tasks, err := a.pipelineTasks(ctx, base)
+	tasks, err := a.pipelineTasks(ctx, base, workID)
 	if err != nil {
 		return resumeWorkResponse{}, err
 	}
@@ -100,7 +111,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 		return resumeWorkResponse{}, conflict("work_not_paused", "this work is not owner-paused")
 	}
 
-	metadata := readResumeWorkMetadata(base)
+	metadata := readResumeWorkMetadata(base, workID)
 	target, source := resumeTarget(tasks, settings.Stages, metadata)
 	if target == "" || source == nil {
 		if pausedAt >= 0 {
@@ -126,7 +137,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 	if detail.Context == "" || detail.Workflow == nil {
 		return resumeWorkResponse{}, conflict("resume_history_incomplete", "the paused stage has no reusable workflow context")
 	}
-	key := resumeRequestKey(base, source.ID, target)
+	key := resumeRequestKey(pauseKey, source.ID, target)
 	created, _, err := a.store.CreateTask(ctx, protocol.CreateTaskRequest{
 		RequestKey:                 key,
 		Title:                      fmt.Sprintf("[auto] [%d/%d %s] %s", stageIndex(settings.Stages, target)+1, len(settings.Stages), target, base),
@@ -153,7 +164,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 	return resumeWorkResponse{Task: created.Task, Stage: target, Resumed: true}, nil
 }
 
-func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTask, error) {
+func (a *API) pipelineTasks(ctx context.Context, base, workID string) ([]resumedStageTask, error) {
 	rows, err := a.store.db.QueryContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
@@ -170,8 +181,25 @@ func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTas
 			return nil, unavailable(err)
 		}
 		match := resumeStageTitle.FindStringSubmatch(task.Title)
-		if match == nil || strings.TrimSpace(match[4]) != base {
+		if match == nil {
 			continue
+		}
+		if workID != "" {
+			// A provenance child may bridge a pre-027 parent by carrying the
+			// parent's task ID as work_id. Include that one legacy parent, but
+			// never another same-title pipeline.
+			legacyParent := task.WorkID == "" && task.ParentTaskID == "" && task.CorrectionKind == "" && task.ID == workID
+			if task.WorkID != workID && !legacyParent {
+				continue
+			}
+		} else {
+			if task.WorkID != "" || task.ParentTaskID != "" || task.CorrectionKind != "" {
+				// Title lookup is compatibility for truly legacy rows only.
+				continue
+			}
+			if strings.TrimSpace(match[4]) != base {
+				continue
+			}
 		}
 		result = append(result, resumedStageTask{Task: task, stage: strings.TrimSpace(match[3])})
 	}
@@ -271,7 +299,7 @@ func resumeRequiredStages(stages []protocol.PilotStage, metadata resumeWorkMetad
 	return required
 }
 
-func readResumeWorkMetadata(base string) resumeWorkMetadata {
+func readResumeWorkMetadata(base, workID string) resumeWorkMetadata {
 	data, err := os.ReadFile(worksPath())
 	if err != nil {
 		return resumeWorkMetadata{}
@@ -279,6 +307,9 @@ func readResumeWorkMetadata(base string) resumeWorkMetadata {
 	works := map[string]resumeWorkMetadata{}
 	if json.Unmarshal(data, &works) != nil {
 		return resumeWorkMetadata{}
+	}
+	if workID != "" {
+		return works[workID]
 	}
 	return works[base]
 }

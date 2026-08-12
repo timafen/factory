@@ -169,6 +169,84 @@ class OwnerMessageTests(unittest.TestCase):
 
 
 class DeliveryAreaTests(unittest.TestCase):
+    def test_real_review_gate_isolates_same_title_durable_state_by_work_id(self):
+        """The real gate must never borrow a same-title work's durable facts."""
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
+            paths = {
+                "PROMISES_PATH": os.path.join(temporary, "promises.json"),
+                "AREAS_PATH": os.path.join(temporary, "areas.json"),
+                "RESCUE_PATH": os.path.join(temporary, "rescues.json"),
+                "WORKS_PATH": os.path.join(temporary, "works.json"),
+            }
+            for name, path in paths.items():
+                stack.enter_context(mock.patch.object(pilot, name, path))
+            stack.enter_context(mock.patch.object(
+                pilot, "implementation_commit_gate", return_value=None))
+            rebuild = stack.enter_context(mock.patch.object(
+                pilot, "rebuild_clean_branch", return_value=""))
+
+            first = "11111111-1111-4111-8111-111111111111"
+            second = "22222222-2222-4222-8222-222222222222"
+            title = "Одинаковая работа"
+            pilot.save(pilot.PROMISES_PATH, {
+                first: {"files": ["shared.py"]},
+                second: {"files": ["second.py"]},
+            })
+            pilot.save(pilot.AREAS_PATH, {
+                first: ["repo::shared.py"],
+                second: ["repo::shared.py"],
+            })
+            pilot.save(pilot.RESCUE_PATH, {
+                f"{second}::GATE": 2,
+                f"{second}::DIRT": 1,
+            })
+            active = [{
+                "id": "second-task", "work_id": second, "state": "running",
+                "title": "[auto] [3/5 Implement + Test] " + title,
+            }]
+
+            with mock.patch.object(
+                    pilot, "branch_report", return_value=("есть", ["shared.py"])):
+                waiting = pilot.review_gate(
+                    {}, title, "factory/first", "repo", active_tasks=active,
+                    area_repo="repo", work_id=first)
+            self.assertTrue(waiting["wait"])
+
+            pilot.area_replace(title, ["second.py"], "repo", work_id=second)
+            with mock.patch.object(
+                    pilot, "branch_report", return_value=("есть", ["shared.py"])):
+                accepted = pilot.review_gate(
+                    {}, title, "factory/first", "repo", active_tasks=active,
+                    area_repo="repo", work_id=first)
+            self.assertFalse(accepted["back"])
+            self.assertIn("shared.py", accepted["note"])
+            self.assertNotIn("second.py —", accepted["note"])
+
+            # The other work's exhausted GATE and DIRT allowances do not cap
+            # this work, even though their owner-facing titles are identical.
+            with mock.patch.object(
+                    pilot, "branch_report", return_value=("нет", [])):
+                missing = pilot.review_gate(
+                    {}, title, "factory/first", "repo", work_id=first)
+            self.assertEqual(missing["cap_stage"], "GATE")
+            with mock.patch.object(pilot, "branch_report", return_value=(
+                    "есть", ["shared.py", "node_modules/cache.js"])):
+                dirty = pilot.review_gate(
+                    {}, title, "factory/first", "repo", work_id=first)
+            self.assertEqual(dirty["cap_stage"], "DIRT")
+            rebuild.assert_called_once()
+
+            pilot.record_delivery_artifact(title, "factory/first-clean", work_id=first)
+            pilot.record_delivery_artifact(title, "factory/second-clean", work_id=second)
+            self.assertEqual(
+                pilot.delivery_artifact(title, work_id=first)["branch"],
+                "factory/first-clean")
+            self.assertEqual(
+                pilot.delivery_artifact(title, work_id=second)["branch"],
+                "factory/second-clean")
+            self.assertNotIn("ВЕТКУ НЕ ПРОДОЛЖАЙ", pilot.resume_branch_line(
+                title, "factory/first", work_id=first))
+
     def test_stage_report_extends_delivery_area(self):
         known = {"Счётчик": ["repo::pilot/pilot.py"]}
 
@@ -1421,10 +1499,12 @@ class DiagnosisRepairTests(unittest.TestCase):
     def test_loop_rescue_does_not_grant_another_full_round_allowance(self):
         rescues = {"LOOP": 0}
 
-        def cap_rescues(_base, stage):
+        def cap_rescues(_base, stage, work_id=""):
+            del work_id
             return rescues.get(stage, 0)
 
-        def note_cap_rescue(_base, stage):
+        def note_cap_rescue(_base, stage, work_id=""):
+            del work_id
             rescues[stage] = rescues.get(stage, 0) + 1
 
         conf = dict(self.conf, deep_diag_rounds=99, max_stage_attempts=3,
@@ -2628,7 +2708,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
-            area_repo="repo-id", expected_card=card)
+            area_repo="repo-id", expected_card=card, work_id="")
         merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
 
 
