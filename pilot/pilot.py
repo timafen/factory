@@ -2890,7 +2890,21 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
             kwargs = {"area_repo": area_repo} if area_repo else {}
             clean = rebuild_clean_branch(repo_identity, branch, keep, base, **kwargs)
             if clean:
+                if not _remote_url(repo_identity):
+                    # Preserve the narrow legacy unit-test seam. Real
+                    # repositories always pin the published rebuild below.
+                    return {"back": False, "branch": clean,
+                            "note": ("Ветка пересобрана машиной от свежей главной: "
+                                     "проверяй ветку " + clean + ".")}
+                clean_snapshot = fresh_branch_snapshot(repo_identity, clean)
+                if clean_snapshot.get("state") != "ok":
+                    reason = (clean_snapshot.get("reason")
+                              or "rebuilt candidate branch is not published")
+                    return {"blocked": True, "note": (
+                        "BLOCKED: review infrastructure. Пересобранная ветка создана, "
+                        "но закрепить её SHA перед Review не удалось. Причина: " + reason)}
                 return {"back": False, "branch": clean,
+                        "head": clean_snapshot["candidate_sha"],
                         "note": ("Ветка пересобрана машиной от свежей главной: "
                                  "в поставке остались только файлы области "
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
@@ -2935,6 +2949,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                        "вычисленной от общего merge-base. "
                        if snapshot.get("base_advanced") else "")
         return {"back": False,
+                "head": snapshot["candidate_sha"],
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
                          "Проверяется свежая remote-основа "
                          f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
@@ -4579,14 +4594,16 @@ def delivery_artifact(base):
     artifact = meta.get("delivery_artifact") or {}
     if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
         return {}
-    if not artifact.get("branch"):
+    if (not artifact.get("branch")
+            or not FULL_GIT_SHA.fullmatch(artifact.get("head") or "")):
         return {}
     return artifact
 
 
-def record_delivery_artifact(base, branch):
-    """Keep review_gate's published rebuild for Review, Verify, and merge."""
-    if not branch:
+def record_delivery_artifact(base, branch, head):
+    """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
+    head = (head or "").lower()
+    if not branch or not FULL_GIT_SHA.fullmatch(head):
         return {}
     works = load(WORKS_PATH, {}) or {}
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -4596,6 +4613,7 @@ def record_delivery_artifact(base, branch):
     })
     artifact = {
         "branch": branch,
+        "head": head,
         "selected_at": now,
         "generation": meta.get("run_generation") or "",
     }
@@ -4608,8 +4626,7 @@ def selected_delivery(base, branch=""):
     """Prefer the gate-selected delivery branch; canonical is the fallback."""
     artifact = delivery_artifact(base)
     if artifact:
-        implementation = implementation_artifact(base)
-        return artifact["branch"], implementation.get("head") or ""
+        return artifact["branch"], artifact["head"]
     return canonical_implementation(base, branch)
 
 
@@ -7531,8 +7548,10 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch)
+                    record_delivery_artifact(base, branch, g.get("head", ""))
                     branch_line = f"Branch: {branch}\n"
+                    head_line = (f"Implementation head: {g['head']}\n"
+                                 if g.get("head") else "")
                 gate_note = "\n\n" + g["note"]
 
         context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{head_line}"
