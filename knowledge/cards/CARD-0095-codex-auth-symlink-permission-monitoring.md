@@ -1,6 +1,6 @@
 # CARD-0095 — Мониторинг Codex проверяет конечный auth.json
 
-Implementation commit: 172c3aee59d69cec6488526fb791a689295ef991 — Добавлен read-only checker прав конечных целей Codex и регрессии на симлинк с отображаемым режимом 777.
+Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавлен read-only checker прав конечных целей Codex и регрессии на симлинк с отображаемым режимом 777.
 
 ## HEAD
 
