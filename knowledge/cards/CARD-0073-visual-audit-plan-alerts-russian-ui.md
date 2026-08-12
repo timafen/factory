@@ -4,7 +4,7 @@
 
 - Status: Implement PASS — русский интерфейс и поставляемая сборка перенесены на свежий main.
 - Branch: `factory/a834da11-81f-fc2043d9-131`.
-Implementation commit: ede54d6e65fa00bf59f8b3d3482c4c0ef2062dd8 — русифицирован интерфейс управления и добавлены проверки.
+Implementation commit: ede54d6a497c1b97d35061ad29bbded61c333446 — русифицирован интерфейс управления и добавлены проверки.
 - What changed: русские подписи, сообщения и форматы охватывают основные экраны; добавлены 21 браузерный сценарий и их fixture.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit` завершилась без диагностик; `npm run build` сформировал и зафиксировал воспроизводимый `web/dist`.
 - One next action: дождаться результата полного `npm run test:browser` и передать ветку.
