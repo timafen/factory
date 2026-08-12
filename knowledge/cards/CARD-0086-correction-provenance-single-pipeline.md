@@ -2,18 +2,18 @@
 
 ## HEAD
 
-- Status: Implemented and tested; migration 026 is present in `main`;
-  Pilot remains operationally disabled.
-- Branch: `factory/31b80853-0f0-095f6283-3e1`.
-- Implementation commit: 7cd603288a2e666cb261248649fa3bba871f744a — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- What changed: 027 validates the exact 026 reconciliation schema before ALTER,
-  and the runner derives ledger versions from migration filenames.
-- What changed: Review/Verify corrections persist across a recreated Pilot
-  state and complete one `work_id` through Implement, Review, Verify and merge.
-- What changed: `pilot_duplicate_root_prevented` is a stable-ID durable outbox
-  event retained across crashes before/after journal and acknowledgement.
-- Evidence: focused provenance migration tests → PASS; full Pilot → PASS (204 tests);
-  `go test ./...` → PASS; `go build ./...` and diff check → PASS.
+- Status: Implemented and tested; Pilot remains operationally disabled.
+- Branch: `factory/016c61a8-e4d-be2c802c-a1a` (base `origin/main`
+  `60cba840f39a453862c1c0f87f261fd453b09688`).
+- Implementation commit: 4f36ccb2af718e95b0ff5318864f34940d3102c6 — durable
+  `work_id` isolation for artifact, delivery and lifecycle state.
+- What changed: same-title work IDs now retain separate implementation/delivery
+  branches, merge receipts and archival state through a Pilot restart.
+- What changed: a provenance child whose `work_id == legacy_parent.id` is
+  matched back to its legacy parent and advances one pipeline only.
+- Evidence: new focused isolation/restart/storm regressions → PASS; full Pilot
+  (206 tests) → PASS; migration-027 dependency, `go test ./...`, `go build ./...`
+  and diff check → PASS.
 - Next action: review and merge this correction; keep Pilot disabled until its
   separate safe release-state-machine decision.
 
@@ -61,3 +61,14 @@ CARD-0085 migration 026 is now in `origin/main` at
 cherry-picked onto that base. The focused provenance migration tests, all 204
 Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
 passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
+
+### 2026-08-11 — Implement
+
+On `factory/016c61a8-e4d-be2c802c-a1a`, based on fresh
+`origin/main` `60cba840f39a453862c1c0f87f261fd453b09688`, implementation
+`4f36ccb2af718e95b0ff5318864f34940d3102c6` replaces title-keyed Pilot
+artifact/delivery/lifecycle state with `work_id` where provenance exists. Two
+same-title corrections now preserve their own branches through restart, Review,
+Verify, merge and archive; a legacy parent and provenance child share one next
+stage without a duplicate Triage or Specification. Focused regressions, all 206
+Pilot tests, migration-027 dependency test, full Go tests/build and diff check passed.
