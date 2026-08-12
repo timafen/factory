@@ -3,11 +3,11 @@
 ## HEAD
 
 Status: PASS.
-Branch: `factory/1a906a91-cdb-734c58dd-50b`.
-Implementation commit: 14c6dfdb1355a1e03ac1a48c61ff87b42eebf44f — recovery и merge закреплены за SHA, прошедшим Verify.
-What changed: recovery сверяет текущий head и слитый PR с SHA из merge intent. Merge использует атомарный `--match-head-commit`; force-push останавливает доставку.
-Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.RebuiltDeliveryBranchPipelineTests pilot.test_pilot.ImmutableMergeTests pilot.test_pilot.MergeConflictRecoveryTests` — 11 tests OK; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` — OK; `go build ./cmd/factory-server ./cmd/factory-worker ./cmd/factory-release-broker` — OK.
-Next action: выполнить pinned Verify на опубликованных SHA после push.
+Branch: `factory/96cb138f-2fa-641c94ee-0d0`.
+Implementation commit: 7bbde9e8dd58866f64631fffce1735df1b38c35d — Review сохраняет SHA пересобранной delivery-ветки, а Verify сверяет и сливает именно его.
+What changed: delivery artifact теперь содержит закреплённые branch и head. После rebuild новый remote-снимок фиксируется до Review; Verify больше не сравнивает пересобранную ветку с SHA исходной реализации.
+Evidence: целевой набор — 11 tests OK; `python3 -m unittest pilot.test_pilot` — 237 tests OK (13 skipped); `go test ./...` и сборка трёх Go-бинариев — OK.
+Next action: повторить Review для опубликованной ветки.
 
 ## LOG
 
@@ -22,3 +22,9 @@ Next action: выполнить pinned Verify на опубликованных 
 Закрыты две гонки после Review: recovery больше не принимает force-push или merge другого SHA,
 а `gh pr merge` атомарно ограничен SHA из merge intent. Целевой набор из 11 тестов,
 Python compile-check и сборка трёх Go-бинариев прошли.
+
+### 2026-08-12 — Implement
+
+Устранён цикл после успешного Review: SHA пересобранной delivery-ветки сохраняется отдельно
+от SHA исходной реализации и проходит через Verify в merge intent. Регрессионный pipeline-тест
+использует разные SHA и подтверждает merge именно delivery SHA; полный Python- и Go-набор зелёный.
