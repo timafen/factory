@@ -16,7 +16,33 @@ import urllib.error
 import uuid
 from unittest import mock
 
+# A number of tests exercise the real cycle() function, which durably saves
+# STATE_PATH.  Redirect every HOME-derived Pilot path before importing the
+# production module; subprocess-based tests inherit the same safe root.
+_ORIGINAL_FACTORY_DATA_HOME = os.environ.get("FACTORY_DATA_HOME")
+_TEST_DATA_HOME = tempfile.TemporaryDirectory(prefix="factory-pilot-tests-")
+os.environ["FACTORY_DATA_HOME"] = _TEST_DATA_HOME.name
+for _directory in (
+        "pilot", "pilot/epics", "pilot/questions", "pilot/verdicts",
+        "pilot/rebuild", ".claude/projects", "workers"):
+    os.makedirs(os.path.join(_TEST_DATA_HOME.name, _directory), exist_ok=True)
+
 from pilot import pilot
+
+
+def tearDownModule():
+    _TEST_DATA_HOME.cleanup()
+    if _ORIGINAL_FACTORY_DATA_HOME is None:
+        os.environ.pop("FACTORY_DATA_HOME", None)
+    else:
+        os.environ["FACTORY_DATA_HOME"] = _ORIGINAL_FACTORY_DATA_HOME
+
+
+class TestDataIsolationTests(unittest.TestCase):
+    def test_pilot_state_is_outside_the_live_data_root(self):
+        self.assertEqual(pilot.HOME, _TEST_DATA_HOME.name)
+        self.assertTrue(pilot.STATE_PATH.startswith(_TEST_DATA_HOME.name + os.sep))
+        self.assertNotEqual(pilot.STATE_PATH, "/opt/factory-data/pilot/state.json")
 
 
 class AgentRulesScopeTests(unittest.TestCase):
