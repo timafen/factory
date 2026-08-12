@@ -1,15 +1,17 @@
 # CARD-0086 — Одна корректировка не создаёт второй конвейер
 
+Implementation commit: f3dbc48009e2314db1ee21538b49f506ba065e47 — возобновление одноимённых работ строго по `work_id`.
+
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/8493f4e1-e7f-d0bef795-c9b` (pinned remote default base `d9dcf3cbee1fb902907b64f4e6118c8e9876303b`).
-- Implementation commit: f12fc67fc2d1497ad348dcdf77281f82dfeb3146 — same-title resume, Review and Verify remain isolated by durable `work_id` after rebase.
-- What changed: resume lookup and every Pilot delivery path retain the originating
-  work identity; the restart regression covers both works under bounded polling.
-- Evidence: full Go/static checks, UI (161), Pilot (232), browser, worker race,
-  release reproducibility, tooling, launcher and clean build checks pass.
-- Next action: human merges `factory/8493f4e1-e7f-d0bef795-c9b`.
+- Status: Implemented and rebased on current `origin/main`; awaiting review.
+- Branch: `factory/5925ce7b-cdf-02966af7-5bd`.
+- Implementation commit: f3dbc48009e2314db1ee21538b49f506ba065e47 — resume lookup uses the durable `work_id`.
+- What changed: the control plane and frontend pass `work_id` through resume;
+  Pilot keeps matching titles in separate durable pipelines and artifacts.
+- Evidence: targeted Go provenance tests, 8 Pilot isolation scenarios, 19 web
+  tests, and the web production build pass after the rebase.
+- Next action: review the rebased change and merge it.
 
 ## LOG
 
@@ -69,3 +71,10 @@ tests, static checks, tooling, launcher and the complete build passed.
 The initial UI/browser invocation stopped because a clean worktree had no
 `web/node_modules` (`tsc: not found`). After the repository-prescribed
 `just ui-install`, only the unexecuted UI/browser checks were rerun and passed.
+
+### 2026-08-12 — Implement
+
+Rebased the `work_id` isolation change onto current `origin/main`; the only
+conflict was a generated frontend bundle, rebuilt from the reconciled sources.
+Targeted control-plane provenance tests, eight durable Pilot isolation scenarios,
+nineteen frontend tests, and the production frontend build pass.
