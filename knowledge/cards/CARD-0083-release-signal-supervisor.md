@@ -4,7 +4,7 @@
 
 - Status: Implemented — ready for repeated Review.
 - Branch: `factory/32cba600-231-1808620a-969`.
-Implementation commit: db620e29e4a9600f8dc92daa7b76d7d850fedefb — сессия
+Implementation commit: 6e3ecaa2db940c63a9b6e835f9ee95179f9da818 — сессия
   создаётся до intermediary launcher, fork setsid удерживается для reap.
 - What changed: реальный SID/PGID проверяется до запуска UI/Go gate; ранняя
   остановка находит дочернего session leader и завершает всю группу.
@@ -50,4 +50,12 @@ adversarial UI и Go потомками, подтвердив TERM→KILL, от�
 `$AS`: fork intermediary launcher остаётся в известном PGID, а `setsid --wait`
 удерживает и reap-ит fork-ветку. Регрессия для UI и Go отправляет HUP/INT/TERM
 после создания дочерней сессии, но до PGID-handshake, и подтверждает отсутствие
-процессов и production install; реализация — `db620e29e4a9600f8dc92daa7b76d7d850fedefb`.
+процессов и production install; реализация — `566e2fe26055c7a5b46946ed392450a153f716c8`.
+
+### 2026-08-11 — Implement
+
+После rebase на свежий `main` завершившийся session leader стал исчерпывать
+watchdog как zombie до финального `wait`. Supervisor теперь сразу распознаёт и
+reap-ит zombie launcher, а polling не рассылает TERM уже известному PGID.
+Полный `bash ops/test-fx-factory-release.sh` прошёл в пределах пяти секунд на
+каждую остановку; реализация — `6e3ecaa2db940c63a9b6e835f9ee95179f9da818`.
