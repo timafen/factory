@@ -9,6 +9,7 @@ import html
 import os
 import sys
 import uuid
+from urllib.parse import urlsplit
 
 sys.path.insert(0, "/opt/factory-data/pilot")
 import pilot  # noqa: E402
@@ -416,6 +417,29 @@ def _alert_items():
     return items
 
 
+def safe_alert_click(click):
+    """Return an owner-safe notification destination, or an empty string.
+
+    The notification journal is data, not trusted HTML.  Links may only stay
+    inside the Factory UI: a site-relative route or an http(s) URL on its
+    configured public origin.
+    """
+    if not isinstance(click, str):
+        return ""
+    value = click.strip()
+    if not value or "\\" in value:
+        return ""
+    parsed = urlsplit(value)
+    if not parsed.scheme and not parsed.netloc:
+        return value if parsed.path.startswith("/") else ""
+
+    trusted = urlsplit(pilot.UI_BASE)
+    if (parsed.scheme in {"http", "https"}
+            and (parsed.scheme, parsed.netloc) == (trusted.scheme, trusted.netloc)):
+        return value
+    return ""
+
+
 @router.get("/alerts", response_class=HTMLResponse)
 def alerts_page(group: str = "", n: int = ALERTS_DEFAULT_N):
     items = _alert_items()
@@ -444,7 +468,7 @@ def alerts_page(group: str = "", n: int = ALERTS_DEFAULT_N):
                     f'<span class="alert-freshness">{esc(last_at)}</span></summary>')
         for item in events:
             quiet = "" if item.get("delivered") else " · тихое: группа выключена"
-            click = item.get("click") or ""
+            click = safe_alert_click(item.get("click"))
             link = (f' <a class="back" href="{esc(click)}">открыть</a>' if click else "")
             body.append(
                 f'<article class="card alert-event{"" if item.get("delivered") else " done"}">'

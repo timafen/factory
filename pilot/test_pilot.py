@@ -3688,6 +3688,23 @@ class PlanManualTaskTest(unittest.TestCase):
 
         self.assertIn("Уведомлений пока нет.", markup)
 
+    def test_alerts_only_link_to_factory_routes_or_public_origin(self):
+        records = [
+            {"title": "Безопасный маршрут", "message": "", "at": "сейчас",
+             "group": "done", "click": "/work"},
+            {"title": "Безопасный адрес", "message": "", "at": "сейчас",
+             "group": "done", "click": "https://factory.timafen.com/work"},
+            {"title": "Опасный адрес", "message": "", "at": "сейчас",
+             "group": "done", "click": "javascript:alert(1)"},
+        ]
+
+        with self.with_alert_log(records):
+            markup = self.html(self.plan.alerts_page())
+
+        self.assertIn('href="/work"', markup)
+        self.assertIn('href="https://factory.timafen.com/work"', markup)
+        self.assertNotIn('href="javascript:alert(1)"', markup)
+
     def test_task_action_promotes_card_and_creates_task(self):
         plan = self.plan
         card = {
