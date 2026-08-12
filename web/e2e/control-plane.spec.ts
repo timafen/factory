@@ -1643,7 +1643,9 @@ test("edits pilot settings from the Settings screen", async ({ page }) => {
   const response = page.waitForResponse((result) =>
     result.url().endsWith("/api/v1/settings/pilot") && result.request().method() === "PUT",
   );
-  await settings.getByRole("button", { name: "Сохранить настройки", exact: true }).click();
+  const saveSettings = settings.getByRole("button", { name: "Сохранить настройки", exact: true });
+  await expect(saveSettings).toHaveCount(1);
+  await saveSettings.click();
   expect((await response).ok()).toBe(true);
   await expect(settings.getByText(/Настройки сохранены/)).toBeVisible();
   await page.reload();
