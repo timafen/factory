@@ -2,17 +2,28 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
+Status: BLOCKED — cleanup Gate не выдержал проверку ограниченного времени.
 Branch: factory/5d250fde-09f-9cbb7136-05f.
 Implementation commit: 741c717ecbf8fc96bb0b3de079c8bbde1a250820 — вся release-цепочка закреплена абсолютными tools, каждый gate изолирован cgroup v2.
 What changed: безопасный root PATH устанавливается до первого external command; checkout, lock, ownership, gates, installation и cleanup используют проверенные абсолютные executables.
 What changed: gate останавливается до attach в отдельную cgroup; успех требует пустой cgroup, остатки получают bounded TERM→KILL и приводят к отказу без install.
 Preserved: root-owned immutable checkout, абсолютный Node, SID/PGID/supervisor/nonce, signal cleanup, kernel wait status и запрет install до двух gates; Pilot выключен.
-Evidence: hostile PATH и real escaped-setsid/fork/fail/signal shell-suite ×3 → PASS; live процессов и install не осталось.
-Evidence: `go test ./...`, `go build ./...`, 157 UI tests/build, `bash -n`, `git diff --check` → PASS.
-One next action: human merge into main.
+Evidence: `bash ops/test-fx-factory-release.sh` воспроизвёл отказ `orphan-after-success`: потомок Gate не был очищен за bounded time.
+Evidence: `bash -n` для release/cgroup/install-скриптов и `git diff --check` → PASS; полный `just test` также упал на внешнем `internal/worker` timeout после 300 секунд.
+One next action: исправить bounded cleanup orphan-потомка и повторить полный Verify.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Проверка | Команда | Наблюдение |
+| --- | --- | --- |
+| Безопасный PATH и абсолютные tools | `bash ops/test-fx-factory-release.sh` | PATH-shadow сценарий включён в набор; набор не завершился из-за следующей проверки. |
+| cgroup cleanup потомков | `bash ops/test-fx-factory-release.sh` | FAIL: `successful gate orphan was not drained in bounded time`. |
+| Синтаксис и чистота diff | `bash -n ops/fx-factory-release ops/factory-gate-cgroup ops/install-factory-gate-cgroup.sh`; `git diff --check` | PASS. |
+| Полный backend-набор | `just format-check && just vet && just vuln && just boundary && just test ...` | `format-check`, `vet`, `vuln` прошли; `just test` упал на timeout `internal/worker` через 300 секунд. |
+
+Вердикт: BLOCKED. Изменённая cgroup-очистка не выполняет заявленное bounded fail-closed условие для orphan-потомка; установка должна оставаться запрещённой до исправления.
 
 ### 2026-08-11 — Implement
 
