@@ -2,11 +2,11 @@
 
 ## HEAD
 
-- Status: Implement PASS — полная поставка проверена.
-- Branch: `factory/c4ed5639-1cd-6e93102b-ddb`.
+- Status: Implement PASS — повторная проверка выполнена.
+- Branch: `factory/28ac7d8f-a80-76906e4f-883`.
 Implementation commit: 0579ce69eccea6d891668882d88689489e9909e4 — проверка единственности кнопки сохранения Settings.
 - What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()` и должна существовать в единственном числе.
-- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `npm run test:browser` (21 passed) и `just check` PASS.
+- Evidence: `npm ci`, targeted Playwright Settings (1 passed) и `just check` PASS.
 - One next action: передать в Verify.
 
 ## LOG
@@ -19,6 +19,10 @@ Implementation commit: 0579ce69eccea6d891668882d88689489e9909e4 — провер
 Targeted Playwright: `audits every Factory screen on desktop and phone`, legacy migration и Settings — 3 passed.
 
 ### 2026-08-12 — Implement
+
+После возврата задачи исправлена ссылка на фактический кодовый коммит реализации
+`0579ce69eccea6d891668882d88689489e9909e4`; карточка перенесена на текущую ветку.
+`npm ci` восстановил зависимости, targeted Playwright Settings: 1 passed.
 
 Перенесена только проверка текущей задачи на свежий `origin/main`: перед кликом
 по кнопке «Сохранить настройки» E2E требует ровно один элемент в `.settings-page`.
