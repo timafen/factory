@@ -1222,6 +1222,10 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(screen.path);
       await expect(screen.ready(page), `${screen.name} must show meaningful content`).toBeVisible();
+      expect(
+        await page.evaluate("document.documentElement.lang === 'ru'"),
+        `${screen.name} must declare Russian document language`,
+      ).toBe(true);
       if (viewport.name === "desktop" && screen.name === "overview") {
         await expectInteractiveOverflowRegression(page);
       }
