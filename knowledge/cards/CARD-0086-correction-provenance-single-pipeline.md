@@ -3,19 +3,15 @@
 ## HEAD
 
 - Status: Implemented and tested; Pilot remains operationally disabled.
-- Branch: `factory/016c61a8-e4d-be2c802c-a1a` (base `origin/main`
-  `60cba840f39a453862c1c0f87f261fd453b09688`).
-- Implementation commit: 4f36ccb2af718e95b0ff5318864f34940d3102c6 — durable
-  `work_id` isolation for artifact, delivery and lifecycle state.
-- What changed: same-title work IDs now retain separate implementation/delivery
-  branches, merge receipts and archival state through a Pilot restart.
-- What changed: a provenance child whose `work_id == legacy_parent.id` is
-  matched back to its legacy parent and advances one pipeline only.
-- Evidence: new focused isolation/restart/storm regressions → PASS; full Pilot
-  (206 tests) → PASS; migration-027 dependency, `go test ./...`, `go build ./...`
-  and diff check → PASS.
-- Next action: review and merge this correction; keep Pilot disabled until its
-  separate safe release-state-machine decision.
+- Branch: `factory/82db3b1f-901-430c6234-3d3c`.
+- Implementation commit: 0f47485636102af74e5dcb792ed75e60ee38868f — resume,
+  budget and diagnostic repair isolate same-title work by durable `work_id`.
+- What changed: owner resume selects only its `work_id` pause, history and metadata;
+  title lookup is restricted to legacy records without provenance.
+- What changed: root metadata is written after create; budget/repair state uses work ID.
+- Evidence: `go test ./internal/controlplane -run Resume -count=1` → PASS;
+  `python3 -m unittest pilot.test_pilot -q` → PASS.
+- Next action: review and merge; keep Pilot disabled pending its separate release decision.
 
 ## LOG
 
@@ -72,3 +68,10 @@ same-title corrections now preserve their own branches through restart, Review,
 Verify, merge and archive; a legacy parent and provenance child share one next
 stage without a duplicate Triage or Specification. Focused regressions, all 206
 Pilot tests, migration-027 dependency test, full Go tests/build and diff check passed.
+
+### 2026-08-11 — Implement
+
+Implementation commit: 0f47485636102af74e5dcb792ed75e60ee38868f — owner resume
+now uses durable `work_id`, preserving a separate same-title pause and task
+history. Root metadata is recorded after creation, and budget/diagnostic repair
+storage follows the same ID. Focused resume Go tests and the Pilot unit suite pass.
