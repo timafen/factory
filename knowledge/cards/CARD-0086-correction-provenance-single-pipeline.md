@@ -16,6 +16,15 @@
 
 ## LOG
 
+### 2026-08-11 — Implement
+
+Rebased merge recovery no longer writes a mocked/non-JSON generation into the
+durable merge intent.  A no-adapter repository closes after its durable merge,
+while a real adapter may persist only its string generation ID.  The receipt
+now carries `work_id`, so two corrections with the same display title archive
+independently.  Focused control-plane provenance tests and the seven restart
+storm tests passed; Pilot enablement was left unchanged.
+
 ### 2026-08-11 — Verify
 
 | Criterion | Evidence | Result |
