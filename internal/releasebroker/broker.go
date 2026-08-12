@@ -343,18 +343,6 @@ func (b *Broker) persist(item *operation) error {
 	return b.syncDir(b.stateDir)
 }
 
-func validOperation(item operation) bool {
-	if !valid(item.Request) || item.Posts < 1 || item.PID < 0 {
-		return false
-	}
-	switch item.Status {
-	case "launching", "running", "succeeded", "locked", "release_failed_rolled_back", "rollback_failed", "failed":
-		return true
-	default:
-		return false
-	}
-}
-
 func valid(input Request) bool {
 	return operationIDPattern.MatchString(input.OperationID) && commitSHAPattern.MatchString(input.CommitSHA) && func() bool { _, ok := invocation(input.Adapter, input.CommitSHA); return ok }()
 }
