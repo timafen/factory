@@ -4392,6 +4392,92 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(len(created), 4)
         self.assertEqual(len({task["title"] for task in created}), 4)
 
+    def test_terminal_backlog_is_limited_to_four_decisions_per_cycle(self):
+        conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "poll_seconds": 30,
+            "max_parallel_works": 10,
+        }
+        state = {"processed": []}
+        tasks = [{
+            "id": f"done-{number}",
+            "title": f"[auto] [1/2 Triage] Work {number}",
+            "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
+            "repository_id": "repo-id",
+        } for number in range(6)]
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path.startswith("/tasks/done-"):
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "attempts": [{"result": "READY"}],
+                }
+            if path == "/tasks" and body is not None:
+                new_task = {
+                    "id": f"next-{len(created)}", "title": body["title"],
+                    "state": "created", "created_at": "2026-08-10T11:00:00Z",
+                    "repository_id": "repo-id",
+                }
+                created.append(new_task)
+                tasks.append(new_task)
+                return {"task": new_task}
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 10, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {"id": "rev-spec", "title": "Specification"},
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks",
+                                                  return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block",
+                                                  return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker",
+                                                  return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block",
+                                                  return_value=""))
+            decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            hint = pilot.cycle(conf, state)
+
+        self.assertEqual(hint, {"seconds": 2, "reason": "handoff"})
+        self.assertEqual(decide.call_count, 4)
+        self.assertEqual(len(created), 4)
+        self.assertEqual(len(state["processed"]), 4)
+
 
 class HostLoadAdmissionTests(unittest.TestCase):
     def setUp(self):
