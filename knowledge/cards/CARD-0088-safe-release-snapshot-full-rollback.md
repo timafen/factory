@@ -2,25 +2,20 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot remains disabled and no
-production release was performed.
+Status: Implemented and verified; Pilot remains disabled and no production
+release was performed.
 
-Branch: `factory/00a0a965-4e1-ac3fb722-fe9`
+Branch: `factory/7a10f112-9eb-8b991974-dc9`
 
-Implementation commit: f625813f3f0f38f40091880ff2ed542ebc47c31b —
-выпуск сохраняет проверенный SQLite snapshot и immutable полный комплект,
-устанавливает пару через journal и полностью откатывает код/службы/metadata;
-DB restore остаётся отдельной подтверждаемой операцией.
+Implementation commit: 8d79fa4376a353f069ef1c26a53dafb415b44870 —
+release fixture проверяет, что immutable manifest согласован с точным SHA
+кандидата, наряду с полным SQLite snapshot и комплектом rollback.
 
-Evidence: Verify повторно выполнил `bash ops/test-fx-factory-release.sh` → PASS,
-`go test ./...` → PASS и `python3 -m unittest pilot.test_pilot` → 202 PASS;
-shell syntax и `git diff --check` → PASS. Чистая установка web-зависимостей
-прошла, typecheck/lint прошли, но `npm test` выявил 4 существующих сбоя вне
-scope выпуска: три timeout и порядок brain-chain; `test-factory-release-systemd`
-честно завершился SKIP вне root systemd fixture.
+Evidence: `bash ops/test-fx-factory-release.sh`, `go test ./internal/controlplane`,
+`npx tsc -p tsconfig.app.json --noEmit`, shell syntax and `git diff --check` → PASS.
 
-Next action: человек принимает решение о merge после оценки известных web test
-failures; не выпускать migration 027 и не включать Pilot.
+Next action: независимый Review оценивает реализацию перед merge; не выпускать
+migration 027 и не включать Pilot.
 
 ## LOG
 
@@ -80,6 +75,16 @@ service states без изменения БД; несовместимый ledger
 Доказательство: обязательный release fixture PASS, Go `./...` PASS, Pilot 202
 PASS, UI 157 PASS и production build PASS, syntax/diff PASS. Реальная systemd
 фикстура добавлена и вне root/systemd окружения честно завершилась SKIP.
+
+### 2026-08-11 — Implement
+
+В release fixture добавлена точная проверка `candidate_sha` опубликованного
+manifest: снимок теперь подтверждён как связанный не только с составом
+артефактов и SQLite backup, но и с конкретным кандидатом выпуска.
+
+Доказательство: `bash ops/test-fx-factory-release.sh`,
+`go test ./internal/controlplane` и `npx tsc -p tsconfig.app.json --noEmit` —
+PASS; `bash -n` изменённых shell-файлов и `git diff --check` — PASS.
 
 ### 2026-08-11 — Verify
 
