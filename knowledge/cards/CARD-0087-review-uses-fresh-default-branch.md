@@ -2,15 +2,22 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Verify.
-Branch: `factory/6c341a21-889-2c2564ec-f3f`.
+Status: Implemented — ready for Verify.
+Branch: `factory/1afd7d9f-72c-facc4b8f-b73`.
 Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
 What changed: immutable Revision 10 for Review (`cce09cec-256d-41c4-83fc-a7c58150cef4`) and Verify (`e2bc55e2-c288-4970-8424-316195217732`) now require remote-HEAD resolution, isolated fetch, pinned base/candidate SHA, and infrastructure BLOCKED verdicts.
 What changed: Pilot dynamically reads these current revision IDs; existing task snapshots were not changed.
-Evidence: `python3 -m unittest pilot.test_pilot -q` → PASS; live API smoke confirms both Revision 10 instructions and Pilot selection; dashboard → HTTP 200.
-Next action: Verify the delivered branch against freshly resolved remote `main` and return it to Verify.
+Evidence: `python3 -m unittest pilot.test_pilot -q` → PASS (225 tests, 13 skipped); live API smoke confirms both Revision 10 instructions and Pilot selection.
+Next action: Verify this published branch against freshly resolved remote `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Поставка перебазирована на свежий `origin/main`; реализация остаётся связана с
+кодовым коммитом `ac3ef660715a20f7b50711a57f7d787f63883598`, а отдельный
+commit карточки фиксирует актуальную ветку. Полный `python3 -m unittest
+pilot.test_pilot -q` прошёл: 225 tests OK, 13 skipped.
 
 ### 2026-08-12 — Implement
 
