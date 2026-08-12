@@ -3,13 +3,19 @@
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: `factory/16f9dc13-c12-270afe6b-8a2`.
-Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
-What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
-Evidence: закреплённое сравнение с remote `main` содержит только эту карточку; `python3 -m unittest pilot.test_pilot -q` — PASS, 214 tests OK.
-Next action: human merges the documentation-only verification record; existing task snapshots remain intentionally unchanged according to the handoff.
+Branch: `factory/330508c4-433-38ec8c9d-4b2`.
+Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера конфигурации Pilot удалены неподдерживаемые rollout-поля.
+What changed: строгая серверная схема принимает пример Pilot без служебных rollout-метаданных Review и Verify.
+Evidence: отдельный повтор нестабильного worker-теста — PASS; после `npm ci` полный `just check` — PASS, включая 159 web-тестов и сборку.
+Next action: human merges the verified Pilot configuration cleanup.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+По решению владельца отдельно повторён `TestIdleWorkerMakesOneClaimPerPollingInterval`: PASS за 2.165s.
+Первый `just check` прошёл весь Go-набор, но обнаружил отсутствующие локальные web-зависимости (`eslint: not found`); после воспроизводимого `npm ci` повторный `just check` завершился PASS, включая 159 web-тестов, сборку и operator checks.
+Кодовый implementation commit `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` входит в ветку и меняет `pilot/config.example.json`; неподдерживаемые rollout-поля отсутствуют в конфигурации Pilot.
 
 ### 2026-08-12 — Implement: исправление конфликта Pilot
 
