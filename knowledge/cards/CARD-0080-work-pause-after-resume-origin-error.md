@@ -2,12 +2,13 @@
 
 ## HEAD
 
-- Status: Реализация доставлена в `main`; повторный Verify не запускается по решению владельца.
-- Branch: `factory/22f81140-80a-12900f24-cc4`
-- Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — холодный HTTPS fixture получает увеличенный timeout для полного запуска setup.
-- Evidence summary: коммит реализации есть в свежем `origin/main` и является предком этой ветки; рабочее дерево до записи карточки чистое.
-- Evidence summary: повторная проверка намеренно не выполнялась, потому что реализация уже находится в `main`; полный HTTPS-прогон остаётся отдельной работой по CARD-0080.
-- Next action: выполнить отдельный полный HTTPS-прогон по CARD-0080.
+Status: Реализовано и проверено; готово к повторному Review.
+Branch: `factory/27e7d7c5-57d-a1e62a3d-134`
+Implementation commit: 547894623cefee3d551a48c00baa336fe5f4776c — единый конечный лимит применяется к холодному HTTPS setup и проверяется исполняемой регрессией.
+What changed: 120-секундный лимит вынесен в единый контракт Playwright и применяется непосредственно в `beforeAll`; проверка исходного текста заменена проверкой фактического вызова.
+Evidence: `npm --prefix web test -- --run src/playwrightConfig.test.ts` → 12/12 PASS; `typecheck`, `lint`, production build и чистый `web/dist` → PASS.
+Evidence: холодный `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test --grep 'shows every project product and saves the overview'` → 1 PASS за 52.3 с.
+Next action: повторить Review кандидатной ветки относительно свежего `origin/main`.
 
 ## LOG
 
@@ -101,3 +102,9 @@
 | Desktop/390 resume, stale pause, safe retry и cross-origin | тот же сценарий №7 в полном suite | PASS: hostile Origin получил 403 `cross_origin_request`; безопасное сообщение и retry остались видимы; queued pause и completed stale pause очищены; desktop и 390px assertions/screenshots выполнены. |
 | Смежные browser/API/UI регрессии | оставшиеся 20 Playwright-сценариев; полный Go/UI suite; `npm --prefix web audit --omit=dev` | PASS: все 20 соседних browser-сценариев прошли, Go/UI regressions прошли, production dependencies — `found 0 vulnerabilities`. |
 | Cleanup и чистота дерева | `ps -eo pid,ppid,args`, `ss -ltnp` до/после; `git diff --check`; `git status --short --untracked-files=all` | PASS: scoped-процессов нет; listeners 27 → 27 без новых записей; до правки карточки tracked/untracked изменений не было. |
+
+### 2026-08-12 — Implement
+
+- Кандидат теперь сам содержит реализацию: единый конечный лимит 120 секунд применяется к общему холодному HTTPS setup через исполняемый helper.
+- Регрессия вызывает helper и проверяет единственное конечное значение лимита вместо поиска строки в исходнике.
+- Unit 12/12, typecheck, lint, production build и clean `web/dist` прошли; холодный HTTPS Playwright-сценарий прошёл за 52.3 секунды.
