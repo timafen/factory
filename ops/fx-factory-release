@@ -53,6 +53,8 @@ API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
+DELIVERY_ID="${FACTORY_DELIVERY_ID:-}"
+DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}"
 DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
 FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
 RELEASE_DRIVER="${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}"
@@ -92,6 +94,83 @@ TRUSTED_PYTHON=/usr/bin/python3
 TRUSTED_GIT=/usr/bin/git
 TRUSTED_CHMOD=/usr/bin/chmod
 TRUSTED_MKDIR=/usr/bin/mkdir
+
+# The broker supplies an immutable generation id. Every transition is durable
+# only after its contents and containing directory have been synchronized.
+delivery_status() {
+  [ -n "$DELIVERY_ID" ] || return 0
+  local status=$1
+  python3 - "$DELIVERY_DIR" "$DELIVERY_FILE" "$status" <<'PY'
+import os, sys
+directory, target, status = sys.argv[1:]
+fault = os.environ.get("FACTORY_DELIVERY_STATUS_FAULT", "")
+temporary = f"{target}.tmp.{os.getpid()}"
+previous = None
+had_previous = False
+def fail_at(stage):
+    if fault == f"{status}:{stage}":
+        raise OSError(f"injected delivery status {stage} failure")
+def sync_directory(inject_fault=True):
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+        if inject_fault: fail_at("dir-sync")
+    finally: os.close(fd)
+def restore_previous():
+    if not had_previous:
+        try: os.unlink(target)
+        except FileNotFoundError: pass
+        sync_directory(False)
+        return
+    restore = f"{target}.restore.{os.getpid()}"
+    fd = os.open(restore, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, previous); os.fsync(fd)
+    finally: os.close(fd)
+    os.replace(restore, target); sync_directory(False)
+try:
+    try:
+        with open(target, "rb") as stream:
+            previous = stream.read(); had_previous = True
+    except FileNotFoundError: pass
+    fail_at("create")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        fail_at("write")
+        data = (status + "\n").encode()
+        while data:
+            written = os.write(fd, data)
+            if written <= 0: raise OSError("short delivery status write")
+            data = data[written:]
+        os.fsync(fd); fail_at("file-sync")
+        os.close(fd); fd = None; fail_at("close"); fail_at("rename")
+        os.replace(temporary, target)
+        try: sync_directory()
+        except OSError:
+            restore_previous(); raise
+    finally:
+        if fd is not None: os.close(fd)
+except OSError as error:
+    try: os.unlink(temporary)
+    except FileNotFoundError: pass
+    print(f"!! cannot durably write delivery status {status}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+if [ -n "$DELIVERY_ID" ]; then
+  case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
+  mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
+  DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
+  if [ -f "$DELIVERY_FILE" ]; then
+    case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
+      succeeded) exit 0 ;;
+      locked) exit 8 ;;
+      failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
+    esac
+  fi
+  delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
+fi
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -488,6 +567,7 @@ PY
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
+delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
 umask 077
 
@@ -1234,7 +1314,7 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; delivery_status failed || fail "не смог надёжно записать неуспешный выпуск"; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
