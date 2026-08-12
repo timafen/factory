@@ -318,6 +318,72 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
 }
 
+func TestDiskBrokerTrustsLegacyTerminalRecord(t *testing.T) {
+	dir := t.TempDir()
+	item := operation{
+		Request: Request{OperationID: "legacy-terminal", Adapter: "fx-factory-release", CommitSHA: testSHA},
+		Status:  "succeeded",
+		Posts:   1,
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy-terminal.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &recordingExecutor{}
+	broker, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered, ok := operationSnapshot(broker, "legacy-terminal"); !ok || recovered.Status != "succeeded" {
+		t.Fatalf("legacy terminal recovered as %+v", recovered)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	if got := operationStatus(t, server, "legacy-terminal").Status; got != "succeeded" {
+		t.Fatalf("legacy terminal API status=%q", got)
+	}
+	if got := executor.callCount(); got != 0 {
+		t.Fatalf("legacy terminal started executor %d times", got)
+	}
+}
+
+func TestDiskBrokerIsolatesDamagedTerminalMarker(t *testing.T) {
+	dir := t.TempDir()
+	for _, item := range []operation{
+		{Request: Request{OperationID: "damaged-terminal", Adapter: "fx-factory-release", CommitSHA: testSHA}, Status: "succeeded", Posts: 1},
+		{Request: Request{OperationID: "healthy-terminal", Adapter: "fx-factory-release", CommitSHA: testSHA}, Status: "succeeded", Posts: 1},
+	} {
+		data, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, item.Request.OperationID+".json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "damaged-terminal.commit"), []byte(`{"status":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "healthy-terminal.commit"), []byte(`{"status":"committed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	broker, err := NewAt(dir, &recordingExecutor{})
+	if err != nil {
+		t.Fatalf("damaged marker prevented broker startup: %v", err)
+	}
+	if recovered, ok := operationSnapshot(broker, "damaged-terminal"); !ok || recovered.Status != "failed" {
+		t.Fatalf("damaged operation recovered as %+v", recovered)
+	}
+	if recovered, ok := operationSnapshot(broker, "healthy-terminal"); !ok || recovered.Status != "succeeded" {
+		t.Fatalf("healthy operation recovered as %+v", recovered)
+	}
+}
+
 func TestDiskBrokerRefusesCorruptOperationRecord(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "damaged.json"), []byte(`{"request":`), 0o600); err != nil {
@@ -407,6 +473,60 @@ func TestTerminalSynchronizationErrorsNeverPublishSuccess(t *testing.T) {
 				t.Fatalf("physical executions=%d, want 1", executor.callCount())
 			}
 		})
+	}
+}
+
+func TestCommitMarkerRenameFailureKeepsPendingMarker(t *testing.T) {
+	dir := t.TempDir()
+	executor := &recordingExecutor{}
+	broker, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerRenames := 0
+	broker.rename = func(oldName, newName string) error {
+		if strings.HasSuffix(newName, ".commit") {
+			markerRenames++
+			if markerRenames == 2 {
+				return errors.New("simulated crash before commit marker rename")
+			}
+		}
+		return os.Rename(oldName, newName)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"commit-marker-crash","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForBrokerIdle(t, broker)
+	if markerRenames != 2 {
+		t.Fatalf("marker renames=%d, want pending and committed replacement", markerRenames)
+	}
+	if got := operationStatus(t, server, "commit-marker-crash").Status; got != "running" {
+		t.Fatalf("status after commit marker crash=%q, want running", got)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "commit-marker-crash.commit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker terminalMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		t.Fatalf("pending marker was damaged: %v", err)
+	}
+	if marker.Status != "pending" {
+		t.Fatalf("marker status=%q, want pending", marker.Status)
+	}
+
+	restarted, err := NewAt(dir, &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered, ok := operationSnapshot(restarted, "commit-marker-crash"); !ok || recovered.Status != "failed" {
+		t.Fatalf("restart recovered operation as %+v", recovered)
+	}
+	if got := executor.callCount(); got != 1 {
+		t.Fatalf("executor calls=%d, want 1", got)
 	}
 }
 
