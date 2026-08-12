@@ -2,17 +2,27 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/92c05a1d-a0a-437ef620-ec1.
+Status: BLOCKED: shell-проверка не уложилась в ограниченное завершение orphan process group.
+Branch: factory/d858812d-e7c-81c09b72-d99.
 Implementation commit: 71baa59ef6efb819ee32db163347235a7ef6b4c3 — checkout и gate inputs изолированы от `$AS`, Node закреплён абсолютно, drain process group ограничен.
 What changed: `/usr/bin/git` получает исходники в root-owned read-only snapshot; нестандартный `$AS` отклоняется до checkout/gate/install.
 What changed: UI запускается через проверенные `/usr/bin/node` и абсолютные npm/npx entrypoints с `PATH=/usr/bin:/bin`; успешный gate с потомком получает bounded TERM→KILL, reap и failure.
 Preserved: абсолютные trusted tools, live SID/PGID/supervisor/nonce handshake, signal cleanup, kernel wait result и запрет production install до обоих gates; Pilot не включён.
-Evidence: hostile `$AS`/checkout, fake `PATH/node`, real orphan, fork/fail/signal suite ×2 → PASS; процессов и install не осталось.
-Evidence: `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS; `go test ./...` повторяет baseline CARD-0087 schema failure.
-One next action: human merge into main.
+Evidence: checkout launcher и fake `PATH/node` защищены тестами; однако сценарий реального orphan завершился с `FAIL: successful gate orphan was not drained in bounded time`.
+Evidence: полный Go/UI-набор не засчитывался: shell-набор уже дал блокирующий отказ, а его последующий длительный Go-процесс был остановлен.
+One next action: исправить или стабилизировать bounded orphan drain и повторить полный shell-набор.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Наблюдение |
+| --- | --- | --- |
+| Checkout не контролируется `$AS` | `bash ops/test-fx-factory-release.sh`, fixture `checkout-spoof` | Проверка дошла до сценария; launcher отклоняется до gate/install. |
+| Node не берётся из caller PATH | Тот же shell-набор, fixture `path-shadow` | В сценарии есть запрет вызова fake Node; код использует `/usr/bin/node` и очищенный PATH. |
+| Потомки gate ограниченно завершаются | Тот же shell-набор, fixture `orphan-after-success` | BLOCKED: `FAIL: successful gate orphan was not drained in bounded time`. |
+| Adjacent Go/UI | Полный набор после shell | Не засчитан: после блокирующего shell-отказа длительный Go-процесс остановлен. |
+
 
 ### 2026-08-11 — Implement
 
