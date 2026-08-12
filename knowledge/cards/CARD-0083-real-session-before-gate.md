@@ -1,15 +1,15 @@
 # CARD-0083 — Реальная session подтверждает gate до установки
 
-Implementation commit: 8f8e701263be9ceba44f07c2f6fa80f167f8e9e8 — release gate подтверждает реальную session до запуска проверок.
+Implementation commit: acd440dc7ab336b894ff1c7d6c85f08b1946b5a1 — ошибка настоящего gate запрещает установку.
 
 ## HEAD
 
 Status: Implemented — awaiting human merge.
-Branch: factory/6e66d8d8-0a6-a1f9f952-aa7.
-Implementation commit: 8f8e701263be9ceba44f07c2f6fa80f167f8e9e8 — release gate подтверждает реальную session до запуска проверок.
-What changed: wrapper атомарно сообщает свой SID/PGID до `$AS`, UI и Go gate; выпуск ждёт именно эту группу.
-What changed: cleanup завершает подтверждённую process group, а неготовый launcher останавливает отдельно.
-Evidence: `bash ops/test-fx-factory-release.sh`, `npx tsc -p tsconfig.app.json --noEmit`, UI-тесты/сборка и `go test ./...` → PASS.
+Branch: factory/102792ba-365-f6cb456c-118.
+Implementation commit: acd440dc7ab336b894ff1c7d6c85f08b1946b5a1 — ошибка настоящего gate запрещает установку.
+What changed: реальная session атомарно записывает SID, PGID и код завершения в отдельный result-файл.
+What changed: выпуск продолжается только при явном `status=0`; отсутствие результата или чужая session завершают release до установки.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; регрессия `forked-gate-fail` проверяет forked `setsid` и отсутствие изменений служб/бинарников.
 One next action: merge the implementation branch.
 
 ## LOG
@@ -20,3 +20,11 @@ Forked launcher больше не считается результатом gate
 только wrapper из реальной session, ещё до старта проверок. Shell-фикстура
 принудительно форкает `setsid` и подтверждает, что успешный выпуск ждёт рабочую
 группу, а отказ gate не устанавливает новые бинарные файлы.
+
+### 2026-08-12 — Implement
+
+Результат настоящего gate теперь передаётся отдельным атомарным файлом из его
+реальной session. Только явный нулевой код позволяет перейти к установке;
+исчезновение process group либо отсутствие результата считаются отказом.
+Добавлен отказ UI gate за forked `setsid`-launcher с проверкой прежних бинарников
+и отсутствия перезапуска служб. Синтаксис обоих shell-скриптов проверен `bash -n`.
