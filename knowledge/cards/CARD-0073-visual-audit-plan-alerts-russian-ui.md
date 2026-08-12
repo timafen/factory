@@ -2,14 +2,21 @@
 
 ## HEAD
 
-- Status: Implement PASS — review-блокеры устранены.
-- Branch: `factory/383ce63b-579-070e13b1-6e9`.
-Implementation commit: feb40d2a08e9de717ff2c7f3d64cdbb326f2bdd5 — уведомления принимают только безопасные ссылки, а «Конвейер» полностью русифицирован.
-- What changed: `javascript:` и чужие адреса не становятся ссылками; разрешены относительные маршруты и URL публичного Factory origin. Экран «Конвейер» и его браузерная проверка используют русский текст.
-- Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 6 passed; `npm run test:browser -- --grep "audits every Factory screen on desktop and phone"` → целевой сценарий прошёл, bundle остался чистым.
+- Status: Implement PASS — Review-блокер с языком документа устранён.
+- Branch: `factory/36eea1d3-01e-ffd13838-85d`.
+Implementation commit: 703bb6035fa5dd96395cdb28be12a1502498117c — русский интерфейс объявляет язык документа `ru` и проверяет это в browser-аудите.
+- What changed: исходный HTML и поставляемый `web/dist/index.html` используют `lang="ru"`; аудит 21 экранов проверяет `document.documentElement.lang` в desktop и phone.
+- Evidence: `npm run build` → прошла; `FACTORY_BROWSER_LAUNCHER=/tmp/factory-no-browser-launcher npx playwright test --grep "audits every Factory screen on desktop and phone"` → 1 passed (3.0m).
 - One next action: повторить Review.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Устранён блокер Review: русский интерфейс больше не объявлен английским
+документом. `web/index.html` и воспроизводимый `web/dist` используют `lang="ru"`;
+browser-аудит всех 21 экранов закрепляет проверку языка в desktop и phone.
+Сборка прошла, а целевой Playwright-сценарий завершился успешно: 1 passed (3.0m).
 
 ### 2026-08-12 — Implement
 
