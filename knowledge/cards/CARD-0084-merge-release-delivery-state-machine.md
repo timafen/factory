@@ -3,13 +3,13 @@
 ## HEAD
 
 - Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Branch: `factory/e9c8b551-321-462fb670-02d`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- Implementation commit: 0efd98429300891a8918e207ace684b7d955e8b4 — временная недоступность broker не создаёт новый физический выпуск, а terminal checkpoint удерживает active до durable записи.
+- What changed: Pilot сохраняет `launching`/`running` при неответившем GET и повторяет проверку прежнего operation id.
+- What changed: Broker освобождает `active` только после успешного сохранения terminal status; регрессии покрывают оба отказа.
+- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (11); `just build` → OK; `just check` → OK; `git diff --check` → passed.
+- Next action: Человеку проверить и принять изменения в ветке.
 
 ## LOG
 
@@ -62,3 +62,10 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-11 — Implement
+
+Временный отказ GET статуса больше не превращает `launching`/`running` в
+`failed`: Pilot сохраняет поколение и повторяет проверку его immutable id.
+Broker удерживает `active`, пока terminal status не сохранён надёжно; целевые
+Go и Pilot регрессии, сборка и полный `just check` прошли успешно.
