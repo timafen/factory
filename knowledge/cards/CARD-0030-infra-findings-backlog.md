@@ -173,3 +173,8 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 Фоновая оболочка явно сбрасывает наследованный ignored SIGINT до запуска тестов; параллельные ворота сохранены.
 Доказательство: `bash -n ops/fx-factory-release && bash -n ops/test-fx-factory-release.sh` и `bash ops/test-fx-factory-release.sh` — PASS; HUP/INT/TERM повторены по 5 раз, `/proc` и `ps` не нашли cmdline/cwd фикстур.
 Открытый риск: привилегированный живой выкат не запускался; семантика процессов покрыта изолированной фикстурой и live-проверкой `ps` после неё.
+
+### 2026-08-12 — Восстановление выпуска доказано реальным циклом
+На ветке `factory/16b0e855-246-d3a6ce85-ed9` process-fixture теперь сверяет, что после `rc=8` присоединённый SHA сохраняется в durable request настоящего Go release broker, а не только в памяти Pilot.
+Доказательство: целевой Python process-cycle, `go test ./internal/releasebroker`, обе shell fixture выпуска и `just build` — PASS.
+Открытый риск: привилегированный выпуск в этом задании не выполнялся; поведение покрыто изолированными реальными Unix-process fixtures.
