@@ -1,18 +1,24 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 56cd31e1a0908ebfd0146855227a676f9e9b34a2 — gate запускается только по проверенным абсолютным путям.
+Implementation commit: 7a3cad982966e3ff689f473add6a7222eb5d5db7 — gate запускается только по проверенным абсолютным путям.
 
 ## HEAD
 
 Status: Implemented — ready for review.
-Branch: factory/4bc16894-25c-0f38536d-265.
-Implementation commit: 56cd31e1a0908ebfd0146855227a676f9e9b34a2 — gate запускается только по проверенным абсолютным путям.
+Branch: factory/69d506bf-bc3-68d5fa71-963.
+Implementation commit: 7a3cad982966e3ff689f473add6a7222eb5d5db7 — gate запускается только по проверенным абсолютным путям.
 What changed: `setsid`, оболочка, UI/Go-команды и gate-script закреплены за абсолютными root-owned путями; `$AS` исключён из цепочки результата.
 What changed: nonce-handshake принимается только от живого session leader, а результатом gate остаётся kernel wait status доверенного launcher.
 Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `git diff --check` → PASS; fixture с подменённым `PATH`-`setsid` не входит в gate-цепочку.
 One next action: rerun Review against this published branch.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Опубликована кандидатская ветка на свежем `main`; gate использует только проверенные
+абсолютные пути, а PATH-shadow и поддельная session не допускаются. `bash
+ops/test-fx-factory-release.sh`, `bash -n` и `git diff --check` прошли.
 
 ### 2026-08-12 — Implement
 
