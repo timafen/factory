@@ -481,6 +481,24 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
 
+    def test_verify_gate_refreshes_snapshot_and_blocks_before_merge(self):
+        snapshot = {
+            "state": "ok", "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+        }
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot) as fresh:
+            result = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        fresh.assert_called_once_with("github.com/example/repo", "factory/candidate")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["snapshot"]["base_sha"], "a" * 40)
+        self.assertEqual(result["snapshot"]["candidate_sha"], "b" * 40)
+
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
+                "state": "blocked", "reason": "cannot fetch authoritative refs"}):
+            blocked = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        self.assertTrue(blocked["blocked"])
+        self.assertIn("BLOCKED: review infrastructure", blocked["note"])
+
 
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
@@ -2154,6 +2172,15 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
                 pilot, "gh_merge", return_value=(False, "merge conflict")))
+            snapshot = {
+                "state": "ok", "default_branch": "main",
+                "base_sha": "a" * 40, "candidate_sha": head,
+                "merge_base_sha": "a" * 40, "base_advanced": False,
+                "base_ahead_by": 0, "ahead_by": 1,
+                "files": ["pilot/pilot.py"],
+            }
+            fresh = stack.enter_context(mock.patch.object(
+                pilot, "fresh_branch_snapshot", return_value=snapshot))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
@@ -2185,6 +2212,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
             self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], head)
             self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
+            fresh.assert_called_once_with("github.com/acme/repo", rebuilt)
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
