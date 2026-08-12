@@ -2148,12 +2148,12 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             details["verify"]["attempts"] = [{"result": "PASS"}]
             pilot.cycle(conf, state)
 
-            # V2 retains the merge intent after a conflict and retries that
-            # immutable operation; it must not manufacture a new Implement
-            # task with a second delivery identity.
+            # The immutable attempt is retained, but a content conflict is
+            # handed to the next cycle instead of hammering GitHub forever.
             self.assertEqual(len(created), 2)
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
             self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], head)
+            self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
@@ -2618,6 +2618,70 @@ class WorkArchiveCleanupTests(unittest.TestCase):
         writes_after_first_run = len(self.saved)
         self.run_cleanup(tasks)
         self.assertEqual(len(self.saved), writes_after_first_run)
+
+
+class MergeConflictRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_path = os.path.join(self.temporary.name, "state.json")
+        self.intent = {
+            "phase": "intent", "base": "Resolve once", "branch": "factory/topic",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "link": "",
+        }
+
+    def test_content_conflict_is_journaled_and_not_retried_each_cycle(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}), \
+                mock.patch.object(
+                    pilot, "gh_merge",
+                    return_value=(False, "Pull request is not mergeable: merge conflicts")) as merge:
+            pilot.recover_merge_intents({}, state)
+            pilot.recover_merge_intents({}, state)
+
+        self.assertEqual(merge.call_count, 1)
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
+        self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
+
+    def test_conflict_returns_same_work_to_implement_once(self):
+        intent = dict(self.intent)
+        intent.update({"phase": "conflict", "merge_error": "merge conflict"})
+        state = {"merge_intents": {"verify-1": intent}}
+        parent = {
+            "id": "verify-1", "title": "[auto] [5/5 Verify] Resolve once",
+            "state": "succeeded", "repository_id": "repo-id", "work_id": "work-1",
+        }
+        conf = {
+            "stages": [{"workflow": name} for name in
+                       ("Triage", "Specification", "Implement + Test", "Review", "Verify")],
+            "timeout_seconds": 7200,
+        }
+        workflows = {
+            "Implement + Test": {"enabled": True, "revision_id": "implement-revision"},
+        }
+        workers = {"worker": {"id": "worker-id"}}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-1"}}) as create:
+            self.assertEqual(pilot.resume_merge_conflicts(
+                conf, state, [parent], workflows, workers), 1)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                conf, state, [parent], workflows, workers), 0)
+
+        create.assert_called_once()
+        body, source, passed_conf, correction_kind = create.call_args.args
+        self.assertEqual(body["title"],
+                         "[auto] [3/5 Implement + Test] Resolve once")
+        self.assertIn("Branch: factory/topic", body["context"])
+        self.assertEqual(source, parent)
+        self.assertIs(passed_conf, conf)
+        self.assertEqual(correction_kind, "merge_conflict_return")
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "repairing")
+        self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"], "repair-1")
 
 
 class PipelineWatchMergeTests(unittest.TestCase):
