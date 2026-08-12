@@ -4,17 +4,28 @@ Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node зак�
 
 ## HEAD
 
-Status: Implemented — gate criteria PASS; merge waits for the unrelated browser regression to become green.
+Status: Verified PASS — awaiting human merge.
 Branch: factory/4c92c207-803-93fc28aa-d9e.
 Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
-What changed: UI gate invokes trusted `npm`/`npx` scripts through validated `/usr/bin/node`; a caller-controlled `PATH/node` cannot supply the runtime.
-What changed: the cloned release fixture contains a bounded gate stub, so the outer self-test validates nested success/failure without recursively starting its whole driver.
-Evidence: trusted-Node PATH-probe → `npm=1`, `npx=1`, shebang control `=0`; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS in 150s.
-Evidence: UI (158 tests), embedded UI, tooling, build, release, launcher, format, vet, vuln, staticcheck, boundary, Go and worker race → PASS.
-Known finding: unchanged browser HTTPS pause/resume scenario expects `работа завершена`, while main renders `ждёт подтверждённый выпуск`; full and targeted browser runs fail outside gate scope.
-One next action: resolve the browser contract on its own task, rerun that tail, then merge.
+What changed: the complete gate chain starts only through validated absolute, root-owned executables; PATH shadowing cannot replace Node, npm, npx, or the gate launcher.
+Evidence: pinned remote comparison `base_sha=8dcb96ede53b14d3834af851252afa29786462c9`, `candidate_sha=ae4f780d1e8e2cf7dbb2c73c6efbe6aeebafedda`; target shell suite PASS.
+Evidence: `just check` passed formatting, vet, vulnerability scan, staticcheck, boundary, and all Go tests; UI checks were not runnable because clean environment lacks `web/node_modules/.bin/eslint` (exit 127).
+One next action: human merges after deciding whether to install UI dependencies and rerun the general check.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Gate-цепочка запускается только по доверенным путям | `bash ops/test-fx-factory-release.sh` | PASS: проверены trusted executable, PATH-shadow, Node/npm/npx, реальная session, handshake, параллельные gate, единая установка и общий откат. |
+| Регрессии смежного релизного поведения | тот же shell-suite | PASS: регистрация, rollback, signal cleanup и отсутствие утечек процессов подтверждены. |
+| Полный набор проекта | `just check` | НАХОДКА: форматирование, vet, govulncheck, staticcheck, boundary и Go-тесты PASS; UI lint не запустился в чистом окружении из-за отсутствующего `eslint` (`exit 127`). |
+| Закреплённая область поставки | isolated bare fetch; `git diff --name-only base_sha...candidate_sha` | PASS: `knowledge/cards/CARD-0083-real-session-before-gate.md`, `ops/fx-factory-release`, `ops/test-fx-factory-release.sh`; implementation commit `be58e8096302044be7e96ee96a9e32aef93ddd08` — предок кандидата и меняет код. |
+| Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check` | PASS. |
+
+Полный набор не стал причиной возврата: отказ относится к отсутствующей локальной
+UI-зависимости, а целевой gate-suite прошёл полностью.
 
 ### 2026-08-11 — Implement
 
