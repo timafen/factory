@@ -25,6 +25,10 @@ Implementation commit: 8b189f33b8bf3d11fccb5d8e35424b32090b9a9b — внешни
 | Полная проектная проверка | `go test ./...` | PASS; все Go packages, включая `internal/controlplane` и `internal/worker`. |
 | Гигиена поставки | pinned-SHA diff, `git diff --check`, чистый checkout | PASS; implementation commit является предком ветки и меняет код вне карточки. |
 
+The rebase adopted the current main merge-intent path. Three corrections now fail
+because its state persistence receives a mocked non-serializable link. This is
+an implementation defect in the rebased result, not an infrastructure failure.
+
 ### 2026-08-11 — Specification
 
 Current `main` was inspected. `record_new_works()` currently infers an owner
