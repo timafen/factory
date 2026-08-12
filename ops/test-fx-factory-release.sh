@@ -547,7 +547,10 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    env --default-signal=INT /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+    # The release deliberately kills whole test process groups.  Give the
+    # fixture release its own session so a bad group calculation can fail the
+    # case without killing this test runner before it reports the failure.
+    /usr/bin/setsid env --default-signal=INT /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
 

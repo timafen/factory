@@ -418,7 +418,15 @@ stop_unready_test_gate_launcher() { # stop_unready_test_gate_launcher <launcher-
 }
 
 stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
-  local launcher=$1 pgid=$2
+  local launcher=$1 pgid=$2 own_pgid
+  read -r own_pgid < <(ps -o pgid= -p "$$") || own_pgid=''
+  # A bad setsid implementation must never turn cleanup into a signal for the
+  # release (and potentially its caller) process group.
+  if [ "$pgid" = "$own_pgid" ]; then
+    fail "отказ от остановки gate в process group самого релиза"
+    reap_test_gate_launcher "$launcher"
+    return 1
+  fi
   kill -TERM -- "-$pgid" 2>/dev/null || true
   if ! wait_for_test_gate_group_exit "$pgid"; then
     kill -KILL -- "-$pgid" 2>/dev/null || true
