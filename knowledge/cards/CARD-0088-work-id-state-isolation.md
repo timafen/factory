@@ -1,12 +1,12 @@
 # Изоляция состояния одноимённых работ
 
-Implementation commit: 262b7390a4be6ffee898a364f4c2839e96202b68 — бюджеты, диагностика и корневые metadata изолированы по work_id
+Implementation commit: c5fd6a9c3b3d2cf284e5da0e5a080e4e65f2c929 — бюджеты, диагностика и корневые metadata изолированы по work_id
 
 ## HEAD
 
 Status: Implemented
 Branch: factory/6de3d20b-c7a-5eeb114c-ad5
-Implementation commit: 262b7390a4be6ffee898a364f4c2839e96202b68 — бюджеты, диагностика и корневые metadata изолированы по work_id
+Implementation commit: c5fd6a9c3b3d2cf284e5da0e5a080e4e65f2c929 — бюджеты, диагностика и корневые metadata изолированы по work_id
 What changed: budget, diagnostic history/repair state, branch lookup and stop state now use durable work_id; Epic and Plan provenance is recorded after task creation.
 Evidence: targeted same-title provenance and diagnostic isolation tests → PASS; pilot.py compilation → PASS.
 One next action: run the full repository verification before merge.
