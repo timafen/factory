@@ -94,6 +94,7 @@ PY
 #!/bin/bash
 case "$*" in
   *'clone --quiet'*)
+    printf 'checkout-umask=%s\n' "$(umask)" >>"$TEST_GATES"
     destination=${@: -1}
     mkdir -p "$destination/web" "$destination/ops/systemd"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/install-project-release-broker.sh" \
@@ -509,6 +510,7 @@ assert d['database']['sha256']==hashlib.sha256(open(r+'/database.sqlite3','rb').
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
+assert_file "$success/gates" 'checkout-umask=0077'
 grep -F 'snapshot' "$success/output" >/dev/null || fail "release did not report snapshot creation"
 assert_before "$success/events" 'stop factory-server.service' 'start factory-server.service'
 assert_before "$success/events" 'start factory-server.service' 'start factory-worker.service'

@@ -59,6 +59,13 @@ TRUSTED_GO=/usr/bin/go
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
+as_user_private() {
+  if [ -n "$AS" ]; then
+    $AS "$TRUSTED_BASH" -c 'umask 077; exec "$@"' factory-release-private "$@"
+  else
+    (umask 077; exec "$@")
+  fi
+}
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
@@ -715,10 +722,10 @@ run_parallel_test_gates() {
 }
 
 step "беру исходники: $ref"
-as_user git clone --quiet "$REPO" "$work/src" \
+as_user_private git clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
-as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+as_user_private git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user_private git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
 trusted_gate_script="$work/src/ops/test-fx-factory-release.sh"
 case "$trusted_gate_script" in /*) ;; *) fail "gate script не имеет абсолютного пути"; cleanup; exit 4 ;; esac
