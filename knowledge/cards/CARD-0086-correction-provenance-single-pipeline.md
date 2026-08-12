@@ -2,17 +2,19 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented — the functional provenance change is in `main`; this
+  branch adds its direct Review-return regression.
+- Branch: `factory/5ae64ccd-7fe-1420b145-0a0`.
+- Implementation commit: 01df86321c5fc2a9e90523500897d836a1d0c1e2 — provenance,
+  migration 027 and restart-safe single-pipeline grouping for corrections.
+- What changed: corrections retain `work_id`, `parent_task_id` and
+  `correction_kind`; Pilot groups by that provenance before title fallback.
+- What changed: the new regression drives a real Review answer through child
+  creation and a repeated discovery snapshot, proving it cannot open a second
+  pipeline.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests`
+  → PASS (6 tests).
+- Next action: Review the focused regression delivery.
 
 ## LOG
 
@@ -47,3 +49,12 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Fresh remote `main` already contains the functional delivery in
+`01df86321c5fc2a9e90523500897d836a1d0c1e2`; the earlier Review-only commit was
+not the implementation. Added a focused regression that drives a Review answer
+through child creation and two discovery passes, retaining one root pipeline.
+`python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` passed
+all six tests.
