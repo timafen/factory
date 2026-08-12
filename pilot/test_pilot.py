@@ -5019,6 +5019,8 @@ pilot.save(pilot.STATE_PATH, state)
         with open(paths["success"], encoding="utf-8") as stream:
             successful = [line.strip() for line in stream if line.strip()]
         self.assertEqual(generation["commit_sha"], "b" * 40)
+        self.assertEqual(broker_state["request"]["commit_sha"], "b" * 40,
+                         "the real broker must durably accept the joined snapshot only after rc=8")
         self.assertEqual(set(generation["waits"]), {"verify-1", "verify-2"})
         self.assertEqual(generation["phase"], "completed")
         self.assertEqual(broker_state["posts"], 2, "every real POST was persisted by the broker")
