@@ -2,12 +2,14 @@
 
 ## HEAD
 
-- Status: Реализация доставлена в `main`; повторный Verify не запускается по решению владельца.
-- Branch: `factory/22f81140-80a-12900f24-cc4`
-- Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — холодный HTTPS fixture получает увеличенный timeout для полного запуска setup.
-- Evidence summary: коммит реализации есть в свежем `origin/main` и является предком этой ветки; рабочее дерево до записи карточки чистое.
-- Evidence summary: повторная проверка намеренно не выполнялась, потому что реализация уже находится в `main`; полный HTTPS-прогон остаётся отдельной работой по CARD-0080.
-- Next action: выполнить отдельный полный HTTPS-прогон по CARD-0080.
+- Status: Реализация готова; холодный HTTPS и все 21 browser-сценарий подтверждены под нагрузкой.
+- Branch: `factory/24533b16-ac9-23487db9-88d`
+- Implementation commit: f559b9bd18cd380a3174a82b1e1d8c9fa0048e00 — холодный fixture ждёт реальные задачи без преждевременного внутреннего timeout, а смежные проверки не зависят от истёкшего lease.
+- What changed: fixture-задачи получают до 65 секунд и фиксируют рабочее дерево; общий hook ждёт готовность до 90 секунд внутри 120-секундного бюджета.
+- What changed: progress polling, narrow layout и worker process-group проверки отделены от задержек загруженной среды.
+- Evidence: `playwrightConfig.test.ts` — 12/12 PASS; целевые progress и worker timeout — PASS; browser №1–12 и №13–21 — PASS.
+- Evidence: typecheck, lint, production build и clean `web/dist` — PASS; общий `just check` встретил независимый 5m watchdog, оба застигнутых теста отдельно PASS.
+- Next action: передать реализацию в Review.
 
 ## LOG
 
@@ -101,3 +103,10 @@
 | Desktop/390 resume, stale pause, safe retry и cross-origin | тот же сценарий №7 в полном suite | PASS: hostile Origin получил 403 `cross_origin_request`; безопасное сообщение и retry остались видимы; queued pause и completed stale pause очищены; desktop и 390px assertions/screenshots выполнены. |
 | Смежные browser/API/UI регрессии | оставшиеся 20 Playwright-сценариев; полный Go/UI suite; `npm --prefix web audit --omit=dev` | PASS: все 20 соседних browser-сценариев прошли, Go/UI regressions прошли, production dependencies — `found 0 vulnerabilities`. |
 | Cleanup и чистота дерева | `ps -eo pid,ppid,args`, `ss -ltnp` до/после; `git diff --check`; `git status --short --untracked-files=all` | PASS: scoped-процессов нет; listeners 27 → 27 без новых записей; до правки карточки tracked/untracked изменений не было. |
+
+### 2026-08-12 — Implement
+
+- Внутренние ожидания холодного HTTPS fixture согласованы с общим 120-секундным hook timeout; fixture-коммиты позволяют успешно очищать worktree после каждого этапа.
+- Устранены воспроизводимые гонки полного прогона: progress cursor ждёт browser timer под нагрузкой, narrow layout использует стабильную paused-группу, process-group тест получает время дойти до runtime.
+- `playwrightConfig.test.ts` 12/12, целевые Go/browser, typecheck и lint прошли; browser №1–12 и №13–21 прошли на финальном коде.
+- `just check` остановлен независимым общим 5m watchdog в двух пакетах; застигнутые тесты отдельно прошли за 1.7 и 5.4 секунды.
