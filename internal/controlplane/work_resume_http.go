@@ -3,8 +3,10 @@ package controlplane
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,6 +77,13 @@ func (a *API) resumeWork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) resumePausedWork(ctx context.Context, base, workID string) (resumeWorkResponse, error) {
+	if base == "" {
+		var err error
+		base, err = a.pipelineTitle(ctx, workID)
+		if err != nil {
+			return resumeWorkResponse{}, err
+		}
+	}
 	settingsResponse, err := a.pilotConfig.Read()
 	if err != nil {
 		return resumeWorkResponse{}, err
@@ -157,6 +166,23 @@ func (a *API) resumePausedWork(ctx context.Context, base, workID string) (resume
 		return resumeWorkResponse{}, err
 	}
 	return resumeWorkResponse{Task: created.Task, Stage: target, Resumed: true}, nil
+}
+
+func (a *API) pipelineTitle(ctx context.Context, workID string) (string, error) {
+	var title string
+	err := a.store.db.QueryRowContext(ctx, `
+		SELECT title FROM tasks WHERE work_id=? ORDER BY created_at, id LIMIT 1`, workID).Scan(&title)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", &ServiceError{Code: "work_not_found", Message: "paused work has no canonical pipeline history", Status: http.StatusNotFound}
+	}
+	if err != nil {
+		return "", unavailable(err)
+	}
+	match := resumeStageTitle.FindStringSubmatch(title)
+	if match == nil || strings.TrimSpace(match[4]) == "" {
+		return "", &ServiceError{Code: "work_not_found", Message: "paused work has no canonical pipeline history", Status: http.StatusNotFound}
+	}
+	return strings.TrimSpace(match[4]), nil
 }
 
 func (a *API) pipelineTasks(ctx context.Context, base, workID string) ([]resumedStageTask, error) {

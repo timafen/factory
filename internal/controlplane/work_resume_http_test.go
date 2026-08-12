@@ -91,7 +91,7 @@ func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository
 	return history
 }
 
-func TestResumePausedWorkSeparatesSameTitleByWorkID(t *testing.T) {
+func TestResumePausedWorkByWorkIDOnlySeparatesSameTitle(t *testing.T) {
 	const base = "Одинаковая работа"
 	store, pilot, server, repo, workflows := resumeFixture(t, base)
 	create := func(key string) protocol.Task {
@@ -118,7 +118,7 @@ func TestResumePausedWorkSeparatesSameTitleByWorkID(t *testing.T) {
 	if _, err := pilot.Write(settings.Version, settings.Settings); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(resumeWorkRequest{Title: base, WorkID: second.WorkID})
+	body, _ := json.Marshal(resumeWorkRequest{WorkID: second.WorkID})
 	response, err := server.Client().Post(server.URL+"/api/v1/works/resume", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
