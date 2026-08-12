@@ -2,14 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Status: Implemented PASS — готово к Verify.
+- Branch: `factory/594e18bc-ade-53f984f9-dc3`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+Implementation commit: a30b7b394aafb4640c76e748fc159958af545773 — broker fail-closed останавливает рестарт при повреждённой durable operation-записи.
+- What changed: Broker больше не теряет повреждённую или подменённую запись и не принимает тот же generation как новый физический выпуск.
+- What changed: Recovery проверяет canonical filename, immutable request, phase, posts и PID; четыре corrupt-state сценария доказывают ноль executor-вызовов.
+- Evidence: `go test -count=1 ./internal/releasebroker`; `go test -race -count=1 ./internal/releasebroker` → OK; Pilot state machine → 10/10 OK.
+- Evidence: release-driver и installer shell fixtures → PASS; `just build` → три бинаря собраны; `git diff --check` → passed.
+- Evidence: единственный `just check` дошёл до broker (OK), затем независимые `internal/controlplane` и `internal/worker` превысили 5m; эти файлы не менялись.
+- Next action: Verify повторяет полный `just check` на незагруженном runner и принимает решение по независимым timeout.
 
 ## LOG
 
@@ -62,3 +64,11 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-12 — Implement
+
+Broker recovery теперь fail-closed отвергает повреждённые, подменённые и
+неканоничные durable operation-записи вместо их молчаливой потери и возможного
+повторного физического выпуска. Обычный и race Go-прогоны, 10 Pilot-сценариев,
+release-driver/installer fixtures и сборка зелёные; полный `just check` подтвердил
+broker, но остановился на прежних пятиминутных timeout control-plane и worker.
