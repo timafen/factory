@@ -1,3 +1,4 @@
+
 import { describe, expect, it } from "vitest";
 import { build, sectionOf } from "./Work";
 import type { Task } from "./types";
@@ -151,5 +152,26 @@ describe("build", () => {
       kind: "active", label: "Ожидает слияния и выпуска",
     });
     expect(sectionOf(waiting)).not.toBe("done");
+  });
+
+  it("keeps a successful intermediate pipeline stage out of Done", () => {
+    const triage = build([task("triage", "Triage", "succeeded", 1)], {}, [])[0];
+    const specification = build([
+      task("triage", "Triage", "succeeded", 1),
+      task("specification", "Specification", "succeeded", 2),
+    ], {}, [])[0];
+
+    expect(triage.status).toMatchObject({
+      kind: "queued",
+      label: "Ждёт следующий этап",
+      next: "Следующий этап — «Спецификация». Factory запустит его, когда освободится исполнитель.",
+    });
+    expect(specification.status).toMatchObject({
+      kind: "queued",
+      label: "Ждёт следующий этап",
+      next: "Следующий этап — «Разработка». Factory запустит его, когда освободится исполнитель.",
+    });
+    expect(sectionOf(triage)).not.toBe("done");
+    expect(sectionOf(specification)).not.toBe("done");
   });
 });
