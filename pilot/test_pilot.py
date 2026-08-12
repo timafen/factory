@@ -358,8 +358,8 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.git(work, "-c", "user.name=Test", "-c", "user.email=test@example.com",
                  "commit", "-qm", name)
 
-    def test_remote_advance_replaces_stale_scope_and_preserves_worker_branch(self):
-        """The regression must use a real bare remote, not mocked GitHub data."""
+    def test_remote_main_advance_keeps_old_candidate_reviewable_without_cache(self):
+        """A real bare remote proves scope comes from pinned SHAs, not cached refs."""
         with tempfile.TemporaryDirectory() as tmp:
             remote = os.path.join(tmp, "remote.git")
             author = os.path.join(tmp, "author")
@@ -371,10 +371,6 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.commit(author, "README.md", "root\n")
             self.git(author, "push", "-qu", "origin", "main")
             self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
-            self.git(tmp, "clone", "-q", remote, observer)  # its origin/main is now stale
-
-            self.commit(author, "foreign-from-advanced-main.txt", "not this delivery\n")
-            self.git(author, "push", "-q", "origin", "main")
             self.git(author, "checkout", "-qb", "factory/candidate", "origin/main")
             expected = ["delivery/file-%02d.txt" % i for i in range(1, 12)]
             for names, message in ((expected[:6], "first delivery batch"),
@@ -389,12 +385,14 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
                          "commit", "-qm", message)
             self.git(author, "push", "-qu", "origin", "factory/candidate")
 
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "foreign-from-advanced-main.txt", "not this delivery\n")
+            self.git(author, "push", "-q", "origin", "main")
+
+            self.git(tmp, "clone", "-q", remote, observer)
+
             self.git(observer, "fetch", "-q", "origin",
                      "factory/candidate:refs/remotes/origin/factory/candidate")
-            old_scope = self.git(observer, "diff", "--name-only",
-                                 "origin/main...origin/factory/candidate").splitlines()
-            self.assertIn("foreign-from-advanced-main.txt", old_scope)
-            self.assertEqual(len(old_scope), 12)
             self.git(observer, "checkout", "-qb", "worker-owned")
             before = self.git(observer, "symbolic-ref", "--short", "HEAD")
 
@@ -403,6 +401,8 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["state"], "ok")
             self.assertEqual(snapshot["files"], expected)
             self.assertEqual(snapshot["ahead_by"], 2)
+            self.assertTrue(snapshot["base_advanced"])
+            self.assertEqual(snapshot["base_ahead_by"], 1)
             self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
             self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
@@ -837,7 +837,10 @@ class CardNumberReservationTests(unittest.TestCase):
 
     def test_review_rejects_card_with_other_reserved_number_first(self):
         files = ["pilot/pilot.py", "knowledge/cards/CARD-0071-wrong.md"]
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+        snapshot = {"state": "ok", "default_branch": "main", "base_sha": "a" * 40,
+                    "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+                    "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
                 mock.patch.object(pilot, "implementation_commit_gate") as implementation:
             result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",
                                        expected_card="CARD-0070")
@@ -848,7 +851,10 @@ class CardNumberReservationTests(unittest.TestCase):
 
     def test_review_accepts_matching_card_for_normal_commit_gate(self):
         files = ["pilot/pilot.py", "knowledge/cards/CARD-0070-correct.md"]
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+        snapshot = {"state": "ok", "default_branch": "main", "base_sha": "a" * 40,
+                    "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+                    "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None) as implementation, \
                 mock.patch.object(pilot, "load", return_value={}):
             result = pilot.review_gate({}, "Работа", "factory/task", "github.com/acme/repo",

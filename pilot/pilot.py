@@ -2377,17 +2377,28 @@ def fresh_branch_snapshot(repo_identity, branch):
             base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
             if not GIT_SHA.fullmatch(base_sha) or not GIT_SHA.fullmatch(candidate_sha):
                 return {"state": "blocked", "reason": "remote returned an invalid commit SHA"}
-            rc, out = _git(work, "merge-base", "--is-ancestor", base_sha, candidate_sha)
+            # A published candidate can legitimately have been cut before the
+            # default branch advanced.  It is still reviewable from their
+            # shared merge-base; only genuinely unrelated histories block it.
+            rc, merge_base_sha = _git(work, "merge-base", base_sha, candidate_sha)
             if rc:
-                return {"state": "blocked", "reason": "candidate is not based on fetched default branch"}
-            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
+                return {"state": "blocked", "reason": "base and candidate have unrelated history"}
+            merge_base_sha = merge_base_sha.strip()
+            if not GIT_SHA.fullmatch(merge_base_sha):
+                return {"state": "blocked", "reason": "cannot pin shared merge base"}
+            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
-            rc, ahead = _git(work, "rev-list", "--count", base_sha + ".." + candidate_sha)
+            rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery distance: " + ahead[:180]}
+            rc, base_ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + base_sha)
+            if rc:
+                return {"state": "blocked", "reason": "cannot classify default branch advancement: " + base_ahead[:180]}
             return {"state": "ok", "default_branch": default, "base_sha": base_sha,
-                    "candidate_sha": candidate_sha,
+                    "candidate_sha": candidate_sha, "merge_base_sha": merge_base_sha,
+                    "base_advanced": merge_base_sha != base_sha,
+                    "base_ahead_by": int(base_ahead.strip()),
                     "files": [p for p in out.splitlines() if p][:80],
                     "ahead_by": int(ahead.strip())}
     except Exception as e:
@@ -2395,13 +2406,16 @@ def fresh_branch_snapshot(repo_identity, branch):
 
 
 def branch_report(repo_identity, branch):
-    """Compatibility view of the authoritative snapshot used by Review gates."""
-    snapshot = fresh_branch_snapshot(repo_identity, branch)
-    if snapshot.get("state") == "missing":
+    """Legacy GitHub reporting seam used outside the authoritative Review path."""
+    repo = repo_identity.split("github.com/")[-1]
+    if not repo or not branch:
+        return "", []
+    b = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
+    if b is None:
         return "нет", []
-    if snapshot.get("state") != "ok":
-        raise RuntimeError(snapshot.get("reason") or "review infrastructure blocked")
-    return "есть", snapshot["files"]
+    cmp_ = gh_json(["api", f"repos/{repo}/compare/main...{branch}"], strict=True)
+    files = [f.get("filename") for f in (cmp_ or {}).get("files", [])][:80]
+    return "есть", files
 
 
 IMPLEMENTATION_COMMIT_LINE = re.compile(
@@ -2630,7 +2644,8 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         state_, files = branch_report(repo_identity, branch)
         snapshot = {"state": "ok", "default_branch": "unavailable",
                     "base_sha": "unavailable", "candidate_sha": "unavailable",
-                    "ahead_by": "unavailable", "files": files}
+                    "merge_base_sha": "unavailable", "base_advanced": False,
+                    "base_ahead_by": "unavailable", "ahead_by": "unavailable", "files": files}
     elif snapshot.get("state") == "blocked":
         reason = snapshot.get("reason") or "unknown review infrastructure failure"
         log("REVIEW BLOCKED " + repr(reason))
@@ -2763,12 +2778,18 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 prom_note += ("\nОбещанные, но не тронутые файлы — повод вернуть работу, "
                               "если в отчёте нет внятного объяснения.")
 
+        base_status = ("Основная ветка продвинулась после публикации кандидата "
+                       f"на {snapshot['base_ahead_by']} коммит(а); область остаётся "
+                       "вычисленной от общего merge-base. "
+                       if snapshot.get("base_advanced") else "")
         return {"back": False,
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
                          "Проверяется свежая remote-основа "
                          f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
-                         f"candidate_sha={snapshot['candidate_sha']}, ahead_by={snapshot['ahead_by']}). "
-                         f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
+                         f"candidate_sha={snapshot['candidate_sha']}, "
+                         f"merge_base_sha={snapshot['merge_base_sha']}, ahead_by={snapshot['ahead_by']}). "
+                         + base_status
+                         + f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
                          + prom_note + "\n"
                          "Сверяй записку с этим списком, а не с памятью. "
                          "Возвращай работу только по правилам из инструкций: чужие файлы, "
