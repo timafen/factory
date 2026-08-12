@@ -711,10 +711,13 @@ def close_work(base, reason):
     save(f"{HOME}/pilot/work_status.json", statuses)
 
 
-def reopen_work(base, generation, reason="Владелец явно запустил новое поколение работы."):
+def reopen_work(work, generation, reason="Владелец явно запустил новое поколение работы."):
     """Open a new generation while retaining the previous close receipt."""
+    task = work if isinstance(work, dict) else None
+    base = base_title((task or {}).get("title") or work or "")
+    key = task_work_id(task) if task else base
     works = load(WORKS_PATH, {}) or {}
-    meta = works.get(base)
+    meta = works.get(key)
     if meta:
         if meta.get("closed"):
             history = list(meta.get("closed_generations") or [])
@@ -748,7 +751,14 @@ def work_lifecycle_block(base, task=None, tasks=None):
     and tasks created after it do.  Terminal Plan cards and archive receipts
     close the preceding generation across Pilot restarts.
     """
-    matching = [idea for idea in ideas_all() if _same_work(idea.get("title"), base)]
+    if (task or {}).get("work_id"):
+        # A plan card is linked to the root task, so it shares its work_id.
+        # Never let an identically titled plan card close a modern work.
+        matching = [idea for idea in ideas_all()
+                    if idea.get("task_id") == task.get("work_id")]
+    else:
+        matching = [idea for idea in ideas_all()
+                    if _same_work(idea.get("title"), base)]
     active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
     if active:
         current = active[-1]
@@ -770,7 +780,13 @@ def work_lifecycle_block(base, task=None, tasks=None):
                  else "карточка Плана отклонена"))
 
     works = load(WORKS_PATH, {}) or {}
-    meta = next((value for name, value in works.items() if _same_work(name, base)), {})
+    work_key = task_work_id(task) if task and task.get("work_id") else base
+    # Modern receipts are keyed by the durable root ID.  Title lookup remains
+    # solely for rows created before provenance existed.
+    meta = works.get(work_key, {})
+    if not meta and not (task or {}).get("work_id"):
+        meta = next((value for name, value in works.items()
+                     if _same_work(name, base)), {})
     if task and any(item.get("task_id") == task.get("id")
                     for item in meta.get("archived_attempts", [])):
         return "эту попытку заменила более новая попытка работы"
@@ -782,7 +798,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
         created = task.get("created_at") or ""
         newer = [item for item in (tasks or [])
                  if item.get("id") != task.get("id")
-                 and _same_work(item.get("title"), base)
+                 and same_task_work(item, task or base)
                  and (item.get("created_at") or "") > created
                  and stage_no_of(item.get("title")) <= number]
         if number and created and newer:
@@ -3283,9 +3299,10 @@ def diag_sweep(conf, tasks):
         if not m:
             continue
         base = m.group(2).strip()
-        if base in seen:
+        work_key = task_work_id(t)
+        if work_key in seen:
             continue
-        seen.add(base)
+        seen.add(work_key)
         if is_stopped(conf, base):
             continue
         # The live sweep is an early warning, not a minute-by-minute brain
@@ -3293,8 +3310,8 @@ def diag_sweep(conf, tasks):
         # route_question, where a safe repair has enough evidence to start.
         if cap_rescues(base, "DIAG") >= 1:
             continue
-        rounds = max(stage_attempts(tasks, "Implement + Test", base),
-                     stage_attempts(tasks, "Review", base))
+        rounds = max(stage_attempts(tasks, "Implement + Test", t),
+                     stage_attempts(tasks, "Review", t))
         if rounds < diag_at:
             continue
         try:
@@ -3877,7 +3894,7 @@ def record_new_works(conf, tasks, max_age_min=180):
             continue
         key = task_work_id(task)
         meta = known.get(key) or {}
-        if (not title.startswith(PREFIX) or base in reopened or not meta.get("closed")
+        if (not title.startswith(PREFIX) or key in reopened or not meta.get("closed")
                 or task.get("state") not in PIPELINE_LIVE_STATES):
             continue
         created = _work_time(task.get("created_at"))
@@ -3885,7 +3902,7 @@ def record_new_works(conf, tasks, max_age_min=180):
         if not created or not closed or created <= closed:
             continue
         generation = str(uuid.uuid4())
-        reopen_work(base, generation)
+        reopen_work(task, generation)
         conf["stopped_pipelines"] = [name for name in
                                      (conf.get("stopped_pipelines") or [])
                                      if not _same_work(name, base)]
@@ -3894,7 +3911,7 @@ def record_new_works(conf, tasks, max_age_min=180):
                     and idea.get("state") in ("done", "rejected")):
                 set_idea(idea["id"], state="in_work", task_id=task.get("id") or "",
                          reason="", run_generation=generation)
-        reopened.add(base)
+        reopened.add(key)
         log(f"WORK REOPEN base={base!r}: owner-created task={task.get('id', '')}")
     if reopened:
         known = load(WORKS_PATH, {})

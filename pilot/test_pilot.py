@@ -1367,7 +1367,7 @@ class DiagnosisRepairTests(unittest.TestCase):
         )
         conf = dict(self.conf, deep_diag_rounds=5)
         with mock.patch.object(pilot, "is_stopped", return_value=True), \
-                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+                mock.patch.object(pilot, "deep_diagnose", return_value=None) as diagnose:
             pilot.diag_sweep(conf, [running])
 
         diagnose.assert_not_called()
@@ -1620,6 +1620,35 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.assertEqual(pilot.stage_attempts(tasks, "Triage", other), 1)
         self.assertIs(
             pilot.live_or_done_at(tasks, other, 1), other)
+
+    def test_closed_modern_work_is_found_and_reopened_by_work_id(self):
+        correction = self.correction("review_return")
+        pilot.save(self.works_path, {self.root["id"]: {
+            "closed": "2026-08-11T20:00:30Z", "closed_reason": "завершена",
+            "retention_until": "2026-09-10T20:00:30Z",
+        }})
+
+        self.assertEqual(
+            pilot.work_lifecycle_block("Исправить корзину", correction,
+                                       [self.root, correction]),
+            "завершена")
+        with mock.patch.object(pilot, "HOME", self.temporary.name), \
+                mock.patch.object(pilot, "CONF_PATH",
+                                  os.path.join(self.temporary.name, "missing.json")):
+            pilot.reopen_work(correction, "generation-2")
+        self.assertFalse(pilot.load(self.works_path, {})[self.root["id"]].get("closed"))
+
+    def test_diag_sweep_counts_modern_work_by_durable_id(self):
+        running = dict(self.correction("review_return"), state="running")
+        conf = dict(self.conf, deep_diag_rounds=1)
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "stage_attempts", wraps=pilot.stage_attempts) as attempts, \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+            pilot.diag_sweep(conf, [self.root, running])
+
+        diagnose.assert_called_once()
+        self.assertTrue(all(call.args[2] is running for call in attempts.call_args_list))
 
 
 class PipelineWatchTests(unittest.TestCase):
