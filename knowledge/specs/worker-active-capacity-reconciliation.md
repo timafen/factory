@@ -1,5 +1,12 @@
 # Спецификация: счётчик занятости воркера сам восстанавливается
 
+> **Статус повторной постановки (2026-08-12):** по утверждённому решению
+> владельца эта работа закрывается как повтор
+> [CARD-0085](../cards/CARD-0085-worker-active-capacity-reconciliation.md).
+> Новая реализация и следующие этапы не запускаются: требуемое поведение уже
+> находится в свежем `main`. Эта запись оставляет проверяемую связь повтора с
+> поставкой и не меняет продуктовый код.
+
 ## Цель и влияние на владельца
 
 Владелец получает всю настроенную параллельность без ручного рестарта воркера.
@@ -14,9 +21,9 @@ Retained dirty/cancelled worktree остаётся доказательство�
 
 ## Технический подход и реальные файлы
 
-Сейчас `internal/worker/registration.go` передаёт `len(manager.slots)` как
-`WorkerRegistration.ActiveCount`; `internal/controlplane/store.go` сохраняет его
-в `workers.active_count`, и `selectTaskRouteWithSourceRequirement` использует
+До реализации CARD-0085 `internal/worker/registration.go` передавал `len(manager.slots)` как
+`WorkerRegistration.ActiveCount`; `internal/controlplane/store.go` сохранял его
+в `workers.active_count`, и `selectTaskRouteWithSourceRequirement` использовал
 сохранённое значение как load. В то же время `internal/controlplane/state.go`
 уже считает `attempts` в `preparing`/`running` для `Claim`, а `SweepExpired`
 переводит истёкшие lease в `lost`. Эти два источника расходятся после сбоя.
@@ -42,7 +49,7 @@ Retained dirty/cancelled worktree остаётся доказательство�
   остаётся локальным ограничителем запуска, но не является server authority;
   worker не начинает второй supervisor для attempt, уже находящегося в `active`.
 
-Добавляется `migrations/026_worker_capacity_reconciliations.sql`: append-only
+В `main` добавлена `migrations/026_worker_capacity_reconciliations.sql`: append-only
 журнал с worker ID, временем, trigger (`registration`, `claim`, `heartbeat`,
 `terminal`, `sweep`), прежним cached/reported count, derived count и числом
 освобождённых ghost slots. Миграция нужна для наблюдаемого события и оконной
@@ -52,11 +59,25 @@ Retained dirty/cancelled worktree остаётся доказательство�
 за окно; structured server events логируют только фактическую коррекцию и не
 выдают retained worktrees за active slots.
 
-Затрагиваемые реализационные файлы: migration, protocol-контракт метрик,
-store/state/metrics/http control plane и registration/reconcile worker; UI не
+Фактическая поставка, уже находящаяся в `main`:
+`migrations/026_worker_capacity_reconciliations.sql`,
+`internal/protocol/types.go`,
+`internal/controlplane/{metrics.go,metrics_test.go,state.go,store.go,store_test.go}`
+и `internal/worker/{registration.go,worker_integration_test.go}`. UI не
 меняется.
 
 ## Последовательный план
+
+Для повторной постановки выполнены только следующие действия:
+
+1. Сверить свежий remote `main` с назначенной веткой и подтвердить, что
+   canonical implementation уже присутствует в `main`.
+2. Запустить две целевые регрессии: stale cached count и restart/reconnect после
+   потерянного ответа `/complete`.
+3. Зафиксировать решение владельца в этой спецификации и CARD-0085; не создавать
+   product diff и не запускать следующие этапы.
+
+### Исторический план реализованной CARD-0085
 
 1. Добавить migration `026` с журналом сверок, индексом по времени/worker и
    тестом upgrade `025 -> 026`; оставить старый `active_count` без destructive
@@ -100,6 +121,12 @@ store/state/metrics/http control plane и registration/reconcile worker; UI не
 
 ## Тест-план
 
+Для закрытия повтора обязательна уже существующая целевая команда:
+`go test -race -timeout 10m ./internal/controlplane ./internal/worker -run '^(TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart|TestReconnectAfterLostCompletionRestoresEveryWorkerSlot)$' -count=1`.
+Она должна завершаться с кодом 0 и одновременно доказывает, что stale счётчик
+не блокирует оба слота, а restart после потерянного completion возвращает всю
+ёмкость без дублирования живого supervisor.
+
 - `internal/controlplane/store_test.go`: seeded stale `workers.active_count`,
   two queued совместимые задачи и два claim; assert оба slots заполнены,
   `active_count` в Worker derived и reconciliation записан.
@@ -122,6 +149,9 @@ store/state/metrics/http control plane и registration/reconcile worker; UI не
 
 ## Риски и решения
 
+- Повторная реализация уже поставленного поведения могла бы разойтись с
+  canonical code. Поэтому текущая работа ограничена документацией о закрытии,
+  а основанием служат свежий `main` и целевые регрессии CARD-0085.
 - Гонка sweep/complete может перезаписать исход. Все операции остаются в одной
   SQLite transaction и меняют строку только из active state; только winner
   публикует release/event.
@@ -143,15 +173,11 @@ store/state/metrics/http control plane и registration/reconcile worker; UI не
 
 ГОТОВО-КОГДА: файл migrations/026_worker_capacity_reconciliations.sql
 ГОТОВО-КОГДА: файл internal/protocol/types.go
-ГОТОВО-КОГДА: файл internal/controlplane/store.go
-ГОТОВО-КОГДА: файл internal/controlplane/state.go
 ГОТОВО-КОГДА: файл internal/controlplane/metrics.go
-ГОТОВО-КОГДА: файл internal/controlplane/http.go
-ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/controlplane/metrics_test.go
-ГОТОВО-КОГДА: файл internal/controlplane/http_test.go
+ГОТОВО-КОГДА: файл internal/controlplane/state.go
+ГОТОВО-КОГДА: файл internal/controlplane/store.go
+ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/worker/registration.go
-ГОТОВО-КОГДА: файл internal/worker/reconcile.go
-ГОТОВО-КОГДА: файл internal/worker/registration_test.go
 ГОТОВО-КОГДА: файл internal/worker/worker_integration_test.go
-ГОТОВО-КОГДА: команда go test ./internal/controlplane ./internal/worker
+ГОТОВО-КОГДА: команда go test -race -timeout 10m ./internal/controlplane ./internal/worker -run '^(TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart|TestReconnectAfterLostCompletionRestoresEveryWorkerSlot)$' -count=1

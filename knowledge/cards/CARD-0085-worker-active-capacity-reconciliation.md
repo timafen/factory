@@ -1,20 +1,32 @@
 # CARD-0085 — Самовосстановление счётчика занятости воркера
 
+Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived
+capacity, migration 026 и гарантированная очистка reconciliation journal.
+
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
+- Status: Closed as duplicate — реализация уже находится в `main`.
 - Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
   registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
 - Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
   `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
+- Duplicate evidence: stale-count и restart/reconnect регрессии завершились PASS
+  на свежем `main` 2026-08-12.
+- One next action: нет; владелец утвердил закрытие повтора без новых стадий.
 
 ## LOG
+
+### 2026-08-12 — Specification: закрытие как повтор
+
+Владелец подтвердил закрытие текущей постановки как повтор этой карточки.
+Свежий remote `main` уже содержит указанную выше реализацию; продуктовый diff не
+создавался. Целевая команда stale-count и restart/reconnect завершилась PASS:
+controlplane — 7.323s, worker — 18.591s. Она подтверждает, что устаревший
+`active_count` не отнимает слот, а после потерянного `/complete` и restart оба
+слота снова принимают работу без дубля живого supervisor.
 
 ### 2026-08-12 — Verify
 
