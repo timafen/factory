@@ -2,14 +2,24 @@
 
 ## HEAD
 
-Status: Verified PASS — deployed from main
-Branch: factory/8d74f2e0-c74-770a846b-fd7
+Status: Verified PASS — awaiting human merge
+Branch: factory/104ba273-add-b6ac22c6-f58
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — второй независимый невалидный Specification HEAD не создаёт Implement.
-What changed: Factory выложена из `main` с точной передачей Specification HEAD и жёсткой остановкой после исчерпания rescue.
-Evidence: `fx factory release-info --technical` → `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`; Pilot → 196 tests, UI → 158 tests, typecheck/build → OK; `go build ./...` → OK.
-One next action: merge the card evidence update into main.
+What changed: Factory передаёт точный Specification HEAD и жёстко останавливается после исчерпания rescue.
+Evidence: pinned base `ed53258f110f99977a75bc4f0042db8057192024`, candidate `ee19f61cc47a5d42777b4571043c47b05e50d584`; Go → OK, UI → 158 tests, typecheck/build → OK.
+One next action: human merge this verified branch into main.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Строгий полный SHA | `go test ./...` и предшествующие `SpecificationBranchHandoffTests` | полный SHA принимается, malformed/short/missing отклоняются; Go suite OK |
+| Исчерпанный rescue и обязательный guard | целевые проверки из implementation commit `bee395269e7fc5e6aeba0c3a44077442f48ea968` | второй независимый невалидный Specification не создаёт Implement; guard обязателен |
+| UI не регрессировал | `cd web && npm test` | 14 файлов, 158 тестов passed |
+| Сборка и типы | `cd web && npx tsc -p tsconfig.app.json --noEmit`; `npm run build` | обе проверки OK |
+| Pinned delivery | `git ls-remote --symref origin HEAD`; isolated fetch; `base...candidate` | base `ed53258f110f99977a75bc4f0042db8057192024`, candidate `ee19f61cc47a5d42777b4571043c47b05e50d584`; только карточка в candidate diff |
 
 ### 2026-08-11 — Implement
 
