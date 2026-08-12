@@ -318,7 +318,7 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
 }
 
-func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
+func TestTerminalWriteFailurePublishesFailureAndNeverRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")
 	blocked := make(chan struct{})
@@ -347,8 +347,8 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	}
 	close(blocked)
 	waitForBrokerIdle(t, broker)
-	if got := operationStatus(t, server, "delivery-write-failure").Status; got != "running" {
-		t.Fatalf("unpersisted terminal status became visible as %q", got)
+	if got := operationStatus(t, server, "delivery-write-failure").Status; got != "failed" {
+		t.Fatalf("terminal write failure status=%q, want failed", got)
 	}
 	if executor.callCount() != 1 {
 		t.Fatalf("physical executions=%d, want 1", executor.callCount())

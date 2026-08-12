@@ -351,14 +351,18 @@ func (b *Broker) execute(item *operation) {
 		status = "failed"
 	}
 	b.mu.Lock()
-	// A terminal response is delivery proof.  Publish it only after the same
-	// value is durably represented by the operation record.  If persistence
-	// fails, retain the prior non-terminal state: callers must not create a
-	// receipt from an outcome which a fresh broker cannot confirm.
+	// A terminal response is delivery proof. Publish it only after the same
+	// value is durably represented by the operation record. If persistence
+	// fails, publish an explicit failure in memory: callers must not create a
+	// receipt from an outcome which a fresh broker cannot confirm, nor wait on
+	// a permanently running operation. A restart will fail the on-disk
+	// non-terminal record closed as well.
 	updated := *item
 	updated.Status = status
 	if err := b.saveTerminal(&updated); err == nil {
 		*item = updated
+	} else {
+		item.Status = "failed"
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
