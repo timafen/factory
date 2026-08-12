@@ -315,7 +315,7 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 
-const RESUME_ERROR_MESSAGE = "Продолжение не выполнено. Проверь состояние Factory и повтори попытку.";
+const RESUME_ERROR_MESSAGE = "Пауза сохранена. Продолжить сейчас не удалось. Проверь состояние Factory и повтори попытку.";
 
 export function WorkView({
   tasks, workers, pending, error, fetching, updatedAt,
@@ -572,7 +572,8 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
               e.stopPropagation();
               onResumeError(""); onResuming(g.base);
               Promise.resolve(onResume(g.base)).catch((error: unknown) => {
-                // Внутренний API-текст может раскрыть детали control plane или прокси.
+                // Сервер пишет технический класс ошибки в журнал запроса; карточка
+                // сообщает владельцу только результат, не детали control plane.
                 void error;
                 onResumeError(RESUME_ERROR_MESSAGE);
               }).finally(() => onResuming(""));
