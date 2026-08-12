@@ -116,10 +116,7 @@ except Exception:
 for worker in data.get("workers", []):
     retained = worker.get("retained_worktrees") or []
     offline_with_retained = not worker.get("online") and retained
-    online_and_unhealthy = (worker.get("online")
-                            and worker.get("health") != "healthy")
-    if not worker.get("active_count") and (
-            offline_with_retained or online_and_unhealthy):
+    if not worker.get("active_count") and offline_with_retained:
         print(worker["name"], worker["id"], b64encode(json.dumps(retained).encode()).decode(), sep="\t")
 PY
 )
