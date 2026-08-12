@@ -127,6 +127,7 @@ EOF
 #!/bin/bash
 echo "npm $*" >>"$TEST_GATES"
 [ "$TEST_MODE" != ui-test-fail ] || [ "${1:-}" != test ] || exit 1
+[ "$TEST_MODE" != forked-gate-fail ] || [ "${1:-}" != test ] || exit 1
 exit 0
 EOF
   cat >"$case_dir/bin/npx" <<'EOF'
@@ -536,7 +537,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail; do
+for mode in ui-test-fail go-test-fail release-test-fail forked-gate-fail; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -551,6 +552,8 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+[ -e "$temporary/forked-gate-fail/setsid-forked" ] \
+  || fail "forked gate failure did not exercise the setsid launcher"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
