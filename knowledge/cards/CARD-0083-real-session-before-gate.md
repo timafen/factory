@@ -3,16 +3,23 @@
 ## HEAD
 
 Status: Implemented — awaiting Review.
-Branch: factory/3b2aaa3f-78b-137df0a1-68c.
-Implementation commit: b086029bd7dc8782e9daf894722a8db00478ee2d — launcher исключён из решения о результате gate.
-What changed: gate запускается в требуемой identity только фиксированным root-owned `/usr/bin/sudo`; `$AS` не получает result path и не входит в цепочку доверия.
-What changed: одноразовый результат — kernel wait status цепочки `setsid --wait → sudo → gate`; файловый running/finished protocol полностью удалён.
-Threat model: произвольный fork-capable `$AS` того же UID знает прежний путь и может атомарно писать valid/corrupt/stale/replayed status, но эти файлы больше не читаются.
-Evidence: spoofed `status=0` + реальный gate `1` → release `5`, install events `0`; fork-success → install `1`; `bash ops/test-fx-factory-release.sh` → PASS.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go build ./...`, `git diff --check` → PASS.
+Branch: factory/9cb3b8b4-65b-4ce5fd30-eff.
+Implementation commit: 76358f35fd966acc9d1f6bb4a729be6265f1a6ed — остановка gate использует только проверенный PGID из памяти и его связь с launcher.
+What changed: handshake читается лишь при readiness; далее SID/PGID не берутся из доступного launcher-у файла.
+What changed: перед TERM/KILL лидер session обязан оставаться в дереве исходного launcher; иначе останавливается только это дерево без группового сигнала.
+Evidence: подмена обоих handshake на PGID посторонней session → release 130, внешний процесс не получил TERM; `bash ops/test-fx-factory-release.sh` → PASS.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go test ./...`, `go build ./...`, `npm --prefix web run build`, `git diff --check` → PASS.
 One next action: повторно отправить опубликованную ветку на Review.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После readiness PGID сохраняется только в памяти release, поэтому launcher больше не
+может изменить будущую цель сигнала заменой handshake. Перед остановкой сверяется
+лидер session и его принадлежность дереву launcher; регрессия подменяет PGID на
+постороннюю группу и подтверждает, что она не получает TERM. Shell-набор, Go-тесты,
+Go-сборка и production-сборка web прошли.
 
 ### 2026-08-12 — Implement
 
