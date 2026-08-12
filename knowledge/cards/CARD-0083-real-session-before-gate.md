@@ -1,12 +1,12 @@
 # CARD-0083 — Реальная session подтверждает gate до установки
 
-Implementation commit: acd440dc7ab336b894ff1c7d6c85f08b1946b5a1 — ошибка настоящего gate запрещает установку.
+Implementation commit: b20e91a86eb2c6f2d118fc24a939b9cc87495dbe — ошибка настоящего gate запрещает установку.
 
 ## HEAD
 
 Status: Implemented — awaiting human merge.
 Branch: factory/102792ba-365-f6cb456c-118.
-Implementation commit: acd440dc7ab336b894ff1c7d6c85f08b1946b5a1 — ошибка настоящего gate запрещает установку.
+Implementation commit: b20e91a86eb2c6f2d118fc24a939b9cc87495dbe — ошибка настоящего gate запрещает установку.
 What changed: реальная session атомарно записывает SID, PGID и код завершения в отдельный result-файл.
 What changed: выпуск продолжается только при явном `status=0`; отсутствие результата или чужая session завершают release до установки.
 Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; регрессия `forked-gate-fail` проверяет forked `setsid` и отсутствие изменений служб/бинарников.
