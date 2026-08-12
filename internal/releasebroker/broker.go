@@ -130,13 +130,17 @@ type operation struct {
 }
 
 type Broker struct {
-	executor Executor
-	stateDir string
+	executor   Executor
+	stateDir   string
 	// persistTerminal is a test seam for a failed final state write.
 	persistTerminal func(*operation) error
-	mu              sync.Mutex
-	active          string
-	items           map[string]*operation
+	syncFile   func(*os.File) error
+	closeFile  func(*os.File) error
+	renameFile func(string, string) error
+	syncDir    func(string) error
+	mu         sync.Mutex
+	active     string
+	items      map[string]*operation
 }
 
 func (b *Broker) saveTerminal(item *operation) error {
@@ -190,7 +194,11 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 }
 
 func newBroker(stateDir string, executor Executor) *Broker {
-	return &Broker{executor: executor, stateDir: stateDir, items: make(map[string]*operation)}
+	return &Broker{
+		executor: executor, stateDir: stateDir, items: make(map[string]*operation),
+		syncFile: (*os.File).Sync, closeFile: (*os.File).Close,
+		renameFile: os.Rename, syncDir: syncDirectory,
+	}
 }
 
 func (b *Broker) Handler() http.Handler {
@@ -208,6 +216,11 @@ func (b *Broker) persist(item *operation) error {
 	if err != nil {
 		return err
 	}
+	target := filepath.Join(b.stateDir, item.Request.OperationID+".json")
+	previous, previousErr := os.ReadFile(target)
+	if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) {
+		return previousErr
+	}
 	temporary, err := os.CreateTemp(b.stateDir, ".operation-")
 	if err != nil {
 		return err
@@ -217,13 +230,71 @@ func (b *Broker) persist(item *operation) error {
 	if _, err = temporary.Write(data); err == nil {
 		err = temporary.Chmod(0o600)
 	}
-	if closeErr := temporary.Close(); err == nil {
+	if err == nil {
+		err = b.syncFile(temporary)
+	}
+	if closeErr := b.closeFile(temporary); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json"))
+	if err := b.renameFile(name, target); err != nil {
+		return err
+	}
+	if err := b.syncDir(b.stateDir); err != nil {
+		// Rename durability is ambiguous after a directory sync error. Restore
+		// the last known durable record before returning so neither this broker
+		// nor a fresh one can consume an unconfirmed terminal result.
+		if restoreErr := b.restore(target, previous, previousErr == nil); restoreErr != nil {
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (b *Broker) restore(target string, previous []byte, existed bool) error {
+	if !existed {
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return b.syncDir(b.stateDir)
+	}
+	temporary, err := os.CreateTemp(b.stateDir, ".operation-restore-")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if _, err = temporary.Write(previous); err == nil {
+		err = temporary.Chmod(0o600)
+	}
+	if err == nil {
+		err = b.syncFile(temporary)
+	}
+	if closeErr := b.closeFile(temporary); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = b.renameFile(name, target); err != nil {
+		return err
+	}
+	return b.syncDir(b.stateDir)
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err = directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
 }
 
 func valid(input Request) bool {
