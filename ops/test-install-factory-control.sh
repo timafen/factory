@@ -3,7 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INSTALLER=$SCRIPT_DIR/install-factory-control.sh
-temporary=$(mktemp -d)
+if [ "$(id -u)" = 0 ]; then
+  # The bootstrap deliberately rejects /tmp because it is world-writable.
+  temporary=$(mktemp -d /run/factory-control-install-test.XXXXXX)
+  chmod 700 "$temporary"
+else
+  temporary=$(mktemp -d)
+fi
 trap 'rm -rf "$temporary"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -32,6 +38,12 @@ cmp -s "$source_dir/ops/fx-factory-release" "$target_dir/lib/fx-factory-release"
   || fail "ordinary candidate update provisioned a privileged helper"
 
 if [ "$(id -u)" = 0 ]; then
+  [ ! -e "$target_dir/libexec/factory-gate-cgroup" ] \
+    || fail "clean bootstrap fixture unexpectedly already has a helper"
+  # A syntactically valid fx that would fail if executed proves that the first
+  # installation needs no pre-existing broker invocation.
+  printf '#!/bin/bash\nexit 88\n' >"$source_dir/ops/fx"
+  chmod 755 "$source_dir/ops/fx"
   FACTORY_FX_BIN="$target_dir/bin/fx" \
   FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
   FACTORY_CONTROL_INSTALLER="$target_dir/libexec/factory-install-control" \
@@ -43,6 +55,8 @@ if [ "$(id -u)" = 0 ]; then
     [ "$(stat -Lc '%u %a' "$target_dir/libexec/$installed")" = '0 755' ] \
       || fail "$installed is not root-owned mode 755"
   done
+  cmp -s "$source_dir/ops/fx" "$target_dir/bin/fx" \
+    || fail "clean bootstrap did not finish without running fx"
   printf '\n# malicious candidate helper\n' >>"$source_dir/ops/factory-gate-cgroup"
   if FACTORY_FX_BIN="$target_dir/bin/fx" FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
      FACTORY_CONTROL_INSTALLER="$target_dir/libexec/factory-install-control" \
