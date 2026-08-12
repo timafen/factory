@@ -6,6 +6,19 @@ RELEASE="$SCRIPT_DIR/fx-factory-release"
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 
+# This is invoked only through a separately extracted Git-object copy below.
+# It proves that the copied file is this real Gate and that every relative
+# resource its fixture needs travelled with it.
+if [ "${TEST_MODE:-}" = trusted-gate-real-race ]; then
+  for dependency in fx-factory-release install-project-release-broker.sh fx \
+    systemd/factory-release-broker.service ../pilot/pilot.py ../pilot/context.md \
+    ../intake/app.py ../intake/plan.py; do
+    [ -r "$SCRIPT_DIR/$dependency" ] || { echo "missing trusted dependency: $dependency" >&2; exit 41; }
+  done
+  printf 'real-extracted-gate-after-handshake\n' >>"$TEST_HANDSHAKE_EVENTS"
+  exit 0
+fi
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
 wait_for_file() {
@@ -117,6 +130,9 @@ echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_
 : >"$FACTORY_BRAIN_RESTART_MARKER"
 BRAIN
     touch "$destination/ops/install-server-browser.sh"
+    if [ "$TEST_MODE" = trusted-gate-real-race ]; then
+      /bin/cp "$TEST_REAL_GATE" "$destination/ops/test-fx-factory-release.sh"
+    else
     cat >"$destination/ops/test-fx-factory-release.sh" <<'RELEASE_GATE'
 #!/bin/bash
 echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
@@ -139,6 +155,7 @@ case "$TEST_MODE" in
 esac
 exit 0
 RELEASE_GATE
+    fi
     chmod +x "$destination/ops/install-brain.sh"
     chmod +x "$destination/ops/install-project-release-broker.sh"
     chmod +x "$destination/ops/install-server-browser.sh"
@@ -153,7 +170,22 @@ RELEASE_GATE
       printf '#!/bin/bash\nexit 0\n' >"$2/ops/test-fx-factory-release.sh"
     fi
     ;;
-  *'rev-parse HEAD'*) echo 1234567890abcdef ;;
+  *'rev-parse HEAD'*)
+    if [ "$TEST_MODE" = trusted-gate-real-race ]; then
+      (
+        for ((i = 0; i < 500; i++)); do
+          for target in "$TEST_RELEASE_DIR"/trusted-gate-*; do
+            [ -d "$target" ] || continue
+            /bin/rm -rf -- "$target"
+            mkdir -p "$target/ops"
+            printf '#!/bin/bash\nexit 0\n' >"$target/ops/test-fx-factory-release.sh"
+          done
+          /bin/sleep 0.005
+        done
+      ) &
+      : >"$TEST_TRUSTED_GATE_ATTACK_STARTED"
+    fi
+    echo 1234567890abcdef ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
   *'log -1 --pretty=%B'*) printf 'Merge pull request #123 from factory/readable-release\n\nПроверочный релиз (#123)\n' ;;
 esac
@@ -602,8 +634,9 @@ configure_release_mode() {
 run_release() {
   case_dir=$1 mode=$2
   configure_release_mode "$case_dir" "$mode"
-  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
-    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
+    TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -613,6 +646,7 @@ run_release() {
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
+    TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -623,6 +657,7 @@ run_release() {
     FACTORY_BRAIN_LIVE="$case_dir/live" \
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
@@ -843,12 +878,16 @@ grep -F 'завершилась с кодом 1' "$tampered_gate/output" >/dev/n
   || fail "binaries were built after the workspace gate was replaced"
 assert_no_fixture_processes "$tampered_gate"
 
-extracted_gate="$temporary/trusted-gate-integration"
-make_fixture "$extracted_gate" trusted-gate-integration
-run_release "$extracted_gate" trusted-gate-integration \
+extracted_gate="$temporary/trusted-gate-real-race"
+make_fixture "$extracted_gate" trusted-gate-real-race
+run_release "$extracted_gate" trusted-gate-real-race \
   || { cat "$extracted_gate/output" >&2; fail "the extracted trusted gate did not run"; }
-grep -Fx 'extracted-gate-after-handshake' "$extracted_gate/handshake-events" >/dev/null \
-  || fail "the extracted gate did not run after a verified handshake"
+grep -Fx 'real-extracted-gate-after-handshake' "$extracted_gate/handshake-events" >/dev/null \
+  || fail "the real extracted gate did not run after a verified handshake"
+[ -e "$extracted_gate/trusted-gate-attack-started" ] \
+  || fail "the concurrent gate-directory substitution attempt did not start"
+! find "$extracted_gate/releases" -maxdepth 1 -type d -name 'trusted-gate-*' -print -quit | grep -q . \
+  || fail "a trusted gate was created below the user-writable release directory"
 assert_file "$extracted_gate/install/factory-server" '#!/bin/bash'
 assert_no_fixture_processes "$extracted_gate"
 
