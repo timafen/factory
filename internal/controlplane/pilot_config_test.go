@@ -297,6 +297,9 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	if got := string(fields["respect_host_load"]); got != "true" {
 		t.Fatalf("example respect_host_load = %s, want true", got)
 	}
+	if _, ok := fields["review_verify_fresh_base_rollout"]; ok {
+		t.Fatal("example must not contain unsupported review_verify_fresh_base_rollout metadata")
+	}
 
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, example, 0o600); err != nil {
