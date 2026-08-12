@@ -2,13 +2,13 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/0b933443-daf-3aa76b07-abe`.
+Status: Done — реализация влита в `main` через PR #135; отдельная поставка Verify закрыта как ненужная.
+Branch: `factory/56e8a2c8-266-c4b7a5ba-fa9`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
 What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: human merge this verified narrow config fix.
+Evidence: реализационный коммит — предок свежего `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`; до этой записи `origin/main...HEAD` был пуст.
+Evidence: JSON validation и `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
+Next action: закрыть текущую задачу без повторного этапа Verify.
 
 ## LOG
 
@@ -59,3 +59,10 @@ main через их pinned общий merge-base. Продвижение баз
 которые не являются настройкой сервера и отклонялись строгим декодером.
 Проверки PASS при `umask 077`: focused schema test, `go test ./...`,
 `python3 -m unittest pilot.test_pilot`, JSON validation, build и diff check.
+
+### 2026-08-12 — Implement
+
+По решению владельца задача закрыта как уже выполненная: реализационный коммит
+`80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` входит в свежий `origin/main`
+через PR #135, а до этой записи трёхточечный diff был пуст. Повторный Verify не
+запускался; целевая проверка строгой схемы и JSON validation прошли.
