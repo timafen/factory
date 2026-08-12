@@ -2,16 +2,23 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/12526369-3a4-e69c5117-acd`.
+- Status: Implemented — ожидает повторного Review.
+- Branch: `factory/f0c26f05-da7-09aa4f89-fec`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 81d67ac49275d0fc24fa4380a246aa431d956f15 — повреждённый или неопределённый статус не запускает executor повторно, а release-driver сохраняет переходы durable.
-- What changed: Каждый статус driver проходит запись, file fsync, atomic rename и directory fsync; при неопределённом terminal-переходе сохранён `running`.
-- What changed: Broker fail-closed сохраняет `locked` и не повторяет физический выпуск после повреждённого состояния.
-- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go test -race ./internal/releasebroker`, `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests`, `npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- Next action: Человеку принять решение о слиянии.
+- Implementation commit: 9cecf575d3ec947cb02eba980828031428d4191a — rollback подтверждает terminal succeeded, а безопасный ранний отказ после running фиксируется failed.
+- What changed: `--status` выполняется до delivery-state и не меняет его; rollback с delivery id завершает durable `succeeded`.
+- What changed: Единый EXIT-переход закрывает безопасный preflight-отказ в `failed`; добавлены shell-сценарии с `FACTORY_DELIVERY_ID`.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `bash ops/test-fx-factory-release.sh`, `git diff --check` → PASS.
+- Next action: Повторно провести Review изменений release-driver.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После замечаний Review release-driver сохраняет terminal `succeeded` после
+успешного rollback и `failed` при безопасном preflight-отказе после `running`.
+`--status` оставлен read-only; добавлены shell-проверки с delivery id для всех
+трёх путей. Синтаксис shell, полный профильный набор и проверка whitespace прошли.
 
 ### 2026-08-11 — Implement
 
