@@ -1037,7 +1037,9 @@ def launch_subtask(conf, epic, index, workflows, workers):
     nw = workflows.get(stage_name)
     if not stage_name or not nw or not nw.get("enabled"):
         return None, f"first stage '{stage_name}' has no enabled workflow"
-    worker = workers.get(stage_worker(conf, stage_name, cx, workers))
+    worker = workers.get(stage_worker(
+        conf, stage_name, cx, workers,
+        repository_id=epic.get("repository_id")))
     if not worker:
         return None, f"нет свободного воркера для стадии {stage_name}"
     done_before = [s["title"] for s in epic["subtasks"][:index]]
@@ -2109,9 +2111,7 @@ def autostart_plan(conf, tasks, workflows, workers):
         return None
     stage_name, nstages = first_stage(conf)
     workflow = workflows.get(stage_name) or {}
-    worker_name = stage_worker(conf, stage_name, "medium", workers)
-    worker = workers.get(worker_name)
-    if not stage_name or not workflow.get("enabled") or not worker:
+    if not stage_name or not workflow.get("enabled"):
         return None
     for rec in planned:
         if is_stopped(conf, rec.get("title") or ""):
@@ -2143,6 +2143,12 @@ def autostart_plan(conf, tasks, workflows, workers):
         stored_repository_id = rec.get("repo") or ""
         try:
             repository_id = resolve_plan_repository(stored_repository_id)
+            worker_name = stage_worker(
+                conf, stage_name, "medium", workers,
+                repository_id=repository_id)
+            worker = workers.get(worker_name)
+            if not worker:
+                return None
             created = create_task({
                 "request_key": f"plan-autostart:{rec['id']}:{generation}",
                 "title": title, "context": context, "worker_id": worker["id"],
@@ -2319,12 +2325,13 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
-        wname = stage_worker(conf, nxt, "medium", workers)
+        src = next((t for st, t in lst if st == stages[far]), None)
+        rid = (src or {}).get("repository_id") or ""
+        wname = stage_worker(
+            conf, nxt, "medium", workers, repository_id=rid)
         worker = workers.get(wname)
         if not nw or not nw.get("enabled") or not worker:
             continue
-        src = next((t for st, t in lst if st == stages[far]), None)
-        rid = (src or {}).get("repository_id") or ""
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
         fallback_branch = branch_from_history(tasks, base)
         identity_lines = implementation_context_lines(base, fallback_branch)
@@ -4143,10 +4150,14 @@ def handle_answers(conf, workflows, workers, tasks):
                 tasks, stage, src_task or base_title(q.get("title", "")))
         except Exception:
             rounds = 0
-        selected_worker = stage_worker(conf, stage, cx_hint, workers)
+        repository_id = q.get("repository_id", "")
+        selected_worker = stage_worker(
+            conf, stage, cx_hint, workers, repository_id=repository_id)
         if rounds >= 2 and cx_hint != "high":
             was = selected_worker
-            candidate = stage_worker(conf, stage, "high", workers, exact_tier=True)
+            candidate = stage_worker(
+                conf, stage, "high", workers, exact_tier=True,
+                repository_id=repository_id)
             if (candidate and worker_capability_rank(candidate)
                     > worker_capability_rank(was)):
                 cx_hint = "high"
@@ -6159,7 +6170,9 @@ def rescue_queued(conf, tasks, workflows, workers):
                     if worker_retention_full(candidate, repository_id):
                         candidate["health"] = "retention_full"
                     routing_workers[worker_name] = candidate
-            name = stage_worker(conf, stage, cx, routing_workers or workers)
+            name = stage_worker(
+                conf, stage, cx, routing_workers or workers,
+                repository_id=repository_id)
             fresh = workers.get(name) if isinstance(workers, dict) else None
             if not fresh or fresh.get("id") == t.get("worker_id"):
                 continue
@@ -6205,7 +6218,8 @@ def worker_retention_full(worker, repository_id=None):
     return False
 
 
-def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
+def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False,
+                 repository_id=None):
     """Pick the worker for a stage. Prefer the tier the orchestrator asked for,
     but never hand work to an unhealthy worker: fall back to the other tiers of
     the SAME stage, then to any healthy worker configured anywhere in the
@@ -6232,6 +6246,13 @@ def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
         active = int(w.get("active_count") or 0)
         return active < capacity
 
+    def repository_ready(name):
+        if not repository_id or not workers:
+            return True
+        worker = workers.get(name) or {}
+        return any(repository.get("id") == repository_id
+                   for repository in (worker.get("repositories") or []))
+
     tiers, ordered = None, []
     for s in conf["stages"]:
         if s["workflow"] == stage_name:
@@ -6244,10 +6265,34 @@ def stage_worker(conf, stage_name, complexity, workers=None, exact_tier=False):
             break
     if exact_tier and isinstance(tiers, dict):
         exact = tiers.get(complexity)
-        if healthy(exact):
+        if healthy(exact) and repository_ready(exact):
             # An escalation must really use the configured higher tier. Queue
             # there when it is busy instead of silently falling back downward.
             return exact
+    # Prefer a worker that already advertises this repository. This preserves
+    # the requested stage/tier order while avoiding a known-bad pinned route.
+    # Dynamic acquisition remains the fallback when no configured worker has
+    # the repository yet.
+    if repository_id:
+        for name in ordered:
+            if (name and healthy(name) and available(name)
+                    and repository_ready(name)):
+                return name
+        pool = []
+        for s in conf["stages"]:
+            t = s.get("workers")
+            pool += (list(t.values()) if isinstance(t, dict) else [s.get("worker")])
+        for name in sorted({n for n in pool if n}, key=worker_price_rank):
+            if healthy(name) and available(name) and repository_ready(name):
+                log(f"stage_worker: {stage_name}/{complexity} -> repository-ready {name}")
+                return name
+        for name in ordered:
+            if name and healthy(name) and repository_ready(name):
+                return name
+        for name in sorted({n for n in pool if n}, key=worker_price_rank):
+            if healthy(name) and repository_ready(name):
+                return name
+
     for name in ordered:
         if name and healthy(name) and available(name):
             return name
@@ -7021,7 +7066,9 @@ def cycle(conf, state):
         complexity = verdict.get("next_complexity", "medium")
         if complexity not in ("low", "medium", "high"):
             complexity = "medium"
-        worker_name = stage_worker(conf, next_stage, complexity, workers)
+        rid = (detail.get("task") or {}).get("repository_id", "")
+        worker_name = stage_worker(
+            conf, next_stage, complexity, workers, repository_id=rid)
         worker = workers.get(worker_name)
         if not nw or not nw.get("enabled") or not worker:
             if tid in state["processed"]:
