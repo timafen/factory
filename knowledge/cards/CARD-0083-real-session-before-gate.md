@@ -4,7 +4,7 @@
 
 Status: BLOCKED: реальный root bootstrap/probe/rollback не выполнен; worker UID 994 и `sudo` запрещён через `no new privileges`.
 Branch: factory/f2dc0140-801-bb9f9af1-47e.
-Implementation commit: 6248ea2ae1305a72b41d7a0e9736fedaded7a9ea — закреплённый SHA-256 синхронизирован с финальным cgroup helper до Gate.
+Implementation commit: 749487e7c51905685a50f1b7e8ccbf6b5b7d53ef — закреплённый SHA-256 синхронизирован с финальным cgroup helper до Gate.
 What changed: bootstrap, installer и release используют один SHA-256 фактического helper; тест сверяет все три digest до root-only проверки.
 What changed: bootstrap канонизирует direct-child source, проверяет root owner и mode всей цепочки/файлов и откатывает helper, installer и bootstrap при ошибке.
 Evidence: статическая SHA-256 сверка и shell-регрессии helper/installer/release → PASS; non-root bootstrap → явный SKIP.
