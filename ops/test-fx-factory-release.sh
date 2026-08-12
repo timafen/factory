@@ -354,7 +354,7 @@ EOF
 }
 
 run_release() {
-  case_dir=$1 mode=$2
+  case_dir=$1 mode=$2 ref=${3:-main}
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
@@ -388,7 +388,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
+    /bin/bash "$RELEASE" "$ref" >"$case_dir/output" 2>&1
 }
 
 run_driver() {
@@ -506,6 +506,37 @@ final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_s
   || fail "final status fixture did not perform exactly one physical release"
 grep -F 'не смог надёжно подтвердить успешный выпуск' "$final_status_failed/output" >/dev/null \
   || fail "final status write failure was not reported"
+
+# Broker delivery ids close a successful manual rollback and a safe preflight
+# refusal; inspection itself remains read-only.
+rollback_delivery="$temporary/rollback-delivery"
+rollback_id=rollback-delivery-0123456789abcdef
+make_fixture "$rollback_delivery" parallel-success
+run_release "$rollback_delivery" parallel-success \
+  || { cat "$rollback_delivery/output" >&2; fail "rollback fixture release failed"; }
+FACTORY_DELIVERY_ID="$rollback_id" run_release "$rollback_delivery" parallel-success --rollback \
+  || { cat "$rollback_delivery/output" >&2; fail "broker rollback failed"; }
+[ "$(tr -d '\r\n' <"$rollback_delivery/delivery-state/$rollback_id.status")" = succeeded ] \
+  || fail "successful broker rollback did not record succeeded"
+
+preflight_delivery="$temporary/preflight-delivery"
+preflight_id=preflight-delivery-0123456789abcdef
+make_fixture "$preflight_delivery" worker-build-fail
+set +e
+FACTORY_DELIVERY_ID="$preflight_id" run_release "$preflight_delivery" worker-build-fail
+preflight_rc=$?
+set -e
+[ "$preflight_rc" -eq 5 ] || fail "delivery preflight failure returned $preflight_rc instead of 5"
+[ "$(tr -d '\r\n' <"$preflight_delivery/delivery-state/$preflight_id.status")" = failed ] \
+  || fail "delivery preflight failure did not record failed"
+[ ! -s "$preflight_delivery/events" ] || fail "delivery preflight failure touched services"
+
+status_delivery="$temporary/status-delivery"
+make_fixture "$status_delivery" parallel-success
+FACTORY_DELIVERY_ID=status-delivery-0123456789abcdef run_release "$status_delivery" parallel-success --status \
+  || { cat "$status_delivery/output" >&2; fail "status inspection failed"; }
+[ ! -e "$status_delivery/delivery-state/status-delivery-0123456789abcdef.status" ] \
+  || fail "status inspection changed the delivery status"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
