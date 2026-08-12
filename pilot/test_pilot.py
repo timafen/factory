@@ -8073,6 +8073,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "case \"" + outcome + "\" in\n"
                          "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
                          "  rollback_failed) exit 1 ;;\n"
+                         "  final_driver_status_write_failed) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 4 ;;\n"
                          "  *) exit 7 ;;\n"
                          "esac\n")
         os.chmod(fx, 0o700)
@@ -8281,6 +8282,38 @@ pilot.save(pilot.STATE_PATH, state)
             self.assertEqual(len(stream.readlines()), 1)
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
         self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
+
+    def test_final_driver_status_write_failure_stays_failed_after_fresh_restart(self):
+        # The shell fixture proves that the real driver returns rc=4 only after
+        # physical delivery when its final succeeded rename fails.  Exercise
+        # that process result through the real broker and fresh Pilot processes.
+        paths = self._process_paths(self._start_process_broker(
+            outcome="final_driver_status_write_failed"))
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("recover", paths, sha=self.sha)
+
+        old_broker = self.broker_processes[paths["socket"]]
+        self._stop_process(old_broker)
+        self._restart_process_broker(paths)
+        self._pilot_process("recover", paths, sha=self.sha)
+
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        broker_state = self._read_json(os.path.join(
+            paths["broker_state"], generation["id"] + ".json"))
+        with open(paths["attempts"], encoding="utf-8") as stream:
+            attempts = [line.strip() for line in stream if line.strip()]
+        with open(paths["success"], encoding="utf-8") as stream:
+            successful = [line.strip() for line in stream if line.strip()]
+        self.assertEqual(generation["phase"], "failed")
+        self.assertEqual(broker_state["status"], "rollback_failed")
+        self.assertEqual(attempts, [generation["id"]])
+        self.assertEqual(successful, [generation["id"]])
+        self.assertFalse(os.path.exists(paths["receipts"]))
+        self.assertFalse(os.path.exists(paths["outbox"]))
+        self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(self._events(paths["events"], "owner_done"), [])
 
     def test_terminal_write_failure_survives_real_broker_restart_without_false_done(self):
         paths = self._process_paths(self._start_process_broker())
