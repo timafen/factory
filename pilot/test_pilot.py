@@ -4133,6 +4133,187 @@ class AnswerEscalationTests(unittest.TestCase):
         create.assert_called_once()
         save.assert_not_called()
 
+    def test_cpu_over_reservation_survives_restart_and_claims_first_slot_once(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        question_dir = os.path.join(temporary.name, "questions")
+        os.makedirs(question_dir)
+        question = {
+            "id": "https-answer", "task_id": "source-task", "status": "answered",
+            "answer": "Продолжай полный HTTPS-набор", "answered_at": "2026-08-12T10:00:00Z",
+            "resume_stage": "Implement + Test", "stage": "Specification",
+            "title": "Весь HTTPS-набор проходит с реальным service worker",
+            "repository_id": "repo-id",
+        }
+        pilot.save(os.path.join(question_dir, "https-answer.json"), question)
+        source = {"id": "source-task", "state": "failed", "created_at": "2026-08-12T09:00:00Z"}
+        workers = {"worker": {"id": "worker-id", "online": True, "health": "healthy",
+                               "capacity": 1, "active_count": 0,
+                               "repositories": [{"id": "repo-id"}]}}
+        workflows = {"Implement + Test": {"enabled": True, "revision_id": "revision"}}
+        cpu_over = {"state": "over", "cpu": {"state": "over"},
+                    "memory": {"state": "ok"}, "disk": {"state": "ok"}}
+        conf = {"stages": [{"workflow": "Implement + Test", "workers": {"medium": "worker"}}],
+                "timeout_seconds": 900, "_host_load_snapshot": cpu_over,
+                "_host_load_tasks": [dict(source), {"id": "other", "state": "running"}]}
+
+        common = (
+            mock.patch.object(pilot, "work_lifecycle_block", return_value=""),
+            mock.patch.object(pilot, "stage_attempts", return_value=0),
+            mock.patch.object(pilot, "selected_delivery", return_value=("", "")),
+            mock.patch.object(pilot, "branch_from_history", return_value=""),
+            mock.patch.object(pilot, "is_stopped", return_value=False),
+            mock.patch.object(pilot, "live_or_done_at", return_value=None),
+            mock.patch.object(pilot, "load_limits", return_value={}),
+            mock.patch.object(pilot, "notify"),
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "QUESTION_DIR", question_dir))
+            for patcher in common:
+                stack.enter_context(patcher)
+            create = stack.enter_context(mock.patch.object(pilot, "create_task"))
+            self.assertEqual(pilot.handle_answers(conf, workflows, workers, [source, {"state": "running"}]), 0)
+            create.assert_not_called()
+
+        reserved = pilot.load(os.path.join(question_dir, "https-answer.json"), {})
+        self.assertEqual(reserved["status"], "answered")
+        self.assertEqual(reserved["admission_reason"], "host_load")
+        self.assertEqual(reserved["reservation"]["stage"], "Implement + Test")
+        self.assertIn("ожидает зарезервированный слот", reserved["escalation_reason"])
+
+        restarted = {"stages": conf["stages"], "timeout_seconds": 900,
+                     "_host_load_snapshot": cpu_over, "_host_load_tasks": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "QUESTION_DIR", question_dir))
+            for patcher in common:
+                stack.enter_context(patcher)
+            create = stack.enter_context(mock.patch.object(
+                pilot, "create_task", return_value={"task": {"id": "resumed-task"}}))
+            self.assertEqual(pilot.handle_answers(restarted, workflows, workers, [source]), 1)
+            self.assertEqual(pilot.handle_answers(restarted, workflows, workers, [source]), 0)
+            create.assert_called_once()
+
+        resumed = pilot.load(os.path.join(question_dir, "https-answer.json"), {})
+        self.assertEqual(resumed["status"], "resolved")
+        self.assertEqual(resumed["resumed_task_id"], "resumed-task")
+        self.assertNotIn("reservation", resumed)
+
+    def test_reservation_blocks_new_heavy_automatic_work_but_not_light_stage(self):
+        question = {
+            "id": "first", "task_id": "source", "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z",
+            "reservation": {"stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z"},
+        }
+        conf = {"_answer_reservations": [pilot._reservation_from_question(question)]}
+        heavy = {"title": "[auto] [3/5 Implement + Test] Новая тяжёлая работа"}
+        light = {"title": "[auto] [2/5 Specification] Лёгкий разбор"}
+
+        self.assertEqual(pilot.task_admission_result(conf, heavy)["reason"],
+                         "reserved_answered_work")
+        self.assertTrue(pilot.task_admission_result(conf, light)["admitted"])
+        with mock.patch.object(pilot, "money_guard"), \
+                mock.patch.object(pilot, "api", return_value={"task": {"id": "light"}}) as api:
+            with self.assertRaises(pilot.AdmissionDeferred) as deferred:
+                pilot.create_task(heavy, conf)
+            self.assertEqual(deferred.exception.reason, "reserved_answered_work")
+            pilot.create_task(light, conf)
+        api.assert_called_once()
+
+    def test_no_worker_is_an_explicit_reason_and_keeps_heavy_reservation(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        question_dir = os.path.join(temporary.name, "questions")
+        os.makedirs(question_dir)
+        question = {
+            "id": "no-worker", "task_id": "source-task", "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test", "stage": "Review", "title": "HTTPS", "repository_id": "repo-id",
+        }
+        pilot.save(os.path.join(question_dir, "no-worker.json"), question)
+        conf = {"stages": [{"workflow": "Implement + Test", "workers": {"medium": "missing"}}]}
+        workflows = {"Implement + Test": {"enabled": True, "revision_id": "revision"}}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "QUESTION_DIR", question_dir))
+            stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "stage_attempts", return_value=0))
+            stack.enter_context(mock.patch.object(pilot, "is_stopped", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "live_or_done_at", return_value=None))
+            stack.enter_context(mock.patch.object(pilot, "load_limits", return_value={}))
+            self.assertEqual(pilot.handle_answers(conf, workflows, {}, []), 0)
+
+        waiting = pilot.load(os.path.join(question_dir, "no-worker.json"), {})
+        self.assertEqual(waiting["status"], "no_worker")
+        self.assertEqual(waiting["admission_reason"], "no_compatible_worker")
+        self.assertIn("резервированный слот", waiting["escalation_reason"])
+        self.assertIn("reservation", waiting)
+
+    def test_dashboard_keeps_answered_reservation_visible_without_open_badge(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        question_dir = os.path.join(temporary.name, "questions")
+        os.makedirs(question_dir)
+        question = {
+            "id": "visible", "task_id": "source", "status": "answered", "answer": "Продолжай",
+            "title": "Весь HTTPS-набор проходит с реальным service worker",
+            "question": "Продолжить?", "resume_stage": "Implement + Test",
+            "escalation_reason": "ответ принят, ожидает зарезервированный слот из-за загрузки сервера",
+            "reservation": {"stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z"},
+        }
+        pilot.save(os.path.join(question_dir, "visible.json"), question)
+        usage = {"cost_usd": 0, "total_tokens": 0, "cost_defined": True,
+                 "base_estimate": False, "unknown_models": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "QUESTION_DIR", question_dir))
+            stack.enter_context(mock.patch.object(pilot, "dashboard_slow", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "recent_done_block", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "limits_view", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "brain_block", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "codex_snapshot_windows", return_value=(usage, usage)))
+            save = stack.enter_context(mock.patch.object(pilot, "save"))
+            pilot.write_dashboard({}, [], {}, {"present": True}, (0, 1))
+
+        dashboard = save.call_args.args[1]
+        self.assertEqual(dashboard["now"]["questions_count"], 0)
+        self.assertEqual(dashboard["now"]["reserved_answers_count"], 1)
+        self.assertEqual(dashboard["now"]["questions"][0]["status"], "answered")
+        self.assertTrue(dashboard["now"]["questions"][0]["reserved"])
+        self.assertIn("ожидает зарезервированный слот",
+                      dashboard["now"]["questions"][0]["escalation_reason"])
+
+    def test_memory_emergency_never_bypasses_reservation_and_obsolete_question_releases_it(self):
+        emergency = {"state": "over", "cpu": {"state": "over"},
+                     "memory": {"state": "over"}, "disk": {"state": "ok"}}
+        question = {
+            "id": "reserved", "task_id": "source", "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test",
+            "reservation": {"stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z"},
+        }
+        conf = {"_answer_reservations": [pilot._reservation_from_question(question)],
+                "_answer_reservation_in_progress": "reserved",
+                "_host_load_snapshot": emergency, "_host_load_tasks": []}
+        admission = pilot.task_admission_result(
+            conf, {"title": "[auto] [3/5 Implement + Test] HTTPS"})
+        self.assertEqual(admission, {"admitted": False, "reason": "host_load"})
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        question_dir = os.path.join(temporary.name, "questions")
+        os.makedirs(question_dir)
+        question.update({"title": "HTTPS", "stage": "Review"})
+        pilot.save(os.path.join(question_dir, "reserved.json"), question)
+        source = {"id": "source", "state": "failed", "created_at": "2026-08-12T09:00:00Z",
+                  "title": "[auto] [3/5 Implement + Test] HTTPS"}
+        newer = {"id": "replacement", "state": "running", "created_at": "2026-08-12T10:01:00Z",
+                 "title": "[auto] [3/5 Implement + Test] HTTPS"}
+        with mock.patch.object(pilot, "QUESTION_DIR", question_dir), \
+                mock.patch.object(pilot, "live_or_done_at", return_value=newer):
+            pilot.supersede_stale_questions([source, newer], conf)
+
+        obsolete = pilot.load(os.path.join(question_dir, "reserved.json"), {})
+        self.assertEqual(obsolete["status"], "obsolete")
+        self.assertNotIn("reservation", obsolete)
+        self.assertEqual(conf["_answer_reservations"], [])
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
