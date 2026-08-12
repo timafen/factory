@@ -52,6 +52,10 @@ ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
 MAX_TERMINAL_TASKS_PER_CYCLE = 1
+MERGE_CONFLICT_RE = re.compile(
+    r"merge conflict|has merge conflicts|not mergeable|cannot be cleanly created",
+    re.I,
+)
 
 
 class ParallelWorkLimit(RuntimeError):
@@ -6637,6 +6641,11 @@ def recover_merge_intents(conf, state):
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
         if _intent_has_wait(state, task_id):
             continue
+        # A content conflict cannot heal by repeating the same merge request.
+        # A separate correction task rebases the same branch and sends it
+        # through Review and Verify again.
+        if intent.get("phase") in ("conflict", "repairing", "superseded"):
+            continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
             intent["phase"] = "failed"
@@ -6650,6 +6659,14 @@ def recover_merge_intents(conf, state):
                 ok, output = gh_merge(repo, branch, intent.get("base", branch))
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
+                    if MERGE_CONFLICT_RE.search(output or ""):
+                        intent.update({
+                            "phase": "conflict",
+                            "merge_error": (output or "")[:2000],
+                            "conflict_at": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
+                        save(STATE_PATH, state)
                     continue
                 merged = True
             intent["phase"] = "merged"
@@ -6670,6 +6687,91 @@ def recover_merge_intents(conf, state):
             if generation:
                 intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
                 save(STATE_PATH, state)
+
+
+def resume_merge_conflicts(conf, state, tasks, workflows, workers):
+    """Return a conflicted release to the same pipeline exactly once.
+
+    The correction keeps the original work id through parent provenance, uses
+    the already-reviewed branch, and must pass Review and Verify again after it
+    catches up with current main.
+    """
+    stages = [item.get("workflow") for item in conf.get("stages", [])]
+    implementation = "Implement + Test"
+    if implementation not in stages:
+        return 0
+    workflow = workflows.get(implementation) or {}
+    if not workflow.get("enabled") or not workflow.get("revision_id"):
+        return 0
+    created_count = 0
+    for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
+        if intent.get("phase") != "conflict":
+            continue
+        existing = next((task for task in tasks
+                         if task.get("parent_task_id") == task_id
+                         and task.get("correction_kind") == "merge_conflict_return"), None)
+        if existing:
+            intent.update({"phase": "repairing",
+                           "repair_task_id": existing.get("id", "")})
+            save(STATE_PATH, state)
+            continue
+        parent = next((task for task in tasks if task.get("id") == task_id), None)
+        detail = None
+        if parent is None:
+            try:
+                detail = api(f"/tasks/{task_id}")
+                parent = dict((detail or {}).get("task") or {})
+                parent.setdefault("id", task_id)
+            except Exception as error:
+                log(f"MERGE CONFLICT repair wait task={task_id}: {error}")
+                continue
+        repository_id = parent.get("repository_id") or ""
+        if not repository_id and detail:
+            repository_id = ((detail.get("task") or {}).get("repository_id") or "")
+        worker_name = stage_worker(
+            conf, implementation, "high", workers,
+            repository_id=repository_id)
+        worker = workers.get(worker_name)
+        if not repository_id or not worker:
+            log(f"MERGE CONFLICT repair wait task={task_id}: worker/repository missing")
+            continue
+        base = intent.get("base") or base_title(parent.get("title", ""))
+        branch = intent.get("branch", "")
+        stage_number = stages.index(implementation) + 1
+        context = (
+            f"Pipeline: {base}\n"
+            f"Branch: {branch}\n"
+            f"Previous verified head: {intent.get('commit_sha', '')}\n\n"
+            "GitHub found a content conflict with current main. Continue the SAME branch. "
+            "Fetch origin/main, rebase or merge it into this branch, resolve only the "
+            "conflicts needed for this work, run the full required test set, and push the "
+            "updated branch. Do not create a replacement branch. Review and Verify will "
+            "run again after this correction.\n\n"
+            f"GitHub response:\n{intent.get('merge_error', '')}"
+        )[:20000]
+        try:
+            created = create_child_task({
+                "request_key": f"merge-conflict-return:{task_id}:{intent.get('commit_sha', '')}",
+                "title": (f"[auto] [{stage_number}/{len(stages)} {implementation}] "
+                          f"{base}")[:200],
+                "context": context,
+                "worker_id": worker["id"],
+                "repository_id": repository_id,
+                "timeout_seconds": conf.get("timeout_seconds", 7200),
+                "workflow_revision_id": workflow["revision_id"],
+            }, parent, conf, "merge_conflict_return")
+        except (ParallelWorkLimit, RuntimeError) as error:
+            log(f"MERGE CONFLICT repair deferred task={task_id}: {error}")
+            continue
+        repair_task_id = ((created or {}).get("task") or {}).get("id", "")
+        if not repair_task_id:
+            log(f"MERGE CONFLICT repair wait task={task_id}: create returned no task")
+            continue
+        intent.update({"phase": "repairing", "repair_task_id": repair_task_id})
+        save(STATE_PATH, state)
+        log(f"MERGE CONFLICT returned task={task_id} -> {repair_task_id}")
+        created_count += 1
+    return created_count
 
 
 def cycle(conf, state):
@@ -6779,6 +6881,14 @@ def cycle(conf, state):
             conf["_host_load_tasks"] = list(tasks)
     except Exception as e:
         log("host_load_error", repr(e))
+
+    # A merge conflict is pipeline work, not a reason to hammer GitHub or ask
+    # the owner. Return the same branch to Implement, then require Review and
+    # Verify again before another immutable merge intent is created.
+    try:
+        resume_merge_conflicts(conf, state, tasks, workflows, workers)
+    except Exception as e:
+        log("merge_conflict_resume_error", repr(e))
 
     # Planner layer runs first, guarded so it can never break the pipeline.
     try:
