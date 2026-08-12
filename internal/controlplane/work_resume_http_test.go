@@ -43,9 +43,13 @@ func resumeFixture(t *testing.T, base string) (*Store, *PilotConfigStore, *httpt
 	return store, pilot, server, worker.Repositories[0], workflows
 }
 
-func writeResumeWork(t *testing.T, base string, metadata resumeWorkMetadata) {
+func writeResumeWorkForID(t *testing.T, base, workID string, metadata resumeWorkMetadata) {
 	t.Helper()
-	data, err := json.Marshal(map[string]resumeWorkMetadata{base: metadata})
+	key := workID
+	if key == "" {
+		key = base
+	}
+	data, err := json.Marshal(map[string]resumeWorkMetadata{key: metadata})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,13 +72,19 @@ func writeResumeVerdict(t *testing.T, taskID, action string) {
 func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository, workflows map[string]protocol.Workflow, base string, stages []string, state string) map[string]protocol.Task {
 	t.Helper()
 	history := make(map[string]protocol.Task, len(stages))
+	parentID := ""
 	for index, stage := range stages {
 		workflow := workflows[stage]
+		requestKey, err := newID()
+		if err != nil {
+			t.Fatal(err)
+		}
 		detail, created, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
-			RequestKey: "history-" + base + stage, Title: "[auto] [" + string(rune('1'+index)) + "/5 " + stage + "] " + base,
+			RequestKey: "history-" + requestKey, Title: "[auto] [" + string(rune('1'+index)) + "/5 " + stage + "] " + base,
 			Context: "saved pipeline context", ContextProvided: true,
 			WorkerID: "worker-1", RepositoryID: repository.ID, TimeoutSeconds: 60,
 			WorkflowRevisionID: workflow.CurrentRevision.ID, WorkflowRevisionIDProvided: true,
+			ParentTaskID: parentID,
 		})
 		if err != nil || !created {
 			t.Fatalf("history %s: created=%v err=%v", stage, created, err)
@@ -83,13 +93,26 @@ func addResumeHistory(t *testing.T, store *Store, repository protocol.Repository
 			t.Fatal(err)
 		}
 		history[stage] = detail.Task
+		parentID = detail.Task.ID
 	}
 	return history
 }
 
-func postResume(t *testing.T, server *httptest.Server, base string) (int, resumeWorkResponse) {
+func setResumePause(t *testing.T, pilot *PilotConfigStore, key string) {
 	t.Helper()
-	body, _ := json.Marshal(resumeWorkRequest{Title: base})
+	settings, err := pilot.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Settings.StoppedPipelines = []string{key}
+	if _, err := pilot.Write(settings.Version, settings.Settings); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func postResume(t *testing.T, server *httptest.Server, base, workID string) (int, resumeWorkResponse) {
+	t.Helper()
+	body, _ := json.Marshal(resumeWorkRequest{Title: base, WorkID: workID})
 	response, err := server.Client().Post(server.URL+"/api/v1/works/resume", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -134,17 +157,19 @@ func TestResumePausedWorkRestartsFailedFirstEffectiveStageAndIsIdempotent(t *tes
 		t.Run(terminal, func(t *testing.T) {
 			base := "Возобновить первую обязательную стадию " + terminal
 			store, pilot, server, repo, workflows := resumeFixture(t, base)
-			writeResumeWork(t, base, resumeWorkMetadata{
+			history := addResumeHistory(t, store, repo, workflows, base, []string{"Implement + Test"}, terminal)
+			workID := history["Implement + Test"].WorkID
+			writeResumeWorkForID(t, base, workID, resumeWorkMetadata{
 				StartStage: "Implement + Test",
 				Skipped:    []string{"Triage", "Specification"},
 			})
-			addResumeHistory(t, store, repo, workflows, base, []string{"Implement + Test"}, terminal)
+			setResumePause(t, pilot, workID)
 
-			status, first := postResume(t, server, base)
+			status, first := postResume(t, server, base, workID)
 			if status != http.StatusOK || first.Stage != "Implement + Test" || !first.Resumed || first.Task.State != "queued" {
 				t.Fatalf("first resume = status %d %#v", status, first)
 			}
-			status, second := postResume(t, server, base)
+			status, second := postResume(t, server, base, workID)
 			if status != http.StatusOK || second.Task.ID != first.Task.ID || second.Resumed {
 				t.Fatalf("repeat resume = status %d %#v", status, second)
 			}
@@ -194,10 +219,12 @@ func TestResumePausedWorkUsesVerdictActionForReviewAndVerify(t *testing.T) {
 			base := "Вердикт " + tc.name
 			store, pilot, server, repo, workflows := resumeFixture(t, base)
 			history := addResumeHistory(t, store, repo, workflows, base, tc.stages, "succeeded")
+			workID := history[tc.stages[0]].WorkID
+			setResumePause(t, pilot, workID)
 			for stage, action := range tc.verdicts {
 				writeResumeVerdict(t, history[stage].ID, action)
 			}
-			status, resumed := postResume(t, server, base)
+			status, resumed := postResume(t, server, base, workID)
 			if status != tc.wantStatus || (tc.wantStage != "" && resumed.Stage != tc.wantStage) {
 				t.Fatalf("resume = status %d %#v, want status %d stage %q", status, resumed, tc.wantStatus, tc.wantStage)
 			}
@@ -214,9 +241,13 @@ func TestResumePausedWorkUsesVerdictActionForReviewAndVerify(t *testing.T) {
 func TestResumePausedWorkOnlyClearsStalePauseForAlreadyActiveTask(t *testing.T) {
 	const base = "Уже работает"
 	store, pilot, server, repo, workflows := resumeFixture(t, base)
-	addResumeHistory(t, store, repo, workflows, base, []string{"Triage", "Specification"}, "succeeded")
-	addResumeHistory(t, store, repo, workflows, base, []string{"Implement + Test"}, "running")
-	status, resumed := postResume(t, server, base)
+	history := addResumeHistory(t, store, repo, workflows, base, []string{"Triage", "Specification", "Implement + Test"}, "succeeded")
+	if _, err := store.db.Exec(`UPDATE executions SET state='running' WHERE task_id=?`, history["Implement + Test"].ID); err != nil {
+		t.Fatal(err)
+	}
+	workID := history["Triage"].WorkID
+	setResumePause(t, pilot, workID)
+	status, resumed := postResume(t, server, base, workID)
 	if status != http.StatusOK || resumed.Stage != "Implement + Test" || resumed.Resumed {
 		t.Fatalf("active resume = status %d %#v", status, resumed)
 	}
@@ -233,10 +264,12 @@ func TestResumePausedWorkOnlyClearsStalePauseForAlreadyActiveTask(t *testing.T) 
 func TestResumePausedWorkRetryAfterSettingsWriteFailureDoesNotDuplicateTask(t *testing.T) {
 	const base = "Повтор после ошибки записи"
 	store, pilot, server, repo, workflows := resumeFixture(t, base)
-	addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+	history := addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+	workID := history["Triage"].WorkID
+	setResumePause(t, pilot, workID)
 
 	pilot.writeTemp = func(*os.File, []byte) (int, error) { return 0, errors.New("disk unavailable") }
-	status, _ := postResume(t, server, base)
+	status, _ := postResume(t, server, base, workID)
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("resume with write failure status = %d, want %d", status, http.StatusServiceUnavailable)
 	}
@@ -250,12 +283,72 @@ func TestResumePausedWorkRetryAfterSettingsWriteFailureDoesNotDuplicateTask(t *t
 	}
 
 	pilot.writeTemp = nil
-	status, retried := postResume(t, server, base)
+	status, retried := postResume(t, server, base, workID)
 	if status != http.StatusOK || retried.Resumed || retried.Task.ID != createdID {
 		t.Fatalf("retry = status %d %#v, want existing task %s", status, retried, createdID)
 	}
 	page, err = store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 200})
 	if err != nil || len(page.Tasks) != 2 {
 		t.Fatalf("retry duplicated task: %#v, %v", page, err)
+	}
+}
+
+func TestResumePausedWorkIsolatesSameTitlePipelinesByWorkID(t *testing.T) {
+	const base = "Одинаковое название"
+	store, pilot, server, repo, workflows := resumeFixture(t, base)
+	firstHistory := addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+	secondHistory := addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+	firstID := firstHistory["Triage"].WorkID
+	secondID := secondHistory["Triage"].WorkID
+	if _, err := store.db.Exec(`UPDATE tasks SET title='[auto] [1/5 Triage] Переименованная первая работа' WHERE id=?`, firstHistory["Triage"].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := pilot.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Settings.StoppedPipelines = []string{firstID, secondID}
+	if _, err := pilot.Write(settings.Version, settings.Settings); err != nil {
+		t.Fatal(err)
+	}
+
+	status, resumed := postResume(t, server, base, firstID)
+	if status != http.StatusOK || !resumed.Resumed || resumed.Task.WorkID != firstID {
+		t.Fatalf("resume first = status %d %#v", status, resumed)
+	}
+	if resumed.Task.ParentTaskID != firstHistory["Triage"].ID {
+		t.Fatalf("resumed parent = %q, want %q", resumed.Task.ParentTaskID, firstHistory["Triage"].ID)
+	}
+	settings, err = pilot.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Settings.StoppedPipelines; len(got) != 1 || got[0] != secondID {
+		t.Fatalf("pauses after first resume = %#v, want only %q", got, secondID)
+	}
+	resumeAPI := &API{store: store}
+	firstTasks, err := resumeAPI.pipelineTasks(context.Background(), base, firstID)
+	if err != nil || len(firstTasks) != 2 {
+		t.Fatalf("first history = %#v, %v", firstTasks, err)
+	}
+	secondTasks, err := resumeAPI.pipelineTasks(context.Background(), base, secondID)
+	if err != nil || len(secondTasks) != 1 || secondTasks[0].ID != secondHistory["Triage"].ID {
+		t.Fatalf("second history crossed = %#v, %v", secondTasks, err)
+	}
+}
+
+func TestResumePausedWorkKeepsTitleFallbackForTrulyLegacyHistory(t *testing.T) {
+	const base = "Старая работа без provenance"
+	store, _, server, repo, workflows := resumeFixture(t, base)
+	history := addResumeHistory(t, store, repo, workflows, base, []string{"Triage"}, "failed")
+	legacy := history["Triage"]
+	if _, err := store.db.Exec(`UPDATE tasks SET work_id=NULL, parent_task_id=NULL, correction_kind=NULL WHERE id=?`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	status, resumed := postResume(t, server, base, "")
+	if status != http.StatusOK || !resumed.Resumed || resumed.Task.ParentTaskID != legacy.ID || resumed.Task.WorkID != legacy.ID {
+		t.Fatalf("legacy resume = status %d %#v", status, resumed)
 	}
 }
