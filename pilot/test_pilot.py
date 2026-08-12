@@ -2610,6 +2610,20 @@ class WorkOriginAttributionTests(unittest.TestCase):
         work = pilot.load(self.works_path, {})["Scheduled patrol"]
         self.assertEqual(work["origin"], "orchestrator")
 
+    def test_mixed_fresh_tasks_keep_their_own_origins(self):
+        pilot.record_new_works(
+            self.conf,
+            [
+                self.task("Owner work"),
+                self.task("Scheduled patrol", "automation:patrol:schedule:one"),
+            ],
+            max_age_min=10_000,
+        )
+
+        works = pilot.load(self.works_path, {})
+        self.assertEqual(works["Owner work"]["origin"], "owner")
+        self.assertEqual(works["Scheduled patrol"]["origin"], "orchestrator")
+
 
 class WorkArchiveCleanupTests(unittest.TestCase):
     def setUp(self):

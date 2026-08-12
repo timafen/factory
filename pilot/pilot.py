@@ -4125,7 +4125,6 @@ def record_new_works(conf, tasks, max_age_min=180):
                   stages[n - 1] if n <= len(stages) else "",
                   skipped,
                   skipped_reason if skipped else "",
-                    work_id=work_id)
                   work_id=work_id)
         if skipped:
             log(f"WORK ORIGIN base={base!r} origin={origin} начал с {stages[n - 1]}, "
