@@ -457,7 +457,8 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.git(observer, "checkout", "-qb", "worker-owned")
             before = self.git(observer, "symbolic-ref", "--short", "HEAD")
 
-            snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
+            with mock.patch.object(pilot, "_git", wraps=pilot._git) as git_spy:
+                snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
 
             self.assertEqual(snapshot["state"], "ok")
             self.assertEqual(snapshot["files"], expected)
@@ -466,6 +467,10 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["base_ahead_by"], 1)
             self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
             self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
+            expected_range = snapshot["base_sha"] + "..." + snapshot["candidate_sha"]
+            self.assertTrue(any(
+                call.args[1:] == ("diff", "--name-only", expected_range)
+                for call in git_spy.call_args_list))
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
@@ -481,6 +486,40 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
+
+    def test_review_gate_returns_empty_pinned_delivery_with_one_message(self):
+        snapshot = {
+            "state": "ok", "default_branch": "main",
+            "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+            "merge_base_sha": "a" * 40, "base_advanced": False,
+            "base_ahead_by": 0, "ahead_by": 0, "files": [],
+        }
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertEqual(set(result), {"back", "note"})
+        self.assertTrue(result["back"])
+        self.assertIn("Поставка пуста", result["note"])
+        self.assertIn("a" * 40 + "..." + "b" * 40, result["note"])
+
+    def test_verify_gate_refreshes_snapshot_and_blocks_before_merge(self):
+        snapshot = {
+            "state": "ok", "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+        }
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot) as fresh:
+            result = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        fresh.assert_called_once_with("github.com/example/repo", "factory/candidate")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["snapshot"]["base_sha"], "a" * 40)
+        self.assertEqual(result["snapshot"]["candidate_sha"], "b" * 40)
+
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
+                "state": "blocked", "reason": "cannot fetch authoritative refs"}):
+            blocked = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        self.assertTrue(blocked["blocked"])
+        self.assertIn("BLOCKED: review infrastructure", blocked["note"])
 
 
 class SpecificationBranchHandoffTests(unittest.TestCase):
@@ -2032,7 +2071,8 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             "generation": "generation-1",
         }
         delivery = {
-            "branch": "factory/real-clean", "selected_at": "2026-08-11T10:01:00Z",
+            "branch": "factory/real-clean", "head": "f" * 40,
+            "selected_at": "2026-08-11T10:01:00Z",
             "generation": "generation-1",
         }
         pilot.save(self.works_path, {"Настоящая работа": {
@@ -2060,7 +2100,8 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
                 "generation": "generation-1",
             },
             "delivery_artifact": {
-                "branch": "factory/old-clean", "selected_at": "2026-08-11T10:01:00Z",
+                "branch": "factory/old-clean", "head": "b" * 40,
+                "selected_at": "2026-08-11T10:01:00Z",
                 "generation": "generation-1",
             },
         }})
@@ -2084,12 +2125,13 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         base = "Чистая поставка"
         original = "factory/original-implementation"
         rebuilt = "factory/original-implementation-clean"
-        head = "e" * 40
+        implementation_head = "e" * 40
+        delivery_head = "d" * 40
         card = "CARD-0070"
         pilot.save(works_path, {base: {
             "run_generation": "generation-1",
             "implementation_artifact": {
-                "branch": original, "head": head, "task_id": "implement",
+                "branch": original, "head": implementation_head, "task_id": "implement",
                 "recorded_at": "2026-08-11T10:00:00Z",
                 "generation": "generation-1",
             },
@@ -2198,7 +2240,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
             gate = stack.enter_context(mock.patch.object(
                 pilot, "review_gate",
-                return_value={"back": False, "branch": rebuilt, "note": "rebuilt"}))
+                return_value={"back": False, "branch": rebuilt,
+                              "head": delivery_head, "note": "rebuilt"}))
             stack.enter_context(mock.patch.object(
                 pilot, "pushed_branch", side_effect=lambda candidates, _repo:
                 candidates[0] if candidates else ""))
@@ -2210,20 +2253,35 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             def github(args, strict=False):
                 path = args[-1]
                 if "/branches/" in path:
-                    return {"name": original, "commit": {"sha": head}}
+                    if path.endswith(rebuilt):
+                        return {"name": rebuilt, "commit": {"sha": delivery_head}}
+                    return {"name": original, "commit": {"sha": implementation_head}}
+                if "/pulls?" in path:
+                    return []
                 if "/compare/main..." in path:
                     return {"files": [{"filename": "pilot/pilot.py"}], "ahead_by": 1}
                 raise AssertionError(path)
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
             merge = stack.enter_context(mock.patch.object(
                 pilot, "gh_merge", return_value=(False, "merge conflict")))
+            snapshot = {
+                "state": "ok", "default_branch": "main",
+                "base_sha": "a" * 40, "candidate_sha": delivery_head,
+                "merge_base_sha": "a" * 40, "base_advanced": False,
+                "base_ahead_by": 0, "ahead_by": 1,
+                "files": ["pilot/pilot.py"],
+            }
+            fresh = stack.enter_context(mock.patch.object(
+                pilot, "fresh_branch_snapshot", return_value=snapshot))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
             pilot.cycle(conf, state)
             self.assertIn(f"Branch: {rebuilt}", created[0]["context"])
             self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
+            self.assertEqual(pilot.delivery_artifact(base)["head"], delivery_head)
             self.assertEqual(pilot.implementation_artifact(base)["branch"], original)
+            self.assertNotEqual(delivery_head, implementation_head)
 
             # A watcher restart reprocesses the terminal Implement task before
             # Review completes.  Recording the same implementation must not
@@ -2246,13 +2304,41 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             # handed to the next cycle instead of hammering GitHub forever.
             self.assertEqual(len(created), 2)
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
-            self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], head)
+            self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], delivery_head)
             self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
+            fresh.assert_called_once_with("github.com/acme/repo", rebuilt)
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base)
+        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
+
+
+class ImmutableMergeTests(unittest.TestCase):
+    def test_force_push_after_verify_blocks_merge(self):
+        with mock.patch.object(pilot, "gh_json", return_value={
+                "commit": {"sha": "f" * 40}}), \
+                mock.patch("subprocess.run") as run:
+            ok, message = pilot.gh_merge("github.com/acme/repo", "factory/candidate",
+                                         "Работа", "a" * 40)
+        self.assertFalse(ok)
+        self.assertIn("changed after Verify", message)
+        run.assert_not_called()
+
+    def test_force_push_during_merge_is_rejected_atomically(self):
+        expected = "a" * 40
+        current = {"commit": {"sha": expected}}
+        created = subprocess.CompletedProcess([], 0, "", "")
+        changed = subprocess.CompletedProcess([], 1, "", "head commit changed")
+        with mock.patch.object(pilot, "gh_json", return_value=current), \
+                mock.patch("subprocess.run", side_effect=[created, changed]) as run:
+            ok, message = pilot.gh_merge(
+                "github.com/acme/repo", "factory/candidate", "Работа", expected)
+
+        self.assertFalse(ok)
+        self.assertIn("head commit changed", message)
+        self.assertEqual(run.call_args_list[1].args[0][-2:],
+                         ["--match-head-commit", expected])
 
 
 class ClosedWorkLifecycleTests(unittest.TestCase):
@@ -2727,8 +2813,15 @@ class MergeConflictRecoveryTests(unittest.TestCase):
 
     def test_content_conflict_is_journaled_and_not_retried_each_cycle(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
-                mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
                 mock.patch.object(
                     pilot, "gh_merge",
                     return_value=(False, "Pull request is not mergeable: merge conflicts")) as merge:
@@ -2738,6 +2831,50 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(merge.call_count, 1)
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
         self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
+
+    def test_force_push_before_recovery_blocks_merge_and_delivery(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "b" * 40}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge") as merge, \
+                mock.patch.object(pilot, "deploy_after_merge") as deploy:
+            pilot.recover_merge_intents({}, state)
+
+        intent = state["merge_intents"]["verify-1"]
+        self.assertEqual(intent["phase"], "stale")
+        self.assertIn("changed after Verify", intent["merge_error"])
+        merge.assert_not_called()
+        deploy.assert_not_called()
+
+    def test_recovery_does_not_accept_merge_of_another_head(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "/pulls?" in args[-1]:
+                return [{"merged_at": "2026-08-12T10:00:00Z",
+                         "head": {"sha": "b" * 40}}]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(
+                    pilot, "gh_merge", return_value=(False, "head commit changed")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge") as deploy:
+            pilot.recover_merge_intents({}, state)
+
+        merge.assert_called_once_with(
+            "github.com/acme/repo", "factory/topic", "Resolve once", "a" * 40)
+        deploy.assert_not_called()
 
     def test_conflict_returns_same_work_to_implement_once(self):
         intent = dict(self.intent)

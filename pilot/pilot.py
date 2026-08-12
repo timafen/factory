@@ -589,17 +589,33 @@ def _note_admitted_task(conf, response, body):
             tasks.append(task)
 
 
-def gh_merge(repo_identity, branch, title):
+def gh_merge(repo_identity, branch, title, expected_head=""):
     """Open (best-effort) and squash-merge the branch into the default branch."""
     repo = repo_identity.split("github.com/")[-1]
+    if expected_head:
+        current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+        actual = ((current or {}).get("commit") or {}).get("sha", "")
+        if actual != expected_head:
+            return False, "delivery branch changed after Verify"
     env = dict(os.environ, HOME=HOME)
     subprocess.run(
         ["gh", "pr", "create", "--repo", repo, "--head", branch,
          "--title", title or branch,
          "--body", "Automated by the Factory pipeline after Verify PASS."],
         capture_output=True, text=True, env=env, timeout=120)
+    if expected_head:
+        current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
+        actual = ((current or {}).get("commit") or {}).get("sha", "")
+        if actual != expected_head:
+            return False, "delivery branch changed after Verify"
+    merge_args = ["gh", "pr", "merge", branch, "--repo", repo, "--squash",
+                  "--delete-branch"]
+    if expected_head:
+        # Unlike a separate branch lookup, GitHub evaluates this constraint
+        # atomically with the merge and closes the final force-push window.
+        merge_args.extend(["--match-head-commit", expected_head])
     r = subprocess.run(
-        ["gh", "pr", "merge", branch, "--repo", repo, "--squash", "--delete-branch"],
+        merge_args,
         capture_output=True, text=True, env=env, timeout=180)
     return r.returncode == 0, (r.stdout + r.stderr).strip()
 
@@ -2559,7 +2575,7 @@ def fresh_branch_snapshot(repo_identity, branch):
             merge_base_sha = merge_base_sha.strip()
             if not GIT_SHA.fullmatch(merge_base_sha):
                 return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
+            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
             rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
@@ -2844,6 +2860,12 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
                          "Сделай: git push -u origin " + (branch or "<ветка>") +
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
+    if state_ == "есть" and not files:
+        return {"back": True, "note": (
+            "Машинная проверка перед Ревью: закреплённое сравнение "
+            f"{snapshot['base_sha']}...{snapshot['candidate_sha']} не содержит "
+            "файлов реализации. Поставка пуста — добавь реализацию, запушь ветку "
+            "и сдай работу заново.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
 
@@ -2911,7 +2933,21 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
             kwargs = {"area_repo": area_repo} if area_repo else {}
             clean = rebuild_clean_branch(repo_identity, branch, keep, base, **kwargs)
             if clean:
+                if not _remote_url(repo_identity):
+                    # Preserve the narrow legacy unit-test seam. Real
+                    # repositories always pin the published rebuild below.
+                    return {"back": False, "branch": clean,
+                            "note": ("Ветка пересобрана машиной от свежей главной: "
+                                     "проверяй ветку " + clean + ".")}
+                clean_snapshot = fresh_branch_snapshot(repo_identity, clean)
+                if clean_snapshot.get("state") != "ok":
+                    reason = (clean_snapshot.get("reason")
+                              or "rebuilt candidate branch is not published")
+                    return {"blocked": True, "note": (
+                        "BLOCKED: review infrastructure. Пересобранная ветка создана, "
+                        "но закрепить её SHA перед Review не удалось. Причина: " + reason)}
                 return {"back": False, "branch": clean,
+                        "head": clean_snapshot["candidate_sha"],
                         "note": ("Ветка пересобрана машиной от свежей главной: "
                                  "в поставке остались только файлы области "
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
@@ -2956,6 +2992,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                        "вычисленной от общего merge-base. "
                        if snapshot.get("base_advanced") else "")
         return {"back": False,
+                "head": snapshot["candidate_sha"],
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
                          "Проверяется свежая remote-основа "
                          f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
@@ -2969,6 +3006,26 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          "нет заявленного поведения, сломано работавшее. "
                          "Формулировки в записке — не повод для возврата.")}
     return None
+
+
+def verify_gate(repo_identity, branch):
+    """Pin the published delivery again before Verify can trigger a merge.
+
+    Review's snapshot is intentionally short-lived: the candidate may be
+    force-pushed or the default branch may advance while Verify is running.
+    A failed refresh is an infrastructure BLOCKED result, never permission to
+    merge the last cached or reported SHA.
+    """
+    snapshot = fresh_branch_snapshot(repo_identity, branch)
+    if snapshot.get("state") == "ok":
+        return {"ok": True, "snapshot": snapshot}
+    if snapshot.get("state") == "missing":
+        reason = "candidate branch is no longer published"
+    else:
+        reason = snapshot.get("reason") or "unknown review infrastructure failure"
+    return {"blocked": True, "note": (
+        "BLOCKED: review infrastructure. Невозможно заново получить свежую "
+        "основную ветку и закрепить SHA Verify до слияния. Причина: " + reason)}
 
 
 # ------------------------------------------------- настоящие лимиты подписок ---
@@ -4580,14 +4637,16 @@ def delivery_artifact(base):
     artifact = meta.get("delivery_artifact") or {}
     if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
         return {}
-    if not artifact.get("branch"):
+    if (not artifact.get("branch")
+            or not FULL_GIT_SHA.fullmatch(artifact.get("head") or "")):
         return {}
     return artifact
 
 
-def record_delivery_artifact(base, branch):
-    """Keep review_gate's published rebuild for Review, Verify, and merge."""
-    if not branch:
+def record_delivery_artifact(base, branch, head):
+    """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
+    head = (head or "").lower()
+    if not branch or not FULL_GIT_SHA.fullmatch(head):
         return {}
     works = load(WORKS_PATH, {}) or {}
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -4597,6 +4656,7 @@ def record_delivery_artifact(base, branch):
     })
     artifact = {
         "branch": branch,
+        "head": head,
         "selected_at": now,
         "generation": meta.get("run_generation") or "",
     }
@@ -4609,8 +4669,7 @@ def selected_delivery(base, branch=""):
     """Prefer the gate-selected delivery branch; canonical is the fallback."""
     artifact = delivery_artifact(base)
     if artifact:
-        implementation = implementation_artifact(base)
-        return artifact["branch"], implementation.get("head") or ""
+        return artifact["branch"], artifact["head"]
     return canonical_implementation(base, branch)
 
 
@@ -6688,6 +6747,19 @@ def _merge_journaled(task_id):
         return False
 
 
+def _verified_merge_result(repo, branch, expected_head):
+    """Whether GitHub records this exact verified head as merged."""
+    owner = repo.split("/", 1)[0]
+    head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    pulls = gh_json(["api", f"repos/{repo}/pulls?state=all&head={head}&per_page=100"])
+    if not isinstance(pulls, list):
+        return False
+    return any(
+        pull.get("merged_at") and (pull.get("head") or {}).get("sha") == expected_head
+        for pull in (pulls or [])
+    )
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -6701,7 +6773,7 @@ def recover_merge_intents(conf, state):
         # A content conflict cannot heal by repeating the same merge request.
         # A separate correction task rebases the same branch and sends it
         # through Review and Verify again.
-        if intent.get("phase") in ("conflict", "repairing", "superseded"):
+        if intent.get("phase") in ("conflict", "repairing", "superseded", "stale"):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
@@ -6709,11 +6781,23 @@ def recover_merge_intents(conf, state):
             continue
         merged = intent.get("phase") in ("merged", "journaled", "waiting")
         if not merged:
-            compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
-            if compare is not None and compare.get("ahead_by") == 0:
+            api_repo = repo.split("github.com/")[-1]
+            expected_head = intent.get("commit_sha", "")
+            current = gh_json(["api", f"repos/{api_repo}/branches/{branch}"])
+            actual_head = ((current or {}).get("commit") or {}).get("sha", "")
+            exact_merge = _verified_merge_result(api_repo, branch, expected_head)
+            if actual_head and actual_head != expected_head:
+                intent.update({
+                    "phase": "stale",
+                    "merge_error": "delivery branch changed after Verify",
+                })
+                save(STATE_PATH, state)
+                continue
+            if exact_merge:
                 merged = True
             else:
-                ok, output = gh_merge(repo, branch, intent.get("base", branch))
+                ok, output = gh_merge(repo, branch, intent.get("base", branch),
+                                      expected_head)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
@@ -7175,10 +7259,29 @@ def cycle(conf, state):
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
+                    verify_snapshot = verify_gate(repo_identity, branch)
+                    if verify_snapshot.get("blocked"):
+                        route_question(
+                            conf, tid, "Verify", "Verify", base_title(title), rid,
+                            "Проверка не завершена: инфраструктура свежего сравнения веток недоступна.",
+                            "Повторить Verify после восстановления доступа к репозиторию?",
+                            ["Повтори проверку", "Покажи причину", "Останови работу"],
+                            verify_snapshot["note"], attempts_so_far=0, branch=branch)
+                        continue
                     link = try_url(result, rid)
+                    verified_head = verify_snapshot.get("snapshot", {}).get("candidate_sha", "")
+                    if verified_head != implementation_head:
+                        route_question(
+                            conf, tid, "Verify", "Review", base_title(title), rid,
+                            "Ветка поставки изменилась после проверки.",
+                            "Повторить Review для нового снимка ветки?",
+                            ["Повтори Review", "Останови работу"],
+                            "Проверенный снимок больше не совпадает с текущей поставкой.",
+                            attempts_so_far=0, branch=branch)
+                        continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -7488,8 +7591,10 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch)
+                    record_delivery_artifact(base, branch, g.get("head", ""))
                     branch_line = f"Branch: {branch}\n"
+                    head_line = (f"Implementation head: {g['head']}\n"
+                                 if g.get("head") else "")
                 gate_note = "\n\n" + g["note"]
 
         context = (f"Pipeline: {base}\nPrevious stage: {wf}\n{branch_line}{head_line}"
