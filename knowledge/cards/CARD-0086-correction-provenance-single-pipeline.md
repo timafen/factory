@@ -2,15 +2,25 @@
 
 ## HEAD
 
-- Status: BLOCKED: final rebased Pilot provenance storm test has 3 errors.
-- Branch: `factory/ffb2f1bd-e35-41637e93-24a` (rebased onto current `main`).
-- Implementation commit: a65fb2e82af6e752555a02abbd5557283868e7e9 — durable
-  `work_id` isolation for same-title artifact, delivery and lifecycle state.
-- Evidence: pre-rebase project check and focused provenance API/migration passed;
-  after rebase, three storm paths fail while serializing a `MagicMock` merge intent.
-- Next action: implementation fixes the rebased merge-intent test contract, then Verify reruns.
+- Status: PASS: rebased provenance correction pipeline is durable after restart.
+- Branch: `factory/4df7f905-eec-e65a15c5-8da`.
+- Implementation commit: 52c4ffe5fd83560d5947dc9913fd50b13db28567 — merge-intent
+  stores only serializable delivery data and keeps same-title work receipts isolated.
+- What changed: unsupported delivery completes after the durable merge; completed
+  intents are not replayed; receipts retain `work_id` for independent archival.
+- Evidence: focused provenance Go tests and all 7 `CorrectionProvenanceStormTests` pass.
+- Next action: merge the branch; Pilot remains disabled until the owner enables it.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Rebased merge recovery no longer writes a mocked/non-JSON generation into the
+durable merge intent.  A no-adapter repository closes after its durable merge,
+while a real adapter may persist only its string generation ID.  The receipt
+now carries `work_id`, so two corrections with the same display title archive
+independently.  Focused control-plane provenance tests and the seven restart
+storm tests passed; Pilot enablement was left unchanged.
 
 ### 2026-08-11 — Verify
 
