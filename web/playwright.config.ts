@@ -12,6 +12,13 @@ const allocatedE2EPorts = new Set<number>();
 export const testWorkerBootstrapCredential =
   process.env.FACTORY_E2E_WORKER_BOOTSTRAP_CREDENTIAL ??
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+export const coldHTTPSFixtureSetupTimeout = 120_000;
+
+export function configureColdHTTPSFixtureSetupTimeout(
+  setTimeout: (timeout: number) => void,
+) {
+  setTimeout(coldHTTPSFixtureSetupTimeout);
+}
 
 function createHTTPSFixtureCertificate() {
   const inheritedKeyPath = process.env.FACTORY_E2E_TLS_KEY;

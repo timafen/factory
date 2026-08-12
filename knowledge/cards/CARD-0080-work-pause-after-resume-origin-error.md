@@ -2,15 +2,20 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/f48d26e0-344-21705f71-21c`
-- Implementation commit: 000084fd7cc008d8df69d62dedf02c00d91d93a8 — HTTPS resume идёт через Chromium/SPKI, а proxy фиксирует и проверяет очищенные backend-заголовки.
-- Evidence summary: чистый `just check` прошёл Go/UI/lint/typecheck/tooling/launcher (14 UI-файлов, 157 тестов); production build собрал три бинарника, committed `web/dist` воспроизводим.
-- Evidence summary: единственный полный HTTPS browser-прогон с обычным Chromium собрал и прошёл все 21 тест за 3.4 минуты; сценарий resume/Origin №7 прошёл, TLS/browser errors отсутствуют.
-- Evidence summary: после прогона не осталось scoped-процессов или listeners; дерево было чистым до обновления этой карточки.
-- Next action: человек сливает `factory/f48d26e0-344-21705f71-21c` в `main`.
+Status: Verified PASS — ожидает человеческого слияния.
+Branch: `factory/27e7d7c5-57d-a1e62a3d-134`
+Implementation commit: 75f74f6cfc4f0ac53813d12ca679cf826ad8b277 — единый конечный лимит применяется к холодному HTTPS setup и проверяется исполняемой регрессией.
+What changed: холодная HTTPS-подготовка получает единый конечный лимит 120 секунд непосредственно в `beforeAll`; исполняемая регрессия подтверждает его применение и запас над обязательной 31-секундной паузой.
+Evidence: целевые unit 12/12, typecheck и lint — PASS; холодный HTTPS Playwright — 1 PASS за 50,5 с. Общий `just check` остановился на 5-минутном timeout незатронутого `internal/worker`.
+Next action: человеку слить проверенную ветку.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+- Подтверждено, что реализация честного timeout холодного HTTPS-старта уже доставлена в `main` коммитом `08211c263423a4d563aa56eca9b62f910a0bd240`.
+- Новое кодовое изменение не создавалось по решению владельца; повторный Verify намеренно пропущен.
+- Полный HTTPS-прогон оставлен отдельной работой по CARD-0080.
 
 ### 2026-08-11 — Implement
 
@@ -96,3 +101,21 @@
 | Desktop/390 resume, stale pause, safe retry и cross-origin | тот же сценарий №7 в полном suite | PASS: hostile Origin получил 403 `cross_origin_request`; безопасное сообщение и retry остались видимы; queued pause и completed stale pause очищены; desktop и 390px assertions/screenshots выполнены. |
 | Смежные browser/API/UI регрессии | оставшиеся 20 Playwright-сценариев; полный Go/UI suite; `npm --prefix web audit --omit=dev` | PASS: все 20 соседних browser-сценариев прошли, Go/UI regressions прошли, production dependencies — `found 0 vulnerabilities`. |
 | Cleanup и чистота дерева | `ps -eo pid,ppid,args`, `ss -ltnp` до/после; `git diff --check`; `git status --short --untracked-files=all` | PASS: scoped-процессов нет; listeners 27 → 27 без новых записей; до правки карточки tracked/untracked изменений не было. |
+
+### 2026-08-12 — Implement
+
+- Кандидат теперь сам содержит реализацию: единый конечный лимит 120 секунд применяется к общему холодному HTTPS setup через исполняемый helper.
+- Регрессия вызывает helper и проверяет единственное конечное значение лимита вместо поиска строки в исходнике.
+- Unit 12/12, typecheck, lint, production build и clean `web/dist` прошли; холодный HTTPS Playwright-сценарий прошёл за 52.3 секунды.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+|---|---|---|
+| Сравнение закреплено относительно свежей удалённой базы | isolated bare fetch; `fc8548f244fe1eb2a1c653c224de668844e2f1a3...ffe62531adc90d5c7c9e27ce209cdc2b83c658e5` | PASS: default ref `refs/heads/main`, кандидат непустой, изменены три code/test-файла и эта карточка. |
+| Implementation commit стабилен | `git merge-base --is-ancestor 547894623cefee3d551a48c00baa336fe5f4776c HEAD`; `git show --stat 547894623...` | PASS: предок ветки, не documentation tip, меняет три файла вне `knowledge/cards/`. |
+| Честный конечный timeout применяется до холодного setup | `npm --prefix web test -- --run src/playwrightConfig.test.ts` | PASS: 12/12; helper применил единственное значение 120000 мс, оно конечно и больше обязательной паузы 31000 мс. |
+| Холодный HTTPS-старт укладывается в контракт | `FACTORY_BROWSER_LAUNCHER=/missing npx playwright test --grep 'shows every project product and saves the overview'` | PASS: реальный HTTPS fixture и Chromium стартовали с нуля; 1 passed за 50,5 с при лимите 120 с. |
+| Смежная статическая корректность | `npm --prefix web run typecheck`; `npm --prefix web run lint`; `git diff --check` | PASS. |
+| Полный набор из чистого состояния | `go clean -testcache`; `npm --prefix web ci`; `FACTORY_BROWSER_LAUNCHER=/missing just check` | Общая краснота вне области: `internal/worker` исчерпал 5 минут; `TestSameRepositoryRuntimeAndCleanupCanOverlap` и `TestLostClaimAndCompletionResponsesAreIdempotent` упали. Кандидат не меняет Go-файлы; целевая область PASS. |
+| Чистота дерева | `git status --short --untracked-files=all`; проверка scope pinned diff | PASS до правки карточки: stray/debug-файлов нет; коммиты связны. |
