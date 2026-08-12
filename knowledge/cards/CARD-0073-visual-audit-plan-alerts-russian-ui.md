@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: BLOCKED — committed `web/dist` не воспроизводится, поэтому полный browser-suite не запускается.
+- Status: BLOCKED — committed `web/dist` не воспроизводится, а rebase на свежий `main` конфликтует в UI-файлах.
 - Branch: `factory/5ca3b3c2-88a-882ecf3c-5c1`.
 Implementation commit: aad2e2236733c6faf9d7395a6bc86f59e78ccf17 — усилен locator кнопки сохранения Settings.
 - What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()`.
-- Evidence: `npm run test:browser` успешно собрал UI, но `git diff --exit-code -- dist` обнаружил новый `index-BnohdI1Y.js` вместо committed `index-BK4d6-ve.js`; Playwright не был запущен.
-- One next action: воспроизвести и закоммитить корректный `web/dist`, затем один раз запустить полный browser-suite.
+- Evidence: `npm run test:browser` успешно собрал UI, но `git diff --exit-code -- dist` обнаружил новый `index-BnohdI1Y.js` вместо committed `index-BK4d6-ve.js`; Playwright не был запущен. Rebase на свежий `main` остановился на конфликтах `web/dist`, `web/dist/index.html` и `web/src/Work.tsx`.
+- One next action: интегрировать свежий `main`, воспроизвести и закоммитить корректный `web/dist`, затем один раз запустить полный browser-suite.
 
 ## LOG
 
@@ -93,3 +93,9 @@ Targeted Playwright: `audits every Factory screen on desktop and phone`, legacy 
 | Чистота дерева | восстановление только build-generated `web/dist`, `git status --short` | PASS до записи evidence; тестовые артефакты не оставлены. |
 
 Итог: BLOCKED. Нельзя подтвердить 21 сценарий, пока committed `web/dist` не станет воспроизводимым. Тайм-аут worker-теста относится к нетронутой области и зафиксирован как находка проекта.
+
+### 2026-08-11 — Verify (rebase)
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| Совместимость со свежим `main` | `git fetch origin main && git rebase origin/main` | BLOCKED: конфликт `web/dist/assets/index-FbtnAMaY.js` (rename/delete), `web/dist/index.html` и `web/src/Work.tsx`; rebase отменён без изменения реализации. |
