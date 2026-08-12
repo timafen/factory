@@ -6851,7 +6851,14 @@ def cycle(conf, state):
                      MAX_TERMINAL_TASKS_PER_CYCLE)),
         1,
     )
-    for t in tasks:
+    terminal_tasks = list(tasks)
+    terminal_cursor = state.get("terminal_cursor")
+    cursor_index = next((index for index, task in enumerate(terminal_tasks)
+                         if task.get("id") == terminal_cursor), None)
+    if cursor_index is not None:
+        terminal_tasks = (terminal_tasks[cursor_index + 1:]
+                          + terminal_tasks[:cursor_index + 1])
+    for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
             continue
@@ -6871,6 +6878,9 @@ def cycle(conf, state):
             activity["terminal_backlog"] = True
             break
         terminal_examined += 1
+        # Advance even when this task must wait for capacity. Otherwise the
+        # same deferred handoff can starve every terminal task behind it.
+        state["terminal_cursor"] = tid
 
         detail = api(f"/tasks/{tid}")
         wf = (detail.get("workflow") or {}).get("title")
