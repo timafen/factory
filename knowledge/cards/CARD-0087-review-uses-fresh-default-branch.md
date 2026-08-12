@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; live Workflow revisions remain unchanged.
+Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned.
 Branch: `factory/c92696e9-aa7-d6595696-a5d`.
 Implementation commit: f29e45dc382e35b0ef33453b6be3d19f83d2b58e — Review получает свежий pinned snapshot remote default branch.
 What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
 Evidence: `python3 -m unittest pilot.test_pilot`, `go test ./...`, `go build ./cmd/factory-server`, `npm run typecheck` and `npm test` → PASS.
-Next action: human merge; separately create and smoke immutable live Review/Verify revisions before pinning them.
+Next action: create and smoke immutable live Review/Verify revisions, then pin their IDs; existing task snapshots must remain unchanged.
 
 ## LOG
 
@@ -20,6 +20,7 @@ Next action: human merge; separately create and smoke immutable live Review/Veri
 | Регрессии runtime | `go test ./...`; `go build ./cmd/factory-server` | PASS. |
 | Регрессии web | `npm run typecheck`; `npm test` | PASS: 14 файлов тестов, 155 тестов. |
 | Чистота поставки | `git diff --check`; `git diff --name-only origin/main...HEAD` | PASS: только запись Verify в карточке. |
+| Live rollout | проверка `## HEAD` и rollout-плана карточки | BLOCKED: immutable revisions не созданы и не закреплены; это обязательный критерий приёмки. |
 
 ### 2026-08-11 — Specification
 
