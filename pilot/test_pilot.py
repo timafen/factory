@@ -3669,6 +3669,27 @@ class StageWorkerCapacityTests(unittest.TestCase):
         self.assertEqual(selected, "spare")
 
     @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_worker_without_repository_uses_repository_ready_spare(self, _limits):
+        workers = {
+            "preferred": {
+                "online": True, "health": "healthy", "capacity": 2,
+                "active_count": 0,
+                "repositories": [{"id": "other"}],
+            },
+            "spare": {
+                "online": True, "health": "healthy", "capacity": 2,
+                "active_count": 0,
+                "repositories": [{"id": "factory"}],
+            },
+        }
+
+        selected = pilot.stage_worker(
+            self.conf, "Implement + Test", "medium", workers,
+            repository_id="factory")
+
+        self.assertEqual(selected, "spare")
+
+    @mock.patch.object(pilot, "load_limits", return_value={})
     def test_exact_escalation_queues_on_high_tier_instead_of_falling_back(self, _limits):
         workers = {
             "preferred": {"online": True, "health": "healthy", "capacity": 2, "active_count": 0},
@@ -3715,16 +3736,19 @@ class AnswerEscalationTests(unittest.TestCase):
             "codex-terra-medium": {
                 "id": "terra", "online": True, "health": "healthy",
                 "capacity": 2, "active_count": 0,
+                "repositories": [{"id": "repo-id"}],
             },
             "codex-sol-medium": {
                 "id": "sol-medium", "online": True, "health": "healthy",
                 "capacity": 2, "active_count": 0,
+                "repositories": [{"id": "repo-id"}],
             },
             # Busy is intentional: a real escalation must queue here instead
             # of silently falling back to sol-medium.
             "codex-sol-high": {
                 "id": "sol-high", "online": True, "health": "healthy",
                 "capacity": 1, "active_count": 1,
+                "repositories": [{"id": "repo-id"}],
             },
         }
         created = []
