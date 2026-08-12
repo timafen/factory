@@ -295,29 +295,44 @@ if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
 fi
 exec /bin/bash "$@"
 EOF
+  cat >"$case_dir/bin/as-launcher" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *'npx tsc -p tsconfig.app.json --noEmit'*) gate=ui ;;
+  *'go test ./...'*) gate=go ;;
+  *) exec "$@" ;;
+esac
+# Exercise an opaque privilege launcher which forks the real gate and waits.
+# Because release creates the session first, both processes stay in its PGID.
+child=''
+stop_gate_launcher() {
+  trap '' HUP INT TERM
+  [ -z "$child" ] || kill -TERM "$child" 2>/dev/null || true
+  [ -z "$child" ] || wait "$child" 2>/dev/null || true
+  echo "as-$gate-reaped" >>"$TEST_GATE_CHILDREN"
+  exit 143
+}
+trap stop_gate_launcher HUP INT TERM
+"$@" &
+child=$!
+wait "$child"
+EOF
   cat >"$case_dir/bin/setsid" <<'EOF'
 #!/bin/bash
-# The UI launcher has not entered setsid yet; its direct launcher PID must be
-# stopped after the supervisor's bounded readiness wait.
-case "${TEST_MODE}:${5:-}" in
-  signal-before-pgid-ui:*ui-checks.pid)
-    : >"$TEST_UI_SETSID_PENDING"
-    delay_pid=''
-    stop_delay() {
-      [ -z "$delay_pid" ] || kill -TERM "$delay_pid" 2>/dev/null || true
-      [ -z "$delay_pid" ] || wait "$delay_pid" 2>/dev/null || true
-      exit 143
-    }
-    trap stop_delay HUP INT TERM
-    /bin/sleep 2 &
-    delay_pid=$!
-    wait "$delay_pid"
-    exec /usr/bin/setsid "$@"
+# Force util-linux setsid to fork while delaying the in-session PGID handshake.
+# The tracked --wait parent must retain and reap the real session leader.
+[ "${1:-}" != --wait ] || shift
+case "$TEST_MODE:$*" in
+  signal-before-pgid-ui:*ui-checks.pid*)
+    exec /usr/bin/setsid --fork --wait /bin/bash -c '
+      : >"$1"
+      shift
+      /bin/sleep 2
+      exec "$@"
+    ' bash "$TEST_UI_SETSID_PENDING" "$@"
     ;;
-  # Here setsid already made a session, but the gate's pid file is delayed.
-  # The supervisor must discover and stop this group before the readiness file.
-  signal-before-pgid-go:*go-checks.pid)
-    exec /usr/bin/setsid /bin/bash -c '
+  signal-before-pgid-go:*go-checks.pid*)
+    exec /usr/bin/setsid --fork --wait /bin/bash -c '
       : >"$1"
       shift
       /bin/sleep 2
@@ -325,7 +340,7 @@ case "${TEST_MODE}:${5:-}" in
     ' bash "$TEST_GO_SETSID_PENDING" "$@"
     ;;
 esac
-exec /usr/bin/setsid "$@"
+exec /usr/bin/setsid --wait "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
@@ -440,7 +455,8 @@ run_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS="$case_dir/bin/as-launcher" FACTORY_RELEASE_OWNER='' \
+    FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -494,7 +510,8 @@ start_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS="$case_dir/bin/as-launcher" FACTORY_RELEASE_OWNER='' \
+    FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -639,6 +656,10 @@ for signal in HUP TERM; do
       || fail "signal $signal left the UI test group running"
     grep -Fx 'go-stopped' "$signaled/gate-children" >/dev/null \
       || fail "signal $signal left the Go test group running"
+    grep -Fx 'as-ui-reaped' "$signaled/gate-children" >/dev/null \
+      || fail "signal $signal did not reap the intermediary UI launcher"
+    grep -Fx 'as-go-reaped' "$signaled/gate-children" >/dev/null \
+      || fail "signal $signal did not reap the intermediary Go launcher"
     assert_no_fixture_processes "$signaled"
   done
 done

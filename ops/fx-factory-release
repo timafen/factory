@@ -53,9 +53,6 @@ JOURNAL="$REL/transaction"
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
-# В фоне нужен PID именно launcher, а не subshell, исполняющий as_user: иначе
-# TERM останавливает оболочку, но оставляет её дочерний setsid без наблюдения.
-start_as_user() { if [ -n "$AS" ]; then exec $AS "$@"; else exec "$@"; fi; }
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
@@ -339,23 +336,36 @@ trap on_release_exit EXIT
 # их общего успеха. Каждая группа живёт в отдельной сессии: при остановке
 # выпуска завершается вся её группа процессов, включая возможных помощников
 # тестового раннера.
-# setsid может forkнуть, поэтому PID фонового launcher не всегда совпадает с
-# PGID. До записи pid-файла launcher остаётся pending: сигнал ждёт его лишь
-# ограниченно, после чего останавливает и launcher, и уже найденную группу.
+# Сессию создаём до непрозрачного $AS-launcher: его fork и все gate-потомки
+# остаются в известной process group. setsid --wait сохраняет родителя, если
+# setsid вынужден forkнуть, чтобы supervisor мог остановить группу и reap-нуть
+# tracked launcher. Gate запускается только после handshake реального SID/PGID.
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
   local name=$1 log=$2 pid_file=$3 i launcher signal
+  local -a as_command=()
   shift 3
+  [ -z "$AS" ] || read -r -a as_command <<<"$AS"
   # Bash исполняет trap между командами. Пока launcher ещё не добавлен в
   # массив, запоминаем сигнал и немедленно обрабатываем его после регистрации.
   gate_starting=1
-  start_as_user setsid bash -c '
+  setsid --wait bash -c '
     trap - INT
     [ ! -e "$2" ] || exit 130
-    printf "%s\\n" "$$" > "$1"
+    session_id=$(ps -o sid= -p "$$" 2>/dev/null | tr -d "[:space:]")
+    group_pid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d "[:space:]")
+    [ "$session_id" = "$$" ] && [ "$group_pid" = "$$" ] || exit 125
+    printf "%s\\n" "$session_id" > "$1"
     [ ! -e "$2" ] || exit 130
-    shift 2
+    as_count=$3
+    shift 3
+    if [ "$as_count" -gt 0 ]; then
+      as_command=("${@:1:as_count}")
+      shift "$as_count"
+      exec "${as_command[@]}" "$@"
+    fi
     exec "$@"
-  ' bash "$pid_file" "$gate_stop_file" "$@" >"$log" 2>&1 &
+  ' bash "$pid_file" "$gate_stop_file" "${#as_command[@]}" \
+    "${as_command[@]}" "$@" >"$log" 2>&1 &
   launcher=$!
   gate_pids+=("$launcher")
   gate_pid_files+=("$pid_file")
@@ -385,14 +395,24 @@ test_gate_group_pid() {
 }
 
 test_gate_launcher_group_pid() {
-  local launcher=$1 session_id group_pid
+  local launcher=$1 pid session_id group_pid
   case "$launcher" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$launcher" 2>/dev/null || return 1
   session_id=$(ps -o sid= -p "$launcher" 2>/dev/null | tr -d '[:space:]')
   group_pid=$(ps -o pgid= -p "$launcher" 2>/dev/null | tr -d '[:space:]')
   [ "$session_id" = "$launcher" ] && [ "$group_pid" = "$launcher" ] \
-    || return 1
-  printf '%s\n' "$launcher"
+    && { printf '%s\n' "$launcher"; return 0; }
+  # setsid --wait остаётся родителем, когда setsid вынужден forkнуть. Реальный
+  # лидер новой сессии поэтому обнаружим и до записи handshake pid-файла.
+  while read -r pid session_id group_pid; do
+    case "$pid:$session_id:$group_pid" in
+      ''|*[!0-9:]*) continue ;;
+    esac
+    [ "$pid" = "$session_id" ] && [ "$pid" = "$group_pid" ] || continue
+    printf '%s\n' "$pid"
+    return 0
+  done < <(ps -o pid=,sid=,pgid= --ppid "$launcher" 2>/dev/null)
+  return 1
 }
 
 test_gate_group_for() {
@@ -463,8 +483,8 @@ stop_test_gates() {
   local i
   [ -z "$gate_stop_file" ] || : >"$gate_stop_file"
   signal_test_gate_groups TERM
-  # setsid может уже жить в отдельной сессии, но ещё не успеть записать PGID.
-  # Не ждём launcher без лимита: даём readiness одну секунду, затем TERM ему.
+  # setsid может уже жить в дочерней сессии, но ещё не успеть записать PGID.
+  # Даём direct child перейти в SID/PGID и обнаруживаем его через --ppid.
   for ((i = 0; i < 100; i++)); do
     test_gate_startup_pending || break
     /bin/sleep 0.01
