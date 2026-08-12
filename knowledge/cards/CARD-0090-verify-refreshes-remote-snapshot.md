@@ -6,7 +6,7 @@ Implementation commit: 5d0d47dd98288d239239f4bfcfd94d48480d51d6 — Verify за�
 
 Status: PASS.
 Branch: `factory/9a522826-8ad-b33ca087-1f9`.
-Implementation commit: 95bcb4c48ad924937dd380c72729e1f7239dcc0b — merge разрешён только для неизменившегося SHA, проверенного Verify.
+Implementation commit: 591808d1f5d3d5481dddbb56ce4e9ce63d862b32 — merge разрешён только для неизменившегося SHA, проверенного Verify.
 What changed: Verify сохраняет `candidate_sha`; перед merge текущий head ветки сверяется до и после создания PR.
 Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.RebuiltDeliveryBranchPipelineTests pilot.test_pilot.ImmutableMergeTests` — 6 tests OK.
 Next action: выполнить полный набор тестов после перебазирования на свежий `main`.
