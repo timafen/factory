@@ -5,7 +5,7 @@
 - Status: Implemented PASS — готово к Review.
 - Branch: `factory/28f4da49-ddb-34730e2a-67e`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 11f6999d97d843ea943cb46e30116c8e1c724d8f — NewAt fail-closed отвергает `.json`-каталог как повреждённую durable-запись.
+Implementation commit: 7c5abff257f5f3492ba3c2c2721d353344343de5 — NewAt fail-closed отвергает `.json`-каталог как повреждённую durable-запись.
 - What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
 - What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
 - Evidence: `go test -count=1 ./internal/releasebroker` и `go test -race -count=1 ./internal/releasebroker` → OK; `just build` → бинарники собраны.
