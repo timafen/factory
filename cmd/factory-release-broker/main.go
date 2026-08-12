@@ -51,7 +51,10 @@ func run() error {
 		return fmt.Errorf("secure Unix socket permissions: %w", err)
 	}
 
-	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{Executable: *fxExecutable})
+	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{
+		Executable:       *fxExecutable,
+		DeliveryStateDir: filepath.Join(*stateDir, "driver-status"),
+	})
 	if err != nil {
 		return fmt.Errorf("prepare durable state: %w", err)
 	}
