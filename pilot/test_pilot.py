@@ -1748,6 +1748,303 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.assertIs(
             pilot.live_or_done_at(tasks, other, 1), other)
 
+    def test_same_title_work_ids_keep_artifacts_isolated_through_restart_and_merge(self):
+        """Exercise the real durable artifact/lifecycle path for both works.
+
+        The external control-plane and GitHub boundaries are faked, but the
+        regression deliberately leaves record_new_works(), lifecycle checks,
+        artifact selection, delivery selection, watcher/archive work and the
+        merge journal unmocked.  A title-only key would make the second
+        correction inherit and merge the first work's branch after restart.
+        """
+        base = "Одинаковое имя работы"
+        home = os.path.join(self.temporary.name, "home")
+        os.makedirs(os.path.join(home, "pilot", "questions"))
+        stall_path = os.path.join(home, "pilot", "stalled.json")
+        conf_path = os.path.join(home, "pilot", "config.json")
+        ideas_path = os.path.join(home, "pilot", "ideas.json")
+        verdict_dir = os.path.join(home, "pilot", "verdicts")
+        os.makedirs(verdict_dir)
+        pilot.save(conf_path, {"stopped_pipelines": []})
+        pilot.save(ideas_path, [])
+
+        work_a, work_b = "same-title-a", "same-title-b"
+        roots = [
+            {"id": work_a, "work_id": work_a,
+             "title": f"[auto] [1/5 Triage] {base}", "state": "succeeded",
+             "created_at": "2026-08-11T20:00:00Z", "repository_id": "repo-id"},
+            {"id": work_b, "work_id": work_b,
+             "title": f"[auto] [1/5 Triage] {base}", "state": "succeeded",
+             "created_at": "2026-08-11T20:00:01Z", "repository_id": "repo-id"},
+        ]
+        sources = [
+            {"id": "review-a", "work_id": work_a, "parent_task_id": "impl-a",
+             "title": f"[auto] [4/5 Review] {base}", "state": "queued",
+             "created_at": "2026-08-11T20:01:00Z", "repository_id": "repo-id"},
+            {"id": "review-b", "work_id": work_b, "parent_task_id": "impl-b",
+             "title": f"[auto] [4/5 Review] {base}", "state": "queued",
+             "created_at": "2026-08-11T20:01:01Z", "repository_id": "repo-id"},
+        ]
+        tasks = roots + sources
+        workflows = {
+            stage: {"enabled": True, "revision_id": "rev-" + stage}
+            for stage in ("Triage", "Specification", "Implement + Test", "Review", "Verify")
+        }
+        workers = {"worker": {"id": "worker-id", "name": "worker", "online": True,
+                               "health": "healthy", "capacity": 1, "active_count": 0}}
+        created, outcomes = [], {}
+
+        def stage_of(task):
+            return pilot.STAGE_TITLE_RE.match(task["title"]).group(1).strip()
+
+        def create(body, _conf=None):
+            parent = next(task for task in tasks if task["id"] == body["parent_task_id"])
+            task_id = "created-%d" % (len(created) + 1)
+            task = {
+                "id": task_id,
+                "work_id": parent.get("work_id") or parent["id"],
+                "parent_task_id": parent["id"],
+                "correction_kind": body.get("correction_kind", ""),
+                "title": body["title"], "context": body.get("context", ""),
+                "state": "queued",
+                "created_at": "2026-08-11T20:%02d:00Z" % (10 + len(created)),
+                "repository_id": "repo-id",
+            }
+            tasks.append(task)
+            created.append(dict(body))
+            return {"task": task}
+
+        heads = {
+            "factory/a-implementation": "a" * 40,
+            "factory/b-implementation": "b" * 40,
+            "factory/a-clean": "c" * 40,
+            "factory/b-clean": "d" * 40,
+        }
+
+        def github(args, strict=False):
+            path = args[-1]
+            if "/branches/" in path:
+                branch = path.split("/branches/", 1)[1]
+                return {"name": branch, "commit": {"sha": heads[branch]}}
+            if "/compare/main..." in path:
+                return {"files": [{"filename": "pilot/pilot.py"}], "ahead_by": 1}
+            raise AssertionError(path)
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path.startswith("/tasks/"):
+                task = next(task for task in tasks if task["id"] == path.rsplit("/", 1)[-1])
+                result = outcomes.get(task["id"], "")
+                return {"task": task, "workflow": {"title": stage_of(task)},
+                        "context": task.get("context", ""),
+                        "attempts": ([{"result": result}] if result else [])}
+            if path == "/workers":
+                return {"workers": list(workers.values())}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo-id",
+                                            "remote_identity": "github.com/acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": stage, "enabled": True,
+                    "current_revision": {"id": value["revision_id"], "title": stage}}
+                    for stage, value in workflows.items()]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "budget_guard", "handle_epics", "reconcile_diag_repairs", "diag_sweep",
+            "rescue_queued", "supersede_stale_questions",
+            "cleanup_orphaned_paused_pipelines", "advance_epics",
+            "area_extend", "collect_ideas", "retry_pending_factory_deploy",
+            "autostart_plan", "deploy_after_merge", "notify",
+        )
+        state = {"processed": []}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "HOME", home))
+            stack.enter_context(mock.patch.object(pilot, "STALL_PATH", stall_path))
+            stack.enter_context(mock.patch.object(pilot, "CONF_PATH", conf_path))
+            stack.enter_context(mock.patch.object(pilot, "IDEAS_PATH", ideas_path))
+            stack.enter_context(mock.patch.object(pilot, "VERDICT_DIR", verdict_dir))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot", side_effect=lambda day, _week: {day: {}}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "all_tasks", return_value=tasks))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "reason": "готово", "handoff": "",
+                "next_complexity": "medium"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "review_gate", side_effect=lambda _conf, _base, branch, *_args, **_kwargs:
+                {"back": False,
+                 "branch": "factory/a-clean" if branch == "factory/a-implementation"
+                 else "factory/b-clean", "note": "clean"}))
+            merge = stack.enter_context(mock.patch.object(
+                pilot, "gh_merge", return_value=(True, "merged")))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.save(self.works_path, {
+                work_a: {"run_generation": "run-a", "base_title": base},
+                work_b: {"run_generation": "run-b", "base_title": base},
+            })
+            # These calls intentionally use the real artifact storage API.
+            pilot.record_implementation_artifact(
+                base, "impl-a", f"[auto] [3/5 Implement + Test] {base}",
+                "BRANCH: factory/a-implementation", "", "github.com/acme/repo",
+                work_id=work_a)
+            pilot.record_implementation_artifact(
+                base, "impl-b", f"[auto] [3/5 Implement + Test] {base}",
+                "BRANCH: factory/b-implementation", "", "github.com/acme/repo",
+                work_id=work_b)
+
+            for suffix, source, work_id in (("a", sources[0], work_a),
+                                            ("b", sources[1], work_b)):
+                question = {
+                    "id": "question-" + suffix, "status": "answered", "answer": "Исправь",
+                    "title": base, "work_id": work_id, "stage": "Review",
+                    "resume_stage": "Implement + Test", "task_id": source["id"],
+                    "repository_id": "repo-id", "question": "Исправлять?",
+                    "branch": "factory/unused", "prior_result": "REQUEST CHANGES",
+                }
+                pilot.save(os.path.join(self.questions_path, question["id"] + ".json"), question)
+
+            self.assertEqual(pilot.handle_answers(self.conf, workflows, workers, tasks), 2)
+            corrections = [task for task in tasks if task.get("correction_kind") == "review_return"]
+            self.assertEqual({task["work_id"] for task in corrections}, {work_a, work_b})
+            for task in roots + sources:
+                task["state"] = "suspended"
+            for task in corrections:
+                task["state"] = "succeeded"
+                outcomes[task["id"]] = (
+                    "BRANCH: factory/a-implementation" if task["work_id"] == work_a
+                    else "BRANCH: factory/b-implementation")
+            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+
+            # Recreate the Pilot snapshot after the corrections have been
+            # persisted; only durable IDs may reconnect the two branches.
+            pilot.save(self.tasks_path, tasks)
+            pilot.save(self.state_path, state)
+            tasks = pilot.load(self.tasks_path, [])
+            state = pilot.load(self.state_path, {})
+
+            stack.enter_context(mock.patch.object(pilot, "handle_answers", return_value=0))
+            pilot.cycle(dict(self.conf, auto_merge=True), state)
+            self.assertEqual(
+                pilot.delivery_artifact(base, work_id=work_a)["branch"],
+                "factory/a-clean")
+            self.assertEqual(
+                pilot.delivery_artifact(base, work_id=work_b)["branch"],
+                "factory/b-clean")
+
+            reviews = [task for task in tasks if stage_of(task) == "Review"
+                       and task.get("state") == "queued"]
+            self.assertEqual({task["work_id"] for task in reviews}, {work_a, work_b})
+            for task in reviews:
+                task["state"] = "succeeded"
+                outcomes[task["id"]] = "APPROVE"
+            pilot.cycle(dict(self.conf, auto_merge=True), state)
+
+            verifies = [task for task in tasks if stage_of(task) == "Verify"
+                        and task.get("state") == "queued"]
+            self.assertEqual({task["work_id"] for task in verifies}, {work_a, work_b})
+            for task in verifies:
+                task["state"] = "succeeded"
+                outcomes[task["id"]] = "PASS\nTRY: none"
+            pilot.cycle(dict(self.conf, auto_merge=True), state)
+            completed = [task for task in tasks if task["id"].startswith("created-")]
+            pilot.cleanup_work_archive(dict(self.conf, auto_merge=True), completed)
+            lifecycle = pilot.load(self.works_path, {})
+            self.assertTrue(lifecycle[work_a].get("closed"))
+            self.assertTrue(lifecycle[work_b].get("closed"))
+            statuses = pilot.load(os.path.join(home, "pilot", "work_status.json"), {})
+            self.assertEqual(set(statuses), {work_a, work_b})
+
+        self.assertEqual(merge.call_args_list, [
+            mock.call("github.com/acme/repo", "factory/a-clean", base),
+            mock.call("github.com/acme/repo", "factory/b-clean", base),
+        ])
+        self.assertFalse(any(" Triage]" in body["title"] or " Specification]" in body["title"]
+                             for body in created))
+        with open(self.merges_path, encoding="utf-8") as merge_file:
+            merges = [json.loads(line) for line in merge_file]
+        self.assertEqual({entry["work_id"] for entry in merges}, {work_a, work_b})
+
+    def test_legacy_parent_and_provenance_child_share_one_pipeline_after_restart(self):
+        base = "Старый родитель"
+        home = os.path.join(self.temporary.name, "legacy-home")
+        os.makedirs(os.path.join(home, "pilot", "questions"))
+        stall_path = os.path.join(home, "pilot", "stalled.json")
+        conf_path = os.path.join(home, "pilot", "config.json")
+        ideas_path = os.path.join(home, "pilot", "ideas.json")
+        pilot.save(conf_path, {"stopped_pipelines": []})
+        pilot.save(ideas_path, [])
+        parent = {
+            "id": "legacy-root", "title": f"[auto] [1/5 Triage] {base}",
+            "state": "succeeded", "created_at": "2026-08-11T20:00:00Z",
+            "repository_id": "repo-id",
+        }
+        child = {
+            "id": "provenance-child", "work_id": parent["id"],
+            "parent_task_id": parent["id"], "correction_kind": "answer_resume",
+            "title": f"[auto] [2/5 Specification] {base}", "state": "succeeded",
+            "created_at": "2026-08-11T20:01:00Z", "repository_id": "repo-id",
+        }
+        tasks, created = [parent, child], []
+        workflows = {
+            stage: {"enabled": True, "revision_id": "rev-" + stage}
+            for stage in ("Triage", "Specification", "Implement + Test", "Review", "Verify")
+        }
+        workers = {"worker": {"id": "worker-id", "online": True, "health": "healthy"}}
+
+        def create(body, _conf=None):
+            source = next(task for task in tasks if task["id"] == body["parent_task_id"])
+            task = {
+                "id": "next-stage", "work_id": source.get("work_id") or source["id"],
+                "parent_task_id": source["id"], "title": body["title"],
+                "state": "queued", "repository_id": "repo-id",
+                "created_at": "2026-08-11T20:02:00Z",
+            }
+            created.append(dict(body))
+            return {"task": task}
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "HOME", home))
+            stack.enter_context(mock.patch.object(pilot, "STALL_PATH", stall_path))
+            stack.enter_context(mock.patch.object(pilot, "CONF_PATH", conf_path))
+            stack.enter_context(mock.patch.object(pilot, "IDEAS_PATH", ideas_path))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "notify"))
+            stack.enter_context(mock.patch.object(pilot.time, "time", return_value=10_000))
+
+            self.assertTrue(pilot.same_task_work(child, parent))
+            self.assertEqual(pilot.task_work_id(parent, tasks), parent["id"])
+            self.assertEqual(pilot.task_work_id(child, tasks), parent["id"])
+            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+            self.assertEqual(list(pilot.load(self.works_path, {})), [parent["id"]])
+
+            pilot.save(stall_path, {parent["id"]: {
+                "since": 10_000 - pilot.STALL_WAIT, "nudges": 0}})
+            pilot.pipeline_watch(self.conf, tasks, workflows, workers)
+            pilot.save(self.tasks_path, tasks)
+
+            # A fresh process rebuilds its list from disk and sees the queued
+            # child as the same work, so it cannot create a second stage/root.
+            tasks = pilot.load(self.tasks_path, [])
+            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
+            pilot.pipeline_watch(self.conf, tasks, workflows, workers)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["parent_task_id"], child["id"])
+        self.assertIn(" Implement + Test]", created[0]["title"])
+        self.assertFalse(any(" Triage]" in body["title"] or " Specification]" in body["title"]
+                             for body in created))
+
 
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
