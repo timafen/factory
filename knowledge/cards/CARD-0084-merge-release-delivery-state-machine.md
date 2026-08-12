@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Implementation commit: fa50e62ac19dd11ca1d94cefc1a21d0b4f33d8e4 — повторный restart подтверждает durable `failed` без новой физической доставки.
+Implementation commit: d060ede7f9e7904aa2898a228240b1818de1ecf8 — повторный restart подтверждает durable `failed` без новой физической доставки.
 
 - Status: Implemented — усиление restart-регрессии готово к review.
 - Branch: `factory/a3cb13db-49c-5099bd14-4af`.
