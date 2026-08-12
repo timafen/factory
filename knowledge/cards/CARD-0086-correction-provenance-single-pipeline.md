@@ -4,7 +4,7 @@
 
 - Status: Implemented and targeted checks pass; ready for Review.
 - Branch: `factory/0c8206c2-db3-5816087b-ae8`.
-- Implementation commit: 208e4fe6a45129ed367e58dd06a33704b81301bc — resume by `work_id` alone resolves the selected pipeline title.
+- Implementation commit: 2e0190c3ec2db82baadb16a76b120fbaacc9cc17 — same-title resume, outbox, and merge recovery remain isolated by `work_id`.
 - What changed: same-title work remains separated by durable `work_id`, including
   HTTP resume requests that omit `title`; Review keeps pinned SHA comparison and
   merge keeps persist-before-action recovery across restart.
