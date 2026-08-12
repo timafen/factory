@@ -1,18 +1,25 @@
 # Реальная session регистрируется до запуска gate
 
+Implementation commit: 56cd31e1a0908ebfd0146855227a676f9e9b34a2 — gate запускается только по проверенным абсолютным путям.
+
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/b3052294-9b9-63503efd-ec9.
-Implementation commit: d6cda20403b9f72494c7cbf4b20decd16ccbae17 — вся gate-цепочка закреплена за проверенными абсолютными путями и живой session.
-What changed: `/usr/bin/setsid --fork --wait → /usr/bin/sudo → /bin/bash → абсолютный gate script`; системные executables проверяются как root-owned и не writable для group/other.
-What changed: nonce-handshake принимается только от живого session leader — прямого ребёнка запущенного supervisor; gate ждёт одноразовый ack, а итогом остаётся kernel wait status.
-Threat model: PATH/function/alias/env/config shadow, prewritten/replayed/forged handshake и исчезнувшая PGID не могут дать успех; `$AS` исключён из цепочки результата.
-Evidence: malicious PATH `setsid` с `sid=999999 pgid=999999 ready=1` + `0`, forged file и missing session → release `5`, installs/restarts/build replacements `0`; real fork fail/success и signal cleanup → PASS; shell-suite ×3 → PASS.
-Evidence: `go test -timeout 5m ./...`, `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS.
-One next action: human merge into main.
+Status: Implemented — ready for review.
+Branch: factory/4bc16894-25c-0f38536d-265.
+Implementation commit: 56cd31e1a0908ebfd0146855227a676f9e9b34a2 — gate запускается только по проверенным абсолютным путям.
+What changed: `setsid`, оболочка, UI/Go-команды и gate-script закреплены за абсолютными root-owned путями; `$AS` исключён из цепочки результата.
+What changed: nonce-handshake принимается только от живого session leader, а результатом gate остаётся kernel wait status доверенного launcher.
+Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `git diff --check` → PASS; fixture с подменённым `PATH`-`setsid` не входит в gate-цепочку.
+One next action: rerun Review against this published branch.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Перенесена на свежий `main` доверенная gate-цепочка: фиксированные абсолютные
+executables, проверка владельца и прав, живая session с nonce/ack и kernel wait
+status. Изолированная shell-фикстура подменяет `PATH`-`setsid` и подтверждает,
+что он не участвует в запуске gate; `bash -n` и `git diff --check` также прошли.
 
 ### 2026-08-11 — Implement
 
