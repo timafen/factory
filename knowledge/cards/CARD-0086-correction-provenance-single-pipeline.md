@@ -2,17 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and tested; ready for Review. Pilot remains operationally disabled.
+- Branch: `factory/12abca4e-aa6-a9fb749b-304`.
+- Implementation commit: 737db0106f50afdeac140a190686697d7b792902 — each discovered Pilot work retains its own source task for origin attribution.
+- What changed: `record_new_works()` keeps the original task in each earliest-stage
+  tuple and derives the automation request key from that task.
+- What changed: a mixed fresh owner/automation snapshot proves both origins remain correct.
+- Evidence: `python3 -B -m unittest -v pilot.test_pilot` → PASS (220 tests; 13 skipped).
+- Next action: submit this branch for Review.
 
 ## LOG
 
@@ -47,3 +44,12 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Fixed the mixed-snapshot origin regression in `record_new_works()`: each
+earliest-stage tuple now retains its own original task, so its `request_key`
+cannot leak from the preceding loop iteration. A fresh owner task and an
+automation task discovered together retain `owner` and `orchestrator` origins
+respectively. `python3 -B -m unittest -v pilot.test_pilot` passed (220 tests,
+13 skipped).
