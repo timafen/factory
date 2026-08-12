@@ -804,7 +804,7 @@ def reopen_work(base, generation, reason="Владелец явно запуст
             save(CONF_PATH, conf)
 
 
-def work_lifecycle_block(base, task=None, tasks=None):
+def work_lifecycle_block(base, task=None, tasks=None, work_id=""):
     """Return the durable reason why an old task may not create more work.
 
     An active Plan card is a generation boundary: while it is merely planned,
@@ -812,7 +812,11 @@ def work_lifecycle_block(base, task=None, tasks=None):
     and tasks created after it do.  Terminal Plan cards and archive receipts
     close the preceding generation across Pilot restarts.
     """
-    matching = [idea for idea in ideas_all() if _same_work(idea.get("title"), base)]
+    matching = [idea for idea in ideas_all()
+                if (str(work_id or "").strip() and str(idea.get("work_id") or "").strip()
+                    == str(work_id).strip())
+                or (not work_id and not idea.get("work_id")
+                    and _same_work(idea.get("title"), base))]
     active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
     if active:
         current = active[-1]
@@ -834,7 +838,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
                  else "карточка Плана отклонена"))
 
     works = load(WORKS_PATH, {}) or {}
-    meta = next((value for name, value in works.items() if _same_work(name, base)), {})
+    meta = works.get(work_storage_key(base, work_id)) or {}
     if task and any(item.get("task_id") == task.get("id")
                     for item in meta.get("archived_attempts", [])):
         return "эту попытку заменила более новая попытка работы"
@@ -846,7 +850,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
         created = task.get("created_at") or ""
         newer = [item for item in (tasks or [])
                  if item.get("id") != task.get("id")
-                 and _same_work(item.get("title"), base)
+                 and task_matches_work(item, base, work_id)
                  and (item.get("created_at") or "") > created
                  and stage_no_of(item.get("title")) <= number]
         if number and created and newer:
@@ -1440,12 +1444,13 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
 
 
-def stage_attempts(tasks, stage, base):
+def stage_attempts(tasks, stage, base, work_id=""):
     """How many times this exact work already went through this exact stage."""
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if m and m.group(1).strip() == stage and m.group(2).strip() == base.strip():
+        if (m and m.group(1).strip() == stage
+                and task_matches_work(t, base, work_id)):
             n += 1
     return n
 
@@ -1456,7 +1461,7 @@ def stage_no_of(title):
     return int(m.group(1)) if m else 0
 
 
-def live_or_done_at(tasks, base, stage_no, since=None):
+def live_or_done_at(tasks, base, stage_no, since=None, work_id=""):
     """Задача по этой же работе на стадии stage_no или дальше, живая либо успешная.
     Единственный источник правды для защиты от дублей: и при продвижении по
     конвейеру, и при возобновлении после ответа владельца.
@@ -1465,7 +1470,7 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     base = (base or "").strip()
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or m.group(2).strip() != base:
+        if not m or not task_matches_work(t, base, work_id):
             continue
         if since and (t.get("created_at") or "") <= since:
             continue
@@ -1621,24 +1626,25 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
 RESCUE_PATH = f"{HOME}/pilot/cap_rescues.json"
 
 
-def cap_rescues(base, stage):
-    return int((load(RESCUE_PATH, {}) or {}).get(f"{base}::{stage}", 0))
+def cap_rescues(base, stage, work_id=""):
+    return int((load(RESCUE_PATH, {}) or {}).get(
+        f"{work_storage_key(base, work_id)}::{stage}", 0))
 
 
-def note_cap_rescue(base, stage):
+def note_cap_rescue(base, stage, work_id=""):
     rec = load(RESCUE_PATH, {}) or {}
-    key = f"{base}::{stage}"
+    key = f"{work_storage_key(base, work_id)}::{stage}"
     rec[key] = int(rec.get(key, 0)) + 1
     save(RESCUE_PATH, rec)
 
 
-def create_cap_rescue(base, stage, body, conf=None):
+def create_cap_rescue(base, stage, body, conf=None, work_id=""):
     """Create a return task before consuming its durable rescue allowance."""
     created = create_task(body, conf)
     task = created.get("task") if isinstance(created, dict) else None
     if not isinstance(task, dict) or not task.get("id"):
         raise RuntimeError(f"{stage} return: create_task returned no task")
-    note_cap_rescue(base, stage)
+    note_cap_rescue(base, stage, work_id=work_id)
     return created
 
 
@@ -6119,12 +6125,19 @@ def limits_view():
     return out
 
 
-def is_stopped(conf, base):
+def is_stopped(conf, base, work_id=""):
     """Работа, которую владелец закрыл насовсем. Пилот её не двигает и не
     перезапускает, что бы ни отвечал оркестратор."""
     b = (base or "").strip().lower()
+    key = work_storage_key(base, work_id)
     for s in conf.get("stopped_pipelines") or []:
-        if s.strip().lower() in b:
+        if isinstance(s, dict):
+            if work_id and str(s.get("work_id") or "").strip() == str(work_id).strip():
+                return True
+            s = s.get("title") or ""
+        if work_id and str(s).strip() == key:
+            return True
+        if not work_id and str(s).strip().lower() in b:
             return True
     return False
 
@@ -6853,6 +6866,7 @@ def cycle(conf, state):
 
     for t in tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
+        work_id = task_work_id(t, tasks)
         if not title.startswith(PREFIX):
             continue
         if tid in state["processed"]:
@@ -6860,7 +6874,7 @@ def cycle(conf, state):
         if tstate not in ("succeeded", "failed", "cancelled"):
             continue
 
-        closed_reason = work_lifecycle_block(base_title(title), t, tasks)
+        closed_reason = work_lifecycle_block(base_title(title), t, tasks, work_id=work_id)
         if closed_reason:
             overlap_wait_decisions.pop(tid, None)
             state["processed"].append(tid)
@@ -6879,17 +6893,17 @@ def cycle(conf, state):
             rid = detail["task"].get("repository_id") or ""
             # Отменённая/упавшая задача, которую уже перекрыла другая по той же
             # работе, вопросов не порождает — иначе эпик встанет на пустом месте.
-            if is_stopped(conf, base):
+            if is_stopped(conf, base, work_id=work_id):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, base, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(tasks, base, stage_no_of(title), since=t.get("created_at"), work_id=work_id)
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
                 continue
             # Сбой окружения, а не работы: вход в модель протух, сеть моргнула.
             # Владельцу тут делать нечего — повторяем этап сами.
-            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA") < 3:
+            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA", work_id=work_id) < 3:
                 try:
                     create_cap_rescue(base, "INFRA", {
                                  "request_key": str(uuid.uuid4()),
@@ -6899,8 +6913,9 @@ def cycle(conf, state):
                                  "worker_id": detail["task"].get("worker_id") or "",
                                  "repository_id": rid,
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
-                                 "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
-                                     or (workflows.get(wf, {}) or {}).get("revision_id")}, conf)
+                                     "workflow_revision_id": (detail.get("workflow") or {}).get("revision_id")
+                                     or (workflows.get(wf, {}) or {}).get("revision_id"),
+                                     "work_id": work_id}, conf, work_id=work_id)
                     log(f"INFRA RETRY task={tid} stage={wf}: сбой окружения, повторяю этап")
                     notify(conf, "Повторяю этап: сбой окружения",
                            base + chr(10) + "Вход в модель или сеть подвели — это не ошибка работы. "
@@ -6913,7 +6928,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(tasks, wf, base)
+            done = stage_attempts(tasks, wf, base, work_id=work_id)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -6926,7 +6941,7 @@ def cycle(conf, state):
                            expl.get("question_ru", "Что делать дальше?"),
                            expl.get("options_ru", []),
                            f"ОШИБКА:\n{squeeze(err, 4000)}\n\nПОСЛЕДНИЙ ВЫВОД:\n{squeeze(res, 8000)}",
-                           attempts_so_far=done, repair_task=t)
+                           attempts_so_far=done, repair_task=t, work_id=work_id)
             log(f"stage_ended state={tstate} task={tid} stage={wf}")
             continue
         if wf not in stages:
@@ -6959,7 +6974,7 @@ def cycle(conf, state):
                 record_implementation_artifact(
                     base_title(title), tid, title, result,
                     detail.get("context") or detail["task"].get("context") or "",
-                    repo_identity_by_id.get(rid_i, ""))
+                    repo_identity_by_id.get(rid_i, ""), work_id=work_id)
             except Exception as e:
                 # A transport failure must not erase the last proven artifact;
                 # the next cycle can safely retry this completed task.
@@ -6987,14 +7002,15 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': delivery wait already exists")
                     continue
                 branch, implementation_head = selected_delivery(
-                    base_title(title), extract_branch(result, detail.get("context", "")))
+                    base_title(title), extract_branch(result, detail.get("context", "")), work_id=work_id)
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
                     link = try_url(result, rid)
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or "",
+                        "work_id": work_id}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -7018,9 +7034,9 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base),
+                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, base, work_id=work_id),
                     branch=selected_delivery(
-                        base, extract_branch(result, detail.get("context", "")))[0])
+                        base, extract_branch(result, detail.get("context", "")), work_id=work_id)[0], work_id=work_id)
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
                            f"{base_title(title)}\nПроверка не подтвердила результат, "
@@ -7037,9 +7053,9 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, base),
+                           attempts_so_far=stage_attempts(tasks, back, base, work_id=work_id),
                            branch=selected_delivery(
-                               base, extract_branch(result, detail.get("context", "")))[0])
+                               base, extract_branch(result, detail.get("context", "")), work_id=work_id)[0], work_id=work_id)
             continue
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
@@ -7070,10 +7086,10 @@ def cycle(conf, state):
         # Idempotency guard: if this work already has a task at the next stage
         # (or beyond) that is live or done, do NOT create another one. Without
         # this, any re-processing of an old task duplicates the whole tail.
-        if is_stopped(conf, base):
+        if is_stopped(conf, base, work_id=work_id):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
-        dup = live_or_done_at(tasks, base, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(tasks, base, idx + 2, since=t.get("created_at"), work_id=work_id)
         if dup:
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -7090,7 +7106,7 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
-        branch, implementation_head = selected_delivery(base, branch)
+        branch, implementation_head = selected_delivery(base, branch, work_id=work_id)
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -7124,7 +7140,7 @@ def cycle(conf, state):
                 log(f"SPEC BRANCH WAIT {base[:40]!r}: состояние ветки неизвестно")
                 continue
             if branch_missing or branch_empty:
-                if cap_rescues(base, "SPEC_BRANCH") >= 1:
+                if cap_rescues(base, "SPEC_BRANCH", work_id=work_id) >= 1:
                     log(f"SPEC BRANCH STOP {base[:40]!r}: возврат уже использован, "
                         "разработку не запускаю")
                     continue
@@ -7148,7 +7164,8 @@ def cycle(conf, state):
                                  "timeout_seconds": conf.get("timeout_seconds", 7200),
                                  "workflow_revision_id": (detail.get("workflow") or {}).get(
                                      "revision_id") or workflows.get(wf, {}).get("revision_id")
-                                     or nw["revision_id"]}, conf)
+                                     or nw["revision_id"], "work_id": work_id}, conf,
+                    work_id=work_id)
                     log(f"SPEC BRANCH GATE {base[:40]!r}: {reason} — вернул сохранить")
                     notify(conf, "Вернул сам: спецификация не сохранена",
                            base + chr(10) + reason.capitalize() +
@@ -7163,7 +7180,7 @@ def cycle(conf, state):
 
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
         if (wf == "Specification" and not PROMISE_LINE.search(result or "")
-                and cap_rescues(base, "SPEC") < 1):
+                and cap_rescues(base, "SPEC", work_id=work_id) < 1):
             back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
             nl = chr(10)
             spec_ctx = nl.join([
@@ -7188,7 +7205,8 @@ def cycle(conf, state):
                              "repository_id": detail["task"].get("repository_id") or "",
                              "timeout_seconds": conf.get("timeout_seconds", 7200),
                              "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                                 or nw["revision_id"]}, conf)
+                                 or nw["revision_id"], "work_id": work_id}, conf,
+                    work_id=work_id)
                 log(f"SPEC GATE {base[:40]!r}: нет ГОТОВО-КОГДА — вернул дописать обещания")
                 notify(conf, "Вернул сам: спецификация без обещаний",
                        base + chr(10) + "Спецификация не назвала проверяемые признаки "
@@ -7206,7 +7224,7 @@ def cycle(conf, state):
         # same stage, so the next stage cannot guess which revision to use.
         if wf == "Specification":
             head_reason = specification_head_gate(result)
-            if head_reason and cap_rescues(base, "SPEC_HEAD") >= 1:
+            if head_reason and cap_rescues(base, "SPEC_HEAD", work_id=work_id) >= 1:
                 log(f"SPEC HEAD STOP {base[:40]!r}: возврат уже использован, "
                     "разработку не запускаю")
                 continue
@@ -7221,7 +7239,8 @@ def cycle(conf, state):
                         "repository_id": detail["task"].get("repository_id") or "",
                         "timeout_seconds": conf.get("timeout_seconds", 7200),
                         "workflow_revision_id": workflows.get(wf, {}).get("revision_id")
-                            or nw["revision_id"]}, conf)
+                            or nw["revision_id"], "work_id": work_id}, conf,
+                        work_id=work_id)
                     log(f"SPEC HEAD GATE {base[:40]!r}: {head_reason}")
                     continue
                 except Exception as e:
@@ -7294,7 +7313,7 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch)
+                    record_delivery_artifact(base, branch, work_id=work_id)
                     branch_line = f"Branch: {branch}\n"
                 gate_note = "\n\n" + g["note"]
 
@@ -7311,6 +7330,7 @@ def cycle(conf, state):
             "repository_id": detail["task"].get("repository_id") or detail.get("repository", {}).get("id", ""),
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
+            "work_id": work_id,
         }
         try:
             created = create_task(body, conf)

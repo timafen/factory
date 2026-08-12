@@ -530,6 +530,11 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda *epochs: {epoch: {} for epoch in epochs}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github_branch))
             if branch_error:
                 branch_report = stack.enter_context(mock.patch.object(
@@ -5900,6 +5905,83 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         question = pilot.load(os.path.join(self.paths["questions"], "task-a.json"), {})
         self.assertEqual(question["work_id"], "work-a")
         self.assertEqual(question["branch"], "factory/a")
+
+    def test_cycle_hands_two_same_title_implementations_to_their_own_reviews(self):
+        """The main loop must not let a title select another work's delivery."""
+        title = "Одинаковая поставка"
+        tasks = [
+            {"id": "implement-a", "work_id": "work-a", "state": "succeeded",
+             "created_at": "2026-08-11T10:00:00Z",
+             "title": f"[auto] [3/5 Implement + Test] {title}"},
+            {"id": "implement-b", "work_id": "work-b", "state": "succeeded",
+             "created_at": "2026-08-11T10:01:00Z",
+             "title": f"[auto] [3/5 Implement + Test] {title}"},
+        ]
+        created, recorded = [], []
+        conf = {"stages": [{"workflow": name} for name in (
+            "Triage", "Specification", "Implement + Test", "Review", "Verify")],
+            "auto_merge": False}
+
+        def fake_api(path, body=None):
+            if path in ("/tasks?limit=100", "/tasks?limit=200"):
+                return {"tasks": tasks}
+            if path == "/workers":
+                return {"workers": [{"id": "worker", "name": "worker", "online": True,
+                                      "health": "healthy", "capacity": 4, "active_count": 0}]}
+            if path == "/repositories":
+                return {"repositories": [{"id": "repo", "remote_identity": "github.com/acme/repo"}]}
+            if path == "/workflows":
+                return {"workflows": [{"id": "workflow-" + name, "enabled": True, "current_revision":
+                    {"id": name, "title": name}} for name in
+                    ("Triage", "Specification", "Implement + Test", "Review", "Verify")]}
+            task_id = path.removeprefix("/tasks/")
+            return {"task": {"id": task_id, "repository_id": "repo"},
+                    "workflow": {"title": "Implement + Test", "revision_id": "implement"},
+                    "context": "", "attempts": [{"result": "готово"}]}
+
+        def create(body, _conf):
+            created.append(body)
+            return {"task": {"id": "review-" + body["work_id"][-1],
+                              "work_id": body["work_id"], "title": body["title"],
+                              "state": "created"}}
+
+        noops = ("collect_automation_findings", "cleanup_completed_plan_cards",
+                 "write_dashboard", "provider_limits_tick", "detect_limits",
+                 "record_new_works", "budget_guard", "money_guard", "handle_epics",
+                 "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+                 "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+                 "handle_answers", "advance_epics", "pipeline_watch",
+                 "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+                 "collect_ideas")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda *epochs: {epoch: {} for epoch in epochs}))
+            stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "reason": "", "next_complexity": "medium", "handoff": ""}))
+            stack.enter_context(mock.patch.object(pilot, "review_gate", return_value=None))
+            stack.enter_context(mock.patch.object(pilot, "record_implementation_artifact",
+                side_effect=lambda *args, **kwargs: recorded.append(kwargs["work_id"])))
+            stack.enter_context(mock.patch.object(pilot, "selected_delivery",
+                side_effect=lambda _base, _branch="", work_id="":
+                ("factory/" + work_id, work_id * 8)))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            pilot.cycle(conf, {"processed": []})
+
+        self.assertEqual(recorded, ["work-a", "work-b"])
+        self.assertEqual([body["work_id"] for body in created], ["work-a", "work-b"])
+        self.assertEqual(["Branch: factory/work-a" in created[0]["context"],
+                          "Branch: factory/work-b" in created[1]["context"]], [True, True])
+        pilot.stop_pipeline(conf, title, work_id="work-a")
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertFalse(pilot.is_stopped(conf, title, work_id="work-b"))
 
 
 if __name__ == "__main__":
