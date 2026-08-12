@@ -2,14 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Verified PASS — ожидает слияния.
+- Branch: `factory/145d8183-4f9-a933a2ab-093`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+- Implementation commit: 3ba7447f63fbceff1ce21e0f592b31a0d4f3ae2d — исправлена проверка финального отказа выпуска на реальном пути Pilot/driver.
+- What changed: Убрана ложная shell-инъекция в `delivery-state/*.status`; Pilot-регрессия явно подтверждает код драйвера 4 после физической доставки и fail-closed recovery.
+- Evidence: shell fixture → PASS; Pilot process tests → 11 OK; `just check` → PASS (14 UI files, 158 tests); `FACTORY_DATA_HOME=$(mktemp -d) just build` → PASS.
+- Next action: Выполнить штатное слияние этой ветки в `main`.
 
 ## LOG
 
@@ -65,7 +64,13 @@ recovery, and no receipt, outbox, finalization or owner completion.
 
 ### 2026-08-12 — Implement
 
-Исправлено наблюдаемое расхождение terminal status и durable operation record:
-при отказе финального persist API сохраняет `running`, а не публикует ложный
-`succeeded`. Новый test принудительно ломает финальную запись и подтверждает
-результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+После переноса на свежий `main` сохранены только три отсутствовавшие регрессии:
+отказ финальной записи статуса, process restart Pilot/broker и durable POST после lock retry.
+`go test -race -count=1 ./internal/releasebroker`, 11 процессных Pilot-тестов,
+обе shell-fixtures, `npx tsc -p tsconfig.app.json --noEmit` и `just build` прошли.
+
+### 2026-08-12 — Implement
+
+Shell-регрессия больше не подменяет путь `delivery-state`, которого нет в
+`ops/fx-factory-release`; проверка кода 4 перенесена в процессный Pilot-тест,
+который проходит через реальный broker и фиксирует отсутствие ложного done.
