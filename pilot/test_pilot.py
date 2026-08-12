@@ -425,7 +425,16 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.git(observer, "checkout", "-qb", "worker-owned")
             before = self.git(observer, "symbolic-ref", "--short", "HEAD")
 
-            snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
+            git_calls = []
+            real_git = pilot._git
+
+            def recording_git(cwd, *args):
+                git_calls.append(args)
+                return real_git(cwd, *args)
+
+            with mock.patch.object(pilot, "_git", side_effect=recording_git):
+                snapshot = pilot.fresh_branch_snapshot(
+                    "file://" + remote, "factory/candidate")
 
             self.assertEqual(snapshot["state"], "ok")
             self.assertEqual(snapshot["files"], expected)
@@ -434,6 +443,10 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["base_ahead_by"], 1)
             self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
             self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
+            self.assertIn(("init", "--bare", "-q"), git_calls)
+            self.assertIn(("diff", "--name-only",
+                           snapshot["base_sha"] + "..." + snapshot["candidate_sha"]),
+                          git_calls)
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
