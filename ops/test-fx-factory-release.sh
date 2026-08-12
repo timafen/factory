@@ -341,6 +341,51 @@ if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new
 fi
 exec /bin/chmod "$@"
 EOF
+  cat >"$case_dir/cgroup-helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+name=$2
+state="$TEST_CGROUP_DIR/$name.pids"
+descendants() {
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -z "$child" ] || descendants "$child"
+  done < <(/usr/bin/ps -eo pid=,ppid= | /usr/bin/awk -v p="$parent" '$2 == p {print $1}')
+}
+members() {
+  [ -r "$state" ] && while read -r root; do descendants "$root"; done <"$state"
+}
+printf 'cgroup %s %s\n' "$1" "$name" >>"$TEST_GATES"
+case "$1" in
+  create) : >"$state" ;;
+  attach) printf '%s\n' "$3" >>"$state" ;;
+  empty)
+    while read -r pid; do
+      [ -r "/proc/$pid/stat" ] || continue
+      process_stat=$(<"/proc/$pid/stat")
+      process_rest=${process_stat##*) }
+      read -r process_state _ <<<"$process_rest"
+      [ "$process_state" = Z ] || exit 1
+    done < <(members)
+    ;;
+  signal) while read -r pid; do kill -"$3" "$pid" 2>/dev/null || true; done < <(members) ;;
+  remove) /bin/rm -f -- "$state" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod 755 "$case_dir/cgroup-helper"
+  printf 'completed\n' >"$case_dir/cgroup-bootstrap.done"
+  chmod 600 "$case_dir/cgroup-bootstrap.done"
+  helper_hash=$(/usr/bin/sha256sum "$case_dir/cgroup-helper" | /usr/bin/awk '{print $1}')
+  helper_uid=$(/usr/bin/id -u)
+  /usr/bin/sed \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/cgroup-helper|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$helper_hash|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
+    -e "s|^TRUSTED_CGROUP_OWNER_UID=.*$|TRUSTED_CGROUP_OWNER_UID=$helper_uid|" \
+    "$RELEASE" >"$case_dir/release-under-test"
+  chmod 755 "$case_dir/release-under-test"
   cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
 case "$*" in
@@ -451,7 +496,7 @@ run_driver() {
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
-    /bin/bash "$RELEASE" "$@"
+    /bin/bash "$case_dir/release-under-test" "$@"
 }
 
 start_release() {
@@ -499,6 +544,9 @@ for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
+assert_before "$success/gates" 'cgroup attach factory-release-gate-' 'npx tsc -p tsconfig.app.json --noEmit'
+grep -F 'cgroup remove factory-release-gate-' "$success/gates" >/dev/null \
+  || fail "successful Gate did not remove its cgroup"
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"

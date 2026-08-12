@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+HELPER=$SCRIPT_DIR/factory-gate-cgroup
+temporary=$(mktemp -d)
+trap 'rm -rf "$temporary"' EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# Exercise the shipped parser with an isolated fake root.  The source copy only
+# bypasses the root guard so this regression remains runnable in CI containers;
+# every rejected name returns before any cgroup file is opened.
+test_helper=$temporary/factory-gate-cgroup
+sed \
+  -e "s|^CGROUP_ROOT=.*$|CGROUP_ROOT=$temporary/owned|" \
+  -e 's/\[ "$(\/usr\/bin\/id -u)" = 0 \]/true/' \
+  "$HELPER" >"$test_helper"
+chmod 755 "$test_helper"
+printf 'parent-must-not-be-killed\n' >"$temporary/cgroup.kill"
+
+for name in . .. ../parent parent/child 'parent\\child' ; do
+  if "$test_helper" signal "$name" KILL >"$temporary/output" 2>&1; then
+    fail "unsafe cgroup name was accepted: $name"
+  fi
+  grep -F 'invalid cgroup name' "$temporary/output" >/dev/null \
+    || fail "unsafe cgroup name did not fail closed: $name"
+  grep -Fx 'parent-must-not-be-killed' "$temporary/cgroup.kill" >/dev/null \
+    || fail "unsafe cgroup name touched parent cgroup.kill: $name"
+done
+
+echo "PASS: cgroup helper rejects traversal before parent cgroup.kill"
+
