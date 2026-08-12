@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkView } from "./Work";
+import { APIError } from "./api";
 import type { Task } from "./types";
 
 const now = new Date().toISOString();
@@ -103,14 +104,17 @@ it("uses one mobile-column explanation card", async () => {
   expect(await screen.findByLabelText("Что будет дальше")).toHaveClass("work-explanation");
 });
 
-it("keeps the paused card and shows the resume error", async () => {
+it("keeps the pause and hides a same-origin resume error", async () => {
   const tasks = [task("paused", "[auto] [1/5 Triage] Ошибка продолжения", "failed")];
   mockAPI({ statuses: { "Ошибка продолжения": { state: "stopped_owner", text: "пауза" } } });
-  view(tasks, { onResume: () => Promise.reject(new Error("Нет доступного исполнителя")) });
+  view(tasks, { onResume: () => Promise.reject(new APIError(
+    "cross_origin_request",
+    "browser mutations must be same-origin",
+    403,
+  )) });
 
   fireEvent.click(await screen.findByRole("button", { name: "Продолжить" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Продолжение не выполнено. Проверь состояние Factory и повтори попытку.");
-  expect(screen.queryByText("Нет доступного исполнителя")).not.toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toHaveTextContent("Пауза сохранена. Продолжить сейчас не удалось. Проверь состояние Factory и повтори попытку.");
   expect(screen.queryByText(/same-origin|cross_origin_request/i)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Продолжить" })).toBeVisible();
 });

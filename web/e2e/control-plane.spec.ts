@@ -888,7 +888,7 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
     body: JSON.stringify({ error: { code: "cross_origin_request", message: "browser mutations must be same-origin" } }),
   }));
   await resume.click();
-  await expect(page.getByRole("alert")).toHaveText("Продолжение не выполнено. Проверь состояние Factory и повтори попытку.");
+  await expect(page.getByRole("alert")).toHaveText("Пауза сохранена. Продолжить сейчас не удалось. Проверь состояние Factory и повтори попытку.");
   await expect(page.getByText("browser mutations must be same-origin")).toHaveCount(0);
   await expect(resume).toBeVisible();
   await page.unroute("**/api/v1/works/resume");
