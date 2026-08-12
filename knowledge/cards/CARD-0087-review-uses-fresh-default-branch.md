@@ -2,14 +2,23 @@
 
 ## HEAD
 
-Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned; full Pilot suite has 3 compatibility-test errors.
-Branch: `factory/c92696e9-aa7-d6595696-a5d`.
+Status: Implemented — awaiting Verify.
+Branch: `factory/6c341a21-889-2c2564ec-f3f`.
 Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
-What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
-Evidence: Go and web suites pass; `python3 -m unittest pilot.test_pilot` fails with 3 stale `branch_report` compatibility-test errors.
-Next action: restore compatibility/update the three Pilot tests, then create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots must remain unchanged.
+What changed: immutable Revision 10 for Review (`cce09cec-256d-41c4-83fc-a7c58150cef4`) and Verify (`e2bc55e2-c288-4970-8424-316195217732`) now require remote-HEAD resolution, isolated fetch, pinned base/candidate SHA, and infrastructure BLOCKED verdicts.
+What changed: Pilot dynamically reads these current revision IDs; existing task snapshots were not changed.
+Evidence: `python3 -m unittest pilot.test_pilot -q` → PASS; live API smoke confirms both Revision 10 instructions and Pilot selection; dashboard → HTTP 200.
+Next action: Verify the delivered branch against freshly resolved remote `main` and return it to Verify.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлены три устаревших точки совместимости Pilot: полный `python3 -m unittest
+pilot.test_pilot -q` проходит. В live control plane созданы immutable Revision 10
+для Review и Verify: обе закрепляют remote default/candidate SHA до сравнения и
+отдают BLOCKED при ошибке инфраструктуры. Smoke через API подтвердил, что Pilot
+видит новые текущие ревизии; существующие task snapshots не изменялись.
 
 ### 2026-08-11 — Verify
 
