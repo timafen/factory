@@ -2,16 +2,22 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Status: Implemented — recovery merge и privileged release-driver закрыты fail-closed.
+- Branch: `factory/18090251-b0b-8a66e557-4ae`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- Implementation commit: a7551f370e221f9e0cf6293ee806e3f1df011e97 — проверка retry сверяет собственную долговечную операцию без panic.
+- What changed: Recovery сохраняет immutable merge identity; broker подтверждает PID/running до process-group gate и не публикует terminal без durable proof.
+- What changed: Повтор `rc=8` допускает только тот же адаптер и target; тест сверяет его счётчик POST после успешного повторного запуска.
+- Evidence: `go test -race ./internal/releasebroker`, Pilot recovery, shell fixtures, `just check`, `just build`, `git diff --check` → PASS.
+- Next action: Проверить ветку в Review и слить в `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Rebased the strict merge-recovery and release-driver work onto current `main`.
+The retry regression now reads its own durable operation, proving adapter/target
+immutability without a panic; broker, Pilot, FX fixtures, `just check` and build pass.
 
 ### 2026-08-11 — Specification
 
