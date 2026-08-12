@@ -4,7 +4,7 @@
 
 - Status: Implemented — ready for review.
 - Branch: `factory/264b71ca-d92-3566e3c1-05e`.
-- Implementation commit: cd53b38e5b1a1319215c4d58aef9e2b438d6618b — worker передаёт фактически
+- Implementation commit: e3bf54e08052819fbd2392fecec6e2399f7a0402 — worker передаёт фактически
   занятые локальные слоты старому control plane во время поэтапного обновления.
 - What changed: новый server продолжает считать active capacity по lease, а старый
   control plane получает `len(manager.slots)` и не назначает второй supervisor.
