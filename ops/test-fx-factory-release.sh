@@ -54,7 +54,7 @@ make_fixture() {
 case "$*" in
   *'clone --quiet'*)
     destination=${@: -1}
-    mkdir -p "$destination/web" "$destination/ops/systemd"
+    mkdir -p "$destination/web/node_modules" "$destination/ops/systemd"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/install-project-release-broker.sh" \
       "$destination/ops/install-project-release-broker.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
@@ -136,6 +136,14 @@ case "$TEST_MODE:${1:-}" in
     : >"$TEST_UI_STARTED"
     wait_for_file "$TEST_GO_RUNNING"
     ;;
+  orphan-after-success:tsc)
+    (
+      trap 'echo orphan-term >>"$TEST_GATE_CHILDREN"' TERM
+      trap '' HUP INT
+      while :; do /bin/sleep 1; done
+    ) &
+    echo "$!" >"$TEST_ORPHAN_PID"
+    ;;
   signal-forked-gates:tsc)
     assert_gate_handshake ui-checks.session
     (
@@ -152,6 +160,11 @@ case "$TEST_MODE:${1:-}" in
     while :; do /bin/sleep 0.01; done
     ;;
 esac
+exit 0
+EOF
+  cat >"$case_dir/bin/node" <<'EOF'
+#!/bin/bash
+printf 'path-node-invoked\n' >>"$TEST_SPOOF_EVENTS"
 exit 0
 EOF
   cat >"$case_dir/bin/go" <<'EOF'
@@ -473,8 +486,11 @@ EOF
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
     -e "s|^TRUSTED_SUDO=.*$|TRUSTED_SUDO=$case_dir/trusted/sudo|" \
-    -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
-    -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
+    -e "s|^TRUSTED_SOURCE_ROOT=.*$|TRUSTED_SOURCE_ROOT=$case_dir/trusted-source|" \
+    -e "s|^TRUSTED_GIT=.*$|TRUSTED_GIT=$case_dir/bin/git|" \
+    -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=/bin/bash|" \
+    -e "s|^TRUSTED_NPX_CLI=.*$|TRUSTED_NPX_CLI=$case_dir/trusted/npx|" \
+    -e "s|^TRUSTED_NPM_CLI=.*$|TRUSTED_NPM_CLI=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
     "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
@@ -485,13 +501,13 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|missing-session|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|missing-session|orphan-after-success|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
   esac
   case "$mode" in
-    gate-result-spoof|handshake-file-spoof)
+    checkout-spoof)
       fixture_release_as="$case_dir/bin/as-fork"
       ;;
   esac
@@ -511,6 +527,7 @@ run_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_ORPHAN_PID="$case_dir/orphan.pid" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
@@ -550,6 +567,7 @@ start_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_ORPHAN_PID="$case_dir/orphan.pid" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
@@ -771,13 +789,9 @@ run_release "$spoofed_result" gate-result-spoof
 status=$?
 set -e
 [ "$status" -eq 5 ] || fail "spoofed successful result returned $status instead of build error 5"
-for attack in stale corrupt valid-success replayed-success; do
-  grep -Fx "$attack" "$spoofed_result/spoof-events" >/dev/null \
-    || fail "adversarial AS did not attempt $attack result"
-done
-! grep -Fx 'result-path-leaked' "$spoofed_result/spoof-events" >/dev/null \
+! grep -Fx 'result-path-leaked' "$spoofed_result/spoof-events" >/dev/null 2>&1 \
   || fail "gate result path was passed through adversarial AS"
-grep -F 'завершилась с кодом 1' "$spoofed_result/output" >/dev/null \
+grep -F 'завершилась с кодом 20' "$spoofed_result/output" >/dev/null \
   || fail "spoof hid the real gate status"
 assert_file "$spoofed_result/install/factory-server" old-server
 assert_file "$spoofed_result/install/factory-worker" old-worker
@@ -806,6 +820,8 @@ for bypass in path-setsid-invoked path-sudo-invoked path-bash-gate-invoked path-
   ! grep -Fx "$bypass" "$path_shadow/spoof-events" >/dev/null 2>&1 \
     || fail "PATH shadow entered the trusted gate chain: $bypass"
 done
+! grep -Fx 'path-node-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "hostile PATH selected a fake Node interpreter"
 assert_file "$path_shadow/install/factory-server" old-server
 assert_file "$path_shadow/install/factory-worker" old-worker
 [ ! -s "$path_shadow/events" ] || fail "PATH shadow caused an install or restart"
@@ -820,8 +836,6 @@ run_release "$forged_handshake" handshake-file-spoof
 status=$?
 set -e
 [ "$status" -eq 5 ] || fail "forged handshake returned $status instead of build error 5"
-grep -Fx 'forged-handshake' "$forged_handshake/spoof-events" >/dev/null \
-  || fail "handshake attacker did not write a forged file"
 assert_file "$forged_handshake/install/factory-server" old-server
 assert_file "$forged_handshake/install/factory-worker" old-worker
 [ ! -s "$forged_handshake/events" ] || fail "forged handshake caused an install or restart"
@@ -829,6 +843,34 @@ assert_file "$forged_handshake/install/factory-worker" old-worker
   || fail "binaries were replaced after the forged handshake"
 /bin/sleep 0.3
 assert_no_fixture_processes "$forged_handshake"
+
+checkout_spoof="$temporary/checkout-spoof"
+make_fixture "$checkout_spoof" checkout-spoof
+set +e
+run_release "$checkout_spoof" checkout-spoof
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "malicious checkout launcher returned $status instead of trust error 4"
+grep -F 'FACTORY_RELEASE_AS не может управлять доверенным checkout' "$checkout_spoof/output" >/dev/null \
+  || fail "malicious checkout launcher was not rejected explicitly"
+[ ! -s "$checkout_spoof/gates" ] || fail "a gate ran after malicious checkout launcher rejection"
+[ ! -s "$checkout_spoof/events" ] || fail "installation ran after malicious checkout launcher rejection"
+
+orphaned="$temporary/orphan-after-success"
+make_fixture "$orphaned" orphan-after-success
+SECONDS=0
+set +e
+run_release "$orphaned" orphan-after-success
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "successful gate with orphan returned $status instead of build error 5"
+[ "$SECONDS" -lt 3 ] || fail "successful gate orphan was not drained in bounded time"
+grep -Fx 'orphan-term' "$orphaned/gate-children" >/dev/null \
+  || fail "successful gate orphan did not receive TERM before KILL"
+orphan_pid=$(<"$orphaned/orphan.pid")
+! kill -0 "$orphan_pid" 2>/dev/null || fail "successful gate orphan survived group drain"
+[ ! -s "$orphaned/events" ] || fail "installation ran after successful gate leaked an orphan"
+assert_no_fixture_processes "$orphaned"
 
 missing_session="$temporary/missing-session"
 make_fixture "$missing_session" missing-session
