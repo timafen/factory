@@ -2,13 +2,13 @@
 
 ## HEAD
 
-Status: IMPLEMENTED: требуется независимая Verify полного сценария.
-Branch: factory/679963e3-028-b412b1c3-498.
-Implementation commit: bf5aa3c537047ee09d171d5335d5532e789db5b2 — cleanup gate не может завершить тестовый раннер или группу самого релиза.
+Status: IMPLEMENTED: полный Verify пройден.
+Branch: factory/e4258c26-c0d-c2b5d27e-3d2.
+Implementation commit: a12ceded7e78b18ee1968afb2ea1d92704ca2b5c — cleanup gate не может завершить тестовый раннер или группу самого релиза.
 What changed: shell-фикстура запускает release в отдельной session; `fx-factory-release` отказывается сигналить собственной process group.
-What changed: изменения CARD-0083 перенесены поверх свежего `origin/main` с сохранением его release-механизма.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и `git diff --check` завершились успешно.
-One next action: Verify запускает полный `bash ops/test-fx-factory-release.sh` в чистом worker и фиксирует результат.
+What changed: реальная SID/PGID подтверждается до UI и Go gate, а сигнал завершает только подтверждённую группу.
+Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n` и `git diff --check` завершились успешно.
+One next action: передать ветку на review.
 
 ## LOG
 
@@ -37,3 +37,10 @@ release-механизмом. Фикстура isolирует session релиз
 | Ветка готова к слиянию с актуальным main | `git fetch origin main && git rebase origin/main` | BLOCKED: конфликты в `ops/fx-factory-release` и `ops/test-fx-factory-release`; rebase отменён без изменения кода. |
 
 Проверка дерева: изменений вне карточки нет; `git diff --check` по кандидату не вывел ошибок пробелов.
+
+### 2026-08-12 — Implement
+
+Полный `bash ops/test-fx-factory-release.sh` повторно запущен на чистом
+Verify-worker и завершился успешно: handshake реальной session предшествует gate,
+а сценарии HUP/INT/TERM дочищают forked процессы. `bash -n` и
+`git diff --check` по `9123aa42b01a39ce7f1fa998568189ab6d38b07b...HEAD` также успешны.
