@@ -2,21 +2,26 @@
 
 ## HEAD
 
-- Status: Implemented and tested; Pilot remains operationally disabled.
-- Branch: `factory/ffb2f1bd-e35-41637e93-24a` (base `origin/main`
-  `36ce322e2b6685dd9a87f4d2c947f61538654ae1`).
-- Implementation commit: 55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3 — durable
+- Status: Verified PASS — awaiting human merge; Pilot remains disabled.
+- Branch: `factory/ffb2f1bd-e35-41637e93-24a` (rebased onto current `main`).
+- Implementation commit: a65fb2e82af6e752555a02abbd5557283868e7e9 — durable
   `work_id` isolation for same-title artifact, delivery and lifecycle state.
-- What changed: provenance-first corrections retain separate same-title work
-  branches through restart, Review, Verify, merge and archive.
-- What changed: a provenance child whose `work_id == legacy_parent.id` joins
-  its legacy parent’s one pipeline; migration 027 and its durable outbox remain exact-once.
-- Evidence: focused provenance/restart and migration checks → PASS; full Pilot
-  (209 tests), `go test ./...`, `go build ./...` and diff check → PASS.
-- Next action: review and merge this correction; keep Pilot disabled pending its
-  separate safe release-state-machine decision.
+- Evidence: full project check, Go build, targeted provenance API/migration and
+  Pilot restart-storm checks passed; final diff has no whitespace errors.
+- Next action: human reviews and merges the correction; keep Pilot disabled pending
+  its separate safe release-state-machine decision.
 
 ## LOG
+
+### 2026-08-11 — Verify
+
+| Criterion | Evidence | Result |
+| --- | --- | --- |
+| Provenance create/replay/list/detail and parent deletion | focused `go test` control-plane provenance set | PASS |
+| Migration 027 dependency on 026 and atomic reopen | focused migration test | PASS |
+| Same-title correction after restart creates no duplicate root | `CorrectionProvenanceStormTests` (7 tests) | PASS |
+| Whole project and build | `just check`; `go build ./...` | PASS |
+| Delivery hygiene | rebase on current `main`; `git diff --check` | PASS |
 
 ### 2026-08-11 — Specification
 
