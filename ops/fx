@@ -123,6 +123,9 @@ fx — разрешённые операции:
                                   и сервера, установка, перезапуск, проверка здоровья,
                                   автоматический откат при неудаче
   fx factory rollback             вернуть предыдущую версию Фабрики
+  fx factory restore-db <snapshot> <manifest-hash> RESTORE-FACTORY-DATABASE
+                                  отдельно восстановить проверенный снимок БД;
+                                  действующая БД сохраняется как failed
   fx factory release-info [--technical]
                                   что изменилось в текущей версии; служебный код
                                   показывается только с флагом --technical
@@ -528,9 +531,11 @@ case "$scope" in
     require factory "$verb"
     FBIN=/opt/factory-data/bin/factory-server
     FINFO=/opt/factory-data/releases/factory-current.json
+    FDRIVER=/usr/local/lib/fx-factory-release
     case "$verb" in
       status)
         say factory status OK
+        "$FDRIVER" --status
         systemctl --no-pager --plain status factory-server.service 2>&1 \
           | grep -E 'Loaded:|Active:|Main PID:'
         ;;
@@ -574,13 +579,12 @@ case "$scope" in
         ;;
       rollback)
         say factory rollback OK
-        [ -s "$FBIN.prev" ] || die "предыдущей версии нет — откатывать не на что"
-        cp -f "$FBIN.prev" "$FBIN.new" && chown factory:factory "$FBIN.new" \
-          && chmod 755 "$FBIN.new" && mv -f "$FBIN.new" "$FBIN" || die "не смог вернуть бинарь"
-        systemctl restart factory-server.service
-        sleep 5
-        curl -sS --max-time 20 -o /dev/null -w 'после отката: HTTP %{http_code}\n' \
-             http://127.0.0.1:7337/api/v1/dashboard
+        "$FDRIVER" --rollback
+        ;;
+      restore-db)
+        say factory restore-db HIGH-RISK
+        [ -n "$arg" ] && [ -n "${4:-}" ] || die "нужны snapshot и manifest-hash"
+        "$FDRIVER" --restore-db "$arg" "$4" "${5:-}"
         ;;
       *) usage; exit 2 ;;
     esac
