@@ -3,12 +3,12 @@
 ## HEAD
 
 - Status: Implemented PASS — готово к Review.
-- Branch: `factory/28f4da49-ddb-34730e2a-67e`.
+- Branch: `factory/56574781-e4b-7c963a00-510`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 7c5abff257f5f3492ba3c2c2721d353344343de5 — NewAt fail-closed отвергает `.json`-каталог как повреждённую durable-запись.
+Implementation commit: 5f2dca4e10002bfdc638736f4243a169fd5a65b6 — регрессия закрепляет fail-closed отказ NewAt для каталога `delivery-1.json`.
 - What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
 - What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
-- Evidence: `go test -count=1 ./internal/releasebroker` и `go test -race -count=1 ./internal/releasebroker` → OK; `just build` → бинарники собраны.
+- Evidence: `go test -count=1 ./internal/releasebroker` → OK; `just build` → бинарники собраны.
 - Next action: Review повторно проверяет fail-closed обработку `.json` durable-записей.
 
 ## LOG
@@ -91,3 +91,9 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 `NewAt` завершает запуск ошибкой до чтения состояния. Регрессионный тест
 подтверждает ноль вызовов executor; обычный и race Go-прогоны broker, а также
 `just build`, прошли успешно.
+
+### 2026-08-12 — Implement
+
+Регрессия приведена к точному сценарию владельца с каталогом `delivery-1.json`.
+После перебазирования на свежий `origin/main` целевой Go-тест подтвердил отказ
+`NewAt` до вызова executor, а `just build` успешно собрал бинарники.
