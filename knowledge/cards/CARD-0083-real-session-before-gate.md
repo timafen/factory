@@ -4,13 +4,21 @@
 
 Status: BLOCKED: реальный root bootstrap/probe/rollback не выполнен; worker UID 994 и `sudo` запрещён через `no new privileges`.
 Branch: factory/f2dc0140-801-bb9f9af1-47e.
-Implementation commit: 1d31ef479b2c51afb5e709af9b88d370952b1038 — cgroup helper ограничен доверенной цепочкой и ставится до Gate без потери lifecycle релизов.
+Implementation commit: 6248ea2ae1305a72b41d7a0e9736fedaded7a9ea — закреплённый SHA-256 синхронизирован с финальным cgroup helper до Gate.
+What changed: bootstrap, installer и release используют один SHA-256 фактического helper; тест сверяет все три digest до root-only проверки.
 What changed: bootstrap канонизирует direct-child source, проверяет root owner и mode всей цепочки/файлов и откатывает helper, installer и bootstrap при ошибке.
-What changed: release сохраняет поколения, manifest, journal, recovery, status/rollback/restore-db; marker и закреплённый SHA проверяются до Gate, остановленный launcher входит в cgroup до старта.
-Evidence: helper/installer/release shell-регрессии → PASS; non-root bootstrap → явный SKIP; `go test ./...`, `go build ./...`, 159 UI tests и UI build → PASS.
-One next action: на root-runner выполнить `bash ops/test-factory-cgroup-bootstrap.sh` и сохранить PASS живых install/probe/rollback.
+Evidence: статическая SHA-256 сверка и shell-регрессии helper/installer/release → PASS; non-root bootstrap → явный SKIP.
+One next action: повторный Review должен подтвердить согласованность digest; затем на root-runner выполнить живой bootstrap/probe/rollback.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлены три закреплённых SHA-256 по окончательному содержимому
+`factory-gate-cgroup`; прежнее значение не позволяло bootstrap и release принять
+поставленный helper. Статическая сверка всех трёх значений перенесена до проверки
+UID, поэтому работает и на непривилегированном worker. Целевые shell-проверки и
+syntax прошли; root-сценарий ожидаемо выдал `SKIP` без прав администратора.
 
 ### 2026-08-11 — Implement
 
