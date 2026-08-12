@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+Implementation commit: fa50e62ac19dd11ca1d94cefc1a21d0b4f33d8e4 — повторный restart подтверждает durable `failed` без новой физической доставки.
+
+- Status: Implemented — усиление restart-регрессии готово к review.
+- Branch: `factory/a3cb13db-49c-5099bd14-4af`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
 - What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- What changed: Второй broker restart читает уже durable `failed` и по-прежнему сохраняет ровно один вызов executor.
+- Evidence: crash regression ×20 и `go test -race ./internal/releasebroker` → OK; Pilot delivery class → 10 OK; `just build` → OK.
+- Next action: Review проверить доказательство второго restart после terminal write failure.
 
 ## LOG
 
@@ -62,3 +63,9 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-11 — Implement
+
+The terminal-write regression now starts a second fresh broker after recovery
+has persisted `failed`. It proves the recovery result itself survives another
+process boundary and the physical executor remains at exactly one invocation.
