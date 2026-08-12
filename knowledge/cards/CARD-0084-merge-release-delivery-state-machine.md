@@ -2,16 +2,22 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Implemented — recovery merge и privileged release-driver закрыты fail-closed.
+- Branch: `factory/18090251-b0b-8a66e557-4ae`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+- Implementation commit: a7551f370e221f9e0cf6293ee806e3f1df011e97 — проверка retry сверяет собственную долговечную операцию без panic.
+- What changed: Recovery сохраняет immutable merge identity; broker подтверждает PID/running до process-group gate и не публикует terminal без durable proof.
+- What changed: Повтор `rc=8` допускает только тот же адаптер и target; тест сверяет его счётчик POST после успешного повторного запуска.
+- Evidence: `go test -race ./internal/releasebroker`, Pilot recovery, shell fixtures, `just check`, `just build`, `git diff --check` → PASS.
+- Next action: Проверить ветку в Review и слить в `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Rebased the strict merge-recovery and release-driver work onto current `main`.
+The retry regression now reads its own durable operation, proving adapter/target
+immutability without a panic; broker, Pilot, FX fixtures, `just check` and build pass.
 
 ### 2026-08-11 — Specification
 
