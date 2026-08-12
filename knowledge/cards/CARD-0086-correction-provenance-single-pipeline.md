@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: PASS; Pilot remains disabled.
+- Status: Verified PASS — awaiting human merge; Pilot remains disabled.
 - Branch: `factory/63ee7b58-ec0-e9738c0c-9f1`.
-- Implementation commit: 5be1a3fd5e5f71248d338a4e776f2ecefb118794 — external repository merges now create a durable merge-only delivery generation and complete the owner wait.
+- Implementation commit: dd4988f8deb36f242cdaa49d18765f8fa9fc15d5 — external repository merges now create a durable merge-only delivery generation and complete the owner wait.
 - What changed: provenance Review/Verify corrections now reach owner completion
   for an external repository without invoking a Factory-owned release adapter.
-- Evidence: `go test ./...` → PASS; `python3 -B -m unittest -v pilot.test_pilot`
-  → PASS (209 tests); `go build ./...` → PASS.
-- Next action: review and merge CARD-0086 after normal branch review.
+- Evidence: clean-cache `just test` → PASS; `python3 -B -m unittest -v
+  pilot.test_pilot` → PASS (209 tests); release, tooling and real-server browser
+  checks → PASS (21 browser tests).
+- Next action: merge `factory/63ee7b58-ec0-e9738c0c-9f1` into `main`.
 
 ## LOG
 
@@ -94,3 +95,29 @@ asking the Factory release broker to deploy a repository it does not operate.
 The restart storm tests exercise both Review and Verify corrections through
 this target. Final verification passed: `go test ./...`, all 209 Pilot tests,
 and `go build ./...`; Pilot enablement was not changed.
+
+### 2026-08-12 — Verify
+
+Initial pinned comparison: base `fde77f86a9c020807654df9714c05260e7b7cfae`,
+candidate `fd7dffce1113489b15f4153e18a80e88a22558ac`.
+
+| Acceptance criterion | Command/check | Observed result |
+| --- | --- | --- |
+| 1–3: compatible root creation; inherited, validated and persisted provenance; replay | clean-cache `just test` | PASS; full Go suite covers HTTP/store create, replay and reopen paths |
+| 4–6: Review/Verify correction completes in one pipeline after restart | `python3 -B -m unittest -v pilot.test_pilot` | PASS; 209 tests, including both correction kinds, one root and owner completion |
+| 7: prevented-root event is durable and idempotent | same Pilot suite, crash-boundary outbox regression | PASS; no duplicate durable event after restart/acknowledgement |
+| 8: legacy clients and rows remain compatible | full Go and Pilot suites | PASS; legacy fallback remains limited to missing provenance |
+| 9: migration 027 depends atomically on 026 | clean-cache `just test` | PASS; migration dependency/reopen regression passed |
+| 10: Pilot remains disabled | pinned diff and settings/browser checks | PASS; no operational enablement change |
+| Adjacent build and delivery behavior | `just build`; `just test-release`; `just test-tooling`; `just test-browser` | PASS; reproducible artifacts, tooling, and 21 real-server browser tests |
+| Static and boundary checks | `just format-check`; `just vet`; `just vuln`; `just staticcheck`; `just boundary` | PASS |
+
+Full UI unit run completed 157/158 tests; unchanged
+`web/src/WorkHistory.test.tsx` exceeded its 10-second timeout while several
+worktrees were concurrently running UI suites. The branch does not change UI
+files, `ui-build` reproduced committed assets, and all 21 browser tests passed.
+The implementation commit is an ancestor of the branch and changes Pilot code
+outside `knowledge/cards/`; the worktree was clean before this card update.
+After rebasing onto `fc3af293e5e2b2c3802ad9b1d376f7796aa3b067`,
+`CorrectionProvenanceStormTests` passed all 5 restart/outbox scenarios and
+`go test ./internal/controlplane -run TestTaskProvenance -count=1` passed.
