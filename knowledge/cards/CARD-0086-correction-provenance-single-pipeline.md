@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally
-  disabled.
+- Status: BLOCKED: rebased Pilot storm verification does not reach owner
+  completion for an unrecognised release target; Pilot remains disabled.
 - Branch: `factory/31b80853-0f0-095f6283-3e1`.
-- Implementation commit: 7cd603288a2e666cb261248649fa3bba871f744a — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- Evidence: clean-cache `go test ./...` → PASS; full Pilot suite → PASS
-  (209 tests); `go build ./...` and whitespace check → PASS. The provenance
-  API/migration tests and the restart-storm/outbox tests cover all ten
-  acceptance criteria.
-- Next action: human reviews and merges the correction; Pilot stays disabled
-  until its separate safe release-state-machine decision.
+- Implementation commit: 7cf62afcbec972a5c1266606161407efaf002829 — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
+- Evidence: pre-rebase clean-cache `go test ./...` → PASS; full Pilot suite →
+  PASS (209 tests); `go build ./...` → PASS. On fresh `main`, targeted Go
+  provenance tests pass, but two restart-cycle cases fail at owner completion.
+- Next action: integrate the provenance storm completion path with the new
+  release-state machine, then rerun full verification; keep Pilot disabled.
 
 ## LOG
 
@@ -74,3 +73,15 @@ Clean-cache full verification completed: `go test ./...` (PASS),
 `go build ./...` (PASS). The tree had no unrelated changes before the card
 update; the implementation commit is an ancestor and changes code outside
 `knowledge/cards/`.
+
+### 2026-08-11 — Verify after rebase
+
+| Check | Observed result |
+| --- | --- |
+| Fresh-main targeted control-plane provenance tests | PASS (`go test ./internal/controlplane -run 'TestTaskProvenance...'`) |
+| Fresh-main Pilot restart storm | BLOCKED: `CorrectionProvenanceStormTests` has two errors. Review/Verify corrections retain one root, create no Triage, and merge successfully, but the release state machine does not create a delivery generation for `github.com/acme/repo`; the test cannot reach owner completion. |
+| Full Pilot suite on the earlier incomplete conflict resolution | FAILED (4 failures, 8 errors); discarded by restoring the exact pre-rebase branch and resolving only the merge-path conflict. |
+
+The current rebase preserves provenance helpers, child creation and durable
+outbox. It cannot be marked PASS while the acceptance scenario's final owner
+completion is blocked by the new release-target policy.
