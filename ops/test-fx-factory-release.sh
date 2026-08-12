@@ -1066,6 +1066,23 @@ assert_before "$success/events" 'stop factory-worker.service' 'stop factory-serv
 assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
 assert_before "$success/events" 'stop factory-server.service' 'start factory-server.service'
 assert_before "$success/events" 'start factory-server.service' 'start factory-worker.service'
+assert_before "$success/events" 'release-info ready' 'systemd-run '
+grep -E "^systemd-run .*--on-active=30s /usr/bin/flock -n $success/release.lock /bin/systemctl restart factory-pilot.service$" \
+  "$success/events" >/dev/null \
+  || fail "Pilot restart did not use the release lock after release metadata"
+exec 8>"$success/release.lock"
+flock -n 8 || fail "could not acquire successful fixture release lock"
+deferred_command=$(sed "s|/bin/systemctl|$success/bin/systemctl|" "$success/deferred-pilot-restart")
+if TEST_EVENTS="$success/events" /bin/bash -c "$deferred_command"; then
+  fail "outdated Pilot restart ran while a newer release held the lock"
+fi
+! grep -Fx 'restart factory-pilot.service' "$success/events" >/dev/null \
+  || fail "outdated Pilot restart reached systemctl while the lock was held"
+flock -u 8
+TEST_EVENTS="$success/events" /bin/bash -c "$deferred_command" \
+  || fail "current Pilot restart did not run after the release lock was freed"
+[ "$(grep -Fxc 'restart factory-pilot.service' "$success/events")" -eq 1 ] \
+  || fail "Pilot restart did not run exactly once after the release lock was freed"
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
 grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release did not explain the deployed change"
@@ -1213,7 +1230,7 @@ run_release "$identity_retry" identity-transient \
   || { cat "$identity_retry/output" >&2; fail "transient identity lock was not retried"; }
 [ -e "$identity_retry/identity-retried" ] || fail "identity retry scenario did not exercise the transient failure"
 
-for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install; do
+for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install systemd-run-fail; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   set +e
@@ -1232,6 +1249,16 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   fi
   assert_no_fixture_processes "$failed"
 done
+
+unchanged_brain="$temporary/unchanged-brain"
+make_fixture "$unchanged_brain" parallel-success
+for brain_file in pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
+  /bin/cp "$SCRIPT_DIR/../$brain_file" "$unchanged_brain/live/$brain_file"
+done
+run_release "$unchanged_brain" parallel-success \
+  || { cat "$unchanged_brain/output" >&2; fail "release with unchanged brain failed"; }
+! grep -F 'systemd-run ' "$unchanged_brain/events" >/dev/null \
+  || fail "unchanged brain scheduled a Pilot restart"
 
 run_crash_cleanup
 
