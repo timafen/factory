@@ -23,6 +23,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/sleep"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/su"
 printf '#!/usr/bin/env bash\nif [ "$1" = "%s/worker/worktrees/unmoved" ]; then exit 1; fi\nexec /bin/mv "$@"\n' "$TMP" >"$TMP/bin/mv"
 chmod +x "$TMP/bin/systemctl" "$TMP/bin/sleep" "$TMP/bin/su" "$TMP/bin/mv"
+sed -i '2i echo "$*" >> "'$TMP'/systemctl.log"' "$TMP/bin/systemctl"
 
 python3 -c '
 import json, sys
@@ -74,12 +75,13 @@ test "$(<"$TMP/request-path")" = '/api/v1/workers/worker-1/retained-worktrees/cl
 test ! -e "$TMP/worker/worktrees/retained"
 test -e "$TMP/worker/worktrees/unmoved"
 test -e "$TMP/quarantine/worker-retained."* 2>/dev/null
-test ! -e "$TMP/unhealthy/worktrees/current"
-test -e "$TMP/quarantine/unhealthy-current."* 2>/dev/null
+test -e "$TMP/unhealthy/worktrees/current"
+test ! -e "$TMP/quarantine/unhealthy-current."* 2>/dev/null
 test -e "$TMP/healthy/worktrees/retained"
 test ! -e "$TMP/quarantine/healthy-retained."* 2>/dev/null
 grep -q 'подтверждена очистка retained worktree: claude-haiku' "$TMP/janitor.log"
-grep -q 'ОСВОБОЖДАЮ online-unhealthy' "$TMP/janitor.log"
+test "$(grep -c 'stop factory-unhealthy.service\|start factory-unhealthy.service' "$TMP/systemctl.log" || true)" -eq 0
+test "$(python3 -c 'import json; print("online-unhealthy" in json.load(open("'$TMP'/state/heals.json")))')" = False
 test "$(grep -c 'ОСВОБОЖДАЮ online-healthy' "$TMP/janitor.log" || true)" -eq 0
 
 mkdir -p "$TMP/worker/worktrees/missing"
@@ -97,6 +99,6 @@ test -e "$TMP/quarantine/worker-missing."* 2>/dev/null
 grep -q 'не удалось подтвердить очистку retained worktree: claude-haiku' "$TMP/janitor.log"
 
 echo 'TestJanitorSelectsOfflineRetainedWorker: PASS'
-echo 'TestJanitorSelectsOnlineUnhealthyWorker: PASS'
+echo 'TestJanitorSkipsOnlineUnhealthyWorker: PASS'
 echo 'TestJanitorSkipsOnlineHealthyRetainedWorker: PASS'
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
