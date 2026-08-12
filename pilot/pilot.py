@@ -1141,10 +1141,6 @@ def launch_subtask(conf, epic, index, workflows, workers):
                     "Работай сразу по описанию ниже.\n")
     # Подзадача наследует происхождение эпика: если эпик завёл помощник,
     # владельцу важно видеть именно это, а не безликое «развернулось само».
-    note_work(sub["title"], epic.get("origin") or ORIGIN_ORCHESTRATOR,
-              stage_name, stages_all[:start],
-              "задача мелкая — разбор и спецификация не окупаются"
-              if start else "")
     context = (
         f"Epic: {epic['name']} (id {epic['id']})\n"
         f"Overall goal: {epic['goal']}\n\n"
@@ -1167,6 +1163,12 @@ def launch_subtask(conf, epic, index, workflows, workers):
     try:
         r = create_task(body, conf)
         tid = r.get("task", {}).get("id")
+        if not tid:
+            raise RuntimeError("create_task returned no task.id")
+        note_work(sub["title"], epic.get("origin") or ORIGIN_ORCHESTRATOR,
+                  stage_name, stages_all[:start],
+                  "задача мелкая — разбор и спецификация не окупаются"
+                  if start else "", work_id=tid)
         sub["status"] = "running"
         sub["task_id"] = tid
         sub["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -2287,7 +2289,8 @@ def autostart_plan(conf, tasks, workflows, workers):
         if repository_id != stored_repository_id:
             updates["repo"] = repository_id
         set_idea(rec["id"], **updates)
-        note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
+        note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name,
+                  work_id=task_id)
         notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
         return task_id
     return None
@@ -3173,22 +3176,24 @@ def _all_tasks_for_diag_repair():
         seen_cursors.add(cursor)
 
 
-def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
+def begin_diag_repair(conf, base, stage, verdict, tasks, candidate, work_id=""):
     """Cancel one proven looping run. A later sweep resumes it after terminal state."""
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
-    if base in repairs:
+    key = work_storage_key(base, work_id, candidate, tasks)
+    if key in repairs:
         return False
     try:
         all_tasks = _all_tasks_for_diag_repair()
     except Exception as e:
         repair = {"status": "failed", "task_id": candidate.get("id", "")}
-        _fail_diag_repair(conf, base, repair,
+        _fail_diag_repair(conf, key, repair,
                           f"не удалось проверить все активные запуски: {e}")
         return False
     live = []
     live_ids = set()
     for task in all_tasks:
-        if (base_title(task.get("title", "")) != base
+        if ((not same_task_work(task, work_id) if work_id else
+             (has_task_provenance(task) or base_title(task.get("title", "")) != base))
                 or task.get("state") not in ("running", "queued", "preparing")):
             continue
         task_id = task.get("id")
@@ -3206,7 +3211,7 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
                   f"найдено активных запусков — {len(live)}")
         repair = {"status": "failed", "task_id": candidate.get("id", ""),
                   "failure": reason}
-        _save_diag_repair(base, repair)
+        _save_diag_repair(key, repair)
         log(f"DIAG REPAIR SKIP base={base!r}: {reason}")
         notify(conf, "Автопочинка не начата", f"{base}\n\nПричина: {reason}",
                priority="high", tags="warning", click=f"{UI_BASE}/work")
@@ -3215,14 +3220,15 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         detail = api(f"/tasks/{candidate['id']}")
     except Exception as e:
         repair = {"status": "failed", "task_id": candidate["id"]}
-        _fail_diag_repair(conf, base, repair,
+        _fail_diag_repair(conf, key, repair,
                           f"не удалось прочитать зациклившийся запуск: {e}")
         return False
     task = detail.get("task") or {}
     workflow = detail.get("workflow") or {}
     branch = (extract_branch(detail.get("context") or task.get("context") or "", "")
-              or branch_from_history(tasks, base))
+              or branch_from_history(tasks, base, work_id=work_id))
     repair = {
+        "work_id": work_id,
         "status": "cancel_pending" if running_candidate else "resume_pending",
         "task_id": candidate["id"],
         "title": candidate.get("title", ""),
@@ -3246,27 +3252,27 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
     missing = [label for label, value in required.items() if not value]
     if missing:
         _fail_diag_repair(
-            conf, base, repair,
+            conf, key, repair,
             "до отмены не удалось сохранить данные для безопасного продолжения: "
             + ", ".join(missing))
         return False
     # A failed run reaches this path from cycle() after it is already terminal;
     # no cancellation is needed and reconciliation may resume it immediately.
     if terminal_candidate:
-        _save_diag_repair(base, repair)
+        _save_diag_repair(key, repair)
         reconcile_diag_repairs(conf, tasks)
         return True
     # Persist before the HTTP call: after an uncertain response we must never
     # cancel a second time. Cancelling the same identified task is idempotent.
-    _save_diag_repair(base, repair)
+    _save_diag_repair(key, repair)
     try:
         api(f"/tasks/{candidate['id']}/cancel", {})
     except Exception as e:
-        _fail_diag_repair(conf, base, repair,
+        _fail_diag_repair(conf, key, repair,
                           f"отмена зациклившегося запуска не подтверждена: {e}")
         return False
     repair["status"] = "cancellation_requested"
-    _save_diag_repair(base, repair)
+    _save_diag_repair(key, repair)
     log(f"DIAG REPAIR CANCEL task={candidate['id']} base={base!r}")
     notify(conf, "Чиню застрявшую работу",
            f"{base}\n\nПричина: {cut(repair['reason'], 220)}\n"
@@ -3432,7 +3438,8 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     else:
         if repair_task is not None:
             verdict["repair_started"] = bool(
-                begin_diag_repair(conf, base, stage, verdict, tasks, repair_task))
+                begin_diag_repair(conf, base, stage, verdict, tasks, repair_task,
+                                  work_id=task_durable_work_id(repair_task, tasks)))
         else:
             notify(conf, "Разобрался в застрявшей",
                    f"{base}\n\nБуксовала {rounds} кругов. Причина: {cut(why, 220)}\n"
@@ -4891,13 +4898,13 @@ def task_cost_usd(attempt_ids):
 BUDGET_STOPS = f"{HOME}/pilot/budget_stops.json"
 
 
-def note_budget_stop(base):
+def note_budget_stop(base, work_id=""):
     """Работа, остановленная по деньгам, не должна перезапускаться сама.
     Иначе выходит круг: отмена -> автоответ «перезапусти» -> ещё один потолок.
     Так мы уже сожгли деньги дважды подряд без единой строчки кода."""
     try:
         rec = load(BUDGET_STOPS, {})
-        rec[base] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        rec[work_storage_key(base, work_id)] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         save(BUDGET_STOPS, rec)
     except Exception as e:
         log("budget_stop_write_error", repr(e))
@@ -4996,13 +5003,14 @@ def _live(task):
     return task.get("state") in ("running", "queued", "preparing")
 
 
-def work_spent(tasks, base):
+def work_spent(tasks, base, work_id=""):
     """Сколько съела работа целиком — все стадии и все перезапуски. Считать по
     одной задаче бессмысленно: перезапуск заводит новую, и ровно так конвейер
     трижды заплатил один и тот же потолок."""
     atts = []
     for t in tasks:
-        if base_title(t.get("title") or "") != base:
+        if (not same_task_work(t, work_id) if work_id else
+                (has_task_provenance(t) or base_title(t.get("title") or "") != base)):
             continue
         atts += attempts_of(t["id"], not _live(t))
     return task_cost_usd(atts)
@@ -5029,13 +5037,14 @@ def branch_head(branch):
     return m.group(0) if m else ""
 
 
-def stop_pipeline(conf, base):
+def stop_pipeline(conf, base, work_id=""):
     """Насовсем остановить работу: пилот её больше не двигает."""
     try:
         disk = load(CONF_PATH, {})
         sp = disk.get("stopped_pipelines") or []
-        if base not in sp:
-            sp.append(base)
+        key = work_storage_key(base, work_id)
+        if key not in sp:
+            sp.append(key)
             disk["stopped_pipelines"] = sp
             save(CONF_PATH, disk)
         conf["stopped_pipelines"] = sp
@@ -5097,7 +5106,9 @@ def budget_guard(conf, tasks, workers=None):
 
         wname = (by_id.get(t.get("worker_id")) or {}).get("name", "")
         cx = complexity_of(conf, stage, wname)
-        rec = st.setdefault(base, {"extensions": 0, "downgrades": 0,
+        work_id = task_durable_work_id(t, tasks)
+        key = work_storage_key(base, work_id, t, tasks)
+        rec = st.setdefault(key, {"extensions": 0, "downgrades": 0,
                                    "last_head": "", "stopped": ""})
         ext = int(rec.get("extensions") or 0)
         cap = stage_cap(conf, stage, cx, wname) * (1.5 ** ext)
@@ -5106,12 +5117,12 @@ def budget_guard(conf, tasks, workers=None):
         if spent < cap:
             continue
 
-        branch = branch_from_history(tasks, base)
+        branch = branch_from_history(tasks, base, work_id=work_id)
         head = branch_head(branch)
         moved = bool(head) and head != (rec.get("last_head") or "")
         # credit — списание за прошлые сгоревшие заходы, в которых виновата
         # не работа, а наша собственная поломка.
-        total = work_spent(tasks, base) - float(rec.get("credit") or 0)
+        total = work_spent(tasks, base, work_id=work_id) - float(rec.get("credit") or 0)
         total = max(0.0, total)
         wcap = work_cap(conf, cx)
 
@@ -5147,8 +5158,8 @@ def budget_guard(conf, tasks, workers=None):
                             "долларов). Жечь дальше без нового плана не буду."
                             .format(total, wcap))
             changed = True
-            note_budget_stop(base)
-            stop_pipeline(conf, base)
+            note_budget_stop(base, work_id=work_id)
+            stop_pipeline(conf, base, work_id=work_id)
             log(f"BUDGET HARD STOP base={base!r} всего=${total:.2f} "
                 f"потолок работы=${wcap:.0f}")
             notify(conf, "Остановил работу · деньги",
