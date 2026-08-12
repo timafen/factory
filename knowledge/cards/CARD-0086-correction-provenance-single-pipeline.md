@@ -4,7 +4,7 @@
 
 - Status: Implemented — awaiting Review.
 - Branch: `factory/d40c77cd-34c-8ddd7926-bf0`.
-- Implementation commit: db4f4ba0991aabad6d792ead31e798b6fe123703 — сохранено
+- Implementation commit: c9c10250e80beaa6b12b8dcd711ee948e0a1aab9 — сохранено
   происхождение задач для корректировок.
 - What changed: control plane сохраняет `work_id`, родителя и причину
   корректировки; Pilot не принимает явного потомка за новый root.
