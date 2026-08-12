@@ -441,6 +441,24 @@ AGENT_RULES = """
 """
 
 
+TRIAGE_AGENT_RULES = """
+=== ПРАВИЛА ДЛЯ АГЕНТА (обязательны, проверяются машиной) ===
+1. Это этап Разбора: здесь ещё нет поставки кода и удалённой ветки-кандидата.
+   Не требуй имени ветки, коммита, перебазирования или отправки изменений.
+2. Изучай задачу и свежий основной код без изменений файлов. Не создавай
+   коммиты и не переключай рабочую копию на другую ветку.
+3. Заверши ровно одним честным решением этапа: READY TO SPECIFY,
+   NEEDS INFORMATION, WAIT или CLOSE / DUPLICATE. Отсутствующая ветка
+   кандидата не является причиной WAIT на Разборе.
+4. Если базовые инструкции workflow требуют строки сдачи ветки или коммита,
+   на Разборе это требование не применяется: вместо них дай факты, границы,
+   проверки и следующий шаг для Спецификации.
+5. Пиши для человека. Поставленное человеком называй ПРЕДЛОЖЕНИЕМ,
+   обнаруженное исполнителем по ходу работы — НАХОДКОЙ.
+=== КОНЕЦ ПРАВИЛ ===
+"""
+
+
 def notification_channel(conf):
     """Return the configured owner notification URL for local workers."""
     server = str((conf or {}).get("ntfy_server") or "").strip().rstrip("/")
@@ -450,18 +468,19 @@ def notification_channel(conf):
     return server + "/" + urllib.parse.quote(topic, safe="")
 
 
-def agent_rules(conf=None):
+def agent_rules(conf=None, stage=""):
+    rules = TRIAGE_AGENT_RULES if str(stage).strip() == "Triage" else AGENT_RULES
     channel = notification_channel(conf)
     if not channel:
-        return AGENT_RULES
-    return AGENT_RULES.replace(
+        return rules
+    return rules.replace(
         "=== КОНЕЦ ПРАВИЛ ===",
         "8. Канал срочных уведомлений владельца: " + channel + "\n"
         "=== КОНЕЦ ПРАВИЛ ===",
     )
 
 
-def context_with_agent_rules(context, conf=None):
+def context_with_agent_rules(context, conf=None, stage=""):
     """Replace every managed rules block with the current configured rules."""
     start = "=== ПРАВИЛА ДЛЯ АГЕНТА (обязательны, проверяются машиной) ==="
     end = "=== КОНЕЦ ПРАВИЛ ==="
@@ -470,7 +489,7 @@ def context_with_agent_rules(context, conf=None):
         re.DOTALL,
     )
     ctx = managed.sub("\n\n", str(context or "")).strip()
-    rules = agent_rules(conf).strip()
+    rules = agent_rules(conf, stage).strip()
     ctx = ctx[:max(0, 60000 - len(rules) - 2)].rstrip()
     return ((ctx + "\n\n") if ctx else "") + rules
 
@@ -489,7 +508,8 @@ def create_task(body, conf=None):
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
     if str(body.get("title", "")).startswith(PREFIX):
-        body["context"] = context_with_agent_rules(body.get("context"), conf)
+        body["context"] = context_with_agent_rules(
+            body.get("context"), conf, stage_from_title(body.get("title", "")))
     """Create a task robustly. Attempt chain:
     1. exact worker + repository (fast path when already advertised);
     2. route + same worker (lets the worker acquire the repo dynamically);

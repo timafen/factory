@@ -67,6 +67,37 @@ class AgentRulesScopeTests(unittest.TestCase):
             with self.subTest(signature=signature):
                 self.assertIn(signature, pilot.AGENT_RULES)
 
+    def test_triage_rules_do_not_require_a_delivery_branch(self):
+        rules = pilot.agent_rules({}, "Triage")
+
+        self.assertIn("здесь ещё нет поставки кода", rules)
+        self.assertIn("Отсутствующая ветка", rules)
+        self.assertIn("не является причиной WAIT на Разборе", rules)
+        for forbidden in ("git push", "candidate_sha", "Сдача: сначала", "origin/main...HEAD"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rules)
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_triage_task_replaces_stale_delivery_rules(self, _api, _money):
+        body = {
+            "title": "[auto] [1/5 Triage] Проверить проблему",
+            "context": "Контекст\n\n" + pilot.AGENT_RULES,
+        }
+
+        pilot.create_task(body, {})
+
+        self.assertIn("здесь ещё нет поставки кода", body["context"])
+        self.assertNotIn("candidate_sha", body["context"])
+        self.assertNotIn("git push --force-with-lease", body["context"])
+        self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
+    def test_later_stages_keep_delivery_rules(self):
+        rules = pilot.agent_rules({}, "Specification")
+
+        self.assertIn("candidate_sha", rules)
+        self.assertIn("git push --force-with-lease", rules)
+
     def test_stage_verdict_keeps_review_return_reason(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
