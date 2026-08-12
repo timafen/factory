@@ -222,7 +222,7 @@ func superviseRuntime(
 	displayName := runtimeDisplayName(init.Runtime)
 	command := exec.Command(init.RuntimeExecutable, arguments...)
 	command.Dir = init.Worktree
-	command.Env = runtimeEnvironment()
+	command.Env = runtimeEnvironment(init.Worktree)
 	configureExistingProcessGroup(command, groupID)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -401,16 +401,34 @@ func superviseRuntime(
 	return writer.send(message)
 }
 
-func runtimeEnvironment() []string {
-	environment := make([]string, 0, len(os.Environ())+2)
+func runtimeEnvironment(worktree string) []string {
+	// Service-only Factory paths must never leak into an agent command. In
+	// production FACTORY_DATA_HOME points at the live installation, and a
+	// harmless `just build` would otherwise overwrite the running binaries.
+	blocked := map[string]struct{}{
+		"FACTORY_BUILD_DIR":        {},
+		"FACTORY_V2_BUILD_DIR":     {},
+		"FACTORY_DATA_HOME":        {},
+		"FACTORY_V2_DATA_HOME":     {},
+		"FACTORY_WORKER_CONFIG":    {},
+		"FACTORY_V2_WORKER_CONFIG": {},
+	}
+	environment := make([]string, 0, len(os.Environ())+3)
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
 		if name == "LANG" || name == "LC_ALL" {
 			continue
 		}
+		if _, unsafe := blocked[name]; unsafe {
+			continue
+		}
 		environment = append(environment, entry)
 	}
-	return append(environment, "LANG="+runtimeUTF8Locale, "LC_ALL="+runtimeUTF8Locale)
+	return append(environment,
+		"FACTORY_BUILD_DIR="+filepath.Join(worktree, ".factory-build"),
+		"LANG="+runtimeUTF8Locale,
+		"LC_ALL="+runtimeUTF8Locale,
+	)
 }
 
 func finishSupervisorStartFailure(anchor *exec.Cmd, identity string, writer *synchronizedEncoder, cause error) error {
