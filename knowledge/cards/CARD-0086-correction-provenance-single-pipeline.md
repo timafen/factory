@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented and tested on current `main`; Pilot remains operationally disabled.
-- Branch: `factory/cca728a1-7fd-f804ceba-5e5` (base `origin/main`
+- Status: Corrected and fully tested on current `main`; Pilot remains operationally disabled.
+- Branch: `factory/9237f495-61a-a45beb40-508` (base `origin/main`
   `3183424f924d440b686908f219d0013b7ee8c504`).
-- Implementation commit: f9ebf11002431b3c82eec96c3491e6a6a915eee0 — resume and Review durable state are isolated by `work_id`.
-- What changed: Work UI and `/api/v1/works/resume` pass `work_id`; pause,
-  metadata, history and child selection no longer merge same-title works.
-- What changed: Review promises, areas, return limits, dirty/gate state and
-  delivery artifacts use `work_id`; title fallback remains legacy-only.
-- Evidence: focused HTTPS browser, UI/API/Pilot and migration checks → PASS;
-  full Pilot 210/210, UI 160/160, full Go, lint, builds and diff → PASS.
-- Next action: review and merge this current-main correction while keeping Pilot disabled.
+- Implementation commit: 0ba694a163b0840ed9ec847f08f8b3b170a80b41 — Plan, epic, receipts, budgets and history branches are isolated by `work_id`.
+- What changed: Plan/epic completion and root metadata require matching
+  provenance; title fallback is limited to rows where both sides are legacy.
+- What changed: work spend, budget/stop state and history branch selection use
+  the stable work key, with concurrent same-title regressions for both roots.
+- Evidence: focused Pilot 32/32 and provenance/migration Go → PASS; full Pilot
+  214/214, UI 160/160, HTTPS browser 21/21, full Go, lint/build/dist/diff → PASS.
+- Next action: review and merge this correction while keeping Pilot disabled.
 
 ## LOG
 
@@ -91,3 +91,16 @@ fresh-review behavior and the PR #135 Pilot config fix remain unchanged.
 Focused API/UI/Pilot/migration and HTTPS Chromium checks passed; full Pilot
 passed 210/210, fresh-main UI passed 160/160, `umask 077; go test ./...`, lint,
 Go/UI builds and diff checks passed. Pilot remains disabled.
+
+### 2026-08-11 — Implement
+
+Strict Review's remaining title-only paths were corrected on the new branch.
+Plan and epic completion, subtask/task/merge receipts, root `note_work`, work
+spend, budget/stop state and history branch lookup now use the stable `work_id`;
+only two genuinely provenance-free legacy records may fall back to title.
+Concurrent same-title regressions exercise real Plan, epic, merge and budget
+state: work-a cannot complete, charge, stop, or choose a branch for work-b.
+Focused Pilot passed 32/32 and provenance/API/migration Go checks passed; full
+Pilot passed 214/214, UI 160/160, HTTPS Playwright 21/21, full
+`umask 077; go test ./...`, lint, Go/UI builds, dist and diff checks passed.
+Pilot remains disabled.
