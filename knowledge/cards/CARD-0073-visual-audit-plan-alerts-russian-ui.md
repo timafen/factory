@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Implement PASS — targeted browser checks зелёные.
-- Branch: `factory/06aca8f6-f40-899f572b-747`.
+- Status: BLOCKED — committed `web/dist` не воспроизводится, поэтому полный browser-suite не запускается.
+- Branch: `factory/5ca3b3c2-88a-882ecf3c-5c1`.
 Implementation commit: aad2e2236733c6faf9d7395a6bc86f59e78ccf17 — усилен locator кнопки сохранения Settings.
 - What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()`.
-- Evidence: targeted Playwright visual audit, legacy migration and Settings — 3/3 passed; production не менялся.
-- One next action: отправить ветку и подтвердить её через `git ls-remote`.
+- Evidence: `npm run test:browser` успешно собрал UI, но `git diff --exit-code -- dist` обнаружил новый `index-BnohdI1Y.js` вместо committed `index-BK4d6-ve.js`; Playwright не был запущен.
+- One next action: воспроизвести и закоммитить корректный `web/dist`, затем один раз запустить полный browser-suite.
 
 ## LOG
 
@@ -82,3 +82,14 @@ labels и responsive-правила проверены Vitest, Playwright, lint,
 тест ограничен Settings-контейнером и использует `getByRole("button", { name: "Сохранить настройки", exact: true })`.
 Убран `.first()`, поэтому дубликат кнопки или неверная область теперь ломают сценарий.
 Targeted Playwright: `audits every Factory screen on desktop and phone`, legacy migration и Settings — 3 passed.
+
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| Полный Go/UI gate | `just check` | BLOCKED: vet, vuln и staticcheck прошли; затем нетронутый `internal/worker.TestCancellationStopsCompleteProcessGroup` превысил timeout 300 s. |
+| Воспроизводимость committed UI | `cd web && npm ci --no-audit --no-fund`, затем `npm run test:browser` | BLOCKED: `tsc -b && vite build` прошёл, но guard `git diff --exit-code -- dist` обнаружил `index-BnohdI1Y.js` вместо `index-BK4d6-ve.js`; Playwright не стартовал. |
+| 21 русскоязычный браузерный сценарий | Тот же единственный browser-wrapper | Не проверены: wrapper остановился до запуска сценариев. |
+| Чистота дерева | восстановление только build-generated `web/dist`, `git status --short` | PASS до записи evidence; тестовые артефакты не оставлены. |
+
+Итог: BLOCKED. Нельзя подтвердить 21 сценарий, пока committed `web/dist` не станет воспроизводимым. Тайм-аут worker-теста относится к нетронутой области и зафиксирован как находка проекта.
