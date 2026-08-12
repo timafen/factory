@@ -560,6 +560,10 @@ add_artifact "$work/factory-server" factory-server "$SERVER_BIN" 755 "$OWNER" \
   && add_artifact "$work/src/intake/plan.py" intake-plan.py "$BRAIN_LIVE/intake/plan.py" 644 "$BRAIN_OWNER" \
   || { fail "не удалось собрать полный кандидатный комплект"; cleanup; exit 4; }
 
+deferred_pilot_restart=0
+cmp -s "$work/src/pilot/pilot.py" "$BRAIN_LIVE/pilot/pilot.py" \
+  || deferred_pilot_restart=1
+
 services="$stage/services.tsv"
 for unit in "$SERVER_SERVICE" $(worker_service_list) "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
   printf '%s\t%s\n' "$unit" "$(service_state "$unit")" >>"$services"
@@ -722,6 +726,19 @@ cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" 
 ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
 ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
 write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
+
+if [ -f "$work/src/ops/factory-janitor.sh" ]; then
+  janitor_bin="${FACTORY_JANITOR_BIN:-/usr/local/bin/factory-janitor.sh}"
+  install -o root -g root -m 755 "$work/src/ops/factory-janitor.sh" "$janitor_bin" \
+    || rollback "санитар воркеров не обновился — сервер и воркер уже обновлены" 7
+fi
+
+if [ "$deferred_pilot_restart" = 1 ]; then
+  step "ставлю безопасный отложенный перезапуск Пилота"
+  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+    /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
+    || rollback "не смог отложить перезапуск Пилота" 7
+fi
 rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
 cleanup
