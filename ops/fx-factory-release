@@ -719,6 +719,21 @@ as_user git clone --quiet "$REPO" "$work/src" \
 as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
   || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
+trusted_gate_script="$work/src/ops/test-fx-factory-release.sh"
+case "$trusted_gate_script" in /*) ;; *) fail "gate script не имеет абсолютного пути"; cleanup; exit 4 ;; esac
+gate_script_owner=$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_script" 2>/dev/null) \
+  || { fail "не смог проверить gate script"; cleanup; exit 4; }
+work_owner=$("$TRUSTED_STAT" -Lc %u -- "$work" 2>/dev/null) \
+  || { fail "не смог проверить владельца сборки"; cleanup; exit 4; }
+gate_script_mode=$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_script" 2>/dev/null) \
+  || { fail "не смог проверить права gate script"; cleanup; exit 4; }
+if [ ! -f "$trusted_gate_script" ] || [ -L "$trusted_gate_script" ] \
+  || [ ! -r "$trusted_gate_script" ] || [ "$gate_script_owner" != "$work_owner" ] \
+  || (( (8#$gate_script_mode & 0022) != 0 )); then
+  fail "gate script не прошёл проверку доверенного пути"
+  cleanup
+  exit 4
+fi
 sha=$(as_user git -C "$work/src" rev-parse HEAD)
 subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
 case "$subject" in
