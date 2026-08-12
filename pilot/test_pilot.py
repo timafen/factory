@@ -5078,7 +5078,8 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(body["title"], "[auto] [1/1 Triage] Первая")
         self.assertIn("Это этап Triage", body["context"])
         self.assertIn("Зачем: важнее", body["context"])
-        set_idea.assert_called_once_with("top", state="in_work", task_id="new-task")
+        set_idea.assert_called_once_with(
+            "top", state="in_work", task_id="new-task", work_id="new-task")
         note_work.assert_called_once()
         notify.assert_called_once()
         self.assertEqual(pilot.notify_group("Взял из Плана"), "routine")
@@ -5105,7 +5106,8 @@ class PlanAutostartTest(unittest.TestCase):
 
         self.assertEqual(create.call_args.args[0]["repository_id"], "factory-repo-id")
         set_idea.assert_called_once_with(
-            "top", state="in_work", task_id="new-task", repo="factory-repo-id")
+            "top", state="in_work", task_id="new-task", work_id="new-task",
+            repo="factory-repo-id")
 
     @mock.patch.object(pilot, "notify")
     @mock.patch.object(pilot, "note_work")
@@ -5370,7 +5372,8 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(len(set(seen_keys)), 1)
         self.assertTrue(seen_keys[0].startswith("plan-autostart:top:"))
         self.assertEqual(set_idea.call_args_list[-1], mock.call(
-            "top", state="in_work", task_id="created-on-first-post"))
+            "top", state="in_work", task_id="created-on-first-post",
+            work_id="created-on-first-post"))
 
     @mock.patch.object(pilot, "notify")
     @mock.patch.object(pilot, "note_work")
@@ -9205,6 +9208,213 @@ class MergedCommitShaTests(unittest.TestCase):
     def test_without_expected_head_takes_any_merged(self):
         with mock.patch.object(pilot, "gh_json", return_value=self.PULLS):
             self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "d" * 40)
+class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
+    """Concurrent owner work keeps real Pilot state partitioned by work_id."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = self.temp.name
+        for name in ("questions", "epics", "verdicts"):
+            os.makedirs(os.path.join(self.home, name))
+        self.paths = {
+            "ideas": os.path.join(self.home, "ideas.json"),
+            "works": os.path.join(self.home, "works.json"),
+            "questions": os.path.join(self.home, "questions"),
+            "epics": os.path.join(self.home, "epics"),
+            "verdicts": os.path.join(self.home, "verdicts"),
+            "merges": os.path.join(self.home, "merges.jsonl"),
+            "budget": os.path.join(self.home, "budget.json"),
+            "budget_stops": os.path.join(self.home, "budget_stops.json"),
+            "config": os.path.join(self.home, "config.json"),
+        }
+        self.patches = [
+            mock.patch.object(pilot, "IDEAS_PATH", self.paths["ideas"]),
+            mock.patch.object(pilot, "WORKS_PATH", self.paths["works"]),
+            mock.patch.object(pilot, "QUESTION_DIR", self.paths["questions"]),
+            mock.patch.object(pilot, "EPIC_DIR", self.paths["epics"]),
+            mock.patch.object(pilot, "VERDICT_DIR", self.paths["verdicts"]),
+            mock.patch.object(pilot, "MERGES_PATH", self.paths["merges"]),
+            mock.patch.object(pilot, "BUDGET_PATH", self.paths["budget"]),
+            mock.patch.object(pilot, "BUDGET_STOPS", self.paths["budget_stops"]),
+            mock.patch.object(pilot, "CONF_PATH", self.paths["config"]),
+        ]
+        for patch in self.patches:
+            patch.start()
+        self.addCleanup(lambda: [patch.stop() for patch in reversed(self.patches)])
+        pilot.save(self.paths["config"], {"stopped_pipelines": []})
+
+    def test_plan_completion_never_closes_other_same_title_work(self):
+        title = "Одинаковая карточка"
+        pilot.save(self.paths["ideas"], [
+            {"id": "idea-a", "title": title, "state": "in_work",
+             "task_id": "root-a", "work_id": "work-a"},
+            {"id": "idea-b", "title": title, "state": "in_work",
+             "task_id": "root-b", "work_id": "work-b"},
+        ])
+        tasks = [
+            {"id": "root-a", "work_id": "work-a", "state": "succeeded",
+             "created_at": "2026-08-11T10:00:00Z",
+             "title": f"[auto] [1/5 Triage] {title}"},
+            {"id": "root-b", "work_id": "work-b", "state": "succeeded",
+             "created_at": "2026-08-11T10:00:01Z",
+             "title": f"[auto] [1/5 Triage] {title}"},
+            {"id": "verify-a", "work_id": "work-a", "parent_task_id": "root-a",
+             "state": "succeeded", "created_at": "2026-08-11T11:00:00Z",
+             "title": f"[auto] [5/5 Verify] {title}"},
+        ]
+        pilot.mark_final("verify-a", "Verify", True)
+
+        self.assertEqual(pilot.cleanup_completed_plan_cards(tasks, 5), ["idea-a"])
+        states = {idea["id"]: idea["state"] for idea in pilot.ideas_all()}
+        self.assertEqual(states, {"idea-a": "done", "idea-b": "in_work"})
+
+    def test_plan_and_epic_producers_record_both_same_title_roots(self):
+        title = "Одинаковый корень"
+        pilot.save(self.paths["ideas"], [
+            {"id": "plan-a", "title": title, "origin": "owner-a",
+             "state": "planned", "order": 1, "repo": "repo",
+             "run_generation": "generation-a"},
+            {"id": "plan-b", "title": title, "origin": "owner-b",
+             "state": "planned", "order": 2, "repo": "repo",
+             "run_generation": "generation-b"},
+        ])
+        conf = {"stages": [{"workflow": "Triage", "workers": {"medium": "triager"}}],
+                "max_parallel_works": 4}
+        workflows = {"Triage": {"enabled": True, "revision_id": "triage-rev"}}
+        workers = {"triager": {"id": "triager-id", "online": True,
+                                "health": "healthy"}}
+        roots = iter((
+            {"task": {"id": "task-a", "work_id": "plan-work-a"}},
+            {"task": {"id": "task-b", "work_id": "plan-work-b"}},
+        ))
+        with mock.patch.object(pilot, "create_task", side_effect=lambda *_: next(roots)), \
+                mock.patch.object(pilot, "notify"):
+            self.assertEqual(pilot.autostart_plan(conf, [], workflows, workers), "task-a")
+            self.assertEqual(pilot.autostart_plan(conf, [], workflows, workers), "task-b")
+
+        works = pilot.load(self.paths["works"], {})
+        self.assertEqual(works["plan-work-a"]["origin"], "owner-a")
+        self.assertEqual(works["plan-work-b"]["origin"], "owner-b")
+        self.assertEqual(works["plan-work-a"]["start_stage"], "Triage")
+        self.assertEqual(works["plan-work-b"]["skipped"], [])
+
+        epic_conf = {
+            "stages": [
+                {"workflow": "Triage", "workers": {"medium": "triager"}},
+                {"workflow": "Specification", "workers": {"medium": "triager"}},
+                {"workflow": "Implement + Test", "workers": {"low": "implementer"}},
+            ],
+            "skip_stages_for_low": ["Triage", "Specification"],
+        }
+        epic_workflows = {
+            name: {"enabled": True, "revision_id": name + "-rev"}
+            for name in ("Triage", "Specification", "Implement + Test")
+        }
+        epic_workers = {"implementer": {"id": "implementer-id", "online": True,
+                                         "health": "healthy"}}
+        epics = [
+            {"id": "epic-a", "name": "A", "goal": "A", "origin": "agent-a",
+             "repository_id": "repo", "subtasks": [{"title": title, "complexity": "low"}]},
+            {"id": "epic-b", "name": "B", "goal": "B", "origin": "agent-b",
+             "repository_id": "repo", "subtasks": [{"title": title, "complexity": "low"}]},
+        ]
+        epic_roots = iter((
+            {"task": {"id": "epic-task-a", "work_id": "epic-work-a"}},
+            {"task": {"id": "epic-task-b", "work_id": "epic-work-b"}},
+        ))
+        with mock.patch.object(pilot, "create_task",
+                               side_effect=lambda *_: next(epic_roots)):
+            for epic in epics:
+                self.assertTrue(pilot.start_epic(
+                    epic_conf, epic, epic_workflows, epic_workers)[0])
+
+        works = pilot.load(self.paths["works"], {})
+        self.assertEqual(works["epic-work-a"]["origin"], "agent-a")
+        self.assertEqual(works["epic-work-b"]["origin"], "agent-b")
+        self.assertEqual(works["epic-work-a"]["start_stage"], "Implement + Test")
+        self.assertEqual(works["epic-work-b"]["skipped"], ["Triage", "Specification"])
+
+    def test_epic_completion_and_merge_receipt_ignore_other_work(self):
+        title = "Одинаковая подзадача"
+        for suffix in ("a", "b"):
+            pilot.save(os.path.join(self.paths["epics"], f"epic-{suffix}.json"), {
+                "id": f"epic-{suffix}", "name": suffix.upper(), "status": "running",
+                "created_at": "2026-08-11T09:00:00Z",
+                "subtasks": [{"title": title, "status": "running",
+                              "task_id": f"root-{suffix}", "work_id": f"work-{suffix}",
+                              "started_at": "2026-08-11T10:00:00Z"}],
+                "children": [],
+            })
+        tasks = [
+            {"id": "verify-a", "work_id": "work-a", "parent_task_id": "root-a",
+             "state": "succeeded", "created_at": "2026-08-11T11:00:00Z",
+             "title": f"[auto] [2/2 Verify] {title}"},
+            {"id": "root-b", "work_id": "work-b", "state": "running",
+             "created_at": "2026-08-11T10:00:00Z",
+             "title": f"[auto] [1/2 Implement + Test] {title}"},
+        ]
+        pilot.mark_final("verify-a", "Verify", True)
+        with open(self.paths["merges"], "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"task_id": "verify-a", "base": title,
+                                     "work_id": "work-a",
+                                     "at": "2026-08-11T11:01:00Z"}) + "\n")
+
+        with mock.patch.object(pilot, "notify"):
+            pilot.advance_epics({"stages": [{"workflow": "Implement + Test"},
+                                             {"workflow": "Verify"}]},
+                                tasks, {}, {})
+
+        saved_a = pilot.load(os.path.join(self.paths["epics"], "epic-a.json"), {})
+        saved_b = pilot.load(os.path.join(self.paths["epics"], "epic-b.json"), {})
+        self.assertEqual(saved_a["status"], "done")
+        self.assertEqual(saved_b["status"], "running")
+        self.assertIsNotNone(pilot.merge_receipt(title, work_id="work-a"))
+        self.assertIsNone(pilot.merge_receipt(title, work_id="work-b"))
+
+    def test_budget_spend_limit_and_history_branch_are_partitioned(self):
+        title = "Одинаковый бюджет"
+        tasks = [
+            {"id": "task-a", "work_id": "work-a", "worker_id": "worker",
+             "state": "running", "title": f"[auto] [1/1 Triage] {title}"},
+            {"id": "task-b", "work_id": "work-b", "worker_id": "worker",
+             "state": "running", "title": f"[auto] [1/1 Triage] {title}"},
+        ]
+        attempts = {"task-a": ["attempt-a"], "task-b": ["attempt-b"]}
+        costs = {"attempt-a": 5.0, "attempt-b": 0.1}
+
+        def fake_api(path, payload=None):
+            task_id = path.split("/")[2]
+            if path.endswith("/cancel"):
+                return {}
+            return {"task": {"repository_id": "repo",
+                              "context": f"Branch: factory/{task_id[-1]}"},
+                    "attempts": []}
+
+        with mock.patch.object(pilot, "attempts_of",
+                               side_effect=lambda task_id, _finished: attempts[task_id]), \
+                mock.patch.object(pilot, "task_cost_usd",
+                                  side_effect=lambda ids: sum(costs[i] for i in ids)), \
+                mock.patch.object(pilot, "api", side_effect=fake_api), \
+                mock.patch.object(pilot, "branch_head", return_value=""), \
+                mock.patch.object(pilot, "notify"):
+            self.assertEqual(pilot.work_spent(tasks, title, work_id="work-a"), 5.0)
+            self.assertEqual(pilot.work_spent(tasks, title, work_id="work-b"), 0.1)
+            self.assertEqual(pilot.branch_from_history(
+                tasks, title, work_id="work-a"), "factory/a")
+            self.assertEqual(pilot.branch_from_history(
+                tasks, title, work_id="work-b"), "factory/b")
+            conf = {"stages": [{"workflow": "Triage",
+                                 "workers": {"medium": "triager"}}]}
+            workers = {"worker": {"id": "worker", "name": "triager"}}
+            pilot.budget_guard(conf, tasks, workers)
+
+        budget = pilot.load(self.paths["budget"], {})
+        self.assertEqual(budget["work-a"]["downgrades"], 1)
+        self.assertEqual(budget["work-b"]["downgrades"], 0)
+        question = pilot.load(os.path.join(self.paths["questions"], "task-a.json"), {})
+        self.assertEqual(question["work_id"], "work-a")
+        self.assertEqual(question["branch"], "factory/a")
 
 
 if __name__ == "__main__":
