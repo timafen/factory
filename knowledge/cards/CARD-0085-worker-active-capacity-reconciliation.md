@@ -10,9 +10,10 @@
   registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: `go test -timeout 20m ./... && go build ./...` → PASS (2:45.09);
-  focused `go test -race -timeout 10m ... -count=1` → PASS (29.34s, 6 tests);
-  `base...candidate` → diff пуст, реализация уже в `main`.
+- Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (78.284s +
+  47.127s, 6 tests); `go build ./...` → PASS; `base...candidate` → diff пуст.
+- Known risk: полный suite и повтор `internal/worker` имеют 7/2 независимых
+  интеграционных таймаутов в нагруженном окружении; целевые тесты проходят.
 - One next action: закрыть задачу без слияния устаревшей ветки.
 
 ## LOG
@@ -63,4 +64,5 @@ maintenance paths регистрации и `SweepExpired`; idle regression по
 
 Проверено, что реализация гарантированной очистки reconciliation journal и чистой
 поставки слотов уже поглощена актуальным `main`; старую менее полную ветку не
-восстанавливаем. `go test ./...` и `go build ./...` прошли успешно.
+восстанавливаем. Целевые тесты с `-race` и `go build ./...` прошли; полный suite
+и повтор `internal/worker` получили независимые интеграционные таймауты.
