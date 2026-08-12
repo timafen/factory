@@ -464,6 +464,53 @@ func TestDiskBrokerFailsClosedOnJSONDirectory(t *testing.T) {
 	}
 }
 
+func TestDirectoryFsyncFailureAfterRenameFailsClosedOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	executor := &recordingExecutor{}
+	brokeTerminalSync := false
+	b, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSyncDir := b.syncDir
+	calls := 0
+	b.syncDir = func(path string) error {
+		calls++
+		// Initial record, PID, running, pending marker, then terminal rename.
+		if calls == 5 {
+			brokeTerminalSync = true
+			return errors.New("directory fsync failed after terminal rename")
+		}
+		return originalSyncDir(path)
+	}
+	server := httptest.NewServer(b.Handler())
+	defer server.Close()
+	body := `{"operation_id":"rename-sync-restart","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForBrokerIdle(t, b)
+	if !brokeTerminalSync {
+		t.Fatalf("terminal directory fsync was not forced; calls=%d", calls)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "rename-sync-restart.json")); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(data), `"status":"succeeded"`) {
+		t.Fatalf("test did not leave renamed terminal record: %s", data)
+	}
+
+	restarted, err := NewAt(dir, &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, ok := operationSnapshot(restarted, "rename-sync-restart"); !ok || item.Status != "failed" {
+		t.Fatalf("restart accepted unconfirmed terminal: %+v", item)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor calls=%d, want 1", executor.callCount())
+	}
+}
+
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")

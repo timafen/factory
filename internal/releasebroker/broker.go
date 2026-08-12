@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -130,6 +131,10 @@ type operation struct {
 	PID   int `json:"pid,omitempty"` // diagnostic only; never recovery input
 }
 
+type terminalMarker struct {
+	Status string `json:"status"`
+}
+
 type Broker struct {
 	executor Executor
 	stateDir string
@@ -166,6 +171,18 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
+	markers := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".commit" {
+			continue
+		}
+		var marker terminalMarker
+		data, err := os.ReadFile(filepath.Join(stateDir, entry.Name()))
+		if err != nil || json.Unmarshal(data, &marker) != nil || (marker.Status != "pending" && marker.Status != "committed") {
+			return nil, fmt.Errorf("invalid terminal marker %q", entry.Name())
+		}
+		markers[strings.TrimSuffix(entry.Name(), ".commit")] = marker.Status
+	}
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -201,6 +218,12 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			}
 			item = updated
 		}
+		if isTerminal(item.Status) && markers[item.Request.OperationID] != "committed" {
+			// A terminal record without a separately fsynced commit marker may
+			// have crossed rename but not the directory durability boundary.
+			// Keep recovery fail-closed even if the record says succeeded.
+			item.Status = "failed"
+		}
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
@@ -213,6 +236,56 @@ func validPersistedStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func isTerminal(status string) bool {
+	return status == "succeeded" || status == "locked" || status == "release_failed_rolled_back" || status == "rollback_failed" || status == "failed"
+}
+
+func (b *Broker) writeTerminalMarker(operationID, status string, create bool) error {
+	if b.stateDir == "" {
+		return nil
+	}
+	data, err := json.Marshal(terminalMarker{Status: status})
+	if err != nil {
+		return err
+	}
+	markerPath := filepath.Join(b.stateDir, operationID+".commit")
+	if !create {
+		file, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err = file.Write(data); err == nil {
+			err = b.syncFile(file)
+		}
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		return err
+	}
+	temporary, err := os.CreateTemp(b.stateDir, ".commit-")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err = temporary.Write(data); err == nil {
+		err = temporary.Chmod(0o600)
+	}
+	if err == nil {
+		err = b.syncFile(temporary)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := b.rename(temporaryName, markerPath); err != nil {
+		return err
+	}
+	return b.syncDir(b.stateDir)
 }
 
 func newBroker(stateDir string, executor Executor) *Broker {
@@ -413,8 +486,10 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
-	if err := b.saveTerminal(&updated); err == nil {
-		*item = updated
+	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err == nil {
+		if err := b.saveTerminal(&updated); err == nil && b.writeTerminalMarker(item.Request.OperationID, "committed", false) == nil {
+			*item = updated
+		}
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
