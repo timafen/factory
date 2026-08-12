@@ -2172,7 +2172,9 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             state = pilot.load(self.state_path, {})
 
             stack.enter_context(mock.patch.object(pilot, "handle_answers", return_value=0))
-            pilot.cycle(dict(self.conf, auto_merge=True), state)
+            cycle_conf = dict(
+                self.conf, auto_merge=True, max_terminal_tasks_per_cycle=100)
+            pilot.cycle(cycle_conf, state)
             self.assertEqual(
                 pilot.delivery_artifact(base, work_id=work_a)["branch"],
                 "factory/a-clean")
@@ -2186,7 +2188,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             for task in reviews:
                 task["state"] = "succeeded"
                 outcomes[task["id"]] = "APPROVE"
-            pilot.cycle(dict(self.conf, auto_merge=True), state)
+            pilot.cycle(cycle_conf, state)
 
             verifies = [task for task in tasks if stage_of(task) == "Verify"
                         and task.get("state") == "queued"]
@@ -2194,7 +2196,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             for task in verifies:
                 task["state"] = "succeeded"
                 outcomes[task["id"]] = "PASS\nTRY: none"
-            pilot.cycle(dict(self.conf, auto_merge=True), state)
+            pilot.cycle(cycle_conf, state)
             completed = [task for task in tasks if task["id"].startswith("created-")]
             pilot.cleanup_work_archive(dict(self.conf, auto_merge=True), completed)
             lifecycle = pilot.load(self.works_path, {})
