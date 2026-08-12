@@ -6618,7 +6618,9 @@ def recover_merge_intents(conf, state):
             wait = {"task_id": task_id, "base": intent.get("base", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
-            if generation:
+            # A patched/no-op delivery hook may return a truthy sentinel; only
+            # persist a real generation that can survive a restart.
+            if isinstance(generation, dict) and generation.get("id"):
                 intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
                 save(STATE_PATH, state)
 
