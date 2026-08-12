@@ -1409,6 +1409,11 @@ ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
 write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
 rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
+if ! delivery_status succeeded; then
+  fail "не смог надёжно подтвердить успешный выпуск"
+  cleanup
+  exit 4
+fi
 cleanup
 
 # Retention runs only after commit and always protects current, previous and the
