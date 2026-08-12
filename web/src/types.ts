@@ -161,6 +161,9 @@ export interface Task {
   timeout_seconds: number;
   state: TaskState;
   created_at: string;
+  work_id?: string;
+  parent_task_id?: string;
+  correction_kind?: string;
 }
 
 export interface TaskPage {

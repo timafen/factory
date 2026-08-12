@@ -939,10 +939,15 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
   expect(resumedSettings.settings.stopped_pipelines).not.toContain(pausedHTTPSWork);
 
   const completed = await page.evaluate(async (title) => {
+    const tasksResponse = await fetch("/api/v1/tasks?limit=200");
+    if (!tasksResponse.ok) throw new Error(`tasks returned ${tasksResponse.status}`);
+    const tasks = (await tasksResponse.json()) as { tasks: Array<{ title: string; work_id?: string }> };
+    const workID = tasks.tasks.find((task) => task.title.endsWith(title))?.work_id;
+    if (!workID) throw new Error("completed fixture work_id is unavailable");
     const response = await fetch("/api/v1/works/resume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, work_id: workID }),
     });
     return { status: response.status, body: await response.json() };
   }, completedHTTPSWork);
