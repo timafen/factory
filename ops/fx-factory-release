@@ -312,6 +312,7 @@ work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_pids=()
 gate_handshakes=()
+gate_results=()
 gate_logs=()
 gate_names=()
 test_gates_stopped=1
@@ -341,6 +342,18 @@ read_test_gate_handshake() { # read_test_gate_handshake <файл>; sets gate_si
   [ "$gate_sid" = "$gate_pgid" ]
 }
 
+read_test_gate_result() { # read_test_gate_result <файл>; sets gate_status
+  local result=$1 status_field='' extra=''
+  gate_status=''
+  [ -s "$result" ] || return 1
+  IFS=' ' read -r status_field extra <"$result" || return 1
+  [ -z "$extra" ] || return 1
+  case "$status_field" in status=*) ;; *) return 1 ;; esac
+  gate_status=${status_field#status=}
+  case "$gate_status" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$gate_status" -le 255 ] 2>/dev/null
+}
+
 wait_for_test_gate_handshake() { local handshake=$1 i; for ((i=0; i<GATE_READY_ATTEMPTS; i++)); do read_test_gate_handshake "$handshake" && return 0; sleep "$GATE_POLL_DELAY"; done; read_test_gate_handshake "$handshake"; }
 test_gate_group_alive() { kill -0 -- "-$1" 2>/dev/null; }
 wait_for_test_gate_group_exit() { local pgid=$1 i; for ((i=0; i<GATE_STOP_ATTEMPTS; i++)); do test_gate_group_alive "$pgid" || return 0; sleep "$GATE_POLL_DELAY"; done; ! test_gate_group_alive "$pgid"; }
@@ -350,26 +363,32 @@ reap_test_gate_launcher() { local launcher=$1; if ! wait_for_test_gate_pids_exit
 stop_unready_test_gate_launcher() { local launcher=$1; kill -TERM "$launcher" 2>/dev/null || true; if ! wait_for_test_gate_pids_exit "$launcher"; then kill -KILL "$launcher" 2>/dev/null || true; fi; wait "$launcher" 2>/dev/null || true; }
 stop_ready_test_gate() { local launcher=$1 pgid=$2; kill -TERM -- "-$pgid" 2>/dev/null || true; if ! wait_for_test_gate_group_exit "$pgid"; then kill -KILL -- "-$pgid" 2>/dev/null || true; wait_for_test_gate_group_exit "$pgid" || true; fi; reap_test_gate_launcher "$launcher"; }
 
-start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
-  local name=$1 log=$2 handshake=$3 launcher
+start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <result> <команда...>
+  local name=$1 log=$2 handshake=$3 result=$4 launcher
   local -a as_command=()
-  shift 3
+  shift 4
   [ -z "$AS" ] || read -r -a as_command <<<"$AS"
-  rm -f -- "$handshake"
+  rm -f -- "$handshake" "$result"
   setsid --wait bash -c '
     handshake=$1
-    shift
+    result=$2
+    shift 2
     trap - HUP INT TERM
     read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 125
     case "$sid:$pgid" in *[!0-9:]*|:*|*:) exit 125 ;; esac
     [ "$sid" = "$pgid" ] || exit 125
     temporary_handshake=$(mktemp "${handshake}.tmp.XXXXXX") || exit 125
     if ! printf "sid=%s pgid=%s ready=1\\n" "$sid" "$pgid" >"$temporary_handshake" || ! mv -f -- "$temporary_handshake" "$handshake"; then rm -f -- "$temporary_handshake"; exit 125; fi
-    exec "$@"
-  ' bash "$handshake" "${as_command[@]}" "$@" >"$log" 2>&1 &
+    "$@"
+    status=$?
+    temporary_result=$(mktemp "${result}.tmp.XXXXXX") || exit 125
+    if ! printf "status=%s\n" "$status" >"$temporary_result" || ! mv -f -- "$temporary_result" "$result"; then rm -f -- "$temporary_result"; exit 125; fi
+    exit "$status"
+  ' bash "$handshake" "$result" "${as_command[@]}" "$@" >"$log" 2>&1 &
   launcher=$!
   gate_pids+=("$launcher")
   gate_handshakes+=("$handshake")
+  gate_results+=("$result")
   gate_logs+=("$log")
   gate_names+=("$name")
   wait_for_test_gate_handshake "$handshake" && return 0
@@ -396,7 +415,7 @@ wait_for_test_gates() {
   test_gates_reaped=1
 }
 
-wait_for_test_gate_descendants() { local handshake=$1; read_test_gate_handshake "$handshake" || return 1; while test_gate_group_alive "$gate_pgid"; do sleep "$GATE_POLL_DELAY"; done; }
+wait_for_test_gate_result() { local handshake=$1 result=$2; read_test_gate_handshake "$handshake" || return 1; while test_gate_group_alive "$gate_pgid"; do sleep "$GATE_POLL_DELAY"; done; read_test_gate_result "$result"; }
 
 print_test_gate_logs() {
   local i
@@ -420,6 +439,7 @@ run_parallel_test_gates() {
   local completed status failed_name completed_index other_index
   gate_pids=()
   gate_handshakes=()
+  gate_results=()
   gate_logs=()
   gate_names=()
   test_gates_stopped=0
@@ -432,10 +452,10 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal INT' INT
   trap 'on_test_gate_signal TERM' TERM
 
-  if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
+  if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" "$work/ui-checks.result" \
     bash -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
     bash "$work/src/web"; then stop_test_gates; wait_for_test_gates; trap - HUP INT TERM; print_test_gate_logs; return 1; fi
-  if ! start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
+  if ! start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" "$work/go-checks.result" \
     bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
     bash "$work/src"; then stop_test_gates; wait_for_test_gates; trap - HUP INT TERM; print_test_gate_logs; return 1; fi
 
@@ -454,11 +474,15 @@ run_parallel_test_gates() {
   fi
 
   completed_index=1; [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
-  if ! wait_for_test_gate_descendants "${gate_handshakes[$completed_index]}"; then stop_test_gates; wait_for_test_gates; trap - HUP INT TERM; print_test_gate_logs; fail "не смог подтвердить завершение process group ${gate_names[$completed_index]}"; return 1; fi
+  if ! wait_for_test_gate_result "${gate_handshakes[$completed_index]}" "${gate_results[$completed_index]}" || [ "$gate_status" -ne 0 ]; then
+    status=${gate_status:-125}; failed_name=${gate_names[$completed_index]}; stop_test_gates; wait_for_test_gates; trap - HUP INT TERM; print_test_gate_logs; fail "$failed_name завершилась с кодом $status"; return 1
+  fi
   other_index=0; [ "$completed_index" = 0 ] && other_index=1
   wait "${gate_pids[$other_index]}"
   status=$?
-  if [ "$status" -eq 0 ] && ! wait_for_test_gate_descendants "${gate_handshakes[$other_index]}"; then status=1; fi
+  if [ "$status" -eq 0 ]; then
+    if wait_for_test_gate_result "${gate_handshakes[$other_index]}" "${gate_results[$other_index]}"; then status=$gate_status; else status=125; fi
+  fi
   if [ "$status" -ne 0 ]; then
     stop_test_gates
     wait_for_test_gates

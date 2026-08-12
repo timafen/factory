@@ -149,6 +149,9 @@ case "$TEST_MODE:${1:-}" in
     : >"$TEST_UI_STARTED"
     wait_for_file "$TEST_GO_RUNNING"
     ;;
+  forked-gate-fail:tsc)
+    exit 23
+    ;;
   signal-gates:tsc)
     : >"$TEST_UI_RUNNING"
     trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
@@ -302,6 +305,10 @@ EOF
 #!/bin/bash
 /bin/mv "$@" || exit
 target=${@: -1}
+if [[ "$target" = *.result ]]; then
+  if [ "$TEST_MODE" = gate-result-missing ]; then /bin/rm -f -- "$1"; exit 0; fi
+  if [ "$TEST_MODE" = gate-result-corrupt ]; then printf 'not-a-status\n' >"$target"; /bin/rm -f -- "$1"; exit 0; fi
+fi
 if [ "$TEST_MODE" = interrupt-between-install ] \
   && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
   : >"$TEST_INTERRUPT_MARK"
@@ -536,7 +543,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail; do
+for mode in ui-test-fail go-test-fail release-test-fail forked-gate-fail gate-result-missing gate-result-corrupt; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -551,6 +558,8 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+[ -e "$temporary/forked-gate-fail/setsid-forked" ] \
+  || fail "forked gate failure did not exercise the forked setsid launcher"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
