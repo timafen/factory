@@ -14,7 +14,7 @@ GATE_TARGET=${FACTORY_GATE_CGROUP_HELPER:-/usr/local/libexec/factory-gate-cgroup
 BOOTSTRAP_TARGET=${FACTORY_CGROUP_BOOTSTRAP:-/usr/local/libexec/factory-cgroup-bootstrap}
 OWNER=${FACTORY_CONTROL_OWNER-root:root}
 BOOTSTRAP=${FACTORY_CONTROL_BOOTSTRAP:-0}
-GATE_HELPER_SHA256=2d7f2b5fa4302bb3f0bb40c439421b1a444d6094d571a619bd0695f16b988da6
+GATE_HELPER_SHA256=b241be54c609c4c172dab0796f4408081fa5e9d7f429eba694712ffd03f109ac
 
 fx_source=$SRC/ops/fx
 release_source=$SRC/ops/fx-factory-release
