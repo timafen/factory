@@ -165,8 +165,9 @@ if [ -n "$DELIVERY_ID" ]; then
   if [ -f "$DELIVERY_FILE" ]; then
     case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
       succeeded) exit 0 ;;
-      locked) exit 8 ;;
+      locked) delivery_status locked || { echo "!! cannot confirm locked delivery status" >&2; exit 4; }; exit 8 ;;
       failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
+      running) echo "!! delivery outcome is uncertain; refusing to repeat physical release" >&2; exit 4 ;;
     esac
   fi
   delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
@@ -564,7 +565,13 @@ PY
 
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
-flock -n 9 || { fail "another Factory release is already running"; exit 8; }
+flock -n 9 || {
+  if [ -n "$DELIVERY_ID" ]; then
+    delivery_status locked || { fail "cannot durably record locked delivery"; exit 4; }
+  fi
+  fail "another Factory release is already running"
+  exit 8
+}
 delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
 umask 077
