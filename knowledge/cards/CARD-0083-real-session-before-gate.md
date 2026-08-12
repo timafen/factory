@@ -2,15 +2,22 @@
 
 ## HEAD
 
-Status: BLOCKED: verify cannot complete — обязательный shell-тест релиза не завершился.
-Branch: factory/4d0cca7e-228-85d28caf-e8b.
-Implementation commit: 55f2a61f85fc8565ac31efc7ebbad161319a87a1 — gate получает реальную SID/PGID session до запуска проверок.
-What changed: `fx-factory-release` получает атомарный handshake из оболочки после `setsid` и запускает `$AS`/gate только после него.
-What changed: HUP/INT/TERM ограниченно завершают подтверждённую группу TERM→KILL и дочищают launcher, если handshake так и не появился.
-Evidence: две изолированные попытки `bash ops/test-fx-factory-release.sh` не завершились; первая работала почти 3 минуты, вторая — более минуты, после чего были остановлены только процессы проверки. Повторная проверка потребовала перебазирования на свежий main и получила конфликты в обоих изменённых production-файлах.
-One next action: автору разрешить конфликты с main и устранить зависание shell-сценария, затем повторить Verify.
+Status: IMPLEMENTED: требуется независимая Verify полного сценария.
+Branch: factory/679963e3-028-b412b1c3-498.
+Implementation commit: bf5aa3c537047ee09d171d5335d5532e789db5b2 — cleanup gate не может завершить тестовый раннер или группу самого релиза.
+What changed: shell-фикстура запускает release в отдельной session; `fx-factory-release` отказывается сигналить собственной process group.
+What changed: изменения CARD-0083 перенесены поверх свежего `origin/main` с сохранением его release-механизма.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и `git diff --check` завершились успешно.
+One next action: Verify запускает полный `bash ops/test-fx-factory-release.sh` в чистом worker и фиксирует результат.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Перенесены только файлы CARD-0083 на свежий main и разрешены конфликты с текущим
+release-механизмом. Фикстура isolирует session релиза, а cleanup отказывается
+посылать групповой сигнал в собственную process group. `bash -n` и
+`git diff --check` успешны; полный shell-тест требует независимого чистого worker.
 
 ### 2026-08-11 — Implement
 
