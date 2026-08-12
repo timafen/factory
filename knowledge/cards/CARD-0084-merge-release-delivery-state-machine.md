@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — terminal результат не подтверждается без надёжной записи.
+- Status: Verified PASS — ожидает слияния человеком.
 - Branch: `factory/2c29f61e-762-453fb329-76b`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 2c15afeb71f813f72de700105f5447e4dc600aca — terminal status публикуется только после успешного persist.
+- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
 - What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
 - What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -race ./internal/releasebroker` → OK; process crash/restart regression → OK (2); полный Pilot → OK (209, 13 skipped); обе shell fixture → PASS; `just check` → passed; `git diff --check` → passed.
-- Next action: Strict Review проверить fail-closed terminal persistence CARD-0084.
+- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
+- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
 
 ## LOG
 
@@ -52,3 +52,13 @@ Terminal and restart-recovery states are now published only after the matching
 operation record is persisted. A real filesystem write failure followed by a
 fresh broker and Pilot process proves one physical delivery, durable fail-closed
 recovery, and no receipt, outbox, finalization or owner completion.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Terminal recovery | `go test -count=1 ./internal/releasebroker` | 9 OK; отказ записи не публикует terminal, fresh restart даёт `failed`, executor остаётся один. |
+| Fail-closed готовность | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | 10 OK; процессный restart не создаёт receipt, outbox, `mark_final(true)` или owner done. |
+| Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
+| Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
+| Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
