@@ -40,7 +40,7 @@ assert_no_fixture_processes() {
 make_fixture() {
   case_dir=$1 mode=$2
   mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
-    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
+    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database" "$case_dir/cgroups"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
 # old-server
@@ -438,6 +438,10 @@ EOF
   # only its local test tools and still keeps every gate executable absolute.
   fixture_uid=$(id -u)
   /bin/sed \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/cgroup-helper|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$helper_hash|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
+    -e "s|^TRUSTED_CGROUP_OWNER_UID=.*$|TRUSTED_CGROUP_OWNER_UID=$helper_uid|" \
     -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
@@ -458,7 +462,7 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_CGROUP_DIR="$case_dir/cgroups" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -485,7 +489,7 @@ run_release() {
 
 run_driver() {
   case_dir=$1; shift
-  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE=control \
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_CGROUP_DIR="$case_dir/cgroups" TEST_MODE=control \
     PATH="$case_dir/bin:$PATH" FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" FACTORY_FX_BIN="$case_dir/install/fx" \
     FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" FACTORY_BRAIN_LIVE="$case_dir/live" \
@@ -509,7 +513,7 @@ start_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_CGROUP_DIR="$case_dir/cgroups" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
