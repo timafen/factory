@@ -350,6 +350,60 @@ func TestDiskBrokerKeepsAcceptedTerminalStatusAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestDiskBrokerFailsClosedOnInvalidOperationState(t *testing.T) {
+	tests := map[string]struct {
+		name string
+		body string
+	}{
+		"corrupt JSON": {
+			name: "delivery-corrupt.json",
+			body: `{`,
+		},
+		"mismatched filename": {
+			name: "delivery-alias.json",
+			body: `{"request":{"operation_id":"delivery-real","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"},"status":"succeeded","posts":1}`,
+		},
+		"invalid request": {
+			name: "delivery-invalid.json",
+			body: `{"request":{"operation_id":"delivery-invalid","adapter":"arbitrary-command","commit_sha":"` + testSHA + `"},"status":"succeeded","posts":1}`,
+		},
+		"invalid status": {
+			name: "delivery-status.json",
+			body: `{"request":{"operation_id":"delivery-status","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"},"status":"unknown","posts":1}`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, test.name), []byte(test.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			executor := &recordingExecutor{}
+			if _, err := NewAt(dir, executor); err == nil {
+				t.Fatal("broker accepted invalid durable operation state")
+			}
+			if calls := executor.callCount(); calls != 0 {
+				t.Fatalf("physical executions=%d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestDiskBrokerFailsClosedOnJSONDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "delivery-1.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingExecutor{}
+	_, err := NewAt(dir, executor)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("NewAt error=%v, want non-regular operation state", err)
+	}
+	if calls := executor.callCount(); calls != 0 {
+		t.Fatalf("physical executions=%d, want 0", calls)
+	}
+}
+
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")

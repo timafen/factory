@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Verified PASS — awaiting human merge.
+- Branch: `factory/56574781-e4b-7c963a00-510`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+Implementation commit: 5f2dca4e10002bfdc638736f4243a169fd5a65b6 — регрессия закрепляет fail-closed отказ NewAt для каталога `delivery-1.json`.
+- What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
+- What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
+- Evidence: `go test -count=1 -timeout 5m ./internal/releasebroker` → OK; `just check` подтвердил format/vet/vuln/staticcheck и broker-тесты; независимые `internal/controlplane` и `internal/worker` достигли общего пятиминутного timeout.
+- Next action: Human merge reviews the recorded unrelated full-suite timeouts and merges the verified release-broker change.
 
 ## LOG
 
@@ -69,3 +69,40 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Implement
+
+Broker recovery теперь fail-closed отвергает повреждённые, подменённые и
+неканоничные durable operation-записи вместо их молчаливой потери и возможного
+повторного физического выпуска. Обычный и race Go-прогоны, 10 Pilot-сценариев,
+release-driver/installer fixtures и сборка зелёные; полный `just check` подтвердил
+broker, но остановился на прежних пятиминутных timeout control-plane и worker.
+
+### 2026-08-12 — Implement
+
+Поставка восстановлена поверх свежего `origin/main` без посторонних файлов.
+Обычный и race-прогоны broker, 10 процессных Pilot-сценариев, release-driver,
+installer и сборка подтвердили fail-closed recovery; systemd fixture штатно
+пропущен в непривилегированном окружении.
+
+### 2026-08-12 — Implement
+
+`.json`-каталог больше не пропускается как отсутствующая durable operation:
+`NewAt` завершает запуск ошибкой до чтения состояния. Регрессионный тест
+подтверждает ноль вызовов executor; обычный и race Go-прогоны broker, а также
+`just build`, прошли успешно.
+
+### 2026-08-12 — Implement
+
+Регрессия приведена к точному сценарию владельца с каталогом `delivery-1.json`.
+После перебазирования на свежий `origin/main` целевой Go-тест подтвердил отказ
+`NewAt` до вызова executor, а `just build` успешно собрал бинарники.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Повреждённая durable-запись не запускает выпуск | `go test -count=1 -timeout 5m ./internal/releasebroker` | OK: `delivery-1.json` как каталог отклонён до вызова executor. |
+| Прочие некорректные `.json`-записи fail-closed | тесты `TestDiskBrokerFailsClosedOnInvalidOperationState` и `TestDiskBrokerFailsClosedOnJSONDirectory` | OK: corrupt JSON, чужое имя, неверный adapter/status и каталог не восстанавливаются. |
+| Соседнее восстановление | тот же пакет | OK: terminal state сохраняется после restart, незавершённый запуск становится `failed`, повторный executor не запускается. |
+| Полный проектный регресс | `just check` | Форматирование, `vet`, `govulncheck`, `staticcheck` и `internal/releasebroker` OK; вне области timeout 5m: `internal/controlplane`, `internal/worker` (включая flaky worker integration tests). |
