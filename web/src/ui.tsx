@@ -24,8 +24,8 @@ export function ViewHeader({
     <div className="view-header">
       <h1>{title}</h1>
       <div className="refresh-state" aria-live="polite">
-        <span>{updatedAt ? `Updated ${timeAgo(new Date(updatedAt).toISOString())}` : "Waiting for data"}</span>
-        <button className="icon-button" aria-label="Refresh" onClick={onRefresh} disabled={fetching}>
+        <span>{updatedAt ? `Обновлено ${timeAgo(new Date(updatedAt).toISOString())}` : "Ожидаем данные"}</span>
+        <button className="icon-button" aria-label="Обновить" onClick={onRefresh} disabled={fetching}>
           <RefreshCw size={16} className={fetching ? "spin" : ""} />
         </button>
       </div>
@@ -63,15 +63,15 @@ export function ErrorState({ error, onRetry }: { error: Error | null; onRetry: (
   return (
     <div className="page centered-state error-state" role="alert">
       <span className="empty-icon danger"><XCircle size={22} /></span>
-      <h1>Couldn’t load this view</h1>
+      <h1>Не удалось загрузить страницу</h1>
       <p>{errorMessage(error)}</p>
-      <button className="button button-secondary" onClick={onRetry}><RefreshCw size={15} /> Try again</button>
+      <button className="button button-secondary" onClick={onRetry}><RefreshCw size={15} /> Повторить</button>
     </div>
   );
 }
 
 export function StaleBanner({ error }: { error: Error }) {
-  return <div className="stale-banner" role="status"><AlertCircle size={16} /> Showing the last available data. Refresh failed: {errorMessage(error)}</div>;
+  return <div className="stale-banner" role="status"><AlertCircle size={16} /> Показаны последние доступные данные. Обновление не удалось: {errorMessage(error)}</div>;
 }
 
 export function InlineError({ error }: { error: Error | null }) {
@@ -80,7 +80,7 @@ export function InlineError({ error }: { error: Error | null }) {
 }
 
 function errorMessage(error: Error | null): string {
-  if (!error) return "The server returned no data.";
+  if (!error) return "Сервер не вернул данных.";
   if (error instanceof APIError) return `${error.message} (${error.code})`;
-  return error.message || "The request failed.";
+  return error.message || "Запрос не выполнен.";
 }

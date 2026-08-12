@@ -75,8 +75,8 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const work = await screen.findByRole("button", { name: /^Work$/ });
-    const workers = screen.getByRole("button", { name: /^Workers$/ });
+    const work = await screen.findByRole("button", { name: /^Работы$/ });
+    const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(screen.getByRole("button", { name: /^Обзор$/ })).not.toHaveAttribute("aria-current");
     expect(work).toHaveAttribute("aria-current", "page");
     expect(workers).not.toHaveAttribute("aria-current");
@@ -93,10 +93,10 @@ describe("App", () => {
     renderApp();
 
     await screen.findByRole("heading", { name: "running task" });
-    const work = screen.getByRole("button", { name: /^Work$/ });
+    const work = screen.getByRole("button", { name: /^Работы$/ });
     expect(work).toHaveClass("active");
     expect(work).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /^Workers$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Исполнители$/ })).not.toHaveAttribute("aria-current");
   });
 
   it("highlights the Workers section without marking worker detail as current", async () => {
@@ -105,10 +105,10 @@ describe("App", () => {
     renderApp();
 
     await screen.findByRole("heading", { name: "Build Mac" });
-    const workers = screen.getByRole("button", { name: /^Workers$/ });
+    const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(workers).toHaveClass("active");
     expect(workers).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /^Work$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Работы$/ })).not.toHaveAttribute("aria-current");
   });
 
   it("lists managed repositories and shows current acquisition readiness", async () => {
@@ -117,13 +117,13 @@ describe("App", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "github.com/example/factory" })).toBeVisible();
-    expect(screen.getByText("1 worker is ready to acquire routed work")).toBeVisible();
+    expect(screen.getByText("1 исполнитель готов взять работу")).toBeVisible();
     const workerRow = screen.getByText("Build Mac").closest(".repository-worker-row");
     expect(workerRow).not.toBeNull();
-    expect(within(workerRow as HTMLElement).getByText("Cached")).toBeVisible();
-    expect(within(workerRow as HTMLElement).getByText("Advertised")).toBeVisible();
-    expect(within(workerRow as HTMLElement).getByText("Ready")).toBeVisible();
-    const navigation = screen.getByRole("button", { name: /^Repositories$/ });
+    expect(within(workerRow as HTMLElement).getByText("В кэше")).toBeVisible();
+    expect(within(workerRow as HTMLElement).getByText("Заявлен")).toBeVisible();
+    expect(within(workerRow as HTMLElement).getByText("Готов")).toBeVisible();
+    const navigation = screen.getByRole("button", { name: /^Репозитории$/ });
     expect(navigation).toHaveClass("active");
     expect(navigation).not.toHaveAttribute("aria-current");
   });
@@ -135,16 +135,16 @@ describe("App", () => {
     renderApp();
 
     expect(await screen.findByText("github.com/example/disabled")).toBeVisible();
-    await user.type(screen.getByLabelText("Canonical identity"), "github.com/example/new-repository");
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.type(screen.getByLabelText("Точная идентичность"), "github.com/example/new-repository");
+    await user.click(screen.getByRole("button", { name: "Добавить репозиторий" }));
 
     expect(await screen.findByRole("heading", { name: "github.com/example/new-repository" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Disable repository" }));
-    expect(screen.getByText(/Disabling rejects new routed work/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Disable routing" }));
-    expect(await screen.findByText("Routing disabled")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Enable repository" }));
-    expect(await screen.findByRole("button", { name: "Disable repository" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Выключить репозиторий" }));
+    expect(screen.getByText(/После выключения новые работы не будут направляться сюда/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Выключить маршрутизацию" }));
+    expect(await screen.findByText("Маршрутизация выключена")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Включить репозиторий" }));
+    expect(await screen.findByRole("button", { name: "Выключить репозиторий" })).toBeVisible();
   });
 
   it("shows actionable repository validation errors", async () => {
@@ -153,9 +153,9 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const input = await screen.findByLabelText("Canonical identity");
+    const input = await screen.findByLabelText("Точная идентичность");
     await user.type(input, "example.com/not-github");
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Добавить репозиторий" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "remote_identity must use the canonical github.com/owner/repository form (invalid_repository)",
@@ -169,13 +169,13 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const input = await screen.findByLabelText("Canonical identity");
+    const input = await screen.findByLabelText("Точная идентичность");
     await user.type(input, "github.com/example/factory");
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Добавить репозиторий" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("is already managed");
+    expect(await screen.findByRole("status")).toHaveTextContent("уже управляется Factory");
     expect(screen.queryByRole("heading", { name: "github.com/example/factory" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Open existing repository" }));
+    await user.click(screen.getByRole("button", { name: "Открыть существующий репозиторий" }));
     expect(await screen.findByRole("heading", { name: "github.com/example/factory" })).toBeVisible();
   });
 
@@ -185,15 +185,15 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const input = await screen.findByLabelText("Canonical identity");
+    const input = await screen.findByLabelText("Точная идентичность");
     await user.type(input, "github.com/example/over-limit");
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Добавить репозиторий" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "the managed repository limit has been reached (repository_limit_reached)",
     );
 
     await user.click(screen.getByText("github.com/example/disabled"));
-    await user.click(await screen.findByRole("button", { name: "Enable repository" }));
+    await user.click(await screen.findByRole("button", { name: "Включить репозиторий" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "repository update could not be saved (storage_unavailable)",
     );
@@ -205,8 +205,8 @@ describe("App", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "github.com/example/factory" })).toBeVisible();
-    expect(screen.getByText("1 worker is ready to acquire routed work")).toBeVisible();
-    expect(screen.getByText("Worker readiness")).toBeVisible();
+    expect(screen.getByText("1 исполнитель готов взять работу")).toBeVisible();
+    expect(screen.getByText("Готовность исполнителей")).toBeVisible();
   });
 
   it("preserves repository form focus and input during background polling", async () => {
@@ -217,7 +217,7 @@ describe("App", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
 
-      const input = await screen.findByLabelText("Canonical identity");
+      const input = await screen.findByLabelText("Точная идентичность");
       await user.type(input, "github.com/example/in-progress");
       expect(input).toHaveFocus();
 
@@ -237,32 +237,32 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: /^Workflows$/ }));
-    expect(await screen.findByRole("heading", { name: "Runbooks" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Create runbook" }));
-    const createDialog = screen.getByRole("dialog", { name: "Create runbook" });
-    const workflowTitle = within(createDialog).getByLabelText("Title");
+    await user.click(await screen.findByRole("button", { name: /^Сценарии$/ }));
+    expect(await screen.findByRole("heading", { name: "Сценарии" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Создать сценарий" }));
+    const createDialog = screen.getByRole("dialog", { name: "Создать сценарий" });
+    const workflowTitle = within(createDialog).getByLabelText("Название");
     expect(workflowTitle).toHaveAttribute("name", "title");
     expect(workflowTitle).toHaveAttribute("autocomplete", "off");
     expect(createDialog.querySelector('[name="name"]')).not.toBeInTheDocument();
     await user.type(workflowTitle, "Security review");
-    await user.type(within(createDialog).getByLabelText("Summary"), "Review trust boundaries.");
-    await user.type(within(createDialog).getByLabelText("Markdown instructions"), "Inspect inputs and permissions.");
-    await user.click(within(createDialog).getByRole("button", { name: "Create runbook" }));
+    await user.type(within(createDialog).getByLabelText("Описание"), "Review trust boundaries.");
+    await user.type(within(createDialog).getByLabelText("Инструкции Markdown"), "Inspect inputs and permissions.");
+    await user.click(within(createDialog).getByRole("button", { name: "Создать сценарий" }));
 
     expect(await screen.findByRole("heading", { name: "Security review" })).toBeVisible();
     expect(screen.getByText("Inspect inputs and permissions.", { selector: ".long-copy" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "New revision" }));
-    const revisionDialog = screen.getByRole("dialog", { name: "Create revision" });
-    const instructions = within(revisionDialog).getByLabelText("Markdown instructions");
+    await user.click(screen.getByRole("button", { name: "Новая редакция" }));
+    const revisionDialog = screen.getByRole("dialog", { name: "Создать редакцию" });
+    const instructions = within(revisionDialog).getByLabelText("Инструкции Markdown");
     await user.clear(instructions);
     await user.type(instructions, "Inspect inputs, permissions, and recovery.");
-    await user.click(within(revisionDialog).getByRole("button", { name: "Create revision" }));
-    expect(await screen.findByText("Revision 2", { selector: ".panel-heading span" })).toBeVisible();
+    await user.click(within(revisionDialog).getByRole("button", { name: "Создать редакцию" }));
+    expect(await screen.findByText("Редакция 2", { selector: ".panel-heading span" })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Disable" }));
-    await user.click(screen.getByRole("button", { name: "Confirm disable" }));
-    expect(await screen.findByRole("button", { name: "Enable" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Выключить" }));
+    await user.click(screen.getByRole("button", { name: "Подтвердить: выключить" }));
+    expect(await screen.findByRole("button", { name: "Включить" })).toBeVisible();
     expect(fetch.mock.calls.some(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path.endsWith("/enabled") && init?.method === "PUT";
@@ -277,9 +277,9 @@ describe("App", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
 
-      await user.click(await screen.findByRole("button", { name: "Create runbook" }));
-      const dialog = screen.getByRole("dialog", { name: "Create runbook" });
-      const instructions = within(dialog).getByLabelText("Markdown instructions");
+      await user.click(await screen.findByRole("button", { name: "Создать сценарий" }));
+      const dialog = screen.getByRole("dialog", { name: "Создать сценарий" });
+      const instructions = within(dialog).getByLabelText("Инструкции Markdown");
       await user.type(instructions, "Keep this cursor here.");
       expect(instructions).toHaveFocus();
 
@@ -300,44 +300,44 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    expect(await screen.findByRole("heading", { name: "Automations" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Автоматизации" })).toBeVisible();
     const existingRow = screen.getByRole("button", { name: /Ready issues/ });
-    expect(existingRow).toHaveTextContent("Automation is disabled.");
-    expect(existingRow).toHaveTextContent("0 matched");
-    expect(existingRow).toHaveTextContent("Next check");
-    expect(existingRow).toHaveTextContent("No run yet");
-    await user.click(screen.getByRole("button", { name: "Create Automation" }));
-    const dialog = screen.getByRole("dialog", { name: "Create Automation" });
-    const automationTitle = within(dialog).getByLabelText("Title");
+    expect(existingRow).toHaveTextContent("Автоматизация выключена.");
+    expect(existingRow).toHaveTextContent("0 совпало");
+    expect(existingRow).toHaveTextContent("Следующая проверка");
+    expect(existingRow).toHaveTextContent("Запусков ещё не было");
+    await user.click(screen.getByRole("button", { name: "Создать автоматизацию" }));
+    const dialog = screen.getByRole("dialog", { name: "Создать автоматизацию" });
+    const automationTitle = within(dialog).getByLabelText("Название");
     expect(automationTitle).toHaveAttribute("name", "title");
     expect(automationTitle).toHaveAttribute("autocomplete", "off");
     expect(dialog.querySelector('[name="name"]')).not.toBeInTheDocument();
     await user.type(automationTitle, "Factory ready issues");
-    await user.selectOptions(within(dialog).getByLabelText("Runbook"), "workflow-implement");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.type(within(dialog).getByLabelText("Context for this Automation"), "Fetch and revalidate live state.");
-    await user.click(within(dialog).getByRole("button", { name: "Create Automation" }));
+    await user.selectOptions(within(dialog).getByLabelText("Сценарий"), "workflow-implement");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.type(within(dialog).getByLabelText("Контекст автоматизации"), "Fetch and revalidate live state.");
+    await user.click(within(dialog).getByRole("button", { name: "Создать автоматизацию" }));
 
     expect(await screen.findByRole("heading", { name: "Factory ready issues" })).toBeVisible();
-    expect(screen.getByText("Automation is disabled.")).toBeVisible();
-    expect(screen.getByText("No durable run yet.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Edit" }));
-    const editDialog = screen.getByRole("dialog", { name: "Edit Automation" });
-    const editName = within(editDialog).getByLabelText("Title");
+    expect(screen.getByText("Автоматизация выключена.")).toBeVisible();
+    expect(screen.getByText("Постоянного запуска ещё не было.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Изменить" }));
+    const editDialog = screen.getByRole("dialog", { name: "Изменить автоматизацию" });
+    const editName = within(editDialog).getByLabelText("Название");
     await user.clear(editName);
     await user.type(editName, "Edited ready issues");
-    await user.click(within(editDialog).getByRole("button", { name: "Save changes" }));
+    await user.click(within(editDialog).getByRole("button", { name: "Сохранить изменения" }));
     expect(await screen.findByRole("heading", { name: "Edited ready issues" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Test trigger" }));
+    await user.click(screen.getByRole("button", { name: "Проверить триггер" }));
     expect(await screen.findByText("#184 Typed Automations")).toBeVisible();
-    expect(screen.getByText("Testing creates no task or durable run.")).toBeVisible();
+    expect(screen.getByText("Проверка не создаёт задачу или постоянный запуск.")).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Enable" }));
+    await user.click(screen.getByRole("button", { name: "Включить" }));
     expect(screen.queryByRole("checkbox", { name: /factory-poller is stopped/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Confirm enable" }));
-    expect(await screen.findByRole("button", { name: "Disable" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Check now" }));
-    expect(await screen.findByText("Checking GitHub now.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Подтвердить: включить" }));
+    expect(await screen.findByRole("button", { name: "Выключить" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Проверить сейчас" }));
+    expect(await screen.findByText("Проверяем GitHub сейчас.")).toBeVisible();
     expect(fetch.mock.calls.some(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path.endsWith("/check") && init?.method === "POST";
@@ -351,13 +351,13 @@ describe("App", () => {
     renderApp();
 
     expect(await screen.findByText("Docs review")).toBeVisible();
-    await user.selectOptions(screen.getByLabelText("Repository"), "github.com/example/disabled");
+    await user.selectOptions(screen.getByLabelText("Репозиторий"), "github.com/example/disabled");
     expect(screen.getByText("Docs review")).toBeVisible();
     expect(screen.queryByText("Ready issues")).not.toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Status"), "disabled");
-    expect(await screen.findByRole("heading", { name: "No Automations match" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    await user.selectOptions(screen.getByLabelText("Статус"), "disabled");
+    expect(await screen.findByRole("heading", { name: "Нет подходящих автоматизаций" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
     expect(await screen.findByText("Ready issues")).toBeVisible();
     expect(screen.getByText("Docs review")).toBeVisible();
   });
@@ -369,16 +369,16 @@ describe("App", () => {
 
     const row = await screen.findByRole("button", { name: /Ready issues/ });
     expect(row).toHaveTextContent("#185 Newest run without task");
-    expect(row).toHaveTextContent("Failed");
+    expect(row).toHaveTextContent("С ошибкой");
     expect(row).not.toHaveTextContent("Older dispatched task");
   });
 
   it.each([
-    ["queued", "Queued"],
-    ["running", "Running"],
-    ["succeeded", "Succeeded"],
-    ["failed", "Failed"],
-    ["cancelled", "Cancelled"],
+    ["queued", "В очереди"],
+    ["running", "Выполняется"],
+    ["succeeded", "Завершена"],
+    ["failed", "С ошибкой"],
+    ["cancelled", "Отменена"],
   ] as const)("shows a linked %s task as the Automation Run state", async (taskState, label) => {
     window.history.replaceState({}, "", "/automations/automation-ready");
     mockControlPlane({ automationTaskState: taskState });
@@ -388,7 +388,7 @@ describe("App", () => {
     const row = identity.closest(".occurrence-row");
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText(label, { selector: ".status-badge" })).toBeVisible();
-    expect(within(row as HTMLElement).getByRole("link", { name: "GitHub source" })).toHaveAttribute(
+    expect(within(row as HTMLElement).getByRole("link", { name: "Источник GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/example/factory/issues/184",
     );
@@ -401,44 +401,44 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Migrate legacy poller" }));
-    const dialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    expect(within(dialog).getByRole("button", { name: "Preview locked snapshot" })).toBeDisabled();
-    await user.type(within(dialog).getByLabelText("Legacy poller.toml"), "/tmp/legacy/poller.toml");
-    await user.click(within(dialog).getByRole("checkbox", { name: /I stopped every factory-poller process/ }));
-    await user.click(within(dialog).getByRole("button", { name: "Preview locked snapshot" }));
+    await user.click(await screen.findByRole("button", { name: "Перенести старый опросчик" }));
+    const dialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    expect(within(dialog).getByRole("button", { name: "Просмотреть заблокированный снимок" })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Старый poller.toml"), "/tmp/legacy/poller.toml");
+    await user.click(within(dialog).getByRole("checkbox", { name: /Я остановил все процессы factory-poller/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Просмотреть заблокированный снимок" }));
 
-    expect(await within(dialog).findByText("1 supported · 0 unsupported")).toBeVisible();
+    expect(await within(dialog).findByText("1 поддержано · 0 не поддержано")).toBeVisible();
     expect(within(dialog).getAllByText("/tmp/legacy", { exact: true })).toHaveLength(2);
     expect(within(dialog).getByText("/tmp/legacy/poller", { exact: true })).toBeVisible();
-    expect(within(dialog).getByText(/Repository mapping:/)).toHaveTextContent("github.com/example/factory");
-    expect(within(dialog).getByText(/Repository mapping:/)).toHaveTextContent("repo-factory");
-    expect(within(dialog).getByText(/0 submitted · 1 pending · every 30s/)).toBeVisible();
-    const workflowTitle = within(dialog).getByLabelText("Runbook title");
-    const automationTitle = within(dialog).getByLabelText("Automation title");
+    expect(within(dialog).getByText(/Связанный репозиторий:/)).toHaveTextContent("github.com/example/factory");
+    expect(within(dialog).getByText(/Связанный репозиторий:/)).toHaveTextContent("repo-factory");
+    expect(within(dialog).getByText(/0 отправлено · 1 ожидает · каждые 30 с/)).toBeVisible();
+    const workflowTitle = within(dialog).getByLabelText("Название сценария");
+    const automationTitle = within(dialog).getByLabelText("Название автоматизации");
     await user.clear(workflowTitle);
     await user.type(workflowTitle, "Imported implementation workflow");
     await user.clear(automationTitle);
     await user.type(automationTitle, "Imported ready issues");
-    await user.click(within(dialog).getByRole("button", { name: "Import disabled Automations" }));
+    await user.click(within(dialog).getByRole("button", { name: "Импортировать выключенные автоматизации" }));
 
-    expect(await within(dialog).findByText("1 unresolved")).toBeVisible();
-    expect(within(dialog).getByRole("button", { name: "Finalize and archive" })).toBeDisabled();
-    await user.click(within(dialog).getAllByRole("button", { name: "Close" })[1]);
-    await user.click(screen.getByRole("button", { name: "Migrate legacy poller" }));
-    const resumedDialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    expect(await within(resumedDialog).findByText("1 unresolved")).toBeVisible();
-    const reconfirm = within(resumedDialog).getByRole("checkbox", { name: /I reconfirmed every factory-poller process/ });
+    expect(await within(dialog).findByText("1 не разобрано")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Завершить и архивировать" })).toBeDisabled();
+    await user.click(within(dialog).getAllByRole("button", { name: "Закрыть" })[1]);
+    await user.click(screen.getByRole("button", { name: "Перенести старый опросчик" }));
+    const resumedDialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    expect(await within(resumedDialog).findByText("1 не разобрано")).toBeVisible();
+    const reconfirm = within(resumedDialog).getByRole("checkbox", { name: /Я ещё раз подтвердил, что все процессы factory-poller остановлены/ });
     expect(reconfirm).not.toBeChecked();
-    expect(within(resumedDialog).getByRole("button", { name: "Skip" })).toBeDisabled();
+    expect(within(resumedDialog).getByRole("button", { name: "Пропустить" })).toBeDisabled();
     await user.click(reconfirm);
-    await user.click(within(resumedDialog).getByRole("button", { name: "Skip" }));
-    await vi.waitFor(() => expect(within(resumedDialog).getByText("0 unresolved")).toBeVisible());
-    await user.click(within(resumedDialog).getByRole("button", { name: "Finalize and archive" }));
+    await user.click(within(resumedDialog).getByRole("button", { name: "Пропустить" }));
+    await vi.waitFor(() => expect(within(resumedDialog).getByText("0 не разобрано")).toBeVisible());
+    await user.click(within(resumedDialog).getByRole("button", { name: "Завершить и архивировать" }));
 
-    expect(await within(resumedDialog).findByText("Migration finalized")).toBeVisible();
+    expect(await within(resumedDialog).findByText("Перенос завершён")).toBeVisible();
     expect(within(resumedDialog).getByText("/tmp/legacy/archive/legacy-migration")).toBeVisible();
-    expect(within(resumedDialog).getByRole("button", { name: "Review Imported ready issues" })).toBeVisible();
+    expect(within(resumedDialog).getByRole("button", { name: "Проверить Imported ready issues" })).toBeVisible();
     const importCall = fetch.mock.calls.find(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path === "/api/v1/migrations/legacy-poller/import" && init?.method === "POST";
@@ -460,15 +460,15 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Migrate legacy poller" }));
-    const dialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    await user.click(within(dialog).getByRole("checkbox", { name: /I stopped every factory-poller process/ }));
-    await user.click(within(dialog).getByRole("button", { name: "Preview locked snapshot" }));
-    await user.click(await within(dialog).findByRole("button", { name: "Import disabled Automations" }));
+    await user.click(await screen.findByRole("button", { name: "Перенести старый опросчик" }));
+    const dialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    await user.click(within(dialog).getByRole("checkbox", { name: /Я остановил все процессы factory-poller/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Просмотреть заблокированный снимок" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Импортировать выключенные автоматизации" }));
 
     expect(await within(dialog).findByText("legacy_pending_invalid_requires_skip")).toBeVisible();
-    expect(within(dialog).queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Skip" })).toBeEnabled();
+    expect(within(dialog).queryByRole("button", { name: "Возобновить" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Пропустить" })).toBeEnabled();
   });
 
   it("archives a command-only legacy migration without creating Automations", async () => {
@@ -477,23 +477,23 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Migrate legacy poller" }));
-    const dialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    await user.click(within(dialog).getByRole("checkbox", { name: /I stopped every factory-poller process/ }));
-    await user.click(within(dialog).getByRole("button", { name: "Preview locked snapshot" }));
-    expect(await within(dialog).findByText("0 supported · 1 unsupported")).toBeVisible();
-    expect(within(dialog).getByText("1 submitted · 1 pending", { exact: true })).toBeVisible();
-    await user.click(within(dialog).getByRole("button", { name: "Continue to archive" }));
-    expect(await within(dialog).findByRole("button", { name: "Finalize and archive" })).toBeEnabled();
-    expect(within(dialog).getByText("0 supported · 1 unsupported")).toBeVisible();
-    await user.click(within(dialog).getAllByRole("button", { name: "Close" })[1]);
-    await user.click(screen.getByRole("button", { name: "Migrate legacy poller" }));
-    const resumedDialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    expect(await within(resumedDialog).findByText("0 supported · 1 unsupported")).toBeVisible();
-    expect(within(resumedDialog).getByText("1 submitted · 1 pending", { exact: true })).toBeVisible();
-    await user.click(within(resumedDialog).getByRole("checkbox", { name: /I reconfirmed every factory-poller process/ }));
-    await user.click(within(resumedDialog).getByRole("button", { name: "Finalize and archive" }));
-    expect(await within(resumedDialog).findByText("Migration finalized")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Перенести старый опросчик" }));
+    const dialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    await user.click(within(dialog).getByRole("checkbox", { name: /Я остановил все процессы factory-poller/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Просмотреть заблокированный снимок" }));
+    expect(await within(dialog).findByText("0 поддержано · 1 не поддержано")).toBeVisible();
+    expect(within(dialog).getByText("1 отправлено · 1 ожидает", { exact: true })).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Продолжить к архиву" }));
+    expect(await within(dialog).findByRole("button", { name: "Завершить и архивировать" })).toBeEnabled();
+    expect(within(dialog).getByText("0 поддержано · 1 не поддержано")).toBeVisible();
+    await user.click(within(dialog).getAllByRole("button", { name: "Закрыть" })[1]);
+    await user.click(screen.getByRole("button", { name: "Перенести старый опросчик" }));
+    const resumedDialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    expect(await within(resumedDialog).findByText("0 поддержано · 1 не поддержано")).toBeVisible();
+    expect(within(resumedDialog).getByText("1 отправлено · 1 ожидает", { exact: true })).toBeVisible();
+    await user.click(within(resumedDialog).getByRole("checkbox", { name: /Я ещё раз подтвердил, что все процессы factory-poller остановлены/ }));
+    await user.click(within(resumedDialog).getByRole("button", { name: "Завершить и архивировать" }));
+    expect(await within(resumedDialog).findByText("Перенос завершён")).toBeVisible();
   });
 
   it("blocks Import when the ledger contains a removed queue", async () => {
@@ -502,14 +502,14 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Migrate legacy poller" }));
-    const dialog = screen.getByRole("dialog", { name: "Migrate legacy poller" });
-    await user.click(within(dialog).getByRole("checkbox", { name: /I stopped every factory-poller process/ }));
-    await user.click(within(dialog).getByRole("button", { name: "Preview locked snapshot" }));
+    await user.click(await screen.findByRole("button", { name: "Перенести старый опросчик" }));
+    const dialog = screen.getByRole("dialog", { name: "Перенести старый опросчик" });
+    await user.click(within(dialog).getByRole("checkbox", { name: /Я остановил все процессы factory-poller/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Просмотреть заблокированный снимок" }));
 
-    expect(await within(dialog).findByText("1 supported · 1 unsupported")).toBeVisible();
+    expect(await within(dialog).findByText("1 поддержано · 1 не поддержано")).toBeVisible();
     expect(within(dialog).getByText(/restore the matching queue before Import/)).toBeVisible();
-    expect(within(dialog).getByRole("button", { name: "Restore missing queue before Import" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Восстановите отсутствующую очередь до импорта" })).toBeDisabled();
     expect(fetch.mock.calls.some(([input]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path === "/api/v1/migrations/legacy-poller/import";
@@ -522,38 +522,38 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Create Automation" }));
-    const dialog = screen.getByRole("dialog", { name: "Create Automation" });
-    await user.type(within(dialog).getByLabelText("Title"), "Daily Factory maintenance");
-    await user.selectOptions(within(dialog).getByLabelText("Runbook"), "workflow-implement");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.selectOptions(within(dialog).getByLabelText("Trigger"), "schedule");
-    await user.selectOptions(within(dialog).getByLabelText("Frequency"), "custom");
-    await user.clear(within(dialog).getByLabelText("Cron (five fields)"));
-    await user.type(within(dialog).getByLabelText("Cron (five fields)"), "0 9 * * 1");
-    await user.clear(within(dialog).getByLabelText("Timezone"));
-    await user.type(within(dialog).getByLabelText("Timezone"), "Europe/London");
-    await user.click(within(dialog).getByRole("button", { name: "Create Automation" }));
+    await user.click(await screen.findByRole("button", { name: "Создать автоматизацию" }));
+    const dialog = screen.getByRole("dialog", { name: "Создать автоматизацию" });
+    await user.type(within(dialog).getByLabelText("Название"), "Daily Factory maintenance");
+    await user.selectOptions(within(dialog).getByLabelText("Сценарий"), "workflow-implement");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.selectOptions(within(dialog).getByLabelText("Триггер"), "schedule");
+    await user.selectOptions(within(dialog).getByLabelText("Частота"), "custom");
+    await user.clear(within(dialog).getByLabelText("Cron (пять полей)"));
+    await user.type(within(dialog).getByLabelText("Cron (пять полей)"), "0 9 * * 1");
+    await user.clear(within(dialog).getByLabelText("Часовой пояс"));
+    await user.type(within(dialog).getByLabelText("Часовой пояс"), "Europe/London");
+    await user.click(within(dialog).getByRole("button", { name: "Создать автоматизацию" }));
 
     expect(await screen.findByRole("heading", { name: "Daily Factory maintenance" })).toBeVisible();
     expect(screen.getByText("0 9 * * 1")).toBeVisible();
     expect(screen.getByText("Europe/London")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Test trigger" }));
-    expect(await screen.findByText(/next matching UTC instant/i)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Enable pipeline patrol" }));
-    expect(screen.getByText(/existing cron and timezone stay unchanged/i)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Confirm pipeline patrol" }));
-    expect(await screen.findByText("Pipeline patrol provisioned from the existing schedule.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Проверить триггер" }));
+    expect(await screen.findByText(/Следующий подходящий момент UTC/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Включить сторож конвейера" }));
+    expect(screen.getByText(/существующие Cron и часовой пояс не изменятся/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Подтвердить сторож конвейера" }));
+    expect(await screen.findByText("Сторож конвейера создан по существующему расписанию.")).toBeVisible();
     expect(fetch.mock.calls.some(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path.endsWith("/api/v1/automations/automation-created/pipeline-patrol") && init?.method === "POST";
     })).toBe(true);
-    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    await user.click(await screen.findByRole("button", { name: "Запустить сейчас" }));
     expect(await screen.findByText(/connection lost after Run now commit/i)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Run now" }));
-    expect(await screen.findByText("Run now", { selector: ".occurrence-identity strong" })).toBeVisible();
-    expect(screen.getAllByText("Run now", { selector: ".occurrence-identity strong" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Open task" })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Запустить сейчас" }));
+    expect(await screen.findByText("Запущен вручную", { selector: ".occurrence-identity strong" })).toBeVisible();
+    expect(screen.getAllByText("Запущен вручную", { selector: ".occurrence-identity strong" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Открыть задачу" })).toHaveLength(1);
     const runBodies = fetch.mock.calls
       .filter(([input, init]) => {
         const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -572,8 +572,8 @@ describe("App", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
 
-      await user.click(await screen.findByRole("button", { name: "Create Automation" }));
-      const input = screen.getByLabelText("Context for this Automation");
+      await user.click(await screen.findByRole("button", { name: "Создать автоматизацию" }));
+      const input = screen.getByLabelText("Контекст автоматизации");
       await user.type(input, "In progress Automation context");
       expect(input).toHaveFocus();
 
@@ -594,25 +594,25 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Create Automation" }));
-    const dialog = screen.getByRole("dialog", { name: "Create Automation" });
-    await user.type(within(dialog).getByLabelText("Title"), "Factory pull request reviews");
-    await user.selectOptions(within(dialog).getByLabelText("Runbook"), "workflow-implement");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.selectOptions(within(dialog).getByLabelText("Trigger"), "github_pull_request");
-    await user.selectOptions(within(dialog).getByLabelText("Pull request state"), "open");
-    await user.click(within(dialog).getByLabelText("Include drafts"));
-    await user.clear(within(dialog).getByLabelText("Required labels"));
-    await user.type(within(dialog).getByLabelText("Required labels"), "factory:review");
-    await user.type(within(dialog).getByLabelText("Base branches"), "main, release");
-    await user.click(within(dialog).getByRole("button", { name: "Create Automation" }));
+    await user.click(await screen.findByRole("button", { name: "Создать автоматизацию" }));
+    const dialog = screen.getByRole("dialog", { name: "Создать автоматизацию" });
+    await user.type(within(dialog).getByLabelText("Название"), "Factory pull request reviews");
+    await user.selectOptions(within(dialog).getByLabelText("Сценарий"), "workflow-implement");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.selectOptions(within(dialog).getByLabelText("Триггер"), "github_pull_request");
+    await user.selectOptions(within(dialog).getByLabelText("Статус запроса на слияние"), "open");
+    await user.click(within(dialog).getByLabelText("Включить черновики"));
+    await user.clear(within(dialog).getByLabelText("Обязательные метки"));
+    await user.type(within(dialog).getByLabelText("Обязательные метки"), "factory:review");
+    await user.type(within(dialog).getByLabelText("Базовые ветки"), "main, release");
+    await user.click(within(dialog).getByRole("button", { name: "Создать автоматизацию" }));
 
     expect(await screen.findByRole("heading", { name: "Factory pull request reviews" })).toBeVisible();
-    expect(screen.getByText("Included")).toBeVisible();
+    expect(screen.getByText("Включены")).toBeVisible();
     expect(screen.getByText("main, release")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Test trigger" }));
+    await user.click(screen.getByRole("button", { name: "Проверить триггер" }));
     expect(await screen.findByText("#185 Typed pull-request Automations")).toBeVisible();
-    expect(screen.getByText(/base main/)).toBeVisible();
+    expect(screen.getByText(/база main/)).toBeVisible();
   });
 
   it("loads every Workflow page in the Automation form", async () => {
@@ -621,8 +621,8 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Create Automation" }));
-    const workflow = screen.getByLabelText("Runbook");
+    await user.click(await screen.findByRole("button", { name: "Создать автоматизацию" }));
+    const workflow = screen.getByLabelText("Сценарий");
     expect(await within(workflow).findByRole("option", { name: "Historical workflow" })).toHaveValue("workflow-history");
   });
 
@@ -632,12 +632,12 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit Automation" });
-    expect(within(dialog).getByLabelText("Runbook")).toHaveValue("workflow-implement");
-    expect(within(dialog).getByLabelText("Repository")).toHaveValue("repo-factory");
-    await user.type(within(dialog).getByLabelText("Title"), " updated");
-    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await user.click(await screen.findByRole("button", { name: "Изменить" }));
+    const dialog = screen.getByRole("dialog", { name: "Изменить автоматизацию" });
+    expect(within(dialog).getByLabelText("Сценарий")).toHaveValue("workflow-implement");
+    expect(within(dialog).getByLabelText("Репозиторий")).toHaveValue("repo-factory");
+    await user.type(within(dialog).getByLabelText("Название"), " updated");
+    await user.click(within(dialog).getByRole("button", { name: "Сохранить изменения" }));
     expect(fetch.mock.calls.some(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (!path.endsWith("/api/v1/automations/automation-ready") || init?.method !== "PUT") return false;
@@ -652,12 +652,12 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Load more Automations" }));
+    await user.click(await screen.findByRole("button", { name: "Показать ещё автоматизации" }));
     expect(await screen.findByText("Historical Automation")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /Ready issues/ }));
     expect(await screen.findByText("#184 Paged issue 184", { selector: ".occurrence-identity strong" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Load more runs" }));
+    await user.click(screen.getByRole("button", { name: "Показать ещё запуски" }));
     expect(await screen.findByText("#183 Paged issue 183", { selector: ".occurrence-identity strong" })).toBeVisible();
   });
 
@@ -667,7 +667,7 @@ describe("App", () => {
     const user = userEvent.setup();
     const { client } = renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Load more runbooks" }));
+    await user.click(await screen.findByRole("button", { name: "Показать ещё сценарии" }));
     expect(await screen.findByText("Historical workflow")).toBeVisible();
 
     await client.refetchQueries({ queryKey: ["workflows", "head"] });
@@ -677,7 +677,7 @@ describe("App", () => {
     const refreshedRow = screen.getByText("Refreshed workflow").closest(".workflow-row");
     expect(refreshedRow).not.toBeNull();
     expect(within(refreshedRow as HTMLElement).getByText("#2")).toBeVisible();
-    expect(within(refreshedRow as HTMLElement).getByText("Disabled")).toBeVisible();
+    expect(within(refreshedRow as HTMLElement).getByText("Выключен")).toBeVisible();
   });
 
   it("restarts Workflow history from a changed head boundary", async () => {
@@ -690,7 +690,7 @@ describe("App", () => {
     const user = userEvent.setup();
     const { client } = renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Load more runbooks" }));
+    await user.click(await screen.findByRole("button", { name: "Показать ещё сценарии" }));
     await vi.waitFor(() => expect(workflowRequestPaths(fetch)).toContain(
       "/api/v1/workflows?limit=200&cursor=old-workflow-boundary",
     ));
@@ -698,7 +698,7 @@ describe("App", () => {
     await client.refetchQueries({ queryKey: ["workflows", "head"] });
     releaseWorkflowHistory();
     expect(await screen.findByText("Historical workflow")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Load more runbooks" }));
+    await user.click(screen.getByRole("button", { name: "Показать ещё сценарии" }));
 
     expect(await screen.findByText("Shifted boundary workflow")).toBeVisible();
     expect(workflowRequestPaths(fetch)).toEqual([
@@ -714,17 +714,17 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.type(within(dialog).getByLabelText("Title"), "Implement #183");
-    await user.selectOptions(within(dialog).getByLabelText("Workflow"), "workflow-revision-1");
-    await user.type(within(dialog).getByLabelText("Context"), "Issue #183 remains ordinary text.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.type(within(dialog).getByLabelText("Название"), "Implement #183");
+    await user.selectOptions(within(dialog).getByLabelText("Сценарий"), "workflow-revision-1");
+    await user.type(within(dialog).getByLabelText("Контекст"), "Issue #183 remains ordinary text.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
 
     expect(await screen.findByRole("heading", { name: "Implement #183" })).toBeVisible();
-    expect(screen.getByText("Implement · revision 1")).toBeVisible();
+    expect(screen.getByText("Implement · версия 1")).toBeVisible();
     await user.click(screen.getByText("Задание агенту (техническое) — развернуть"));
     expect(screen.getByText("Issue #183 remains ordinary text.", { selector: ".long-copy" })).toBeVisible();
     await user.click(screen.getByText("Полный промпт (инструкция + контекст) — развернуть"));
@@ -752,16 +752,16 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.type(within(dialog).getByLabelText("Title"), "Inspect screenshot");
-    await user.type(within(dialog).getByLabelText("Context"), "Use the supplied screenshot.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.upload(within(dialog).getByLabelText("Files"), new File(["image"], "screen.png", { type: "image/png" }));
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.type(within(dialog).getByLabelText("Название"), "Inspect screenshot");
+    await user.type(within(dialog).getByLabelText("Контекст"), "Use the supplied screenshot.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.upload(within(dialog).getByLabelText("Файлы"), new File(["image"], "screen.png", { type: "image/png" }));
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
 
-    const submitting = within(dialog).getByRole("button", { name: "Delegating…" });
+    const submitting = within(dialog).getByRole("button", { name: "Ставим…" });
     expect(submitting).toBeDisabled();
     expect(fetch.mock.calls.some(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST")).toBe(false);
     await user.click(submitting);
@@ -795,10 +795,10 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: /^Workers$/ }));
-    const summary = screen.getByLabelText("Fleet summary");
-    expect(within(summary).getByText("Available slots").closest("div")).toHaveTextContent("4");
-    expect(screen.getByLabelText("6 of 10 slots active")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: /^Исполнители$/ }));
+    const summary = screen.getByLabelText("Сводка исполнителей");
+    expect(within(summary).getByText("Свободно мест").closest("div")).toHaveTextContent("4");
+    expect(screen.getByLabelText("6 из 10 мест занято")).toBeVisible();
   });
 
   it("loads another bounded task page without duplicating existing work", async () => {
@@ -920,16 +920,16 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    const repository = within(dialog).getByLabelText("Repository");
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    const repository = within(dialog).getByLabelText("Репозиторий");
     expect(within(repository).getByRole("option", { name: /factory/ })).toBeInTheDocument();
     expect(within(repository).getByRole("option", { name: /github.com\/example\/docs/ })).toBeEnabled();
     expect(within(repository).queryByRole("option", { name: /archive/ })).not.toBeInTheDocument();
 
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-offline");
-    expect(within(dialog).getByText(/task will queue until it returns/i)).toBeVisible();
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-offline");
+    expect(within(dialog).getByText("Исполнитель не в сети. Задача будет ждать в очереди до его возвращения.")).toBeVisible();
     expect(within(repository).getByRole("option", { name: /archive/ })).toBeEnabled();
     expect(within(repository).getByRole("option", { name: /github.com\/example\/factory/ })).toBeDisabled();
   });
@@ -942,12 +942,12 @@ describe("App", () => {
 
     expect(await screen.findByRole("heading", { name: "succeeded task" })).toBeVisible();
     expect(await screen.findByText("Terminal event")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    expect(screen.getByText(/Permanently delete this task, prompt, attempts, and events/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Keep history" }));
-    expect(screen.queryByRole("button", { name: "Confirm delete" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    expect(screen.getByText(/Удалить задачу, промпт, попытки и события/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Оставить историю" }));
+    expect(screen.queryByRole("button", { name: "Подтвердить удаление" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    await user.click(screen.getByRole("button", { name: "Подтвердить удаление" }));
 
     expect(await screen.findByText("queued task")).toBeVisible();
     expect(screen.queryByText("succeeded task")).not.toBeInTheDocument();
@@ -968,7 +968,7 @@ describe("App", () => {
     mockControlPlane();
     renderApp();
     expect(await screen.findByRole("heading", { name: "running task" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Delete history" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Удалить историю" })).not.toBeInTheDocument();
   });
 
   it("does not restore deleted work when an older history request finishes late", async () => {
@@ -980,8 +980,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Показать по этапам" }));
     await user.click(screen.getByText("succeeded task"));
     expect(await screen.findByRole("heading", { name: "succeeded task" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    await user.click(screen.getByRole("button", { name: "Подтвердить удаление" }));
 
     expect(await screen.findByText("queued task")).toBeVisible();
     await vi.waitFor(() => {
@@ -999,20 +999,20 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
-    expect(within(dialog).getByText("Enter a task title.")).toBeVisible();
-    expect(within(dialog).getByText("Enter task context.")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
+    expect(within(dialog).getByText("Введите название задачи.")).toBeVisible();
+    expect(within(dialog).getByText("Введите контекст задачи.")).toBeVisible();
 
-    await user.type(within(dialog).getByLabelText("Title"), "Ship the UI");
-    await user.type(within(dialog).getByLabelText("Context"), "Build and verify the real interface.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.type(within(dialog).getByLabelText("Название"), "Ship the UI");
+    await user.type(within(dialog).getByLabelText("Контекст"), "Build and verify the real interface.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
 
     expect(await screen.findByRole("heading", { name: "Ship the UI" })).toBeVisible();
-    expect(screen.getByText("Progress will appear when the worker starts this task.")).toBeVisible();
+    expect(screen.getByText("Ход работы появится, когда исполнитель начнёт задачу.")).toBeVisible();
     const createCall = fetch.mock.calls.find(([, init]) => init?.method === "POST");
     expect(createCall).toBeDefined();
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
@@ -1029,15 +1029,15 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.type(within(dialog).getByLabelText("Title"), "Work in selected repository");
-    await user.type(within(dialog).getByLabelText("Context"), "Use the repository selected for this worker.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    const repositoryPicker = within(dialog).getByLabelText("Repository");
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.type(within(dialog).getByLabelText("Название"), "Work in selected repository");
+    await user.type(within(dialog).getByLabelText("Контекст"), "Use the repository selected for this worker.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    const repositoryPicker = within(dialog).getByLabelText("Репозиторий");
     expect(within(repositoryPicker).getByRole("option", { name: /docs · github\.com\/example\/docs/ })).toBeEnabled();
     await user.selectOptions(repositoryPicker, "repo-docs");
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
 
     expect(await screen.findByRole("heading", { name: "Work in selected repository" })).toBeVisible();
     const createCall = fetch.mock.calls.find(([input, init]) => input === "/api/v1/tasks" && init?.method === "POST");
@@ -1054,14 +1054,14 @@ describe("App", () => {
     mockControlPlane();
     const user = userEvent.setup();
     renderApp();
-    const trigger = await screen.findByRole("button", { name: "Delegate task" });
+    const trigger = await screen.findByRole("button", { name: "Поставить задачу" });
     await user.click(trigger);
     expect(screen.getByRole("dialog")).toBeVisible();
-    expect(screen.getByLabelText("Title")).toHaveFocus();
+    expect(screen.getByLabelText("Название")).toHaveFocus();
     await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Закрыть" })).toHaveFocus();
     await user.tab({ shift: true });
-    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Delegate task" })).toHaveFocus();
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Поставить задачу" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await vi.waitFor(() => expect(trigger).toHaveFocus());
@@ -1073,11 +1073,11 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Assign work" }));
+    await user.click(await screen.findByRole("button", { name: "Назначить работу" }));
 
-    expect(screen.getByRole("dialog", { name: "Delegate task" })).toBeVisible();
-    expect(screen.getByLabelText("Worker")).toHaveValue("worker-online");
-    expect(screen.getByLabelText("Repository")).toBeEnabled();
+    expect(screen.getByRole("dialog", { name: "Поставить задачу" })).toBeVisible();
+    expect(screen.getByLabelText("Исполнитель")).toHaveValue("worker-online");
+    expect(screen.getByLabelText("Репозиторий")).toBeEnabled();
   });
 
   it("presents worker facts in accessible profile tabs with read-only execution settings", async () => {
@@ -1087,34 +1087,34 @@ describe("App", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "Build Mac" })).toBeVisible();
-    const tabs = screen.getByRole("tablist", { name: "Worker profile" });
-    const overview = within(tabs).getByRole("tab", { name: "Overview" });
-    const work = within(tabs).getByRole("tab", { name: "Work" });
-    const capabilities = within(tabs).getByRole("tab", { name: "Capabilities" });
-    const settings = within(tabs).getByRole("tab", { name: "Settings" });
+    const tabs = screen.getByRole("tablist", { name: "Профиль исполнителя" });
+    const overview = within(tabs).getByRole("tab", { name: "Обзор" });
+    const work = within(tabs).getByRole("tab", { name: "Работа" });
+    const capabilities = within(tabs).getByRole("tab", { name: "Возможности" });
+    const settings = within(tabs).getByRole("tab", { name: "Настройки" });
     for (const tab of [overview, work, capabilities, settings]) {
       expect(document.getElementById(tab.getAttribute("aria-controls") ?? "")).not.toBeNull();
     }
     expect(overview).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("region", { name: "Worker summary" })).toHaveTextContent("6 / 10");
+    expect(screen.getByRole("region", { name: "Сводка исполнителя" })).toHaveTextContent("6 / 10");
 
     overview.focus();
     await user.keyboard("{ArrowRight}");
     expect(work).toHaveFocus();
     expect(work).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("Retained worktrees");
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("Latest of 6 active sessions");
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("Latest active task");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Сохранённые рабочие копии");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Последняя · 6 занято");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Последняя активная задача");
 
     await user.keyboard("{End}");
     expect(settings).toHaveFocus();
     const settingsPanel = screen.getByRole("tabpanel");
-    expect(within(settingsPanel).getByRole("heading", { name: "Execution" })).toBeVisible();
-    expect(within(settingsPanel).getByText("Read only")).toBeVisible();
+    expect(within(settingsPanel).getByRole("heading", { name: "Исполнение" })).toBeVisible();
+    expect(within(settingsPanel).getByText("Только чтение")).toBeVisible();
     expect(within(settingsPanel).getByText("6 / 10")).toBeVisible();
-    expect(within(settingsPanel).getByRole("meter", { name: "Worker concurrency" })).toHaveAttribute("max", "10");
+    expect(within(settingsPanel).getByRole("meter", { name: "Параллельность исполнителя" })).toHaveAttribute("max", "10");
     expect(settingsPanel).toHaveTextContent("max_concurrent");
-    expect(settingsPanel).toHaveTextContent("restart the worker");
+    expect(settingsPanel).toHaveTextContent("перезапусти исполнителя");
     expect(within(settingsPanel).queryByRole("textbox")).not.toBeInTheDocument();
     expect(within(settingsPanel).queryByRole("spinbutton")).not.toBeInTheDocument();
     expect(within(settingsPanel).queryByRole("combobox")).not.toBeInTheDocument();
@@ -1135,8 +1135,8 @@ describe("App", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderApp();
 
-      await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-      const description = screen.getByLabelText("Context");
+      await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+      const description = screen.getByLabelText("Контекст");
       await user.type(description, "Keep typing here.");
       expect(description).toHaveFocus();
 
@@ -1156,11 +1156,11 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
 
-    const option = await within(dialog).findByRole("option", { name: /github\.com\/example\/managed.*acquired on demand/ });
+    const option = await within(dialog).findByRole("option", { name: /github\.com\/example\/managed.*получается по запросу/ });
     expect(option).toBeEnabled();
   });
 
@@ -1169,17 +1169,17 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
     const validUnicodeTitle = "😀".repeat(200);
-    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: validUnicodeTitle } });
-    await user.type(within(dialog).getByLabelText("Context"), "Prove idempotent browser retries.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
+    fireEvent.change(within(dialog).getByLabelText("Название"), { target: { value: validUnicodeTitle } });
+    await user.type(within(dialog).getByLabelText("Контекст"), "Prove idempotent browser retries.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
 
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
     expect(await within(dialog).findByText(/connection lost after submit/i)).toBeVisible();
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
     expect(await screen.findByRole("heading", { name: validUnicodeTitle })).toBeVisible();
 
     const createBodies = fetch.mock.calls
@@ -1194,14 +1194,14 @@ describe("App", () => {
     mockControlPlane();
     const user = userEvent.setup();
     renderApp();
-    await user.click(await screen.findByRole("button", { name: "Delegate task" }));
-    const dialog = screen.getByRole("dialog", { name: "Delegate task" });
-    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "😀".repeat(201) } });
-    await user.type(within(dialog).getByLabelText("Context"), "This should not submit.");
-    await user.selectOptions(within(dialog).getByLabelText("Worker"), "worker-online");
-    await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
-    await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
-    expect(within(dialog).getByText("Keep the title to 200 characters.")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Поставить задачу" }));
+    const dialog = screen.getByRole("dialog", { name: "Поставить задачу" });
+    fireEvent.change(within(dialog).getByLabelText("Название"), { target: { value: "😀".repeat(201) } });
+    await user.type(within(dialog).getByLabelText("Контекст"), "This should not submit.");
+    await user.selectOptions(within(dialog).getByLabelText("Исполнитель"), "worker-online");
+    await user.selectOptions(within(dialog).getByLabelText("Репозиторий"), "repo-factory");
+    await user.click(within(dialog).getByRole("button", { name: "Поставить задачу" }));
+    expect(within(dialog).getByText("Название должно быть не длиннее 200 символов.")).toBeVisible();
   });
 
   it("keeps cached task detail visible after a background refresh fails", async () => {
@@ -1213,7 +1213,7 @@ describe("App", () => {
     await client.refetchQueries({ queryKey: ["task", "task-running"] });
 
     expect(screen.getByRole("heading", { name: "running task" })).toBeVisible();
-    expect(await screen.findByText(/Showing the last available data/)).toBeVisible();
+    expect(await screen.findByText(/Показаны последние доступные данные/)).toBeVisible();
     expect(screen.getByText(/temporary read failure/)).toBeVisible();
   });
 

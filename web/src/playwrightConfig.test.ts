@@ -77,8 +77,11 @@ describe("browser fixture server address", () => {
   });
 
   it("uses an explicit valid port for every Playwright consumer", async () => {
-    const config = await createPlaywrightConfig("24567");
-    const reloadedConfig = await createPlaywrightConfig(process.env.FACTORY_E2E_PORT);
+    const config = await createPlaywrightConfig("24567", "24568");
+    const reloadedConfig = await createPlaywrightConfig(
+      process.env.FACTORY_E2E_PORT,
+      process.env.FACTORY_INTAKE_E2E_PORT,
+    );
 
     expect(config.use?.baseURL).toBe("https://127.0.0.1:24567");
     expect(reloadedConfig.use?.baseURL).toBe(config.use?.baseURL);
@@ -95,6 +98,14 @@ describe("browser fixture server address", () => {
     const backendPort = webServer?.env?.FACTORY_E2E_BACKEND_PORT;
     expect(backendPort).toMatch(/^[0-9]+$/);
     expect(webServer?.url).toBe(`http://127.0.0.1:${backendPort}/healthz`);
+    expect(process.env.FACTORY_INTAKE_E2E_ORIGIN).toBe("http://127.0.0.1:24568");
+      expect(config.webServer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("intake-fixture.py"),
+        url: "http://127.0.0.1:24568/healthz",
+        env: { FACTORY_INTAKE_E2E_PORT: "24568" },
+      }),
+    ]));
   });
 
   it("keeps intercepted HTTPS requests in Chromium and captures sanitized proxy headers", () => {
