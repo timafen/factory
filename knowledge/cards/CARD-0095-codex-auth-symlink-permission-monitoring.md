@@ -1,11 +1,11 @@
 # CARD-0095 — Мониторинг Codex проверяет конечный auth.json
 
-Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавлен read-only checker прав конечных целей Codex и регрессии на симлинк с отображаемым режимом 777.
+Implementation commit: 85f75d94bd92a6e9ba9ca1bc1efcf01180c5f2ff — Существующая Automation переключается на checker на месте с проверкой сохранности расписания и истории.
 
 ## HEAD
 
-- Status: Implemented — целевые проверки PASS; полный check выявил только внеобластной flaky-тест worker.
-- Branch: `factory/4feea8b9-05a-942a7a20-8d1`.
+- Status: Implemented — замечание Review об аудите Automation закрыто.
+- Branch: `factory/c98d0695-c80-b1c6ac3f-56a`.
 - Specification:
   `knowledge/specs/codex-auth-symlink-permission-monitoring.md`.
 - Scope: устранить ложную тревогу о режиме `777` у auth-симлинка и сохранить
@@ -13,13 +13,12 @@ Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавл
 - Relation: исходная находка закрывается как дубликат
   `CARD-0047-codex-auth-provisioning-ownership`; CARD-0095 не переделывает
   provisioning и описывает только отдельное исправление мониторинга.
-- What changed: checker использует `stat -Lc`, принимает только `regular file 600 factory factory`,
-  не меняет ссылки и не читает содержимое токена; Automation «Патруль Factory» переведена на него.
-- Evidence: `bash ops/test-check-codex-auth-permissions.sh`, `bash ops/test-provision-codex-auth.sh`,
-  `just test-tooling` и `just build` — PASS; live checker подтвердил 11 безопасных целей; Run now
-  завершился без новых подтверждённых находок.
-- Next action: Verify проверяет поставленный коммит относительно свежего `main`; известный риск —
-  внеобластной `internal/worker.TestIdleWorkerMakesOneClaimPerPollingInterval`.
+- What changed: checker использует `stat -Lc`; новая идемпотентная команда обновляет именно
+  существующую Automation и проверяет прежние ID, cron/timezone, enabled и все Occurrence.
+- Evidence: `just test-tooling` и изолированный `just build` — PASS; live update сохранил
+  Automation, расписание и 70 Occurrence; 11 фактических целей безопасны. Снимок:
+  `knowledge/evidence/CARD-0095-automation-update.json`.
+- Next action: повторный Review сверяет поставленный операторский путь и evidence со свежим `main`.
 
 
 ## LOG
@@ -73,3 +72,19 @@ Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавл
 подтвердил 11 целей `regular file 600 factory factory` и не вывел содержимое токена. После этого
 Run now task завершился успешно с результатом «новых подтверждённых нерешённых находок нет»;
 matching run-now occurrence сохранился, повторная карточка о режиме 777 не создана.
+
+### 2026-08-12 — Implement
+
+После замечания Review добавлена идемпотентная операторская команда обновления текущей
+Automation через штатный API. Перед `PUT` она запоминает идентификатор, расписание,
+enabled-состояние и полный набор Occurrence, а после обновления проверяет их сохранность;
+регрессия покрывает обновление на месте и повторный запуск без новой версии.
+
+Команда применена к живой Automation «Патруль Factory»: версия изменилась с 2 на 3,
+ID и расписание `17 * * * *` / `America/Chicago` остались прежними, все 70 исторических
+Occurrence сохранились. Live checker вернул 0 для 11 целей с метаданными
+`regular file 600 factory factory`; проверяемый обезличенный снимок сохранён в
+`knowledge/evidence/CARD-0095-automation-update.json`.
+
+`just test-tooling` — PASS, включая две новые регрессии; `FACTORY_BUILD_DIR=/tmp/card0095-build
+just build` — PASS; `git diff --check` — PASS.
