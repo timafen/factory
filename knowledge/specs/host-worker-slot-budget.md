@@ -115,8 +115,10 @@ worker-службам на том же узле, что соответствуе
   новый attempt; повторить успешный request ID после заполнения бюджета.
 - Там же: table-driven освобождение после `CompleteAttempt` и server-time lease
   expiry, а также независимое соблюдение worker capacity=2.
-- Целевая команда ниже запускает новый сквозной regression общего предела и
-  server-config контракт; отдельно выполнить `git diff --check`.
+- Целевая команда ниже сначала проверяет, что новый regression общего предела
+  действительно существует (обычный `go test -run` без найденных тестов ложно
+  завершился бы успешно), а затем запускает его; отдельно выполнить
+  `git diff --check`. До реализации команда красная из-за отсутствующего теста.
 
 ## Риски и решения
 
@@ -153,4 +155,4 @@ remote-веткам; занятые номера заканчиваются на
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл docs/worker.md
 ГОТОВО-КОГДА: файл docs/local.md
-ГОТОВО-КОГДА: команда go test ./cmd/factory-server ./internal/controlplane -run '^(TestServerBootstrapConfigHostMaxConcurrent|TestClaimEnforcesHostMaxConcurrentAcrossWorkers)$' -count=1
+ГОТОВО-КОГДА: команда test "$(go test ./internal/controlplane -list '^TestClaimEnforcesHostMaxConcurrentAcrossWorkers$' | grep -c '^TestClaimEnforcesHostMaxConcurrentAcrossWorkers$')" -eq 1 && go test ./internal/controlplane -run '^TestClaimEnforcesHostMaxConcurrentAcrossWorkers$' -count=1
