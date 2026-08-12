@@ -102,10 +102,11 @@ case "$prompt" in
     echo "deterministic failure" >&2
     exit 17
     ;;
-  *FAKE_MODE=barrier*)
+	*FAKE_MODE=barrier*)
 		release="$FACTORY_TEST_CODEX_LOG/$attempt.release"
 		rm -f "$release"
 		mkfifo "$release"
+		printf '%s\n' "$$" >> "$FACTORY_TEST_CODEX_LOG/$attempt.starts"
     : > "$FACTORY_TEST_CODEX_LOG/$attempt.ready"
 		read -r _ < "$release"
 		rm -f "$release"
@@ -2168,6 +2169,15 @@ func TestReconnectAfterLostCompletionRestoresEveryWorkerSlot(t *testing.T) {
 	})
 	if firstDetail.Attempts[0].ID == secondDetail.Attempts[0].ID {
 		t.Fatal("a live barrier supervisor was duplicated instead of filling the second slot")
+	}
+	for _, attemptID := range []string{firstDetail.Attempts[0].ID, secondDetail.Attempts[0].ID} {
+		starts, err := os.ReadFile(filepath.Join(logDirectory, attemptID+".starts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count := len(strings.Fields(string(starts))); count != 1 {
+			t.Fatalf("barrier supervisor starts for %s = %d; want 1", attemptID, count)
+		}
 	}
 	if detail, err := restartedStore.Task(context.Background(), completed.Task.ID); err != nil || detail.Execution.State != "succeeded" {
 		t.Fatalf("lost completion changed terminal task: state=%q err=%v", detail.Execution.State, err)
