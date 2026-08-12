@@ -2,14 +2,26 @@
 
 ## HEAD
 
-Status: implemented and verified.
+Status: Verified PASS — awaiting human merge.
 Branch: `factory/16f9dc13-c12-270afe6b-8a2`.
 Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
 What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
-Evidence: `python3 -m unittest pilot.test_pilot -q` — PASS, 202 tests OK.
-Next action: create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots remain intentionally unchanged according to the handoff.
+Evidence: закреплённое сравнение с remote `main` содержит только эту карточку; `python3 -m unittest pilot.test_pilot -q` — PASS, 214 tests OK.
+Next action: human merges the documentation-only verification record; existing task snapshots remain intentionally unchanged according to the handoff.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Свежая remote-база и кандидат | `git ls-remote --symref origin HEAD`; isolated bare fetch `main` и `factory/16f9dc13-c12-270afe6b-8a2` | PASS: `base_sha=0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622`, `candidate_sha=23afab43447c8e8b5901e4574f0edfefe6652684`. |
+| Отсутствие ложной блокировки после продвижения базы | `git diff --name-only base_sha...candidate_sha`; проверка предка кодового implementation commit | PASS: относительно свежего `main` изменена только эта карточка; кодовый коммит `ff076ae565626fec8a3150414307e2c66d231b11` — предок кандидата и меняет `pilot/pilot.py`, `pilot/test_pilot.py`. |
+| Пиннинг fresh default branch и поведение сбоя инфраструктуры | `python3 -m unittest pilot.test_pilot -q` | PASS: 214 tests OK (13 skipped), включая регрессии bare remote и BLOCKED при resolution/fetch failure. |
+| Полный набор | `GOMAXPROCS=2 just check` в чистом archive кандидата | НЕ ПРОЙДЕН по внеобластной давней интеграционной проверке `internal/worker.TestTimeoutStopsIgnoringProcessGroup`: test timeout 5m. До сбоя прошли format, vet, govulncheck, staticcheck и несколько Go-пакетов. |
+| Чистота поставки | `git diff --check base_sha...candidate_sha`; `git status --short` | PASS: ошибок пробелов нет; проверочный клон чист. |
+
+Находка: полный Go-набор нестабилен вне области изменения (`internal/worker`); Pilot-регрессии изменения проходят полностью. Live rollout не выполнялся: поставка не меняет runtime-конфигурацию или ревизии задач.
 
 ### 2026-08-12 — Implement
 
