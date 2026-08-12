@@ -105,6 +105,9 @@ describe("browser fixture server address", () => {
     const fixtureServer = readFileSync(join(process.cwd(), "e2e/server.mjs"), "utf8");
 
     expect(specification).not.toContain("route.fetch(");
+    expect(specification).toMatch(
+      /test\("shows project readiness card"[\s\S]*?page\.evaluate\(async \(\) => \{[\s\S]*?fetch\("\/api\/v1\/dashboard"\)[\s\S]*?page\.reload\(\)/,
+    );
     expect(specification).toContain("route.continue({");
     expect(specification).toContain('"x-factory-e2e-backend-forwarded-host"');
     expect(fixtureServer).toContain('responseHeaders["x-factory-e2e-client-origin"]');
