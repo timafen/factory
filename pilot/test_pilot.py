@@ -1558,10 +1558,12 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.works_path = os.path.join(self.temporary.name, "works.json")
         self.events_path = os.path.join(
             self.temporary.name, "duplicate-root-prevented.json")
+        self.question_dir = os.path.join(self.temporary.name, "questions")
         self.patches = (
             mock.patch.object(pilot, "WORKS_PATH", self.works_path),
             mock.patch.object(
                 pilot, "DUPLICATE_ROOT_EVENTS_PATH", self.events_path),
+            mock.patch.object(pilot, "QUESTION_DIR", self.question_dir),
         )
         for patcher in self.patches:
             patcher.start()
@@ -1636,6 +1638,51 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                 "review_return")
         self.assertEqual(sent[0]["parent_task_id"], self.root["id"])
         self.assertEqual(sent[0]["correction_kind"], "review_return")
+
+    def test_review_answer_correction_remains_in_root_pipeline_after_restart(self):
+        question = {
+            "id": "review-question", "task_id": self.root["id"],
+            "title": "Исправить корзину", "stage": "Review",
+            "resume_stage": "Implement + Test", "status": "answered",
+            "answer": "Исправь замечание", "repository_id": "repo-id",
+        }
+        os.makedirs(self.question_dir)
+        pilot.save(os.path.join(self.question_dir, "review-question.json"), question)
+        created = []
+        returned = {}
+
+        def create(body, _conf):
+            created.append(body)
+            returned["task"] = {
+                "id": "review-return", "work_id": self.root["work_id"],
+                "parent_task_id": body["parent_task_id"],
+                "correction_kind": body["correction_kind"],
+                "title": body["title"], "state": "queued",
+                "created_at": "2026-08-11T20:01:00Z",
+            }
+            return returned
+
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""), \
+                mock.patch.object(pilot, "stage_attempts", return_value=0), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "branch_from_history", return_value=""), \
+                mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "live_or_done_at", return_value=None), \
+                mock.patch.object(pilot, "create_task", side_effect=create), \
+                mock.patch.object(pilot, "notify"):
+            self.assertEqual(pilot.handle_answers(
+                self.conf,
+                {"Implement + Test": {"enabled": True, "revision_id": "revision"}},
+                {"worker": {"id": "worker-id"}}, [self.root]), 1)
+
+        correction = returned["task"]
+        self.assertEqual(correction["work_id"], self.root["work_id"])
+        self.assertEqual(correction["parent_task_id"], self.root["id"])
+        pilot.record_new_works(self.conf, [self.root, correction], max_age_min=10_000_000)
+        pilot.record_new_works(self.conf, [correction, self.root], max_age_min=10_000_000)
+        self.assertEqual(list(pilot.load(self.works_path, {})), [self.root["work_id"]])
 
     def test_identical_titles_with_distinct_work_ids_remain_distinct(self):
         first = dict(self.root, state="running")
