@@ -3,16 +3,13 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Branch: `factory/8493f4e1-e7f-d0bef795-c9b` (base `origin/main` `be3aece4f84b9432d6ffc0e77d4e6735b5b99140`).
+- Implementation commit: f12fc67fc2d1497ad348dcdf77281f82dfeb3146 — same-title resume, Review and Verify remain isolated by durable `work_id` after rebase.
+- What changed: resume lookup and every Pilot delivery path retain the originating
+  work identity; the restart regression covers both works under bounded polling.
+- Evidence: isolated controlplane/worker packages pass on both main and candidate;
+  full Go, static, UI (161), Pilot (232), tooling, launcher and build checks pass.
+- Next action: human merges `factory/8493f4e1-e7f-d0bef795-c9b`.
 
 ## LOG
 
@@ -47,3 +44,13 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Rebased the work-ID isolation delivery onto `origin/main`
+`be3aece4f84b9432d6ffc0e77d4e6735b5b99140` and reconciled Pilot's bounded
+terminal-task traversal with the two-work restart regression. The previously
+reported recovery/polling timeout was classified by isolated verbose runs:
+both packages pass on fresh main and candidate, and the full Go suite passes
+when allowed to finish. Targeted provenance tests, 232 Pilot tests, 161 UI
+tests, static checks, tooling, launcher and the complete build passed.
