@@ -1,12 +1,12 @@
-Implementation commit: 157f2ea77a67bc2b60749a014b2bffd2615c3152 — healthy retained эскалируется идемпотентно в утверждённый канал владельца по умолчанию без очистки результата.
+Implementation commit: 394a367ebb1d1ca77f7b811cd95657de94e342d1 — healthy retained эскалируется идемпотентно в утверждённый канал владельца по умолчанию без очистки результата.
 
 # CARD-0093 — Эскалация retained worktree здорового исполнителя
 
 ## HEAD
 
 - Status: Implemented — checks and live delivery pass
-- Branch: `factory/fe45422b-ee5-9037a0d0-e01`
-- Implementation commit: `157f2ea77a67bc2b60749a014b2bffd2615c3152`
+- Branch: `factory/4d7cf287-b29-286b7e0c-27d`
+- Implementation commit: `394a367ebb1d1ca77f7b811cd95657de94e342d1`
 - Specification: `knowledge/specs/healthy-retained-worktree-escalation.md`
 - What changed: healthy online retained получает одну durable-эскалацию на
   точный снимок через `https://ntfy.sh/timafen-a8523d037f21` по умолчанию;
