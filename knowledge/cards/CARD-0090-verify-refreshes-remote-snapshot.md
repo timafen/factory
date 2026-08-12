@@ -1,17 +1,22 @@
 # CARD-0090: Verify заново закрепляет удалённую ветку перед merge
 
-Implementation commit: 5d0d47dd98288d239239f4bfcfd94d48480d51d6 — Verify закрепляет свежий remote snapshot перед автоматическим слиянием.
+Implementation commit: 38a79f1bb9e2c89fa9066f802fdc3275ea9c84f0 — Verify закрепляет свежий remote snapshot перед автоматическим слиянием.
 
 ## HEAD
 
 Status: PASS.
-Branch: `factory/9a522826-8ad-b33ca087-1f9`.
-Implementation commit: 591808d1f5d3d5481dddbb56ce4e9ce63d862b32 — merge разрешён только для неизменившегося SHA, проверенного Verify.
+Branch: `factory/bf1684a1-c50-bcc74146-b7f`.
+Implementation commit: 38a79f1bb9e2c89fa9066f802fdc3275ea9c84f0 — merge разрешён только для неизменившегося SHA, проверенного Verify.
 What changed: Verify сохраняет `candidate_sha`; перед merge текущий head ветки сверяется до и после создания PR.
 Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.RebuiltDeliveryBranchPipelineTests pilot.test_pilot.ImmutableMergeTests` — 6 tests OK.
 Next action: выполнить полный набор тестов после перебазирования на свежий `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлена ссылка на фактический программный коммит: он опубликован в delivery-ветке,
+является её предком и изменяет `pilot/pilot.py` и `pilot/test_pilot.py`.
 
 ### 2026-08-12 — Implement
 
