@@ -4,7 +4,7 @@
 
 - Status: Implement PASS — полная поставка проверена.
 - Branch: `factory/c4ed5639-1cd-6e93102b-ddb`.
-Implementation commit: c01920fa8489b758acb78fe4c2a741d2783dc70c — проверка единственности кнопки сохранения Settings.
+Implementation commit: 0579ce69eccea6d891668882d88689489e9909e4 — проверка единственности кнопки сохранения Settings.
 - What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()` и должна существовать в единственном числе.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `npm run test:browser` (21 passed) и `just check` PASS.
 - One next action: передать в Verify.
@@ -37,3 +37,9 @@ Targeted Playwright: `audits every Factory screen on desktop and phone`, legacy 
 Доказательства: `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint`, `npm test`
 (158 passed), `npm run build`, E2E Settings и весь Playwright-набор (21 passed),
 а также `just check` завершились PASS.
+
+### 2026-08-12 — Implement
+
+После обязательного rebase локальный кодовый дубликат был снят Git: идентичная
+защита уже вошла в `main`. HEAD теперь ссылается на кодовый коммит-предок
+`0579ce69eccea6d891668882d88689489e9909e4`, который меняет Settings E2E.
