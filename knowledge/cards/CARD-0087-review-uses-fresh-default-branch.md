@@ -3,13 +3,20 @@
 ## HEAD
 
 Status: Implemented — awaiting repeated Review.
-Branch: `factory/fbfc83d6-91c-7d003cdd-58f`.
-Implementation commit: 0ad547d2ad72476c1ea177e52cbb1a4f2826cbfe — Review/Verify сравнивают закреплённые SHA в изолированном bare-репозитории.
-What changed: authoritative base/candidate refs fetch-ятся в отдельные refs bare-репозитория; delivery scope вычисляется точной командой `<base_sha>...<candidate_sha>`. Merge-base используется отдельно только для метрик.
-Evidence: `python3 -m unittest pilot.test_pilot -q` — 226 tests OK (13 skipped); regression фиксирует `git init --bare` и точные аргументы pinned diff; `just build` — PASS.
+Branch: `factory/07015c72-001-735446d0-6e9`.
+Implementation commit: ffcb95b6f7b928fcd8e17a23c93fe97066c3002e — пустая pinned-поставка возвращается на доработку как `REQUEST CHANGES`.
+What changed: успешный pinned snapshot с пустым diff теперь явно считается недоставленной реализацией; добавлена регрессия на настоящем bare snapshot.
+Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests -q` — 4 tests OK; `git diff --check` — PASS.
 Next action: повторить независимый Review относительно свежего remote default branch.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Пустой diff после успешной pinned-проверки больше не проходит gate молча:
+Review возвращает единственный blocker `REQUEST CHANGES` как недоставленную
+реализацию. Реальный bare snapshot без изменений покрыт отдельным тестом.
+`python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests -q` — PASS.
 
 ### 2026-08-12 — Implement
 
