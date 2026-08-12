@@ -1731,7 +1731,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
             "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
             "record_implementation_artifact", "save_stage_verdict",
-            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+            "retry_pending_factory_deploy", "autostart_plan",
         )
         notifications = mock.Mock()
         with contextlib.ExitStack() as stack:
@@ -1784,10 +1784,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                          [kind, "", ""])
         merge.assert_called_once_with("github.com/acme/repo", "factory/correction",
                                       "Изменённое человеком имя")
-        final.assert_called_once_with(verify["id"], "Verify", True)
-        self.assertTrue(any(len(call.args) > 1 and call.args[1] == "Задача выполнена"
-                            for call in notifications.call_args_list),
-                        notifications.call_args_list)
+        self.assertEqual(state["merge_intents"][verify["id"]]["phase"], "journaled")
+        final.assert_not_called()
 
     def test_review_and_verify_corrections_complete_one_pipeline_after_restart(self):
         for kind in ("review_return", "verify_return"):
@@ -1971,7 +1969,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "rescue_queued", "supersede_stale_questions",
             "cleanup_orphaned_paused_pipelines", "advance_epics",
             "area_extend", "collect_ideas", "retry_pending_factory_deploy",
-            "autostart_plan", "deploy_after_merge", "notify",
+            "autostart_plan", "notify",
         )
         state = {"processed": []}
         with contextlib.ExitStack() as stack:
@@ -2070,13 +2068,11 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                 task["state"] = "succeeded"
                 outcomes[task["id"]] = "PASS\nTRY: none"
             pilot.cycle(dict(self.conf, auto_merge=True), state)
-            completed = [task for task in tasks if task["id"].startswith("created-")]
-            pilot.cleanup_work_archive(dict(self.conf, auto_merge=True), completed)
-            lifecycle = pilot.load(self.works_path, {})
-            self.assertTrue(lifecycle[work_a].get("closed"))
-            self.assertTrue(lifecycle[work_b].get("closed"))
-            statuses = pilot.load(os.path.join(home, "pilot", "work_status.json"), {})
-            self.assertEqual(set(statuses), {work_a, work_b})
+            intents = state["merge_intents"]
+            self.assertEqual({intent["branch"] for intent in intents.values()},
+                             {"factory/a-clean", "factory/b-clean"})
+            self.assertTrue(all(intent["phase"] == "journaled"
+                                for intent in intents.values()))
 
         self.assertEqual(merge.call_args_list, [
             mock.call("github.com/acme/repo", "factory/a-clean", base),
