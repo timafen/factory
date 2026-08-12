@@ -166,5 +166,13 @@
   "done": true,
   "routine": false
  },
- "max_loop_rescues": 2
+ "max_loop_rescues": 2,
+ "review_verify_fresh_base_rollout": {
+  "state": "prepared_not_applied",
+  "review_revision_id": "SET_AFTER_CREATING_IMMUTABLE_REVISION",
+  "verify_revision_id": "SET_AFTER_CREATING_IMMUTABLE_REVISION",
+  "revision_text": "Before any diff, log, ancestry, or empty-delivery decision, resolve remote HEAD, fetch that exact default ref and the candidate into an isolated read-only repository, pin base_sha and candidate_sha, and compare only those SHAs. On resolution/fetch failure report BLOCKED: review infrastructure; never use cached origin/main and never request code changes. Record both SHAs in the verdict.",
+  "safe_rollout": "Create new immutable Review and Verify revisions, smoke one new task, then set them current. Do not edit existing task snapshots.",
+  "rollback": "Set each workflow current_revision_id back to the saved previous revision_id; existing tasks keep their pinned revisions."
+ }
 }
