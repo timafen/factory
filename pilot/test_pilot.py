@@ -5046,7 +5046,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "case \"" + outcome + "\" in\n"
                          "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
                          "  rollback_failed) exit 1 ;;\n"
-                         "  final_driver_status_write_failed) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 4 ;;\n"
+                         "  final_driver_status_write_failed) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; printf '4\\n' > \"" + fx + ".rc\"; exit 4 ;;\n"
                          "  *) exit 7 ;;\n"
                          "esac\n")
         os.chmod(fx, 0o700)
@@ -5256,9 +5256,9 @@ pilot.save(pilot.STATE_PATH, state)
         self.assertEqual(self._events(paths["events"], "owner_done"), [])
 
     def test_final_driver_status_write_failure_stays_failed_after_fresh_restart(self):
-        # The shell fixture proves that the real driver returns rc=4 only after
-        # physical delivery when its final succeeded rename fails.  Exercise
-        # that process result through the real broker and fresh Pilot processes.
+        # The driver returns rc=4 only after physical delivery when its final
+        # succeeded status write fails. Exercise that result through the real
+        # broker and fresh Pilot processes.
         paths = self._process_paths(self._start_process_broker(
             outcome="final_driver_status_write_failed"))
         self._pilot_process("seed", paths, sha=self.sha)
@@ -5278,6 +5278,8 @@ pilot.save(pilot.STATE_PATH, state)
             attempts = [line.strip() for line in stream if line.strip()]
         with open(paths["success"], encoding="utf-8") as stream:
             successful = [line.strip() for line in stream if line.strip()]
+        with open(paths["fx"] + ".rc", encoding="utf-8") as stream:
+            self.assertEqual(stream.read().strip(), "4")
         self.assertEqual(generation["phase"], "failed")
         self.assertEqual(broker_state["status"], "rollback_failed")
         self.assertEqual(attempts, [generation["id"]])
