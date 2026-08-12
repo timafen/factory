@@ -1,18 +1,17 @@
 # CARD-0089 — стабильный HTTPS-набор с реальным service worker
 
-Implementation commit: 727830a4dad15a66f16b51040ba9d7b57342d753 — закреплён доверенный Chromium-путь HTTPS-перехвата и устранена временная зависимость narrow-layout сценария.
+Implementation commit: 78cf262f967a92adf0bbb1ac0d2a9efa9b0f6055 — worker timeout-тест получает запас на подготовку worktree и стабильно проверяет остановку process group.
 
 ## HEAD
 
-- Status: Verified PASS — полный HTTPS browser suite прошёл.
-- Branch: `factory/6ffeccbd-467-a0dbe95d-b4d`.
-- Implementation commit: `727830a4dad15a66f16b51040ba9d7b57342d753`.
-- What changed: регрессия запрещает возврат readiness-перехвата к `route.fetch()` без scoped SPKI trust; narrow-layout проверяет адаптивный блок независимо от истечения фонового heartbeat.
-- Evidence: `npm test -- --run src/playwrightConfig.test.ts` → 12/12 PASS; целевой narrow Chromium → PASS.
-- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` → 21/21 PASS за 7,6 минуты, включая HTTPS resume/Origin и service worker.
-- Evidence: `FACTORY_BUILD_DIR=<tmp> just build` → три бинарника собраны; `git diff --exit-code -- web/dist` → PASS.
-- Evidence: `just check` → lint/vuln/staticcheck PASS, но существующий timing-тест `TestTimeoutStopsIgnoringProcessGroup` упал под параллельной нагрузкой worktree.
-- Next action: слить ветку после проверки diff и push.
+- Status: Verified PASS — полный HTTPS browser suite и полный check прошли.
+- Branch: `factory/29d8fbbb-45a-61b50a9f-f39`.
+- Implementation commit: `78cf262f967a92adf0bbb1ac0d2a9efa9b0f6055`.
+- What changed: `TestTimeoutStopsIgnoringProcessGroup` получает 10 секунд на admission и проверяет реальный runtime timeout; односекундная граница подготовки остаётся в отдельном `TestTimeoutIncludesWorktreePreparation`.
+- Evidence: целевые timeout-тесты → 2/2 PASS на окончательном HEAD.
+- Evidence: `just check` → PASS: Go, vuln/staticcheck, UI 158 тестов, build/tooling/launcher.
+- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` → 21/21 PASS за 4,7 минуты, включая HTTPS resume/Origin, scoped SPKI и реальный service worker.
+- Next action: слить ветку после подтверждённого push.
 
 ## LOG
 
@@ -21,3 +20,8 @@ Implementation commit: 727830a4dad15a66f16b51040ba9d7b57342d753 — закреп
 - Добавлена точная регрессия доверенного Chromium-fetch для readiness-dashboard без ослабления TLS browser context.
 - Убрана зависимость narrow-layout сценария от уже остановленного heartbeat; адаптивная сетка продолжает проверяться напрямую.
 - Полный HTTPS Chromium-набор прошёл 21/21; production build и dist-проверка прошли, scoped-процессы после теста завершились.
+
+### 2026-08-12 — Implement
+
+- Увеличен только admission-бюджет worker timeout-теста до 10 секунд; проверка runtime timeout, process group и отдельная односекундная pre-start проверка сохранены.
+- На окончательном HEAD целевые timeout-тесты прошли 2/2, полный `just check` прошёл, HTTPS browser suite прошёл 21/21 с реальным service worker.
