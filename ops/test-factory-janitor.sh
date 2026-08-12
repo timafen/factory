@@ -24,6 +24,9 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/su"
 printf '#!/usr/bin/env bash\nif [ "$1" = "%s/worker/worktrees/unmoved" ]; then exit 1; fi\nexec /bin/mv "$@"\n' "$TMP" >"$TMP/bin/mv"
 chmod +x "$TMP/bin/systemctl" "$TMP/bin/sleep" "$TMP/bin/su" "$TMP/bin/mv"
 sed -i '2i echo "$*" >> "'$TMP'/systemctl.log"' "$TMP/bin/systemctl"
+printf 'done\n' >"$TMP/healthy-reason"
+printf '#!/usr/bin/env bash\npayload=\nprevious=\nfor arg in "$@"; do\n  if [ "$previous" = data ]; then payload=$arg; fi\n  [ "$arg" = --data-binary ] && previous=data || previous=\ndone\nlast=${!#}\nif [ "$last" = "$ESCALATION_TARGET" ]; then echo "$payload" >>"$ESCALATION_LOG"; exit 0; fi\nexec /usr/bin/curl "$@"\n' >"$TMP/bin/curl"
+chmod +x "$TMP/bin/curl"
 
 python3 -c '
 import json, sys
@@ -34,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
         body = {"workers": [
             {"id": "worker-1", "name": "claude-haiku", "online": False, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]},
             {"id": "worker-2", "name": "online-unhealthy", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": []},
-            {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": "done", "cleanup_command": "keep"}]}
+            {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": open(sys.argv[7]).read().strip(), "cleanup_command": "keep"}]}
         ]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
@@ -47,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" "$TMP/healthy-reason" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -61,6 +64,8 @@ FACTORY_JANITOR_LOG="$TMP/janitor.log" \
 FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
 FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
 FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+FACTORY_JANITOR_ESCALATION_URL="mock://owner" \
+ESCALATION_TARGET="mock://owner" ESCALATION_LOG="$TMP/escalations.log" \
 bash "$ROOT/ops/factory-janitor.sh"
 
 python3 - "$TMP/request.json" <<'PY'
@@ -83,6 +88,52 @@ grep -q 'подтверждена очистка retained worktree: claude-haiku
 test "$(grep -c 'stop factory-unhealthy.service\|start factory-unhealthy.service' "$TMP/systemctl.log" || true)" -eq 0
 test "$(python3 -c 'import json; print("online-unhealthy" in json.load(open("'$TMP'/state/heals.json")))')" = False
 test "$(grep -c 'ОСВОБОЖДАЮ online-healthy' "$TMP/janitor.log" || true)" -eq 0
+test "$(wc -l <"$TMP/escalations.log")" -eq 1
+grep -q 'online-healthy.*attempt-healthy.*healthy/worktrees/retained.*reason=done' "$TMP/escalations.log"
+
+# The exact snapshot is durable across runs, while a changed reason is new.
+PATH="$TMP/bin:$PATH" FACTORY_JANITOR_LOG="$TMP/janitor.log" \
+FACTORY_JANITOR_STATE="$TMP/state/heals.json" FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+FACTORY_JANITOR_ESCALATION_URL="mock://owner" ESCALATION_TARGET="mock://owner" \
+ESCALATION_LOG="$TMP/escalations.log" bash "$ROOT/ops/factory-janitor.sh"
+test "$(wc -l <"$TMP/escalations.log")" -eq 1
+printf 'owner-review\n' >"$TMP/healthy-reason"
+PATH="$TMP/bin:$PATH" FACTORY_JANITOR_LOG="$TMP/janitor.log" \
+FACTORY_JANITOR_STATE="$TMP/state/heals.json" FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+FACTORY_JANITOR_ESCALATION_URL="mock://owner" ESCALATION_TARGET="mock://owner" \
+ESCALATION_LOG="$TMP/escalations.log" bash "$ROOT/ops/factory-janitor.sh"
+test "$(wc -l <"$TMP/escalations.log")" -eq 2
+
+# A failed owner channel is logged, stays retryable, and never harms the result.
+printf 'channel-down\n' >"$TMP/healthy-reason"
+printf '#!/usr/bin/env bash\necho "notification unavailable" >&2\nexit 22\n' >"$TMP/bin/curl"
+chmod +x "$TMP/bin/curl"
+PATH="$TMP/bin:$PATH" FACTORY_JANITOR_LOG="$TMP/janitor.log" \
+FACTORY_JANITOR_STATE="$TMP/state/heals.json" FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+FACTORY_JANITOR_ESCALATION_URL="mock://owner" bash "$ROOT/ops/factory-janitor.sh"
+test -e "$TMP/healthy/worktrees/retained"
+grep -q 'не удалось отправить эскалацию healthy retained.*attempt=attempt-healthy' "$TMP/janitor.log"
+test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["healthy_retained_escalations"]))' "$TMP/state/heals.json")" -eq 2
+
+# With no channel configured, one explicit log entry is the durable fallback.
+for _ in 1 2; do
+  PATH="$TMP/bin:$PATH" FACTORY_JANITOR_LOG="$TMP/janitor.log" \
+  FACTORY_JANITOR_STATE="$TMP/state/heals.json" FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+  FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" bash "$ROOT/ops/factory-janitor.sh"
+done
+test "$(grep -c 'Канал эскалации не настроен' "$TMP/janitor.log")" -eq 1
+test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["healthy_retained_escalations"]))' "$TMP/state/heals.json")" -eq 3
+
+# Keep the legacy confirmation-failure scenario independent of rate limiting.
+python3 - "$TMP/state/heals.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+data["claude-haiku"] = []
+json.dump(data, open(sys.argv[1], "w"))
+PY
 
 mkdir -p "$TMP/worker/worktrees/missing"
 printf '#!/usr/bin/env bash\necho "confirmation unavailable" >&2\nexit 22\n' >"$TMP/bin/curl"
@@ -101,4 +152,6 @@ grep -q 'не удалось подтвердить очистку retained work
 echo 'TestJanitorSelectsOfflineRetainedWorker: PASS'
 echo 'TestJanitorSkipsOnlineUnhealthyWorker: PASS'
 echo 'TestJanitorSkipsOnlineHealthyRetainedWorker: PASS'
+echo 'TestJanitorEscalatesHealthyRetainedSnapshotOnce: PASS'
+echo 'TestJanitorRetriesFailedHealthyRetainedEscalation: PASS'
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
