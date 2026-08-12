@@ -2231,6 +2231,57 @@ class ClosedWorkLifecycleTests(unittest.TestCase):
             "Закрытая работа", current, [self.old, current]), "")
 
 
+class WorkOriginAttributionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.works_path = os.path.join(self.temporary.name, "works.json")
+        self.ideas_path = os.path.join(self.temporary.name, "ideas.json")
+        self.patches = [
+            mock.patch.object(pilot, "WORKS_PATH", self.works_path),
+            mock.patch.object(pilot, "IDEAS_PATH", self.ideas_path),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        pilot.save(self.works_path, {})
+        pilot.save(self.ideas_path, [])
+        self.conf = {"stages": [{"workflow": "Triage"}, {"workflow": "Review"}]}
+
+    @staticmethod
+    def task(base, request_key="regular-task"):
+        return {
+            "id": request_key,
+            "title": f"[auto] [1/2 Triage] {base}",
+            "state": "queued",
+            "request_key": request_key,
+            "created_at": "2026-08-12T03:00:00Z",
+        }
+
+    def test_new_work_inherits_assistant_origin_from_plan(self):
+        pilot.save(self.ideas_path, [{
+            "id": "proposal", "title": "Assistant proposal",
+            "origin": "assistant", "state": "in_work",
+        }])
+
+        pilot.record_new_works(
+            self.conf, [self.task("Assistant proposal")], max_age_min=10_000,
+        )
+
+        work = pilot.load(self.works_path, {})["Assistant proposal"]
+        self.assertEqual(work["origin"], "assistant")
+
+    def test_automation_task_is_not_attributed_to_owner(self):
+        pilot.record_new_works(
+            self.conf,
+            [self.task("Scheduled patrol", "automation:patrol:schedule:one")],
+            max_age_min=10_000,
+        )
+
+        work = pilot.load(self.works_path, {})["Scheduled patrol"]
+        self.assertEqual(work["origin"], "orchestrator")
+
+
 class WorkArchiveCleanupTests(unittest.TestCase):
     def setUp(self):
         self.now = 1_786_320_000

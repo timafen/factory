@@ -37,7 +37,7 @@ function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (base
 afterEach(() => vi.unstubAllGlobals());
 
 it("separates queued work from work running right now", async () => {
-  mockAPI({});
+  mockAPI({ works: { "Уже выполняется": { origin: "assistant" } } });
   view([
     task("running", "[auto] [3/5 Implement + Test] Уже выполняется", "running"),
     task("queued", "[auto] [4/5 Review] Ждёт исполнителя", "queued"),
@@ -53,6 +53,7 @@ it("separates queued work from work running right now", async () => {
   expect(within(queuedSection).getByText("Ждёт исполнителя")).toBeVisible();
   expect(within(queuedSection).queryByText("Уже выполняется")).not.toBeInTheDocument();
   expect(screen.getByText("Текущий этап поставлен в очередь и ещё не выполняется.")).toBeVisible();
+  expect(screen.getByText("поставил помощник")).toBeVisible();
 });
 
 it("separates owner decision, pause, dead end, automatic repair, and archive", async () => {
