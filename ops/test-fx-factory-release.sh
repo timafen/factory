@@ -77,8 +77,15 @@ d=sqlite3.connect(sys.argv[1]); d.execute('create table schema_migrations(versio
 open(sys.argv[1]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
 PY
   printf '{"name":"old","sha":"old-release-sha"}\n' >"$case_dir/current.json"
-  chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
+  # The real release gate runs this test under umask 077.  Set the fixture
+  # modes explicitly so the rollback preflight verifies production-like
+  # artifacts instead of inheriting the caller's umask.
+  chmod 755 "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
     "$case_dir/install/factory-release-broker" "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
+  chmod 644 "$case_dir/install/factory-release-broker.service" \
+    "$case_dir/install/50-project-release-broker.conf" \
+    "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
+    "$case_dir/live/intake/app.py" "$case_dir/live/intake/plan.py"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
 
