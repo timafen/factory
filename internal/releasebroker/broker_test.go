@@ -241,6 +241,38 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
 }
 
+func TestDiskBrokerKeepsAcceptedTerminalStatusAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	executor := &sequenceExecutor{statuses: []string{"succeeded"}}
+	broker, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"delivery-completed-1","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForOperationStatus(t, server, "delivery-completed-1", "succeeded")
+
+	restarted, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedServer := httptest.NewServer(restarted.Handler())
+	defer restartedServer.Close()
+	if got := operationStatus(t, restartedServer, "delivery-completed-1").Status; got != "succeeded" {
+		t.Fatalf("recovered status=%q, want succeeded", got)
+	}
+	if got := postStatus(t, restartedServer, body); got != http.StatusOK {
+		t.Fatalf("duplicate POST status=%d", got)
+	}
+	if calls, _, _ := executor.snapshot(); calls != 1 {
+		t.Fatalf("executor repeated after accepted terminal status: calls=%d", calls)
+	}
+}
+
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")
