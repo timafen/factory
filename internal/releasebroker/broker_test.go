@@ -391,7 +391,7 @@ func TestDiskBrokerFailsClosedOnInvalidOperationState(t *testing.T) {
 
 func TestDiskBrokerFailsClosedOnJSONDirectory(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "delivery-directory.json"), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "delivery-1.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	executor := &recordingExecutor{}
