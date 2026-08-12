@@ -389,7 +389,7 @@ func TestLockedOperationRejectsAdapterAndTargetMutationAtomically(t *testing.T) 
 	if calls != 2 || strings.Join(adapters, ",") != "fx-factory-release,fx-factory-release" {
 		t.Fatalf("unexpected executor calls=%d adapters=%v", calls, adapters)
 	}
-	if got := broker.items["lock-retry-1"].Posts; got != 3 {
-		t.Fatalf("durable POST observations=%d, want 3", got)
+	if got := broker.items["lock-identity-1"].Posts; got != 2 {
+		t.Fatalf("durable POST observations=%d, want 2", got)
 	}
 }
