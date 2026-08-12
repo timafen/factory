@@ -424,6 +424,24 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
 
+    def test_verify_gate_refreshes_snapshot_and_blocks_before_merge(self):
+        snapshot = {
+            "state": "ok", "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+        }
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot) as fresh:
+            result = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        fresh.assert_called_once_with("github.com/example/repo", "factory/candidate")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["snapshot"]["base_sha"], "a" * 40)
+        self.assertEqual(result["snapshot"]["candidate_sha"], "b" * 40)
+
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
+                "state": "blocked", "reason": "cannot fetch authoritative refs"}):
+            blocked = pilot.verify_gate("github.com/example/repo", "factory/candidate")
+        self.assertTrue(blocked["blocked"])
+        self.assertIn("BLOCKED: review infrastructure", blocked["note"])
+
 
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
