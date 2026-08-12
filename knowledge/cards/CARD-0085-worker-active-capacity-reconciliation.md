@@ -2,18 +2,18 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/b77bd6b3-1cc-c549126f-cd6`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
+- Status: Implemented — ready for repeated review.
+- Branch: `factory/cd440c00-b65-b9cb04d9-be2`.
+- Implementation commit: 947cc2b069f7494ce7a7799eaaf7a48a54d65ca7 — idle-sweep проверяет
+  точные значения обеих метрик reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
   registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: `go test -timeout 20m ./... && go build ./...` → PASS (2:45.09);
-  focused `go test -race -timeout 10m ... -count=1` → PASS (29.34s, 6 tests);
-  fresh `origin/main...HEAD` → ровно 11 файлов, clean tree перед verify update.
-- One next action: выполнить human merge в `main`.
+- Evidence: focused idle-sweep test and `go build ./...` → PASS after rebase;
+  `git diff --check` → PASS; fresh `origin/main...HEAD` → one test file.
+- Evidence: full `go test ./...` met worker polling timing FAIL; isolated rerun → PASS.
+- One next action: повторить review точных idle-sweep метрик перед merge.
 
 ## LOG
 
@@ -58,3 +58,12 @@ maintenance paths регистрации и `SweepExpired`; idle regression по
 что старое окно удаляется без lease, а актуальная метрика остаётся точной.
 Проверки: focused idle-retention, integration с `-timeout=90s`, `go test ./...`
 и `git diff --check` — PASS.
+
+### 2026-08-11 — Implement
+
+После rebase на свежий `main` сама гарантированная sweep-очистка уже присутствует
+из параллельно влитой поставки. Оставлен минимальный недостающий критерий: настоящий
+idle-sweep теперь проверяет точные метрики `1 reconciliation / 0 ghost slots` вместе
+с удалением старой и сохранением актуальной записи. Целевой тест, `go build ./...`
+и `git diff --check` прошли; полный набор встретил polling-флейк worker, который
+прошёл при изолированном повторе.
