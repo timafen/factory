@@ -160,9 +160,9 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
   const archived = all.filter((e) => isArchived(e.status));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <p style={{ color: "var(--text-muted, #8a94a6)", margin: 0, flex: 1 }}>
+    <div className="epics-page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="epics-toolbar" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <p className="epics-toolbar-copy" style={{ color: "var(--text-muted, #8a94a6)", margin: 0, flex: 1 }}>
           Эпики — большие цели, разложенные планировщиком на подзадачи. «Старт» отправляет все
           подзадачи в конвейер; дальше прогресс обновляется сам.
         </p>
@@ -174,7 +174,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
       {epics.isPending && <div className="quiet-empty">Загружаю эпики…</div>}
       {!epics.isPending && list.length === 0 && (
         <div className="quiet-empty">
-          Пока пусто. Надиктуй большую цель на вкладке Say — если она тянет на эпик, план появится здесь.
+          Пока пусто. Надиктуй большую цель на вкладке «Сказать» — если она тянет на эпик, план появится здесь.
         </div>
       )}
 
@@ -193,8 +193,8 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
             return `${i + 1}. ${s.title}. ${p ? `Этап ${p.stage} из ${p.total}, ${p.stageName}, состояние ${p.state}.` : "Ещё не начата."}`;
           }).join(" ");
         return (
-          <div key={e.id} style={{ background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div className="epic-card" key={e.id} style={{ background: "var(--surface, #171b24)", border: "1px solid var(--border, #262c38)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="epic-card-heading" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <strong style={{ fontSize: 16 }}>{e.name}</strong>
               <ProjectTag name={projectName(e.repository_id)} />
               <span style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, background: "#22303f", color: stateColor(e.status === "running" ? "running" : undefined) }}>
@@ -225,6 +225,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
                 const clickable = Boolean(p?.taskId && onTask && st !== "pending");
                 return (
                   <div
+                    className="epic-subtask"
                     key={i}
                     onClick={() => { if (p?.taskId && onTask) onTask(p.taskId); }}
                     role={clickable ? "button" : undefined}
@@ -233,7 +234,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
                     title={clickable ? "Открыть задачу" : undefined}
                     style={{ background: "var(--surface-2, #0f131a)", border: "1px solid var(--border, #262c38)", borderRadius: 8, padding: "10px 12px", cursor: clickable ? "pointer" : "default" }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                    <div className="epic-subtask-heading" style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                       <strong style={{ fontSize: 14 }}>{i + 1}. {s.title}{clickable ? " ›" : ""}</strong>
                       <span style={{ fontSize: 12, whiteSpace: "nowrap",
                                      color: st === "done" ? "#7ee2a8"
@@ -287,10 +288,11 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
           <summary style={{ cursor: "pointer", color: "var(--text-muted, #8a94a6)", fontSize: 14, padding: "6px 0" }}>
             Архив — {archived.length} {archived.length === 1 ? "эпик" : "эпика(ов)"}: завершённые и отменённые
           </summary>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          <div className="epic-archive-list" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
             {archived.map((e) => (
               <div
                 key={e.id}
+                className="epic-archive-row"
                 style={{
                   background: "var(--surface-2, #0f131a)", border: "1px solid var(--border, #262c38)",
                   borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center",
