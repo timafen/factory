@@ -2,16 +2,15 @@
 
 ## HEAD
 
-- Status: Specification ready — implementation pending.
-- Specification: `knowledge/specs/correction-provenance-single-pipeline.md`.
-- Scope: durable task/work provenance, correction-safe Pilot discovery,
-  compatibility migration, prevented-root event and storm regression.
-- Owner impact: Review/Verify correction continues and closes the original work
-  without launching or charging for another five-stage pipeline.
-- Rollout gate: Pilot remains disabled until this change and separate safe
-  release logic are deployed and smoke-tested.
-- Next action: implement the specification without reusing the conflicted old
-  CARD-0079 branch.
+- Status: Implemented — awaiting Review.
+- Branch: `factory/d40c77cd-34c-8ddd7926-bf0`.
+- Implementation commit: db4f4ba0991aabad6d792ead31e798b6fe123703 — сохранено
+  происхождение задач для корректировок.
+- What changed: control plane сохраняет `work_id`, родителя и причину
+  корректировки; Pilot не принимает явного потомка за новый root.
+- Evidence: `go test ./internal/controlplane` → PASS; `python3 -m unittest -v
+  pilot.test_pilot` → PASS.
+- Next action: Review проверяет полный contract provenance и storm/restart cases.
 
 ## LOG
 
@@ -28,3 +27,11 @@ exactly one pipeline.
 CARD-0086 was absent from fresh `origin/main` and every published `factory/*`
 branch when reserved. The prior reservation is owned by concurrent work and
 was not reused; old conflicted CARD-0079 remains untouched.
+
+### 2026-08-12 — Implement
+
+Добавлена additive migration 027 и API/storage provenance для корней и
+потомков, включая replay и validation. Pilot исключает явные correction-задачи
+из root discovery и передаёт parent в обычном продолжении, resume и watcher.
+`go test ./internal/controlplane` и `python3 -m unittest -v pilot.test_pilot`
+завершились успешно.
