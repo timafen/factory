@@ -217,13 +217,24 @@ func (b *Broker) persist(item *operation) error {
 	if _, err = temporary.Write(data); err == nil {
 		err = temporary.Chmod(0o600)
 	}
+	if err == nil {
+		err = temporary.Sync()
+	}
 	if closeErr := temporary.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json"))
+	if err := os.Rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json")); err != nil {
+		return err
+	}
+	directory, err := os.Open(b.stateDir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func valid(input Request) bool {
