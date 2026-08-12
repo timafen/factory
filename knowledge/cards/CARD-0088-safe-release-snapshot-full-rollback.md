@@ -2,8 +2,8 @@
 
 ## HEAD
 
-Status: Implemented and verified; Pilot remains disabled and no production
-release was performed.
+Status: BLOCKED: full Go suite timed out in `internal/controlplane` and
+`internal/worker`; Pilot remains disabled and no production release was performed.
 
 Branch: `factory/7a10f112-9eb-8b991974-dc9`
 
@@ -11,11 +11,13 @@ Implementation commit: 8d79fa4376a353f069ef1c26a53dafb415b44870 —
 release fixture проверяет, что immutable manifest согласован с точным SHA
 кандидата, наряду с полным SQLite snapshot и комплектом rollback.
 
-Evidence: `bash ops/test-fx-factory-release.sh`, `go test ./internal/controlplane`,
-`npx tsc -p tsconfig.app.json --noEmit`, shell syntax and `git diff --check` → PASS.
+Evidence: `bash ops/test-fx-factory-release.sh`, shell syntax, `git diff --check`,
+web `npm ci`, typecheck and lint → PASS. `go test ./...` exceeded its per-test
+10-minute limit in `internal/controlplane` and `internal/worker`; full verification
+cannot pass until this is diagnosed.
 
-Next action: независимый Review оценивает реализацию перед merge; не выпускать
-migration 027 и не включать Pilot.
+Next action: устранить или объяснить таймаут полного Go suite, затем повторить
+Verify; не выпускать migration 027 и не включать Pilot.
 
 ## LOG
 
@@ -100,3 +102,19 @@ PASS; `bash -n` изменённых shell-файлов и `git diff --check` �
 Проверены также корректность implementation commit (предок ветки, содержит
 изменения вне `knowledge/cards/`) и чистота diff. Релиз, миграция 027, restore
 DB и включение Pilot не выполнялись.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда | Наблюдаемый результат |
+| --- | --- | --- |
+| SHA согласованного снимка | `bash ops/test-fx-factory-release.sh` | PASS: fixture подтверждает `candidate_sha` `1234567890abcdef` в immutable manifest вместе с SQLite snapshot и полным rollback-комплектом. |
+| Полный Go suite | `go test ./...` | BLOCKED: после успешных cmd/buildinfo пакетов `internal/controlplane` и `internal/worker` не завершились в 10-минутный test timeout. |
+| Смежный web | `npm ci`; `npm run typecheck`; `npm run lint` | PASS. |
+| Systemd fixture и hygiene | `bash ops/test-factory-release-systemd.sh`; `bash -n`; `git diff --check` | systemd SKIP (нужны root/systemd); остальное PASS. |
+
+Закреплённое remote-сравнение: base
+`fde77f86a9c020807654df9714c05260e7b7cfae`, candidate
+`b66c8864830cd0055ece20edd51e537864334d6e`. Implementation commit
+`8d79fa4376a353f069ef1c26a53dafb415b44870` существует, является предком
+candidate и меняет `ops/test-fx-factory-release.sh` вне `knowledge/cards/`.
+Production release, migration 027, restore DB и включение Pilot не выполнялись.
