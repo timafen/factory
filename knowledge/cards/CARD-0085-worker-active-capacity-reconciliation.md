@@ -2,19 +2,26 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
-- What changed: registration сохраняет старый `active_count` до server-time audit;
-  registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
-- What changed: integration покрывает потерянный `/complete`, restart/reconnect и
-  две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
-  `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
+- Status: Implemented — candidate published for review.
+- Branch: `factory/dc78470b-e09-ace20892-a0e`.
+- Implementation commit: a86c425c8df764dc4672ab5fc7c5cf544c7253a1 — reconnect-тест
+  подтверждает полное заполнение и последующее освобождение мощности воркера.
+- What changed: после потери ответа `/complete` и restart control plane тест
+  проверяет derived `active_count=2` для обеих barrier-задач.
+- What changed: после их завершения тот же счётчик обязан стать `0`.
+- Evidence: целевой `go test -race` → PASS; focused control-plane tests,
+  `go build ./...` и `git diff --check` → PASS.
+- One next action: выполнить review опубликованной кандидатской ветки.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После reconnect worker и control plane регрессия теперь наблюдает authoritative
+`active_count`: при двух live barrier-задачах он равен двум, после штатного
+завершения — нулю. Это доказывает и полное восстановление мощности, и отсутствие
+утечки занятости. Проверки: целевой `go test -race`, focused control-plane tests,
+`go build ./...` и `git diff --check` — PASS.
 
 ### 2026-08-12 — Verify
 
