@@ -74,8 +74,8 @@ echo "bash ops/provision-codex-auth.sh" >>"$TEST_GATES"
 AUTH
     cat >"$destination/ops/install-factory-control.sh" <<'CONTROL'
 #!/bin/bash
-echo "bash ops/install-factory-control.sh" >>"$TEST_GATES"
-[ "$TEST_MODE" != control-install-fail ]
+echo "candidate-control-installer-ran" >>"$TEST_GATES"
+exit 99
 CONTROL
     cat >"$destination/ops/install-server-browser.sh" <<'BROWSER'
 #!/bin/bash
@@ -407,6 +407,11 @@ case "$1" in
   *) exit 2 ;;
 esac
 EOF
+  cat >"$case_dir/trusted/factory-install-control" <<'EOF'
+#!/bin/bash
+echo "trusted-control-installer" >>"$TEST_GATES"
+[ "$TEST_MODE" != control-install-fail ]
+EOF
   cat >"$case_dir/bin/sudo" <<'EOF'
 #!/bin/bash
 printf 'path-sudo-invoked\n' >>"$TEST_SPOOF_EVENTS"
@@ -556,6 +561,7 @@ EOF
   /bin/cp "$case_dir/bin/npm" "$case_dir/trusted/npm"
   /bin/cp "$case_dir/bin/go" "$case_dir/trusted/go"
   chmod +x "$case_dir/trusted/"*
+  fixture_cgroup_hash=$(/usr/bin/sha256sum -- "$case_dir/trusted/factory-gate-cgroup" | /usr/bin/awk '{print $1}')
 
   # Production has immutable root-owned paths. The hermetic copy changes only
   # those constants and accepts the fixture owner's files; the shipped script
@@ -573,6 +579,8 @@ EOF
     -e "s|^TRUSTED_NPM_CLI=.*$|TRUSTED_NPM_CLI=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
     -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/trusted/factory-gate-cgroup|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$fixture_cgroup_hash|" \
+    -e "s|^TRUSTED_CONTROL_INSTALLER=.*$|TRUSTED_CONTROL_INSTALLER=$case_dir/trusted/factory-install-control|" \
     -e "s|^TRUSTED_SYSTEMCTL=.*$|TRUSTED_SYSTEMCTL=$case_dir/bin/systemctl|" \
     -e "s|^TRUSTED_SLEEP=.*$|TRUSTED_SLEEP=$case_dir/bin/sleep|" \
     -e "s|^TRUSTED_CURL=.*$|TRUSTED_CURL=$case_dir/bin/curl|" \
@@ -696,6 +704,10 @@ for hostile_tool in dirname mkdir flock chown bash; do
   ! grep -Fx "hostile-$hostile_tool-invoked" "$success/spoof-events" >/dev/null 2>&1 \
     || fail "successful release used hostile PATH wrapper: $hostile_tool"
 done
+[ ! -f "$success/gates" ] || ! grep -Fx 'candidate-control-installer-ran' "$success/gates" >/dev/null \
+  || fail "candidate checkout ran a privileged control installer"
+grep -Fx 'trusted-control-installer' "$success/gates" >/dev/null \
+  || fail "installed trusted control installer did not update control tools"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
@@ -763,6 +775,24 @@ FACTORY_DELIVERY_ID=factory-1-0123456789abcdef0123456789abcdef run_release "$ide
   || fail "same delivery id physically released Factory twice"
 [ "$(tr -d '\r\n' <"$idempotent/delivery-state/factory-1-0123456789abcdef0123456789abcdef.status")" = succeeded ] \
   || fail "generation fixture did not keep accepted durable status"
+
+for helper_case in missing-helper altered-helper; do
+  helper_fixture="$temporary/$helper_case"
+  make_fixture "$helper_fixture" parallel-success
+  if [ "$helper_case" = missing-helper ]; then
+    rm -f "$helper_fixture/trusted/factory-gate-cgroup"
+  else
+    printf '\n# candidate replacement\n' >>"$helper_fixture/trusted/factory-gate-cgroup"
+  fi
+  set +e
+  run_release "$helper_fixture" parallel-success
+  status=$?
+  set -e
+  [ "$status" -eq 4 ] || fail "$helper_case did not fail before release work"
+  grep -F 'cgroup helper не установлен безопасным bootstrap' "$helper_fixture/output" >/dev/null \
+    || fail "$helper_case did not explain trusted helper provisioning"
+  [ ! -s "$helper_fixture/gates" ] || fail "$helper_case reached a candidate gate"
+ done
 
 forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
