@@ -2,13 +2,14 @@
 
 ## HEAD
 
-- Status: Verified — полный набор проверок PASS.
-- Branch: `factory/d750ff8f-877-b68002b2-395`.
+- Status: Implemented — целевые и полный набор составных проверок PASS.
+- Branch: `factory/b71825df-bbc-79411d2a-fdc4-469c-86af-e23d57648a04`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: f9c95aa5189294cd60ef1218f0c292a0234e4e4a — terminal-успех не принимается после ошибки fsync каталога.
-- What changed: terminal-запись получает durable pending/committed-маркеры; при restart terminal без committed-маркера становится `failed` без повторного executor.
-- Evidence: `go test -count=1 ./internal/releasebroker`, `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint` и `just check` — PASS.
-- Next action: Перед слиянием рассмотреть fail-closed recovery в broker.
+Implementation commit: 98cb4fcc61f667f359f244c814f3c1046dd6d938 — legacy terminal recovery и атомарная запись commit-маркера.
+- What changed: terminal `.json` без V2 marker сохраняется как legacy read-only; повреждение marker закрывает только связанную операцию.
+- What changed: pending и committed markers пишутся через temp-файл, fsync, rename и fsync каталога; добавлены crash/restart-регрессии.
+- Evidence: broker Go/race, полный `just test`, UI, tooling/installer, launcher, staticcheck и `just build` — PASS.
+- Next action: Запушить ветку и подтвердить remote SHA перед передачей на повторный Review.
 
 ## LOG
 
@@ -112,3 +113,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 | Прочие некорректные `.json`-записи fail-closed | тесты `TestDiskBrokerFailsClosedOnInvalidOperationState` и `TestDiskBrokerFailsClosedOnJSONDirectory` | OK: corrupt JSON, чужое имя, неверный adapter/status и каталог не восстанавливаются. |
 | Соседнее восстановление | тот же пакет | OK: terminal state сохраняется после restart, незавершённый запуск становится `failed`, повторный executor не запускается. |
 | Полный проектный регресс | `just check` | Форматирование, `vet`, `govulncheck`, `staticcheck` и `internal/releasebroker` OK; вне области timeout 5m: `internal/controlplane`, `internal/worker` (включая flaky worker integration tests). |
+
+### 2026-08-12 — Implement
+
+Legacy terminal `.json` без V2 marker теперь остаётся доступным после restart, а
+повреждённый marker переводит только связанную операцию в `failed`; обновление
+commit marker атомарно проходит temp/fsync/rename/fsync каталога. Регрессии
+подтверждены broker Go/race тестами; полный Go/UI/tooling/launcher набор и сборка PASS.
