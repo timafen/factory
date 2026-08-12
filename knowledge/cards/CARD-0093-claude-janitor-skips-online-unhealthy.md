@@ -1,6 +1,6 @@
 # CARD-0093 — санитар пропускает online/unhealthy Claude
 
-Implementation commit: pending — реализация будет выполнена на следующем этапе после этой спецификации.
+Implementation commit: 9d80a5b829cbed76c40d8350d251011f77c36671 — опубликована проверяемая спецификация перед реализацией.
 
 - Status: Specification — ожидает Implement + Test.
 - Specification: `knowledge/specs/claude-janitor-does-not-restart-unhealthy-workers.md`.
