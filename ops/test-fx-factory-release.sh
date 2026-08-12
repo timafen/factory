@@ -90,6 +90,8 @@ case "$*" in
     mkdir -p "$destination/web" "$destination/ops/systemd"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/install-project-release-broker.sh" \
       "$destination/ops/install-project-release-broker.sh"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/factory-janitor.sh" \
+      "$destination/ops/factory-janitor.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
       "$destination/ops/systemd/factory-release-broker.service"
     mkdir -p "$destination/pilot" "$destination/intake"
@@ -313,6 +315,21 @@ if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new
 fi
 exec /bin/chmod "$@"
 EOF
+  cat >"$case_dir/bin/install" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = janitor-install-fail ] \
+  && [[ "${*: -1}" = *factory-janitor.sh ]]; then
+  exit 1
+fi
+install_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o|-g) shift 2 ;;
+    *) install_args+=("$1"); shift ;;
+  esac
+done
+exec /usr/bin/install "${install_args[@]}"
+EOF
   cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
 case "$*" in
@@ -368,6 +385,7 @@ run_release() {
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_JANITOR_BIN="$case_dir/install/factory-janitor.sh" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
@@ -419,6 +437,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_JANITOR_BIN="$case_dir/install/factory-janitor.sh" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
   release_pid=$!
@@ -510,6 +529,18 @@ for crash_phase in prepared old-stopped pair-installed services-started; do
   current_after_recovery=$(readlink -f "$crashed/releases/current")
   [ -f "$current_after_recovery/manifest.json" ] || fail "recovery did not reach a committed generation"
 done
+
+janitor_failed="$temporary/janitor-install-fail"
+make_fixture "$janitor_failed" janitor-install-fail
+if run_release "$janitor_failed" janitor-install-fail; then fail "janitor-install-fail unexpectedly succeeded"; fi
+assert_file "$janitor_failed/install/factory-server" old-server
+assert_file "$janitor_failed/install/factory-worker" old-worker
+tail -n 3 "$janitor_failed/events" | diff -u - <(printf '%s\n' \
+  'restart factory-server.service' 'restart factory-worker.service' 'restart factory-worker-2.service') >/dev/null \
+  || fail "janitor-install-fail did not roll back the binary pair"
+! grep -F 'systemd-run ' "$janitor_failed/events" >/dev/null \
+  || fail "failed janitor install scheduled a Pilot restart"
+assert_no_fixture_processes "$janitor_failed"
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
