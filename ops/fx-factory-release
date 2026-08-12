@@ -1075,6 +1075,16 @@ candidate_worker_version=$("$work/factory-worker" version 2>/dev/null || true)
 [[ "$candidate_server_version" == *"$sha"* && "$candidate_worker_version" == *"$sha"* ]] \
   || { fail "собранные server/worker не подтверждают candidate SHA $sha"; cleanup; exit 4; }
 
+# A generation restores Pilot's configured state along with the rest of the
+# release.  Only refresh an already configured Pilot when its brain changed.
+deferred_pilot_restart=0
+for brain_file in pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
+  cmp -s "$work/src/$brain_file" "$BRAIN_LIVE/$brain_file" || {
+    deferred_pilot_restart=1
+    break
+  }
+done
+
 processes="$work/processes.tsv"
 : >"$processes"
 for unit in "$SERVER_SERVICE" $(worker_service_list) "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
@@ -1304,6 +1314,12 @@ write_journal services-started "$generation_path" "$old_generation" || rollback 
 cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
   && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" \
   || rollback "правдивые metadata не опубликованы" 7
+if [ "$deferred_pilot_restart" = 1 ]; then
+  step "ставлю безопасный отложенный перезапуск Пилота"
+  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+    /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
+    || rollback "не смог отложить перезапуск Пилота" 7
+fi
 ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
 ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
 write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
