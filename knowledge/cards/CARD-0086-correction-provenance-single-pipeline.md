@@ -22,9 +22,13 @@
 | --- | --- | --- |
 | Provenance create/replay/list/detail and parent deletion | focused `go test` control-plane provenance set | PASS |
 | Migration 027 dependency on 026 and atomic reopen | focused migration test | PASS |
-| Same-title correction after restart creates no duplicate root | `CorrectionProvenanceStormTests` (7 tests) | PASS |
+| Same-title correction after restart creates no duplicate root | final `CorrectionProvenanceStormTests` (7 tests) | BLOCKED: 3 errors |
 | Whole project and build | `just check`; `go build ./...` | PASS |
 | Delivery hygiene | rebase on current `main`; `git diff --check` | PASS |
+
+The rebase adopted the current main merge-intent path. Three corrections now fail
+because its state persistence receives a mocked non-serializable link. This is
+an implementation defect in the rebased result, not an infrastructure failure.
 
 ### 2026-08-11 — Specification
 
