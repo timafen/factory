@@ -3,15 +3,23 @@
 ## HEAD
 
 Status: Implemented — awaiting repeat review.
-Branch: factory/89714253-ca6-fca26d33-a87.
-Implementation commit: c35c4b1ab75bd4dd1b0874530c2a4dd0ed7115c3 — Gate извлекает и проверяет полный набор относительных зависимостей.
-What changed: защищённая копия содержит `ops/test-fx-factory-release.sh`, `fx-factory-release` и всё дерево `systemd/` из одного Git commit.
-What changed: каждый файл сверяется с Git blob SHA; каталог root-owned `0711`, поэтому Gate доступен для запуска, но не для изменения рабочим пользователем.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая запуск извлечённой копии после проверенного handshake.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и `git diff --check` → PASS.
+Branch: factory/d3645519-0ac-53f5753d-417.
+Implementation commit: 72ec617f7661fbfbbc10150765da8217ba508bf9 — Gate извлекает полный проверенный набор и хранится вне доступного пользователю каталога релизов.
+What changed: защищённая копия содержит Gate, release helper, `systemd/`, broker installer, `fx`, `pilot/` и `intake/` из одного Git commit с проверкой каждого blob.
+What changed: временный Gate создаётся в root-owned `0700` родителе; конкурентная подмена в доступном `$REL` не находит цели.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая настоящий извлечённый Gate и конкурентную попытку подмены.
+Evidence: `npm --prefix web run typecheck`, `npm --prefix web run build`, `go test ./...`, Go builds и `git diff --check` → PASS.
 One next action: repeat human review of the trusted-copy Gate.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После повторного review Gate извлекает полный набор своих относительных
+ресурсов из проверяемых Git blob одного commit. Временная копия перенесена из
+доступного пользователю каталога релизов в закрытый root-owned родительский
+каталог. Полный shell-suite выполнил настоящий извлечённый Gate во время
+конкурентной попытки подмены; typecheck, UI build, Go tests/build и diff check прошли.
 
 ### 2026-08-12 — Implement
 
