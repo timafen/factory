@@ -210,7 +210,7 @@ func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 	waitForOperationStatus(t, server, "factory-rollback-1", "succeeded")
 }
 
-func TestBrokerDoesNotPublishTerminalSuccessWhenPersistFails(t *testing.T) {
+func TestBrokerPublishesFailureWhenTerminalPersistFails(t *testing.T) {
 	dir := t.TempDir()
 	blocked := make(chan struct{})
 	broker, err := NewAt(dir, &recordingExecutor{done: blocked})
@@ -255,23 +255,12 @@ func TestBrokerDoesNotPublishTerminalSuccessWhenPersistFails(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("terminal persist was not attempted")
 	}
+	waitForOperationStatus(t, server, "persist-failure-1", "failed")
 	broker.mu.Lock()
 	status := broker.items["persist-failure-1"].Status
 	broker.mu.Unlock()
-	if status != "running" {
+	if status != "failed" {
 		t.Fatalf("published terminal status=%q after persist failure", status)
-	}
-	statusResponse, err := http.Get(server.URL + "/v1/operations/persist-failure-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer statusResponse.Body.Close()
-	var responseStatus Response
-	if err := json.NewDecoder(statusResponse.Body).Decode(&responseStatus); err != nil {
-		t.Fatal(err)
-	}
-	if responseStatus.Status != "running" {
-		t.Fatalf("published API status=%q after persist failure", responseStatus.Status)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "persist-failure-1.json"))
 	if err != nil {
