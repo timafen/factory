@@ -457,7 +457,8 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.git(observer, "checkout", "-qb", "worker-owned")
             before = self.git(observer, "symbolic-ref", "--short", "HEAD")
 
-            snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
+            with mock.patch.object(pilot, "_git", wraps=pilot._git) as git_spy:
+                snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
 
             self.assertEqual(snapshot["state"], "ok")
             self.assertEqual(snapshot["files"], expected)
@@ -466,6 +467,10 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["base_ahead_by"], 1)
             self.assertRegex(snapshot["base_sha"], r"^[0-9a-f]{40}$")
             self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
+            expected_range = snapshot["base_sha"] + "..." + snapshot["candidate_sha"]
+            self.assertTrue(any(
+                call.args[1:] == ("diff", "--name-only", expected_range)
+                for call in git_spy.call_args_list))
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
@@ -481,6 +486,22 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
+
+    def test_review_gate_returns_empty_pinned_delivery_with_one_message(self):
+        snapshot = {
+            "state": "ok", "default_branch": "main",
+            "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+            "merge_base_sha": "a" * 40, "base_advanced": False,
+            "base_ahead_by": 0, "ahead_by": 0, "files": [],
+        }
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertEqual(set(result), {"back", "note"})
+        self.assertTrue(result["back"])
+        self.assertIn("Поставка пуста", result["note"])
+        self.assertIn("a" * 40 + "..." + "b" * 40, result["note"])
 
     def test_verify_gate_refreshes_snapshot_and_blocks_before_merge(self):
         snapshot = {

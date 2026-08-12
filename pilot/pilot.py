@@ -2575,7 +2575,7 @@ def fresh_branch_snapshot(repo_identity, branch):
             merge_base_sha = merge_base_sha.strip()
             if not GIT_SHA.fullmatch(merge_base_sha):
                 return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
+            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
             rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
@@ -2860,6 +2860,12 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
                          "Сделай: git push -u origin " + (branch or "<ветка>") +
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
+    if state_ == "есть" and not files:
+        return {"back": True, "note": (
+            "Машинная проверка перед Ревью: закреплённое сравнение "
+            f"{snapshot['base_sha']}...{snapshot['candidate_sha']} не содержит "
+            "файлов реализации. Поставка пуста — добавь реализацию, запушь ветку "
+            "и сдай работу заново.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
 
