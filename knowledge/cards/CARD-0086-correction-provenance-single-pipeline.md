@@ -2,16 +2,18 @@
 
 ## HEAD
 
-- Status: Implemented and tested after rebase onto fresh `main`; ready for Review.
-- Branch: `factory/8d00120e-041-fbd90b7b-1f7`.
-Implementation commit: 909469702a7f550798425de5da9efd4328b50eec — доказательство рестарта, проверка схемы миграцией 028 и надёжный журнал предотвращённых дублей.
+- Status: Implemented and tested with real process restarts; ready for Review.
+- Branch: `factory/c43e1862-d44-d6ebc5b5-d36`.
+Implementation commit: bfc6f7954219a2d31ce861e6c9a0afdcb0764970 — subprocess-доказательство восстановления Pilot после штатного и аварийного завершения.
 - What changed: migration 026 is already present in `main`; the new migration 028
   validates schemas 026 and 027 without changing the published migration 027.
-- What changed: Review/Verify corrections and stable-ID prevented-root events
-  survive recreated Pilot state and every tested outbox crash boundary.
-- Evidence: 5 focused Go tests PASS; 6 restart/outbox tests PASS; all 229 Pilot
-  tests PASS (13 skipped); `go vet ./...` PASS; Python compile PASS; build PASS.
-- Next action: repeat Review against the published branch and implementation SHA.
+- What changed: Review/Verify correction discovery now starts Pilot in separate
+  Python processes before and after restart and still observes one pipeline.
+- What changed: every outbox crash boundary uses a process terminated by
+  `os._exit(86)` followed by recovery in a newly imported Pilot process.
+- Evidence: 7 focused restart/outbox tests PASS; all 230 Pilot tests PASS
+  (13 skipped); `go test ./...`, `go vet ./...`, and `go build ./...` PASS.
+- Next action: Review the subprocess restart evidence on the published branch.
 
 ## LOG
 
@@ -63,3 +65,12 @@ published, its dependency check moved to the new side-effect-free migration 028;
 the regression rejects databases missing either prerequisite schema. Five
 focused Go tests, six correction-storm tests, all 229 Pilot tests, Go vet,
 Python compilation, and the binary build passed.
+
+### 2026-08-12 — Implement
+
+Replaced the same-interpreter restart simulation with subprocess evidence. Both
+Review and Verify correction discovery now terminate one Pilot interpreter and
+restore from durable files in another while retaining exactly one pipeline.
+Each of the four outbox crash boundaries exits a subprocess with code 86 and
+converges in a fresh process. Seven focused tests, all 230 Pilot tests (13
+skipped), all Go tests, Go vet, Python compilation, and the Go build passed.
