@@ -4,7 +4,7 @@
 
 Status: Implemented — awaiting Review.
 Branch: factory/9cb3b8b4-65b-4ce5fd30-eff.
-Implementation commit: 76358f35fd966acc9d1f6bb4a729be6265f1a6ed — остановка gate использует только проверенный PGID из памяти и его связь с launcher.
+Implementation commit: 72c91011d5fa877b989cd95a7f9251b14e4f2958 — остановка gate использует только проверенный PGID из памяти и его связь с launcher.
 What changed: handshake читается лишь при readiness; далее SID/PGID не берутся из доступного launcher-у файла.
 What changed: перед TERM/KILL лидер session обязан оставаться в дереве исходного launcher; иначе останавливается только это дерево без группового сигнала.
 Evidence: подмена обоих handshake на PGID посторонней session → release 130, внешний процесс не получил TERM; `bash ops/test-fx-factory-release.sh` → PASS.
