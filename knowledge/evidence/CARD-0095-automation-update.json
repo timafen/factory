@@ -29,6 +29,8 @@
     "automation_version": 3,
     "occurrence_id": "b0389441-ec51-4d97-a6e8-44844ee187a1",
     "task_id": "587162df-980e-4d1b-a55f-4c12e221a8b6",
-    "state_at_capture": "running"
+    "state": "succeeded",
+    "new_findings": 0,
+    "deployment_note": "The Automation is configured, but the production checkout does not contain the checker until this branch is merged and released."
   }
 }

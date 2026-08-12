@@ -1,6 +1,6 @@
 # CARD-0095 — Мониторинг Codex проверяет конечный auth.json
 
-Implementation commit: 85f75d94bd92a6e9ba9ca1bc1efcf01180c5f2ff — Существующая Automation переключается на checker на месте с проверкой сохранности расписания и истории.
+Implementation commit: 27a95285bbf796b75d9d9e19239ba21ac0c26bd8 — Существующая Automation переключается на checker на месте с проверкой сохранности расписания и истории.
 
 ## HEAD
 
@@ -16,7 +16,8 @@ Implementation commit: 85f75d94bd92a6e9ba9ca1bc1efcf01180c5f2ff — Сущест
 - What changed: checker использует `stat -Lc`; новая идемпотентная команда обновляет именно
   существующую Automation и проверяет прежние ID, cron/timezone, enabled и все Occurrence.
 - Evidence: `just test-tooling` и изолированный `just build` — PASS; live update сохранил
-  Automation, расписание и 70 Occurrence; 11 фактических целей безопасны. Снимок:
+  Automation, расписание и 70 Occurrence; 11 фактических целей безопасны; Run now не создал
+  новой находки. До выпуска ветки production checkout ещё не содержит checker. Снимок:
   `knowledge/evidence/CARD-0095-automation-update.json`.
 - Next action: повторный Review сверяет поставленный операторский путь и evidence со свежим `main`.
 
@@ -85,6 +86,10 @@ ID и расписание `17 * * * *` / `America/Chicago` остались п�
 Occurrence сохранились. Live checker вернул 0 для 11 целей с метаданными
 `regular file 600 factory factory`; проверяемый обезличенный снимок сохранён в
 `knowledge/evidence/CARD-0095-automation-update.json`.
+
+Run now версии 3 завершился успешно и не создал новых находок. Он ожидаемо сообщил,
+что checker отсутствует в production checkout до слияния этой ветки; это остаётся
+единственной границей живой проверки и устраняется обычным выпуском поставленного кода.
 
 `just test-tooling` — PASS, включая две новые регрессии; `FACTORY_BUILD_DIR=/tmp/card0095-build
 just build` — PASS; `git diff --check` — PASS.
