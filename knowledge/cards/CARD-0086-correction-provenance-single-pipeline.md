@@ -2,17 +2,19 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and tested on fresh `origin/main`; ready for Review.
+- Branch: `factory/39575a1d-a1c-59153c04-7c9`.
+- Implementation commit: fbfd67350c488a07313faef4e983b4056cbe5fc7 — rescue,
+  DIAG and diagnostic-repair state is isolated by durable `work_id`.
+- What changed: same-title work no longer shares automatic-return limits,
+  diagnosis history, repair cancellation, or one-time resume state.
+- What changed: diagnostic evidence and active-run selection stay within the
+  originating work; legacy title-only records remain readable.
+- Evidence: 44 post-rebase Pilot regressions and five targeted control-plane
+  provenance tests pass; full Pilot passed 223 tests before the final rebase.
+- Evidence: `go build ./...` passes; broad Go tests pass outside pre-existing
+  `internal/worker` timeout failures documented in this LOG.
+- Next action: repeat independent Review on this delivered branch.
 
 ## LOG
 
@@ -100,3 +102,13 @@ Review-base logic while applying the provenance, migration 027 and Pilot work.
 Focused same-title/legacy restart and migration checks passed; full Pilot (209
 tests), `go test ./...`, `go build ./...` and whitespace diff check passed.
 Pilot remains disabled; the implementation is `55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3`.
+
+### 2026-08-12 — Implement
+
+Automatic rescue counters, senior diagnosis and durable diagnostic repairs now
+use `work_storage_key(base, work_id)`. Two works with the same title can each
+spend their own retry allowance, cancel only their own looping task and resume
+once after restart. Post-rebase Pilot regressions passed 44 tests, including
+the two new same-title cases; five focused control-plane provenance tests and
+the Go build passed. The broad Go run remained red only in pre-existing
+`internal/worker` timing tests outside this change; Pilot stays disabled.
