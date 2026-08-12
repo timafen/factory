@@ -68,3 +68,12 @@ CARD-0085 migration 026 is now in `origin/main` at
 cherry-picked onto that base. The focused provenance migration tests, all 204
 Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
 passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
+
+### 2026-08-11 — Implement
+
+CARD-0086 was re-integrated onto fresh `origin/main`
+`36ce322e2b6685dd9a87f4d2c947f61538654ae1`, preserving CARD-0087’s fresh
+Review-base logic while applying the provenance, migration 027 and Pilot work.
+Focused same-title/legacy restart and migration checks passed; full Pilot (209
+tests), `go test ./...`, `go build ./...` and whitespace diff check passed.
+Pilot remains disabled; the implementation is `55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3`.
