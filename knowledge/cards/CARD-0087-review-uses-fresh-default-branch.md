@@ -2,13 +2,13 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/0b933443-daf-3aa76b07-abe`.
-Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
+Status: Implemented — awaiting Review.
+Branch: `factory/35de84dc-eab-16e373da-f95`.
+Implementation commit: 36b8fed35fe3ea24821f8d5a52597c5d7f8cc240 — строгая проверка закрепляет отсутствие неподдерживаемых метаданных rollout в примере Pilot.
 What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: human merge this verified narrow config fix.
+Evidence: `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
+Evidence: `git diff --check` → PASS; пример уже не содержит `review_verify_fresh_base_rollout`.
+Next action: Review проверяет узкую область изменений и публикацию ветки.
 
 ## LOG
 
@@ -59,3 +59,9 @@ main через их pinned общий merge-base. Продвижение баз
 которые не являются настройкой сервера и отклонялись строгим декодером.
 Проверки PASS при `umask 077`: focused schema test, `go test ./...`,
 `python3 -m unittest pilot.test_pilot`, JSON validation, build и diff check.
+
+### 2026-08-11 — Implement
+
+На свежей ветке добавлена явная регрессия: строгий тест примера Pilot проверяет,
+что неподдерживаемые rollout-метаданные не возвращаются в конфигурацию.
+Целевой Go-тест и `git diff --check` прошли.
