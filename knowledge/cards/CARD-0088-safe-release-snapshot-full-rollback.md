@@ -7,7 +7,7 @@ production release was performed.
 
 Branch: `factory/00a0a965-4e1-ac3fb722-fe9`
 
-Implementation commit: 044c941ee845c917967f3f2a25ed64d3367502a6 —
+Implementation commit: f625813f3f0f38f40091880ff2ed542ebc47c31b —
 выпуск сохраняет проверенный SQLite snapshot и immutable полный комплект,
 устанавливает пару через journal и полностью откатывает код/службы/metadata;
 DB restore остаётся отдельной подтверждаемой операцией.
