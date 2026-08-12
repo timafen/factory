@@ -8,6 +8,10 @@ export default defineConfig({
     setupFiles: "./src/test/setup.ts",
     css: true,
     exclude: ["e2e/**", "node_modules/**"],
+    // The release gate runs next to active Factory workers. Keep the suite
+    // bounded so CPU contention does not turn healthy tests into 5s timeouts.
+    maxWorkers: 4,
+    testTimeout: 15_000,
   },
   build: {
     outDir: "dist",
