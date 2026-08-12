@@ -2461,7 +2461,7 @@ def fresh_branch_snapshot(repo_identity, branch):
         return {"state": "blocked", "reason": error}
     try:
         with tempfile.TemporaryDirectory(prefix="factory-review-") as work:
-            rc, out = _git(work, "init", "-q")
+            rc, out = _git(work, "init", "--bare", "-q")
             if rc:
                 return {"state": "blocked", "reason": "cannot create review repository: " + out[:180]}
             rc, out = _git(work, "remote", "add", "origin", url)
@@ -2474,16 +2474,17 @@ def fresh_branch_snapshot(repo_identity, branch):
                 return {"state": "blocked", "reason": "cannot resolve candidate branch: " + heads[:180]}
             if not heads.strip():
                 return {"state": "missing", "default_branch": default}
-            refs = ["+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
-            if branch != default:
-                refs.append("+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch))
+            base_ref = "refs/factory-review/base"
+            candidate_ref = "refs/factory-review/candidate"
+            refs = ["+refs/heads/%s:%s" % (default, base_ref),
+                    "+refs/heads/%s:%s" % (branch, candidate_ref)]
             rc, out = _git(work, "fetch", "--prune", "origin", *refs)
             if rc:
                 return {"state": "blocked", "reason": "cannot fetch authoritative refs: " + out[:240]}
-            rc, base_sha = _git(work, "rev-parse", "refs/remotes/origin/" + default)
+            rc, base_sha = _git(work, "rev-parse", base_ref)
             if rc:
                 return {"state": "blocked", "reason": "cannot pin fetched base: " + base_sha[:180]}
-            rc, candidate_sha = _git(work, "rev-parse", "refs/remotes/origin/" + branch)
+            rc, candidate_sha = _git(work, "rev-parse", candidate_ref)
             if rc:
                 return {"state": "blocked", "reason": "cannot pin fetched candidate: " + candidate_sha[:180]}
             base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
@@ -2498,7 +2499,9 @@ def fresh_branch_snapshot(repo_identity, branch):
             merge_base_sha = merge_base_sha.strip()
             if not GIT_SHA.fullmatch(merge_base_sha):
                 return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", merge_base_sha + "..." + candidate_sha)
+            # Delivery scope has one auditable pinned interface.  Keep the
+            # merge-base calculations below separate as reporting metrics.
+            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
             rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)
