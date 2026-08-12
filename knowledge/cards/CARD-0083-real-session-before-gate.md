@@ -2,16 +2,13 @@
 
 ## HEAD
 
-Status: BLOCKED: требуется root-runner для обязательной живой проверки helper и bootstrap.
-Branch: factory/2b980476-d70-f3423253-545.
-Implementation commit: 450c4b3eabf2b023da3228793e33a32902f0669e — cgroup helper ограничен собственным корнем, а bootstrap ставит проверенный helper до gate.
-What changed: helper отвергает `.`, `..`, separators и traversal; после канонизации допускает только путь строго ниже root-owned `CGROUP_ROOT`.
-What changed: trusted control bootstrap ставит helper и installer от root с mode `0755` и SHA-256; release не выполняет candidate installer и fail-closed проверяет owner/mode/hash до gate.
-Preserved: safe PATH, cgroup cleanup для escaped `setsid`, обязательные gates и выключенный Pilot.
-Evidence: `bash ops/test-factory-gate-cgroup.sh`, `bash ops/test-install-factory-control.sh`, `bash ops/test-fx-factory-release.sh` → PASS.
-Evidence: `go test ./...`, `go build ./...`, `cd web && npm test -- --run`, `cd web && npm run build` → PASS.
-Evidence: живой `stat -fc %T /sys/fs/cgroup` → `cgroup2fs`; worker UID 994, а `sudo -n id` требует пароль, поэтому реальный bootstrap/helper не запускался и остаётся обязательным.
-One next action: на свободном root-runner выполнить bootstrap в изолированный каталог и запуск helper на cgroup v2.
+Status: BLOCKED: root-runner недоступен для обязательного живого bootstrap/probe.
+Branch: factory/c69f6548-54c-7bb76853-658.
+Implementation commit: e4ada82e790eae5560d1509a0eb39e90a1a6c145 — fx получил одноразовую установку, live-проверку и rollback cgroup helper; Gate требует marker этой проверки.
+What changed: fx factory cgroup-helper-bootstrap принимает только root-owned каталог под /run/factory-release-gate, выполняется один раз и откатывает пару при ошибке.
+What changed: release fail-closed проверяет root-owned marker completed до открытия Gate; helper реально создаётся, проверяется и удаляется в probe.
+Evidence: shell syntax, installer/helper regressions и новая root-only regression → PASS/worker reserved; sudo -n id требует пароль.
+One next action: на сервере выполнить одноразовый sudo -n /usr/local/bin/fx factory cgroup-helper-bootstrap /run/factory-release-gate/bootstrap-<id>.
 
 ## LOG
 
@@ -45,3 +42,11 @@ altered helper. Shell hostile/installer fixtures, Go/UI build and tests, syntax 
 Хост использует cgroup v2 (`cgroup2fs`), но процесс работает от UID 994, а
 `sudo -n id` требует пароль. Поэтому обязательный root-bootstrap в изолированный
 каталог и реальный запуск helper не выполнялись; до них статус остаётся BLOCKED.
+
+### 2026-08-12 — Implement
+
+Добавлена узкая одноразовая команда fx factory cgroup-helper-bootstrap: она
+принимает только доверенный bootstrap-каталог, атомарно ставит control-пару,
+делает живой cgroup v2 probe, создаёт marker и восстанавливает прежние файлы
+при любой ошибке. Release теперь не открывает Gate без этого marker.
+Целевые shell-проверки и syntax прошли; worker не может выполнить root-only часть.
