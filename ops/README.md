@@ -13,6 +13,12 @@
 - `ops/fx` — справочная копия брокера fx (живёт в /usr/local/bin, root).
 - `ops/install-factory-control.sh` — атомарно обновляет сам брокер `fx` и
   драйвер выпуска из одной проверенной ревизии; частичная замена откатывается.
+  На чистом хосте root один раз запускает установленный bootstrap из доверенной
+  поставки: он ставит root-owned cgroup helper только после канонизации и
+  проверки owner/mode всей цепочки. Обычный release helper не переустанавливает.
+- `ops/factory-cgroup-bootstrap.sh` — одноразово ставит cgroup helper с откатом,
+  выполняет живой cgroup v2 probe и оставляет защищённый marker; до marker Gate
+  закрыт. Запуск без root явно отмечается тестом как `SKIP`.
 - `ops/install-brain.sh` — установка мозга при выкате: проверка, замена,
   перезапуск, откат при беде. Вызывается из fx-factory-release.
 - `ops/provision-codex-auth.sh` — fail-closed проверка общего `auth.json` и
