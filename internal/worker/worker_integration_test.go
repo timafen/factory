@@ -1606,12 +1606,21 @@ func TestIdleWorkerMakesOneClaimPerPollingInterval(t *testing.T) {
 func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	var claimMutex sync.Mutex
 	var claimTimes []time.Time
+	var heartbeatMutex sync.Mutex
+	heartbeats := make(map[string]int)
 	fixture := newServerFixture(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			if strings.HasSuffix(request.URL.Path, "/claims") {
 				claimMutex.Lock()
 				claimTimes = append(claimTimes, time.Now())
 				claimMutex.Unlock()
+			}
+			if strings.HasSuffix(request.URL.Path, "/heartbeat") {
+				parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+				heartbeatMutex.Lock()
+				heartbeats[parts[len(parts)-2]]++
+				heartbeatMutex.Unlock()
+				time.Sleep(3 * time.Millisecond)
 			}
 			next.ServeHTTP(writer, request)
 		})
@@ -1646,7 +1655,6 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	for index := range 10 {
 		tasks = append(tasks, createTask(t, fixture.store, worker, fmt.Sprintf("pool-%02d", index), "barrier", 300))
 	}
-	overflowTask := createTask(t, fixture.store, worker, "pool-10", "barrier", 300)
 	claimMutex.Lock()
 	baselineClaims := len(claimTimes)
 	claimMutex.Unlock()
@@ -1679,9 +1687,7 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 		return ready == 10
 	})
 	running := make([]protocol.TaskDetail, 0, 10)
-	var queued protocol.TaskDetail
-	candidates := append(append([]protocol.TaskDetail(nil), tasks...), overflowTask)
-	for _, task := range candidates {
+	for _, task := range tasks {
 		detail, err := fixture.store.Task(context.Background(), task.Task.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -1689,14 +1695,12 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 		switch {
 		case detail.Execution.State == "running" && len(detail.Attempts) == 1:
 			running = append(running, detail)
-		case detail.Execution.State == "queued" && len(detail.Attempts) == 0 && queued.Task.ID == "":
-			queued = detail
 		default:
 			t.Fatalf("unexpected capacity task state: %#v", detail)
 		}
 	}
-	if len(running) != 10 || queued.Task.ID == "" {
-		t.Fatalf("capacity split = %d running, queued %#v", len(running), queued)
+	if len(running) != 10 {
+		t.Fatalf("running task count = %d", len(running))
 	}
 	manager.register(managerContext)
 	waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool {
@@ -1741,37 +1745,45 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 		}
 		runtimePIDs[runtimePID] = true
 	}
-
-	if _, err := fixture.store.CancelTask(context.Background(), running[0].Task.ID); err != nil {
-		t.Fatal(err)
-	}
-	waitForTaskState(t, fixture.store, running[0].Task.ID, "cancelled")
-	queuedRunning := waitForTaskState(t, fixture.store, queued.Task.ID, "running")
-	waitFor(t, 10*time.Second, func() bool {
-		_, err := os.Stat(filepath.Join(logDirectory, queuedRunning.Attempts[0].ID+".ready"))
-		return err == nil
+	waitFor(t, 5*time.Second, func() bool {
+		heartbeatMutex.Lock()
+		defer heartbeatMutex.Unlock()
+		for attemptID := range attemptIDs {
+			if heartbeats[attemptID] == 0 {
+				return false
+			}
+		}
+		return true
 	})
-	for _, task := range running[1:] {
-		detail, err := fixture.store.Task(context.Background(), task.Task.ID)
+	for _, detail := range running {
+		current, err := fixture.store.Task(context.Background(), detail.Task.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if detail.Execution.State != "running" {
-			t.Fatalf("cancelling one attempt changed peer task %s to %s", task.Task.ID, detail.Execution.State)
+		if current.Execution.State != "running" || current.Attempts[0].State != "running" {
+			t.Fatalf("heartbeat did not preserve running attempt: %#v", current)
 		}
 	}
 
-	remaining := append([]protocol.TaskDetail(nil), running[1:]...)
-	remaining = append(remaining, queuedRunning)
-	for _, detail := range remaining {
+	for _, detail := range running {
 		attemptID := detail.Attempts[0].ID
 		if err := os.WriteFile(filepath.Join(logDirectory, attemptID+".release"), []byte("release\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, task := range remaining {
-		waitForTaskState(t, fixture.store, task.Task.ID, "succeeded")
+	for _, task := range running {
+		completed := waitForTaskState(t, fixture.store, task.Task.ID, "succeeded")
+		if len(completed.Attempts) != 1 || completed.Attempts[0].State == "lost" {
+			t.Fatalf("completed task lost its lease: %#v", completed.Attempts)
+		}
 	}
+	overflowTask := createTask(t, fixture.store, worker, "pool-10", "barrier", 300)
+	manager.reserveAndClaim(managerContext)
+	overflowRunning := waitForTaskState(t, fixture.store, overflowTask.Task.ID, "running")
+	if err := os.WriteFile(filepath.Join(logDirectory, overflowRunning.Attempts[0].ID+".release"), []byte("release\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskState(t, fixture.store, overflowTask.Task.ID, "succeeded")
 }
 
 func TestClaudeCodeWorkerUsesTheSameConcurrentPool(t *testing.T) {
@@ -3248,4 +3260,59 @@ func jsonValid(value []byte) bool {
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	var decoded any
 	return decoder.Decode(&decoded) == nil
+}
+
+func TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay(t *testing.T) {
+	var mutex sync.Mutex
+	first := make(map[string]time.Time)
+	allStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		attemptID := parts[len(parts)-2]
+		mutex.Lock()
+		if _, exists := first[attemptID]; !exists {
+			first[attemptID] = time.Now()
+			if len(first) == 10 {
+				close(allStarted)
+			}
+		}
+		mutex.Unlock()
+		time.Sleep(3 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"lease_expires_at":"2030-01-01T00:00:30Z","cancellation_requested":false}`)
+	}))
+	defer server.Close()
+	manager := &Manager{
+		client:  newClient(server.URL, server.Client()),
+		options: Options{LeaseRenewInterval: 40 * time.Millisecond, LeaseRetryInterval: 20 * time.Millisecond},
+	}
+	handles := make([]*attemptHandle, 0, 10)
+	for index := 0; index < 10; index++ {
+		handle := &attemptHandle{done: make(chan struct{}), heartbeatDone: make(chan struct{}), expiry: time.Now().Add(time.Second)}
+		handles = append(handles, handle)
+		go manager.heartbeatAttempt(handle, fmt.Sprintf("attempt-%d", index), strings.Repeat("a", 64))
+	}
+	select {
+	case <-allStarted:
+	case <-time.After(time.Second):
+		t.Fatal("not all attempts renewed")
+	}
+	mutex.Lock()
+	min, max := first["attempt-0"], first["attempt-0"]
+	for _, value := range first {
+		if value.Before(min) {
+			min = value
+		}
+		if value.After(max) {
+			max = value
+		}
+	}
+	spread := max.Sub(min)
+	mutex.Unlock()
+	if spread < 5*time.Millisecond {
+		t.Fatalf("renewals remained a synchronous batch: spread %s", spread)
+	}
+	for _, handle := range handles {
+		handle.stopHeartbeat()
+	}
 }

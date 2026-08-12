@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -326,7 +328,8 @@ func (manager *Manager) validateClaim(claim protocol.Claim) error {
 
 func (manager *Manager) heartbeatAttempt(handle *attemptHandle, attemptID, token string) {
 	defer close(handle.heartbeatDone)
-	delay := manager.options.LeaseRenewInterval
+	delay := leaseRenewalDelay(attemptID, manager.options.LeaseRenewInterval, 0)
+	retry := 0
 	for {
 		timer := time.NewTimer(delay)
 		select {
@@ -335,10 +338,20 @@ func (manager *Manager) heartbeatAttempt(handle *attemptHandle, attemptID, token
 			return
 		case <-timer.C:
 		}
-		requestContext, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		remaining := time.Until(handle.leaseExpiry())
+		if remaining <= 0 {
+			handle.stop("lease_lost")
+			return
+		}
+		requestTimeoutForLease := requestTimeout
+		if remaining < requestTimeoutForLease {
+			requestTimeoutForLease = remaining
+		}
+		requestContext, cancel := context.WithTimeout(context.Background(), requestTimeoutForLease)
 		heartbeat, err := manager.client.heartbeat(requestContext, attemptID, token)
 		cancel()
 		if err == nil {
+			handle.updateExpiry(heartbeat.LeaseExpiresAt)
 			if handle.hasManifest() {
 				if _, persistErr := manager.manifests.update(attemptID, func(manifest *attemptManifest) error {
 					manifest.LeaseDeadline = heartbeat.LeaseExpiresAt
@@ -349,12 +362,12 @@ func (manager *Manager) heartbeatAttempt(handle *attemptHandle, attemptID, token
 					return
 				}
 			}
-			handle.updateExpiry(heartbeat.LeaseExpiresAt)
 			if heartbeat.CancellationRequested {
 				handle.stop("cancelled")
 				return
 			}
-			delay = manager.options.LeaseRenewInterval
+			retry = 0
+			delay = leaseRenewalDelay(attemptID, manager.options.LeaseRenewInterval, retry)
 			continue
 		}
 		var apiError *APIError
@@ -366,8 +379,41 @@ func (manager *Manager) heartbeatAttempt(handle *attemptHandle, attemptID, token
 			handle.stop("lease_lost")
 			return
 		}
-		delay = manager.options.LeaseRetryInterval
+		retry++
+		delay = leaseRenewalRetryDelay(attemptID, manager.options.LeaseRetryInterval, retry,
+			time.Until(handle.leaseExpiry()), requestTimeout)
 	}
+}
+
+// leaseRenewalDelay gives each attempt a stable phase in the final 30% of its
+// interval. This avoids a worker-wide heartbeat herd while preserving the
+// original upper bound for every attempt.
+func leaseRenewalDelay(attemptID string, interval time.Duration, retry int) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	digest := sha256.Sum256([]byte(attemptID + ":" + strconv.Itoa(retry)))
+	span := interval * 3 / 10
+	if span <= 0 {
+		return interval
+	}
+	value := binary.BigEndian.Uint64(digest[:8])
+	return interval*7/10 + time.Duration(value%uint64(span))
+}
+
+// leaseRenewalRetryDelay reserves time for the next heartbeat request. A
+// temporary failure near the lease deadline must retry immediately rather than
+// waiting through the remaining lease.
+func leaseRenewalRetryDelay(attemptID string, interval time.Duration, retry int, remaining, timeout time.Duration) time.Duration {
+	delay := leaseRenewalDelay(attemptID, interval, retry)
+	budget := remaining - timeout
+	if budget <= 0 {
+		return 0
+	}
+	if delay > budget {
+		return budget
+	}
+	return delay
 }
 
 func (handle *attemptHandle) stopHeartbeat() {
