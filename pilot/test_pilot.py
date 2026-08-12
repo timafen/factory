@@ -2166,6 +2166,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 path = args[-1]
                 if "/branches/" in path:
                     return {"name": original, "commit": {"sha": head}}
+                if "/pulls?" in path:
+                    return []
                 if "/compare/main..." in path:
                     return {"files": [{"filename": "pilot/pilot.py"}], "ahead_by": 1}
                 raise AssertionError(path)
@@ -2230,6 +2232,21 @@ class ImmutableMergeTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("changed after Verify", message)
         run.assert_not_called()
+
+    def test_force_push_during_merge_is_rejected_atomically(self):
+        expected = "a" * 40
+        current = {"commit": {"sha": expected}}
+        created = subprocess.CompletedProcess([], 0, "", "")
+        changed = subprocess.CompletedProcess([], 1, "", "head commit changed")
+        with mock.patch.object(pilot, "gh_json", return_value=current), \
+                mock.patch("subprocess.run", side_effect=[created, changed]) as run:
+            ok, message = pilot.gh_merge(
+                "github.com/acme/repo", "factory/candidate", "Работа", expected)
+
+        self.assertFalse(ok)
+        self.assertIn("head commit changed", message)
+        self.assertEqual(run.call_args_list[1].args[0][-2:],
+                         ["--match-head-commit", expected])
 
 
 class ClosedWorkLifecycleTests(unittest.TestCase):
@@ -2704,8 +2721,15 @@ class MergeConflictRecoveryTests(unittest.TestCase):
 
     def test_content_conflict_is_journaled_and_not_retried_each_cycle(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
-                mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
                 mock.patch.object(
                     pilot, "gh_merge",
                     return_value=(False, "Pull request is not mergeable: merge conflicts")) as merge:
@@ -2715,6 +2739,50 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(merge.call_count, 1)
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
         self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
+
+    def test_force_push_before_recovery_blocks_merge_and_delivery(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "b" * 40}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge") as merge, \
+                mock.patch.object(pilot, "deploy_after_merge") as deploy:
+            pilot.recover_merge_intents({}, state)
+
+        intent = state["merge_intents"]["verify-1"]
+        self.assertEqual(intent["phase"], "stale")
+        self.assertIn("changed after Verify", intent["merge_error"])
+        merge.assert_not_called()
+        deploy.assert_not_called()
+
+    def test_recovery_does_not_accept_merge_of_another_head(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "/pulls?" in args[-1]:
+                return [{"merged_at": "2026-08-12T10:00:00Z",
+                         "head": {"sha": "b" * 40}}]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(
+                    pilot, "gh_merge", return_value=(False, "head commit changed")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge") as deploy:
+            pilot.recover_merge_intents({}, state)
+
+        merge.assert_called_once_with(
+            "github.com/acme/repo", "factory/topic", "Resolve once", "a" * 40)
+        deploy.assert_not_called()
 
     def test_conflict_returns_same_work_to_implement_once(self):
         intent = dict(self.intent)
