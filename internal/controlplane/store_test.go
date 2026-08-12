@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -67,6 +68,57 @@ func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	summary, err := store.Metrics(context.Background(), metricsWindowAll)
 	if err != nil || summary.QueueReassignments != 1 {
 		t.Fatalf("queue reassignment metric = %d, error %v; want 1", summary.QueueReassignments, err)
+	}
+}
+
+func TestClaimEnforcesHostMaxConcurrentAcrossWorkers(t *testing.T) {
+	hostCapacity := runtime.NumCPU()
+	workerCapacity := max(10, hostCapacity)
+	workerCount := 2
+	if workerCapacity > protocol.MaxWorkerCapacity {
+		workerCapacity = protocol.MaxWorkerCapacity
+		workerCount = hostCapacity/workerCapacity + 1
+	}
+
+	store := newTestStore(t)
+	repository := protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/host-capacity",
+	}
+	workers := make([]string, workerCount)
+	for index := range workers {
+		workers[index] = fmt.Sprintf("host-capacity-worker-%d", index)
+	}
+	assigned := registerTestWorker(t, store, workers[0], workerCapacity, repository)
+	for _, workerID := range workers[1:] {
+		registerTestWorker(t, store, workerID, workerCapacity, repository)
+	}
+	for index := 0; index <= hostCapacity; index++ {
+		createTestTask(t, store, fmt.Sprintf("host-capacity-%d", index), workers[0], assigned.Repositories[0].ID)
+	}
+
+	for index := 0; index < hostCapacity; index++ {
+		workerID := workers[index%len(workers)]
+		claim, err := store.Claim(context.Background(), workerID, protocol.ClaimRequest{
+			RequestID:  fmt.Sprintf("host-capacity-claim-%d", index),
+			LeaseToken: fmt.Sprintf("%064x", index+1),
+		})
+		if err != nil || claim == nil {
+			t.Fatalf("claim %d of %d = %#v, %v; want work", index+1, hostCapacity, claim, err)
+		}
+	}
+
+	blocked, err := store.Claim(context.Background(), workers[0], protocol.ClaimRequest{
+		RequestID: "host-capacity-blocked", LeaseToken: strings.Repeat("f", 64),
+	})
+	if err != nil || blocked != nil {
+		t.Fatalf("claim above host capacity = %#v, %v; want no work", blocked, err)
+	}
+	var attempts int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != hostCapacity {
+		t.Fatalf("attempts across workers = %d; want host capacity %d", attempts, hostCapacity)
 	}
 }
 
