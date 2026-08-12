@@ -3,11 +3,11 @@
 ## HEAD
 
 Status: PASS.
-Branch: `factory/1a906a91-cdb-734c58dd-50b`.
-Implementation commit: 14c6dfdb1355a1e03ac1a48c61ff87b42eebf44f — recovery и merge закреплены за SHA, прошедшим Verify.
-What changed: recovery сверяет текущий head и слитый PR с SHA из merge intent. Merge использует атомарный `--match-head-commit`; force-push останавливает доставку.
-Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.RebuiltDeliveryBranchPipelineTests pilot.test_pilot.ImmutableMergeTests pilot.test_pilot.MergeConflictRecoveryTests` — 11 tests OK; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` — OK; `go build ./cmd/factory-server ./cmd/factory-worker ./cmd/factory-release-broker` — OK.
-Next action: выполнить pinned Verify на опубликованных SHA после push.
+Branch: `factory/a62f2494-33b-09586b53-ed1`.
+Implementation commit: c4fe862207c73b497bb24afa109d4dd32c47821e — пустая закреплённая поставка возвращается до Review, сравнение использует точные base и candidate SHA.
+What changed: Review и Verify закрепляют свежие удалённые SHA; пустой pinned diff возвращает реализацию одним сообщением. Все сравнения области выполняются как `base_sha...candidate_sha`.
+Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests` — 5 tests OK; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` — OK; `git diff --check` — OK.
+Next action: повторить Review опубликованной ветки.
 
 ## LOG
 
@@ -22,3 +22,9 @@ Next action: выполнить pinned Verify на опубликованных 
 Закрыты две гонки после Review: recovery больше не принимает force-push или merge другого SHA,
 а `gh pr merge` атомарно ограничен SHA из merge intent. Целевой набор из 11 тестов,
 Python compile-check и сборка трёх Go-бинариев прошли.
+
+### 2026-08-12 — Implement
+
+После замечаний Review пустой закреплённый diff теперь возвращает работу в разработку
+одним сообщением, а область вычисляется строго по `base_sha...candidate_sha`.
+Целевой класс из 5 тестов, compile-check и проверка diff прошли.
