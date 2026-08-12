@@ -2219,7 +2219,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
         }
 
     def test_verify_pass_is_processed_once(self):
-        """A restart after a successful Verify must not merge it a second time."""
+        """A restart must not merge again or finish before release succeeds."""
         self.conf["stages"] = [{"workflow": "Verify"}]
         self.conf["auto_merge"] = True
         verify = {
@@ -2282,7 +2282,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
             pilot.cycle(self.conf, {"processed": []})
 
         self.assertEqual(merge.call_count, 1)
-        final.assert_called_once_with("verify-pass", "Verify", True)
+        final.assert_not_called()
         with open(journal, encoding="utf-8") as entries:
             records = [json.loads(line) for line in entries]
         self.assertEqual([record["task_id"] for record in records], ["verify-pass"])
