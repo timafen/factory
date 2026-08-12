@@ -1716,7 +1716,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                 return {"workers": list(workers.values())}
             if path == "/repositories":
                 return {"repositories": [{"id": "repo-id",
-                                           "remote_identity": "github.com/acme/repo"}]}
+                                           "remote_identity": "github.com/timafen/factory"}]}
             if path == "/workflows":
                 return {"workflows": [{"id": stage, "enabled": True,
                     "current_revision": {"id": data["revision_id"], "title": stage}}
@@ -1731,7 +1731,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
             "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
             "record_implementation_artifact", "save_stage_verdict",
-            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+            "retry_pending_factory_deploy", "autostart_plan",
         )
         notifications = mock.Mock()
         with contextlib.ExitStack() as stack:
@@ -1759,6 +1759,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                                                   return_value="factory/correction"))
             stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
             stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+            stack.enter_context(mock.patch.object(
+                pilot, "broker_operation", return_value={"status": "succeeded"}))
             merge = stack.enter_context(mock.patch.object(pilot, "gh_merge",
                                                            return_value=(True, "merged")))
             final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
@@ -1782,7 +1784,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                              for body in created))
         self.assertEqual([body.get("correction_kind", "") for body in created],
                          [kind, "", ""])
-        merge.assert_called_once_with("github.com/acme/repo", "factory/correction",
+        merge.assert_called_once_with("github.com/timafen/factory", "factory/correction",
                                       "Изменённое человеком имя")
         final.assert_called_once_with(verify["id"], "Verify", True)
         self.assertTrue(any(len(call.args) > 1 and call.args[1] == "Задача выполнена"
