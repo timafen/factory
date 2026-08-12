@@ -1639,30 +1639,36 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
 
     def test_review_return_created_as_child_never_starts_second_pipeline(self):
         """The API-returned correction must remain invisible to root discovery."""
-        sent = []
-        with mock.patch.object(
-                pilot, "create_task",
-                side_effect=lambda body, _conf: sent.append(body)
-                or {"task": {"id": "review-return"}}):
-            pilot.create_child_task(
+        api_response = {"task": {
+            "id": "review-return", "work_id": self.root["id"],
+            "parent_task_id": "review-task",
+            "correction_kind": "review_return",
+            "title": "[auto] [3/5 Implement + Test] Исправить корзину",
+            "state": "queued", "created_at": "2026-08-11T20:01:00Z",
+        }}
+        with (mock.patch.object(pilot, "api", return_value=api_response) as api,
+              mock.patch.object(pilot, "money_guard")):
+            created = pilot.create_child_task(
                 {"title": "[auto] [3/5 Implement + Test] Исправить корзину"},
                 {"id": "review-task", "work_id": self.root["id"]}, {},
                 "review_return")
 
-        correction = {
-            "id": "review-return", "work_id": self.root["id"],
-            "parent_task_id": sent[0]["parent_task_id"],
-            "correction_kind": sent[0]["correction_kind"],
-            "title": sent[0]["title"], "state": "queued",
-            "created_at": "2026-08-11T20:01:00Z",
-        }
+        correction = created["task"]
+        submitted = api.call_args.args[1]
+        self.assertEqual(submitted["parent_task_id"], "review-task")
+        self.assertEqual(submitted["correction_kind"], "review_return")
+        self.assertEqual({key: correction[key] for key in (
+            "work_id", "parent_task_id", "correction_kind",
+        )}, {
+            "work_id": self.root["id"],
+            "parent_task_id": "review-task",
+            "correction_kind": "review_return",
+        })
         pilot.record_new_works(
             self.conf, [self.root, correction], max_age_min=10_000_000)
         pilot.record_new_works(
             self.conf, [correction, self.root], max_age_min=10_000_000)
 
-        self.assertEqual(sent[0]["parent_task_id"], "review-task")
-        self.assertEqual(sent[0]["correction_kind"], "review_return")
         self.assertEqual(list(pilot.load(self.works_path, {})), [self.root["id"]])
         self.assertEqual(len(pilot.load(self.events_path, {})), 1)
 
