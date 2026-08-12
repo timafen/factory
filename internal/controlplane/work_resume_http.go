@@ -18,7 +18,8 @@ import (
 var resumeStageTitle = regexp.MustCompile(`^\[auto\]\s*\[(\d+)/(\d+)\s+([^\]]+)\]\s*(.*)$`)
 
 type resumeWorkRequest struct {
-	Title string `json:"title"`
+	Title  string `json:"title"`
+	WorkID string `json:"work_id"`
 }
 
 type resumeWorkResponse struct {
@@ -57,14 +58,15 @@ func (a *API) resumeWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := strings.TrimSpace(input.Title)
-	if base == "" || len([]rune(base)) > 160 {
+	workID := strings.TrimSpace(input.WorkID)
+	if (base == "" && workID == "") || len([]rune(base)) > 160 {
 		writeError(w, invalid("invalid_work_title", "work title is required and limited to 160 Unicode characters"))
 		return
 	}
 
 	a.resumeMu.Lock()
 	defer a.resumeMu.Unlock()
-	response, err := a.resumePausedWork(r.Context(), base)
+	response, err := a.resumePausedWork(r.Context(), base, workID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -72,15 +74,19 @@ func (a *API) resumeWork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResponse, error) {
+func (a *API) resumePausedWork(ctx context.Context, base, workID string) (resumeWorkResponse, error) {
 	settingsResponse, err := a.pilotConfig.Read()
 	if err != nil {
 		return resumeWorkResponse{}, err
 	}
 	settings := settingsResponse.Settings
-	pausedAt := pausedPipelineIndex(settings.StoppedPipelines, base)
+	pauseKey := base
+	if workID != "" {
+		pauseKey = workID
+	}
+	pausedAt := pausedPipelineIndex(settings.StoppedPipelines, pauseKey)
 
-	tasks, err := a.pipelineTasks(ctx, base)
+	tasks, err := a.pipelineTasks(ctx, base, workID)
 	if err != nil {
 		return resumeWorkResponse{}, err
 	}
@@ -100,7 +106,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 		return resumeWorkResponse{}, conflict("work_not_paused", "this work is not owner-paused")
 	}
 
-	metadata := readResumeWorkMetadata(base)
+	metadata := readResumeWorkMetadata(pauseKey)
 	target, source := resumeTarget(tasks, settings.Stages, metadata)
 	if target == "" || source == nil {
 		if pausedAt >= 0 {
@@ -126,7 +132,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 	if detail.Context == "" || detail.Workflow == nil {
 		return resumeWorkResponse{}, conflict("resume_history_incomplete", "the paused stage has no reusable workflow context")
 	}
-	key := resumeRequestKey(base, source.ID, target)
+	key := resumeRequestKey(pauseKey, source.ID, target)
 	created, _, err := a.store.CreateTask(ctx, protocol.CreateTaskRequest{
 		RequestKey:                 key,
 		Title:                      fmt.Sprintf("[auto] [%d/%d %s] %s", stageIndex(settings.Stages, target)+1, len(settings.Stages), target, base),
@@ -153,7 +159,7 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 	return resumeWorkResponse{Task: created.Task, Stage: target, Resumed: true}, nil
 }
 
-func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTask, error) {
+func (a *API) pipelineTasks(ctx context.Context, base, workID string) ([]resumedStageTask, error) {
 	rows, err := a.store.db.QueryContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
@@ -170,7 +176,8 @@ func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTas
 			return nil, unavailable(err)
 		}
 		match := resumeStageTitle.FindStringSubmatch(task.Title)
-		if match == nil || strings.TrimSpace(match[4]) != base {
+		if match == nil || (workID != "" && task.WorkID != workID) ||
+			(workID == "" && (task.WorkID != "" || strings.TrimSpace(match[4]) != base)) {
 			continue
 		}
 		result = append(result, resumedStageTask{Task: task, stage: strings.TrimSpace(match[3])})
