@@ -2050,7 +2050,8 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             "generation": "generation-1",
         }
         delivery = {
-            "branch": "factory/real-clean", "selected_at": "2026-08-11T10:01:00Z",
+            "branch": "factory/real-clean", "head": "f" * 40,
+            "selected_at": "2026-08-11T10:01:00Z",
             "generation": "generation-1",
         }
         pilot.save(self.works_path, {"Настоящая работа": {
@@ -2078,7 +2079,8 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
                 "generation": "generation-1",
             },
             "delivery_artifact": {
-                "branch": "factory/old-clean", "selected_at": "2026-08-11T10:01:00Z",
+                "branch": "factory/old-clean", "head": "b" * 40,
+                "selected_at": "2026-08-11T10:01:00Z",
                 "generation": "generation-1",
             },
         }})
@@ -2102,12 +2104,13 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         base = "Чистая поставка"
         original = "factory/original-implementation"
         rebuilt = "factory/original-implementation-clean"
-        head = "e" * 40
+        implementation_head = "e" * 40
+        delivery_head = "d" * 40
         card = "CARD-0070"
         pilot.save(works_path, {base: {
             "run_generation": "generation-1",
             "implementation_artifact": {
-                "branch": original, "head": head, "task_id": "implement",
+                "branch": original, "head": implementation_head, "task_id": "implement",
                 "recorded_at": "2026-08-11T10:00:00Z",
                 "generation": "generation-1",
             },
@@ -2216,7 +2219,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
             gate = stack.enter_context(mock.patch.object(
                 pilot, "review_gate",
-                return_value={"back": False, "branch": rebuilt, "note": "rebuilt"}))
+                return_value={"back": False, "branch": rebuilt,
+                              "head": delivery_head, "note": "rebuilt"}))
             stack.enter_context(mock.patch.object(
                 pilot, "pushed_branch", side_effect=lambda candidates, _repo:
                 candidates[0] if candidates else ""))
@@ -2228,7 +2232,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             def github(args, strict=False):
                 path = args[-1]
                 if "/branches/" in path:
-                    return {"name": original, "commit": {"sha": head}}
+                    if path.endswith(rebuilt):
+                        return {"name": rebuilt, "commit": {"sha": delivery_head}}
+                    return {"name": original, "commit": {"sha": implementation_head}}
                 if "/pulls?" in path:
                     return []
                 if "/compare/main..." in path:
@@ -2239,7 +2245,7 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 pilot, "gh_merge", return_value=(False, "merge conflict")))
             snapshot = {
                 "state": "ok", "default_branch": "main",
-                "base_sha": "a" * 40, "candidate_sha": head,
+                "base_sha": "a" * 40, "candidate_sha": delivery_head,
                 "merge_base_sha": "a" * 40, "base_advanced": False,
                 "base_ahead_by": 0, "ahead_by": 1,
                 "files": ["pilot/pilot.py"],
@@ -2252,7 +2258,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             pilot.cycle(conf, state)
             self.assertIn(f"Branch: {rebuilt}", created[0]["context"])
             self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
+            self.assertEqual(pilot.delivery_artifact(base)["head"], delivery_head)
             self.assertEqual(pilot.implementation_artifact(base)["branch"], original)
+            self.assertNotEqual(delivery_head, implementation_head)
 
             # A watcher restart reprocesses the terminal Implement task before
             # Review completes.  Recording the same implementation must not
@@ -2275,14 +2283,14 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             # handed to the next cycle instead of hammering GitHub forever.
             self.assertEqual(len(created), 2)
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
-            self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], head)
+            self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], delivery_head)
             self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
             fresh.assert_called_once_with("github.com/acme/repo", rebuilt)
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, head)
+        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
 
 
 class ImmutableMergeTests(unittest.TestCase):
