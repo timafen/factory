@@ -483,7 +483,7 @@ async function createHTTPSProxyFixture() {
     revisions.set(stage, workflow.workflow.current_revision.id);
   }
   let sequence = 0;
-  async function completeStage(base, stage) {
+  async function completeStage(base, stage, parentTaskID = "") {
     sequence += 1;
     const created = await serverJSON("/api/v1/tasks", {
       method: "POST",
@@ -496,15 +496,30 @@ async function createHTTPSProxyFixture() {
         repository_id: repository.id,
         timeout_seconds: 60,
         workflow_revision_id: revisions.get(stage),
+        ...(parentTaskID ? { parent_task_id: parentTaskID } : {}),
       }),
     });
     const detail = await waitForFixtureTask(created.task.id);
     if (stage === "Review" || stage === "Verify") {
       await writeFile(join(temporary, "pilot", "verdicts", `${detail.task.id}.json`), JSON.stringify({ action: "advance" }));
     }
+    return detail.task;
   }
-  await completeStage(pausedHTTPSWork, "Triage");
-  for (const stage of pilotStages) await completeStage(completedHTTPSWork, stage);
+  const pausedTask = await completeStage(pausedHTTPSWork, "Triage");
+  let completedTask;
+  for (const stage of pilotStages) {
+    completedTask = await completeStage(completedHTTPSWork, stage, completedTask?.id);
+  }
+  const configPath = join(temporary, "pilot", "config.json");
+  const fixtureConfig = JSON.parse(await readFile(configPath, "utf8"));
+  fixtureConfig.stopped_pipelines = [pausedTask.work_id, completedTask.work_id];
+  await writeFile(configPath, JSON.stringify(fixtureConfig, null, 2));
+  await writeFile(join(temporary, "pilot", "work_status.json"), JSON.stringify({
+    [pausedTask.work_id]: {
+      state: "stopped_owner",
+      text: "Пауза для проверки возобновления через HTTPS-прокси.",
+    },
+  }, null, 2));
 }
 
 await createHTTPSProxyFixture();
