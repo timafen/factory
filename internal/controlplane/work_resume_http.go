@@ -169,21 +169,35 @@ func (a *API) pipelineTasks(ctx context.Context, base, workID string) ([]resumed
 		return nil, unavailable(err)
 	}
 	defer rows.Close()
-	var result []resumedStageTask
+	var candidates []resumedStageTask
 	for rows.Next() {
 		task, err := scanTask(rows, false)
 		if err != nil {
 			return nil, unavailable(err)
 		}
 		match := resumeStageTitle.FindStringSubmatch(task.Title)
-		if match == nil || (workID != "" && task.WorkID != workID) ||
-			(workID == "" && (task.WorkID != "" || strings.TrimSpace(match[4]) != base)) {
+		if match == nil || strings.TrimSpace(match[4]) != base {
 			continue
 		}
-		result = append(result, resumedStageTask{Task: task, stage: strings.TrimSpace(match[3])})
+		candidates = append(candidates, resumedStageTask{Task: task, stage: strings.TrimSpace(match[3])})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, unavailable(err)
+	}
+	legacyRoots := map[string]bool{}
+	if workID == "" {
+		for _, task := range candidates {
+			if task.WorkID == "" {
+				legacyRoots[task.ID] = true
+			}
+		}
+	}
+	result := make([]resumedStageTask, 0, len(candidates))
+	for _, task := range candidates {
+		if (workID != "" && task.WorkID == workID) ||
+			(workID == "" && (task.WorkID == "" || legacyRoots[task.WorkID])) {
+			result = append(result, task)
+		}
 	}
 	return result, nil
 }
