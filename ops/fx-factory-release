@@ -102,7 +102,7 @@ except OSError as error:
 PY
 }
 
-if [ -n "$DELIVERY_ID" ]; then
+if [ -n "$DELIVERY_ID" ] && [ "$ref" != --status ]; then
   case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
   mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
   DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
@@ -302,6 +302,18 @@ rollback_to_generation() { # generation, owner-facing reason
   sync_path "$REL"
 }
 
+if [ "$ref" = --status ]; then
+  read_journal
+  current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  previous_path=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
+  current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$current_path/manifest.json" 2>/dev/null || echo '?')
+  previous_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$previous_path/manifest.json" 2>/dev/null || echo '?')
+  echo "Factory: current=$current_sha previous=$previous_sha phase=${phase:-нет}"
+  [ -z "${generation:-}" ] || echo "manifest=$(manifest_hash "$generation" 2>/dev/null || echo '?') snapshot=$generation/database.sqlite3"
+  echo "Pilot остаётся в настроенном состоянии; эта команда ничего не включает"
+  exit 0
+fi
+
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || {
@@ -313,6 +325,19 @@ flock -n 9 || {
 }
 delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
+fail_closed_delivery() {
+  local status=$1
+  [ -n "$DELIVERY_ID" ] && [ "$status" -ne 0 ] || return 0
+  delivery_status failed || fail "не смог надёжно записать неуспешный выпуск"
+}
+on_early_exit() {
+  local status=$?
+  trap - EXIT
+  fail_closed_delivery "$status"
+  exit "$status"
+}
+trap on_early_exit EXIT
+
 umask 077
 mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
   || { fail "не смог подготовить папку релизов"; exit 4; }
@@ -320,17 +345,6 @@ mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 
 case "$ref" in
-  --status)
-    read_journal
-    current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
-    previous_path=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
-    current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$current_path/manifest.json" 2>/dev/null || echo '?')
-    previous_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$previous_path/manifest.json" 2>/dev/null || echo '?')
-    echo "Factory: current=$current_sha previous=$previous_sha phase=${phase:-нет}"
-    [ -z "${generation:-}" ] || echo "manifest=$(manifest_hash "$generation" 2>/dev/null || echo '?') snapshot=$generation/database.sqlite3"
-    echo "Pilot остаётся в настроенном состоянии; эта команда ничего не включает"
-    exit 0
-    ;;
   --rollback)
     target=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
     current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
@@ -339,6 +353,7 @@ case "$ref" in
     write_journal prepared "$target" "$current_path" || exit 4
     rollback_to_generation "$target" "откат Factory" || exit $?
     [ -z "$current_path" ] || { ln -sfn "$current_path" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
+    delivery_status succeeded || { fail "не смог надёжно подтвердить успешный откат"; exit 4; }
     echo "== полный откат к $(basename "$target") завершён; база не изменялась"
     exit 0
     ;;
@@ -399,7 +414,13 @@ cleanup() {
   wait_for_test_gates
   rm -rf "$work"
 }
-on_release_exit() { cleanup; }
+on_release_exit() {
+  local status=$?
+  trap - EXIT
+  cleanup
+  fail_closed_delivery "$status"
+  exit "$status"
+}
 trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
