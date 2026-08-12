@@ -2,15 +2,25 @@
 
 ## HEAD
 
-- Status: PASS — implementation and card are ready for Review; Pilot remains operationally disabled.
+- Status: BLOCKED — full Go regression suite timed out; Pilot remains operationally disabled.
 - Branch: `factory/546377fd-9f8-f6bdfccf-cec` (base `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`).
 - Implementation commit: 9132c9d10d08bb26a5b0b6b7870db615db2bc779 — same-title resume, Review state and merge receipts remain isolated by `work_id` on current `main`.
 - What changed: the previous implementation was reconciled with the current delivery intent model; Review promises, areas, rescue limits and archive receipts retain durable identity.
-- Evidence: targeted Go and five Pilot isolation regressions passed; full Pilot 222/222, web 161/161, lint, TypeScript, web build and Go build passed.
-- Evidence: full Go has one unrelated `internal/worker` polling timeout, reproduced alone without task files in its scope.
-- Next action: Review the rebased branch; keep Pilot disabled pending its separate release decision.
+- Evidence: targeted Go and four Pilot work-ID isolation regressions passed; web lint, TypeScript and 161/161 tests passed.
+- Evidence: `go test ./...` timed out in `internal/controlplane` recovery and `internal/worker` polling tests after 300 seconds; neither test file is changed by this delivery.
+- Next action: reproduce and resolve the full Go-suite timeouts, then rerun Verify before merging.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Criterion | Command/check | Observed result |
+| --- | --- | --- |
+| Resume isolates equal titles by durable work identity | `go test ./internal/controlplane -count=1 -run 'TestTaskProvenance|TestResumePausedWork(IsolatesSameTitlePipelinesByWorkID|KeepsTitleFallbackForTrulyLegacyHistory|RestartsFailedFirstEffectiveStageAndIsIdempotent|UsesVerdictActionForReviewAndVerify)'` | Passed: provenance persists; one paused work resumes without altering an equal-title sibling; legacy fallback remains covered. |
+| Review and Verify corrections stay in their original pipeline | Four focused `pilot.test_pilot` work-ID isolation tests | Passed: restart, Review, Verify, artifacts and merge/archive state remain separate for equal titles. |
+| UI forwards the durable identity | `just ui-check` after `npm ci` | Passed: lint, TypeScript, and 161/161 Vitest tests; WorkView proves it sends the paused `work_id`. |
+| Full repository regression check | `just format-check && just vet && just vuln && just boundary && just test && ...` | Blocked: format, vet, vulnerability and boundary checks passed, then `just test` timed out after 300 s in unchanged recovery/polling integration tests, so remaining commands were not run. |
+
 
 ### 2026-08-11 — Verify
 
