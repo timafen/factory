@@ -1,0 +1,63 @@
+#!/bin/bash
+# Root-only cgroup v2 containment primitive for Factory release gates.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+CGROUP_ROOT=/sys/fs/cgroup/factory-release-gates
+MKDIR=/usr/bin/mkdir
+RMDIR=/usr/bin/rmdir
+
+fail() { printf 'factory-gate-cgroup: %s\n' "$*" >&2; exit 1; }
+
+[ "$(/usr/bin/id -u)" = 0 ] || fail 'root is required'
+[ "$(/usr/bin/stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] || fail 'cgroup v2 is required'
+case "${2:-}" in ''|*[!a-zA-Z0-9_.-]*) fail 'invalid cgroup name' ;; esac
+group="$CGROUP_ROOT/$2"
+
+case "${1:-}" in
+  create)
+    "$MKDIR" -p -- "$CGROUP_ROOT"
+    "$MKDIR" -- "$group"
+    ;;
+  attach)
+    case "${3:-}" in ''|*[!0-9]*) fail 'invalid pid' ;; esac
+    printf '%s\n' "$3" >"$group/cgroup.procs"
+    ;;
+  pids)
+    [ -r "$group/cgroup.procs" ] || fail 'cgroup does not exist'
+    /usr/bin/sort -n -u -- "$group/cgroup.procs"
+    ;;
+  empty)
+    [ -r "$group/cgroup.procs" ] || exit 1
+    pid=
+    IFS= read -r pid <"$group/cgroup.procs" || true
+    [ -z "$pid" ]
+    ;;
+  signal)
+    signal=${3:-}
+    case "$signal" in
+      TERM)
+        while IFS= read -r pid; do
+          case "$pid" in ''|*[!0-9]*) continue ;; esac
+          kill -TERM "$pid" 2>/dev/null || true
+        done <"$group/cgroup.procs"
+        ;;
+      KILL)
+        if [ -w "$group/cgroup.kill" ]; then
+          printf '1\n' >"$group/cgroup.kill"
+        else
+          while IFS= read -r pid; do
+            case "$pid" in ''|*[!0-9]*) continue ;; esac
+            kill -KILL "$pid" 2>/dev/null || true
+          done <"$group/cgroup.procs"
+        fi
+        ;;
+      *) fail 'invalid signal' ;;
+    esac
+    ;;
+  remove)
+    "$RMDIR" -- "$group"
+    ;;
+  *) fail 'usage: factory-gate-cgroup create|attach|pids|empty|signal|remove NAME [ARG]' ;;
+esac

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Собирает Фабрику из git и выкатывает сервер и воркер одной ревизией.
 set -uo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 umask 022
 
 ref="${1:-main}"
@@ -44,17 +46,36 @@ TRUSTED_NODE=/usr/bin/node
 TRUSTED_NPX_CLI=/usr/lib/node_modules/npm/bin/npx-cli.js
 TRUSTED_NPM_CLI=/usr/lib/node_modules/npm/bin/npm-cli.js
 TRUSTED_GO=/usr/bin/go
+TRUSTED_GATE_CGROUP=/usr/local/libexec/factory-gate-cgroup
+TRUSTED_DIRNAME=/usr/bin/dirname
+TRUSTED_FLOCK=/usr/bin/flock
+TRUSTED_CHOWN=/usr/bin/chown
+TRUSTED_SYSTEMCTL=/usr/bin/systemctl
+TRUSTED_CAT=/usr/bin/cat
+TRUSTED_SED=/usr/bin/sed
+TRUSTED_HEAD=/usr/bin/head
+TRUSTED_CP=/usr/bin/cp
+TRUSTED_CURL=/usr/bin/curl
+TRUSTED_INSTALL=/usr/bin/install
+TRUSTED_LS=/usr/bin/ls
+TRUSTED_TAIL=/usr/bin/tail
+TRUSTED_XARGS=/usr/bin/xargs
+TRUSTED_TR=/usr/bin/tr
+TRUSTED_CUT=/usr/bin/cut
+TRUSTED_PYTHON=/usr/bin/python3
+TRUSTED_DATE=/usr/bin/date
+TRUSTED_SYSTEMD_RUN=/usr/bin/systemd-run
 TRUSTED_PATH=/usr/bin:/bin
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ "${#gate_identity[@]}" -gt 0 ]; then "${gate_identity[@]}" "$@"; else "$@"; fi; }
 trusted_node() { "$TRUSTED_ENV" PATH="$TRUSTED_PATH" "$TRUSTED_NODE" "$@"; }
-set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
+set_owner() { if [ -n "$OWNER" ]; then "$TRUSTED_CHOWN" "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
-stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
-start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
-restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
+stop_workers() { local service; while read -r service; do "$TRUSTED_SYSTEMCTL" stop "$service" || return; done < <(worker_service_list); }
+start_workers() { local service; while read -r service; do "$TRUSTED_SYSTEMCTL" start "$service" || return; done < <(worker_service_list); }
+restart_workers() { local service; while read -r service; do "$TRUSTED_SYSTEMCTL" restart "$service" || return; done < <(worker_service_list); }
 
 case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
   *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
@@ -77,6 +98,14 @@ for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_NPM_CLI" "$TRUSTED_GO"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
+done
+
+for trusted_executable in "$TRUSTED_GATE_CGROUP" "$TRUSTED_DIRNAME" "$TRUSTED_FLOCK" \
+  "$TRUSTED_CHOWN" "$TRUSTED_SYSTEMCTL" "$TRUSTED_CAT" "$TRUSTED_SED" "$TRUSTED_HEAD" \
+  "$TRUSTED_CP" "$TRUSTED_CURL" "$TRUSTED_INSTALL" "$TRUSTED_LS" "$TRUSTED_TAIL" "$TRUSTED_XARGS" \
+  "$TRUSTED_TR" "$TRUSTED_CUT" "$TRUSTED_PYTHON" "$TRUSTED_DATE" "$TRUSTED_SYSTEMD_RUN"; do
+  validate_trusted_executable "$trusted_executable" \
+    || { fail "нет доверенного executable для release chain: $trusted_executable"; exit 4; }
 done
 
 # A caller-provided launcher must never control checkout or gate inputs. Keep
@@ -102,12 +131,12 @@ if [ -n "$OWNER" ]; then
   gate_identity=("$TRUSTED_SUDO" -H -u "$gate_user" --)
 fi
 
-mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
+"$TRUSTED_MKDIR" -p "$("$TRUSTED_DIRNAME" -- "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
-flock -n 9 || { fail "another Factory release is already running"; exit 8; }
+"$TRUSTED_FLOCK" -n 9 || { fail "another Factory release is already running"; exit 8; }
 
-mkdir -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
-mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
+"$TRUSTED_MKDIR" -p "$REL" && set_owner "$REL" || { fail "не смог подготовить папку релизов"; exit 4; }
+"$TRUSTED_MKDIR" -p "$("$TRUSTED_DIRNAME" -- "$INFO")" && set_owner "$("$TRUSTED_DIRNAME" -- "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 work=$(as_user "$TRUSTED_MKTEMP" -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
@@ -117,12 +146,13 @@ gate_pgids=()
 gate_ready=()
 gate_logs=()
 gate_names=()
+gate_cgroups=()
 test_gates_stopped=1
 test_gates_reaped=1
 cleanup() {
   stop_test_gates
   wait_for_test_gates
-  rm -rf "$work"
+  "$TRUSTED_RM" -rf -- "$work"
   if [ -n "$trusted_work" ]; then
     "$TRUSTED_CHMOD" -R u+w "$trusted_work" 2>/dev/null || true
     "$TRUSTED_RM" -rf -- "$trusted_work"
@@ -254,6 +284,46 @@ reap_test_gate_launcher() { # reap_test_gate_launcher <launcher-pid>
   wait "$launcher" 2>/dev/null || true
 }
 
+wait_for_gate_launcher_stop() { # wait_for_gate_launcher_stop <pid>
+  local launcher=$1 i launcher_stat launcher_rest
+  for ((i = 0; i < GATE_READY_ATTEMPTS; i++)); do
+    [ -r "/proc/$launcher/stat" ] || return 1
+    process_identity "$launcher" || {
+      # A deliberately stopped process is still a valid live process.
+      IFS= read -r launcher_stat <"/proc/$launcher/stat" || return 1
+      launcher_rest=${launcher_stat##*) }
+      read -r process_state _ <<<"$launcher_rest"
+    }
+    [ "$process_state" = T ] && return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  return 1
+}
+
+wait_for_gate_cgroup_empty() { # wait_for_gate_cgroup_empty <name>
+  local cgroup=$1 i
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    "$TRUSTED_GATE_CGROUP" empty "$cgroup" && return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  "$TRUSTED_GATE_CGROUP" empty "$cgroup"
+}
+
+drain_gate_cgroup() { # drain_gate_cgroup <name>
+  local cgroup=$1 clean=0
+  if wait_for_gate_cgroup_empty "$cgroup"; then
+    clean=1
+  else
+    "$TRUSTED_GATE_CGROUP" signal "$cgroup" TERM || true
+    if ! wait_for_gate_cgroup_empty "$cgroup"; then
+      "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL || true
+      wait_for_gate_cgroup_empty "$cgroup" || return 1
+    fi
+  fi
+  "$TRUSTED_GATE_CGROUP" remove "$cgroup" || return 1
+  [ "$clean" = 1 ]
+}
+
 stop_unready_test_gate_launcher() { # stop_unready_test_gate_launcher <launcher-pid>
   local launcher=$1 i
   local -a tree=()
@@ -270,25 +340,36 @@ stop_unready_test_gate_launcher() { # stop_unready_test_gate_launcher <launcher-
   wait "$launcher" 2>/dev/null || true
 }
 
-stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
-  local launcher=$1 pgid=$2
+stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid> <cgroup>
+  local launcher=$1 pgid=$2 cgroup=$3
+  "$TRUSTED_GATE_CGROUP" signal "$cgroup" TERM 2>/dev/null || true
   kill -TERM -- "-$pgid" 2>/dev/null || true
-  if ! wait_for_test_gate_group_exit "$pgid"; then
+  if ! wait_for_gate_cgroup_empty "$cgroup" || ! wait_for_test_gate_group_exit "$pgid"; then
+    "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL 2>/dev/null || true
     kill -KILL -- "-$pgid" 2>/dev/null || true
+    wait_for_gate_cgroup_empty "$cgroup" || true
     wait_for_test_gate_group_exit "$pgid" || true
   fi
   reap_test_gate_launcher "$launcher"
+  "$TRUSTED_GATE_CGROUP" remove "$cgroup" 2>/dev/null || true
 }
 
 start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
-  local name=$1 log=$2 handshake=$3 launcher nonce ack
+  local name=$1 log=$2 handshake=$3 launcher nonce ack cgroup
   shift 3
   ack="${handshake}.ack"
   nonce=$("$TRUSTED_OD" -An -N16 -tx1 /dev/urandom) || return 1
   nonce=${nonce//[[:space:]]/}
   [ "${#nonce}" -eq 32 ] || return 1
+  cgroup="factory-release-gate-$nonce"
+  "$TRUSTED_GATE_CGROUP" create "$cgroup" || return 1
+  gate_cgroups+=("$cgroup")
   "$TRUSTED_RM" -f -- "$handshake" "$ack"
-  "$TRUSTED_SETSID" --fork --wait "$TRUSTED_BASH" -c '
+  "$TRUSTED_BASH" -c '
+    trap - INT
+    kill -STOP "$$"
+    exec "$@"
+  ' "$TRUSTED_BASH" "$TRUSTED_SETSID" --fork --wait "$TRUSTED_BASH" -c '
     handshake=$1
     ack=$2
     nonce=$3
@@ -338,6 +419,16 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
   gate_ready+=(0)
   gate_logs+=("$log")
   gate_names+=("$name")
+  if ! wait_for_gate_launcher_stop "$launcher" \
+    || ! "$TRUSTED_GATE_CGROUP" attach "$cgroup" "$launcher"; then
+    kill -KILL "$launcher" 2>/dev/null || true
+    wait "$launcher" 2>/dev/null || true
+    "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL 2>/dev/null || true
+    "$TRUSTED_GATE_CGROUP" remove "$cgroup" 2>/dev/null || true
+    fail "не смог поместить $name в отдельную cgroup"
+    return 1
+  fi
+  kill -CONT "$launcher" 2>/dev/null || return 1
   if wait_for_test_gate_handshake "$handshake" "$launcher" "$nonce" "$ack"; then
     gate_pgids[${#gate_pgids[@]}-1]=$gate_pgid
     gate_ready[${#gate_ready[@]}-1]=1
@@ -354,9 +445,12 @@ stop_test_gates() {
   for i in "${!gate_pids[@]}"; do
     launcher=${gate_pids[$i]}
     if [ "${gate_ready[$i]}" = 1 ]; then
-      stop_ready_test_gate "$launcher" "${gate_pgids[$i]}"
+      stop_ready_test_gate "$launcher" "${gate_pgids[$i]}" "${gate_cgroups[$i]}"
     else
       stop_unready_test_gate_launcher "$launcher"
+      "$TRUSTED_GATE_CGROUP" signal "${gate_cgroups[$i]}" KILL 2>/dev/null || true
+      wait_for_gate_cgroup_empty "${gate_cgroups[$i]}" || true
+      "$TRUSTED_GATE_CGROUP" remove "${gate_cgroups[$i]}" 2>/dev/null || true
     fi
   done
 }
@@ -370,24 +464,26 @@ wait_for_test_gates() {
   test_gates_reaped=1
 }
 
-drain_test_gate_group() { # drain_test_gate_group <launcher> <pgid>
-  local launcher=$1 pgid=$2
+drain_test_gate_group() { # drain_test_gate_group <launcher> <pgid> <cgroup>
+  local launcher=$1 pgid=$2 cgroup=$3 group_clean=1 cgroup_clean=1
   if wait_for_test_gate_group_exit "$pgid"; then
     reap_test_gate_launcher "$launcher"
-    return 0
+  else
+    group_clean=0
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+    if ! wait_for_test_gate_group_exit "$pgid"; then
+      kill -KILL -- "-$pgid" 2>/dev/null || true
+      wait_for_test_gate_group_exit "$pgid" || true
+    fi
+    reap_test_gate_launcher "$launcher"
   fi
-  kill -TERM -- "-$pgid" 2>/dev/null || true
-  if ! wait_for_test_gate_group_exit "$pgid"; then
-    kill -KILL -- "-$pgid" 2>/dev/null || true
-    wait_for_test_gate_group_exit "$pgid" || true
-  fi
-  reap_test_gate_launcher "$launcher"
-  return 1
+  drain_gate_cgroup "$cgroup" || cgroup_clean=0
+  [ "$group_clean" = 1 ] && [ "$cgroup_clean" = 1 ]
 }
 
-wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <launcher> <pgid>
-  local launcher=$1 pgid=$2
-  if ! drain_test_gate_group "$launcher" "$pgid"; then
+wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <launcher> <pgid> <cgroup>
+  local launcher=$1 pgid=$2 cgroup=$3
+  if ! drain_test_gate_group "$launcher" "$pgid" "$cgroup"; then
     return 1
   fi
   while test_gate_group_alive "$pgid"; do
@@ -399,7 +495,7 @@ print_test_gate_logs() {
   local i
   for i in "${!gate_logs[@]}"; do
     step "полный вывод: ${gate_names[$i]}"
-    cat "${gate_logs[$i]}"
+    "$TRUSTED_CAT" "${gate_logs[$i]}"
   done
 }
 
@@ -420,6 +516,7 @@ run_parallel_test_gates() {
   gate_ready=()
   gate_logs=()
   gate_names=()
+  gate_cgroups=()
   test_gates_stopped=0
   test_gates_reaped=0
 
@@ -466,7 +563,7 @@ run_parallel_test_gates() {
 
   completed_index=1
   [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
-  if ! wait_for_test_gate_descendants "${gate_pids[$completed_index]}" "${gate_pgids[$completed_index]}"; then
+  if ! wait_for_test_gate_descendants "${gate_pids[$completed_index]}" "${gate_pgids[$completed_index]}" "${gate_cgroups[$completed_index]}"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -480,7 +577,7 @@ run_parallel_test_gates() {
   wait "${gate_pids[$other_index]}"
   status=$?
   if [ "$status" -eq 0 ] \
-    && ! wait_for_test_gate_descendants "${gate_pids[$other_index]}" "${gate_pgids[$other_index]}"; then
+    && ! wait_for_test_gate_descendants "${gate_pids[$other_index]}" "${gate_pgids[$other_index]}" "${gate_cgroups[$other_index]}"; then
     status=1
   fi
   if [ "$status" -ne 0 ]; then
@@ -539,11 +636,11 @@ subject=$("$TRUSTED_GIT" -C "$source_dir" log -1 --pretty=%s)
 case "$subject" in
   "Merge pull request #"*)
     merged_title=$("$TRUSTED_GIT" -C "$source_dir" log -1 --pretty=%B \
-      | sed '1d; /^[[:space:]]*$/d' | head -n 1)
+      | "$TRUSTED_SED" '1d; /^[[:space:]]*$/d' | "$TRUSTED_HEAD" -n 1)
     [ -z "$merged_title" ] || subject=$merged_title
     ;;
 esac
-subject=$(printf '%s' "$subject" | sed -E 's/[[:space:]]+\(#[0-9]+\)$//')
+subject=$(printf '%s' "$subject" | "$TRUSTED_SED" -E 's/[[:space:]]+\(#[0-9]+\)$//')
 [ -n "$subject" ] || subject="Обновление Factory"
 step "собираю изменение: $subject"
 
@@ -575,17 +672,17 @@ as_user "$TRUSTED_BASH" -c 'cd "$1" && "$2" build -o "$3" ./cmd/factory-server' 
   || { fail "сборка сервера, воркера или release-broker не прошла"; cleanup; exit 5; }
 
 step "ставлю привилегированный broker выпусков"
-bash "$source_dir/ops/install-project-release-broker.sh" \
+"$TRUSTED_BASH" "$source_dir/ops/install-project-release-broker.sh" \
   "$work/factory-release-broker" "$source_dir/ops/systemd/factory-release-broker.service" \
   || { fail "release-broker не установлен безопасно"; cleanup; exit 5; }
 
 step "проверяю и обновляю ссылки авторизации Codex"
-env -u CODEX_HOME bash "$source_dir/ops/provision-codex-auth.sh" \
+"$TRUSTED_ENV" -u CODEX_HOME "$TRUSTED_BASH" "$source_dir/ops/provision-codex-auth.sh" \
   || { fail "авторизация Codex не прошла безопасную проверку — релиз не поеду"; cleanup; exit 5; }
 
 step "сохраняю работающую пару бинарей"
-cp -f "$SERVER_BIN" "$work/factory-server.prev" \
-  && cp -f "$WORKER_BIN" "$work/factory-worker.prev" \
+"$TRUSTED_CP" -f "$SERVER_BIN" "$work/factory-server.prev" \
+  && "$TRUSTED_CP" -f "$WORKER_BIN" "$work/factory-worker.prev" \
   || { fail "не смог сохранить текущие сервер и воркер"; cleanup; exit 4; }
 
 # Снимок release-info нужен до первой операции, которая может вызвать rollback:
@@ -593,7 +690,7 @@ cp -f "$SERVER_BIN" "$work/factory-server.prev" \
 # потерять корректные сведения о прежнем выпуске.
 info_previous_exists=0
 if [ -e "$INFO" ]; then
-  cp -f "$INFO" "$work/release-info.prev" \
+  "$TRUSTED_CP" -f "$INFO" "$work/release-info.prev" \
     || { fail "не смог сохранить прежние сведения о выпуске"; cleanup; exit 4; }
   info_previous_exists=1
 fi
@@ -602,17 +699,17 @@ rollback() {
   trap - EXIT HUP INT TERM
   rollback_armed=0
   fail "$1 — возвращаю предыдущие сервер и воркер"
-  cp -f "$work/factory-server.prev" "$SERVER_BIN.new" \
-    && mv -f "$SERVER_BIN.new" "$SERVER_BIN"
-  cp -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
-    && mv -f "$WORKER_BIN.new" "$WORKER_BIN"
+  "$TRUSTED_CP" -f "$work/factory-server.prev" "$SERVER_BIN.new" \
+    && "$TRUSTED_MV" -f "$SERVER_BIN.new" "$SERVER_BIN"
+  "$TRUSTED_CP" -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
+    && "$TRUSTED_MV" -f "$WORKER_BIN.new" "$WORKER_BIN"
   if [ "${info_previous_exists:-0}" = 1 ]; then
-    cp -f "$work/release-info.prev" "$INFO.new" \
-      && mv -f "$INFO.new" "$INFO"
+    "$TRUSTED_CP" -f "$work/release-info.prev" "$INFO.new" \
+      && "$TRUSTED_MV" -f "$INFO.new" "$INFO"
   else
-    rm -f "$INFO"
+    "$TRUSTED_RM" -f "$INFO"
   fi
-  systemctl restart "$SERVER_SERVICE" || true
+  "$TRUSTED_SYSTEMCTL" restart "$SERVER_SERVICE" || true
   restart_workers || true
   cleanup
   exit "$2"
@@ -633,17 +730,17 @@ trap 'on_signal TERM' TERM
 
 install_binary() {
   source=$1 target=$2
-  cp -f "$source" "$target.new" && set_owner "$target.new" \
-    && chmod 755 "$target.new" && mv -f "$target.new" "$target"
+  "$TRUSTED_CP" -f "$source" "$target.new" && set_owner "$target.new" \
+    && "$TRUSTED_CHMOD" 755 "$target.new" && "$TRUSTED_MV" -f "$target.new" "$target"
 }
 
 step "ставлю новую пару и перезапускаю сервер"
 install_binary "$work/factory-server" "$SERVER_BIN" || rollback "не смог поставить сервер" 4
 install_binary "$work/factory-worker" "$WORKER_BIN" || rollback "не смог поставить воркер" 4
-systemctl restart "$SERVER_SERVICE" || rollback "сервер не перезапустился" 6
-sleep 5
+"$TRUSTED_SYSTEMCTL" restart "$SERVER_SERVICE" || rollback "сервер не перезапустился" 6
+"$TRUSTED_SLEEP" 5
 
-code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
+code=$("$TRUSTED_CURL" -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
 [ "$code" = "200" ] || rollback "после перезапуска Фабрика отвечает $code" 6
 
 stop_workers || rollback "воркеры не остановились" 6
@@ -657,15 +754,15 @@ while [ "$identity_attempt" -le 5 ]; do
   fi
   worker_id=''
   identity_attempt=$((identity_attempt + 1))
-  [ "$identity_attempt" -gt 5 ] || sleep 1
+  [ "$identity_attempt" -gt 5 ] || "$TRUSTED_SLEEP" 1
 done
 if [ -z "$worker_id" ]; then
-  identity_detail=$(tr '\n' ' ' <"$identity_error" | cut -c1-300)
+  identity_detail=$("$TRUSTED_TR" '\n' ' ' <"$identity_error" | "$TRUSTED_CUT" -c1-300)
   [ -z "$identity_detail" ] || fail "причина identity: $identity_detail"
   rollback "не удалось определить identity воркера после пяти попыток" 6
 fi
-previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c \
+previous_body=$("$TRUSTED_CURL" -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+previous_heartbeat=$(printf '%s' "$previous_body" | "$TRUSTED_PYTHON" -c \
   'import json,sys
 try: print(json.load(sys.stdin).get("last_heartbeat", ""))
 except Exception: print("")' 2>/dev/null)
@@ -675,8 +772,8 @@ step "жду здоровую регистрацию воркера $worker_id"
 registered=0
 attempt=1
 while [ "$attempt" -le "$REGISTER_ATTEMPTS" ]; do
-  body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-  if printf '%s' "$body" | python3 -c \
+  body=$("$TRUSTED_CURL" -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+  if printf '%s' "$body" | "$TRUSTED_PYTHON" -c \
     'import datetime,json,sys
 try:
  w=json.load(sys.stdin); current=w.get("last_heartbeat", "")
@@ -689,12 +786,12 @@ raise SystemExit(not ok)' \
     break
   fi
   attempt=$((attempt + 1))
-  [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || sleep "$REGISTER_DELAY"
+  [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || "$TRUSTED_SLEEP" "$REGISTER_DELAY"
 done
 [ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
 
 step "обновляю штатные команды управления Фабрикой"
-bash "$source_dir/ops/install-factory-control.sh" "$source_dir" \
+"$TRUSTED_BASH" "$source_dir/ops/install-factory-control.sh" "$source_dir" \
   || rollback "не смог обновить fx и драйвер выпуска" 7
 
 deferred_pilot_restart=0
@@ -702,21 +799,21 @@ brain_restart_marker="$work/restart-pilot"
 if [ -x "$source_dir/ops/install-brain.sh" ]; then
     FACTORY_BRAIN_DEFER_PILOT_RESTART=1 \
     FACTORY_BRAIN_RESTART_MARKER="$brain_restart_marker" \
-    bash "$source_dir/ops/install-brain.sh" "$source_dir" \
+    "$TRUSTED_BASH" "$source_dir/ops/install-brain.sh" "$source_dir" \
     || rollback "мозг не встал" 7
   [ ! -f "$brain_restart_marker" ] || deferred_pilot_restart=1
 fi
 if [ -f "$source_dir/ops/factory-janitor.sh" ]; then
   janitor_bin="${FACTORY_JANITOR_BIN:-/usr/local/bin/factory-janitor.sh}"
-  install -o root -g root -m 755 "$source_dir/ops/factory-janitor.sh" "$janitor_bin" \
+  "$TRUSTED_INSTALL" -o root -g root -m 755 "$source_dir/ops/factory-janitor.sh" "$janitor_bin" \
     || fail "санитар воркеров не обновился — сервер и воркер уже обновлены"
 fi
 
 step "ставлю и проверяю изолированный серверный браузер"
-bash "$source_dir/ops/install-server-browser.sh" \
+"$TRUSTED_BASH" "$source_dir/ops/install-server-browser.sh" \
   || rollback "серверный браузер не прошёл сетевую проверку" 7
 
-if ! python3 - "$INFO" "$sha" "$subject" "$ref" "$(date -Is)" <<'PY'
+if ! "$TRUSTED_PYTHON" - "$INFO" "$sha" "$subject" "$ref" "$("$TRUSTED_DATE" -Is)" <<'PY'
 import json, sys, datetime
 p, sha, subj, ref, iso = sys.argv[1:6]
 M = ["января","февраля","марта","апреля","мая","июня",
@@ -736,12 +833,12 @@ set_owner "$INFO" 2>/dev/null || true
 
 if [ "$deferred_pilot_restart" = 1 ]; then
   step "ставлю безопасный отложенный перезапуск Пилота"
-  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+  "$TRUSTED_SYSTEMD_RUN" --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
     /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
     || rollback "не смог отложить перезапуск Пилота" 7
 fi
 
 rollback_armed=0
 cleanup
-ls -1dt "$REL"/build-* 2>/dev/null | tail -n +3 | xargs -r rm -rf
+"$TRUSTED_LS" -1dt "$REL"/build-* 2>/dev/null | "$TRUSTED_TAIL" -n +3 | "$TRUSTED_XARGS" -r "$TRUSTED_RM" -rf --
 exit 0
