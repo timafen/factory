@@ -3,15 +3,22 @@
 ## HEAD
 
 - Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2ba87248-032-52d6e999-4fc`.
+- Branch: `factory/12526369-3a4-e69c5117-acd`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 810512e2a600fab4d5aa96159b240255fa116dcb — повреждённое состояние и неопределённый выпуск не запускают executor повторно, locked сохраняется durable.
-- What changed: Broker fail-closed останавливает восстановление при ошибке чтения, JSON или валидации записи; `running` не повторяется.
-- What changed: Занятый release lock перед выходом durable сохраняет `locked`; добавлены проверки повреждённого состояния, retry и lock.
-- Evidence: `bash ops/test-fx-factory-release.sh`, `go test -race ./internal/releasebroker`, `just check`, `just build`, `git diff --check` → PASS.
+- Implementation commit: 81d67ac49275d0fc24fa4380a246aa431d956f15 — повреждённый или неопределённый статус не запускает executor повторно, а release-driver сохраняет переходы durable.
+- What changed: Каждый статус driver проходит запись, file fsync, atomic rename и directory fsync; при неопределённом terminal-переходе сохранён `running`.
+- What changed: Broker fail-closed сохраняет `locked` и не повторяет физический выпуск после повреждённого состояния.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go test -race ./internal/releasebroker`, `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests`, `npx tsc -p tsconfig.app.json --noEmit` → PASS.
 - Next action: Человеку принять решение о слиянии.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Перенесена надёжная запись каждого статуса release-driver на свежий `main`:
+файл и каталог синхронизируются, terminal-сбой не публикует успех, а повтор
+не перезапускает физический executor. Проверены shell syntax, broker race,
+process-state сценарии Pilot и обязательная TypeScript-проверка.
 
 ### 2026-08-11 — Implement
 
