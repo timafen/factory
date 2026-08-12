@@ -2,13 +2,14 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/0b933443-daf-3aa76b07-abe`.
-Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
-What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
-Next action: human merge this verified narrow config fix.
+Status: implemented and tested; ready for Review.
+Branch: `factory/691ad2ed-938-eabe701c-71b`.
+Implementation commit: 6f47f35b1ef6261a47c4a01f75c27363efda75b8 — закреплена граница между продвижением main и несвязанной историей кандидата.
+What changed: свежий `main` уже содержит merge-base/three-dot исправление и восстановленный legacy `branch_report`; добавлена bare-remote регрессия, что только отсутствие общей истории остаётся infrastructure BLOCKED.
+Evidence: `python3 -m unittest pilot.test_pilot` → PASS, 203 tests; focused Review seams/snapshots → PASS, 8 tests.
+Evidence: targeted retry двух resource-sensitive worker tests, `go build ./cmd/factory-server`, py_compile, JSON validation и `git diff --check` → PASS.
+Evidence: первый `go test ./...` → FAIL только в двух `internal/worker` timeout-тестах вне scope при высокой параллельной нагрузке; оба отдельно → PASS.
+Next action: Review confirms the two original findings stay fixed on fresh `origin/main` and accepts the one-file regression scope.
 
 ## LOG
 
@@ -59,3 +60,15 @@ main через их pinned общий merge-base. Продвижение баз
 которые не являются настройкой сервера и отклонялись строгим декодером.
 Проверки PASS при `umask 077`: focused schema test, `go test ./...`,
 `python3 -m unittest pilot.test_pilot`, JSON validation, build и diff check.
+
+### 2026-08-11 — Implement
+
+После rebase подтверждено, что runtime-исправление `ff076ae` уже находится в
+свежем `main`: Review pin-ит общий merge-base и использует three-dot scope, а
+`branch_report` сохраняет legacy seam. Добавлена bare-remote регрессия для
+несвязанных историй, чтобы ослабление infrastructure BLOCKED не прошло незаметно.
+
+`python3 -m unittest pilot.test_pilot` → PASS, 203 tests; focused 8 tests,
+повтор двух упавших из-за общей нагрузки `internal/worker` timeout-тестов,
+сборка, py_compile, JSON и diff check → PASS. Полный Go-прогон имел только эти
+два внешних timeout-сбоя вне изменённого scope.
