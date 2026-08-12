@@ -2,19 +2,18 @@
 
 ## HEAD
 
-- Status: Implemented and tested; migration 026 is present in `main`;
-  Pilot remains operationally disabled.
-- Branch: `factory/31b80853-0f0-095f6283-3e1`.
-- Implementation commit: 7cd603288a2e666cb261248649fa3bba871f744a — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- What changed: 027 validates the exact 026 reconciliation schema before ALTER,
-  and the runner derives ledger versions from migration filenames.
-- What changed: Review/Verify corrections persist across a recreated Pilot
-  state and complete one `work_id` through Implement, Review, Verify and merge.
-- What changed: `pilot_duplicate_root_prevented` is a stable-ID durable outbox
-  event retained across crashes before/after journal and acknowledgement.
-- Evidence: focused provenance migration tests → PASS; full Pilot → PASS (204 tests);
-  `go test ./...` → PASS; `go build ./...` and diff check → PASS.
-- Next action: review and merge this correction; keep Pilot disabled until its
+- Status: Implemented and tested; Pilot remains operationally disabled.
+- Branch: `factory/ffb2f1bd-e35-41637e93-24a` (base `origin/main`
+  `36ce322e2b6685dd9a87f4d2c947f61538654ae1`).
+- Implementation commit: 55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3 — durable
+  `work_id` isolation for same-title artifact, delivery and lifecycle state.
+- What changed: provenance-first corrections retain separate same-title work
+  branches through restart, Review, Verify, merge and archive.
+- What changed: a provenance child whose `work_id == legacy_parent.id` joins
+  its legacy parent’s one pipeline; migration 027 and its durable outbox remain exact-once.
+- Evidence: focused provenance/restart and migration checks → PASS; full Pilot
+  (209 tests), `go test ./...`, `go build ./...` and diff check → PASS.
+- Next action: review and merge this correction; keep Pilot disabled pending its
   separate safe release-state-machine decision.
 
 ## LOG
@@ -61,3 +60,12 @@ CARD-0085 migration 026 is now in `origin/main` at
 cherry-picked onto that base. The focused provenance migration tests, all 204
 Pilot tests, `go test ./...`, `go build ./...`, and the whitespace diff check
 passed. The 027 dependency guard remains atomic, and Pilot remains disabled.
+
+### 2026-08-11 — Implement
+
+CARD-0086 was re-integrated onto fresh `origin/main`
+`36ce322e2b6685dd9a87f4d2c947f61538654ae1`, preserving CARD-0087’s fresh
+Review-base logic while applying the provenance, migration 027 and Pilot work.
+Focused same-title/legacy restart and migration checks passed; full Pilot (209
+tests), `go test ./...`, `go build ./...` and whitespace diff check passed.
+Pilot remains disabled; the implementation is `55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3`.
