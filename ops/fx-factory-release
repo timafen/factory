@@ -51,6 +51,7 @@ TRUSTED_SLEEP=/bin/sleep
 TRUSTED_OD=/usr/bin/od
 TRUSTED_PS=/usr/bin/ps
 TRUSTED_AWK=/usr/bin/awk
+TRUSTED_NODE=/usr/bin/node
 TRUSTED_NPX=/usr/bin/npx
 TRUSTED_NPM=/usr/bin/npm
 TRUSTED_GO=/usr/bin/go
@@ -81,7 +82,7 @@ validate_trusted_executable() { # validate_trusted_executable <absolute path>
 for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
-  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO"; do
+  "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
@@ -648,8 +649,8 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal TERM' TERM
 
   if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
-    "$TRUSTED_BASH" -c 'cd "$1" && "$2" tsc -p tsconfig.app.json --noEmit && "$3" test' \
-    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
+    "$TRUSTED_BASH" -c 'cd "$1" && "$2" "$3" tsc -p tsconfig.app.json --noEmit && "$2" "$4" test' \
+    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM

@@ -102,7 +102,12 @@ case "$*" in
     mkdir -p "$destination/pilot" "$destination/intake"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx" "$destination/ops/fx"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx-factory-release" "$destination/ops/fx-factory-release"
-    /bin/cp "$TEST_RELEASE_SOURCE/ops/test-fx-factory-release.sh" "$destination/ops/test-fx-factory-release.sh"
+    cat >"$destination/ops/test-fx-factory-release.sh" <<'SELF_TEST'
+#!/bin/bash
+echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
+[ "$TEST_MODE" != release-test-fail ]
+SELF_TEST
+    chmod 755 "$destination/ops/test-fx-factory-release.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/pilot.py" "$destination/pilot/pilot.py"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/context.md" "$destination/pilot/context.md"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/app.py" "$destination/intake/app.py"
@@ -352,9 +357,20 @@ EOF
 printf 'path-setsid-invoked\n' >>"$TEST_SPOOF_EVENTS"
 exit 0
 EOF
+  cat >"$case_dir/bin/node" <<'EOF'
+#!/bin/bash
+printf 'path-node-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
   cat >"$case_dir/trusted/setsid" <<'EOF'
 #!/bin/bash
 exec /usr/bin/setsid --fork --wait "$@"
+EOF
+  cat >"$case_dir/trusted/node" <<'EOF'
+#!/bin/bash
+script=$1
+shift
+exec /bin/bash "$script" "$@"
 EOF
   chmod +x "$case_dir/trusted/"* "$case_dir/bin/setsid"
 
@@ -365,6 +381,7 @@ EOF
     -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
+    -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=$case_dir/trusted/node|" \
     -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
@@ -509,6 +526,8 @@ run_release "$path_shadow" parallel-success \
   || { cat "$path_shadow/output" >&2; fail "PATH-shadowed gate did not complete"; }
 ! grep -Fx 'path-setsid-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
   || fail "PATH shadow entered the trusted gate chain"
+! grep -Fx 'path-node-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH node entered the trusted gate chain"
 assert_file "$path_shadow/install/factory-server" '#!/bin/bash'
 assert_file "$path_shadow/install/factory-worker" '#!/bin/bash'
 
