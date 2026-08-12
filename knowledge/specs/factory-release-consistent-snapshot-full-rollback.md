@@ -188,6 +188,13 @@ manifest/preflight/backup и crash-safe transaction, затем полный rol
 передать CARD-0088 в Implement; до его приёмки не выпускать migration 027 и не
 включать Pilot.
 
+Обязательная команда ниже становится доказательством только после расширения
+`ops/test-fx-factory-release.sh` сценарием, который создаёт online snapshot при
+параллельной записи, связывает его hash/ledger/schema с manifest, принудительно
+роняет выпуск после установки пары и подтверждает возврат всего прежнего
+комплекта, unit states и metadata при byte-for-byte неизменной live DB. Один
+лишь успешный запуск прежнего набора сценариев критерий не закрывает.
+
 ГОТОВО-КОГДА: файл ops/fx-factory-release
 ГОТОВО-КОГДА: файл ops/fx
 ГОТОВО-КОГДА: файл ops/test-fx-factory-release.sh

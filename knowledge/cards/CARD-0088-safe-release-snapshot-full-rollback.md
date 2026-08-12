@@ -36,9 +36,12 @@ Unknown/mixed/deleted процессы, отсутствующий rollback arti
 ## Приёмка и доказательство
 
 Обязательное доказательство: `bash ops/test-fx-factory-release.sh` завершено с
-кодом 0. Дополнительно нужны реальные systemd/process fixtures, SQLite
-backup/restore 026→027, crash boundaries, retention/permissions/disk проверки
-и `git diff --check`, как определено спецификацией.
+кодом 0 после добавления целевого сценария: online snapshot при записи связан с
+manifest, сбой после установки возвращает полный прежний комплект, состояния и
+metadata, а live DB остаётся byte-for-byte прежней. Дополнительно нужны реальные
+systemd/process fixtures, SQLite backup/restore 026→027, crash boundaries,
+retention/permissions/disk проверки и `git diff --check`, как определено
+спецификацией.
 
 ## Ограничения и следующее действие
 
