@@ -4985,6 +4985,34 @@ pilot.save(pilot.STATE_PATH, state)
         mark_final.assert_not_called()
         owner_done.assert_not_called()
 
+    def test_unavailable_broker_get_keeps_generation_and_retries_its_same_id(self):
+        state = {}
+        calls = []
+
+        def broker(_socket, method, operation_id, _payload=None):
+            calls.append((method, operation_id))
+            return {"status": "launching"} if method == "POST" else None
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "broker_operation", side_effect=broker), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox):
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait("verify-1"))
+            pilot.poll_delivery_state({}, state)
+            target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+            generation_id = target["current_generation"]
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, "b" * 40, self.wait("verify-2"))
+            pilot.poll_delivery_state({}, state)
+
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][generation_id]
+        self.assertEqual(generation["phase"], "launching")
+        self.assertEqual(len(target["generations"]), 1)
+        self.assertTrue(target["next_requested"])
+        self.assertEqual(calls, [("POST", generation_id), ("GET", generation_id)])
+        self.assertFalse(os.path.exists(self.receipts))
+        self.assertFalse(os.path.exists(self.outbox))
+
     def test_lock_join_and_successor_are_distinct(self):
         state = {}
         with mock.patch.object(pilot, "STATE_PATH", self.state_path):

@@ -6401,8 +6401,12 @@ def poll_delivery_state(conf, state, now=None):
                 generation["phase"] = "failed"
                 save(STATE_PATH, state)
             elif response is None and generation["phase"] in ("launching", "running"):
-                generation["phase"] = "failed"  # status is authoritative; unknown fails closed
-                save(STATE_PATH, state)
+                # A missing GET response is not a terminal broker outcome.  The
+                # same immutable operation may still be executing, so preserve
+                # its generation and poll its id again on the next cycle.
+                # In particular, do not make a queued merge eligible to create
+                # N+1 merely because the broker is temporarily unreachable.
+                pass
         save(STATE_PATH, state)
         current = target.get("current_generation")
         active = target["generations"].get(current) if current else None

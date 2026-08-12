@@ -118,23 +118,6 @@ func operationSnapshot(broker *Broker, id string) (operation, bool) {
 	return *item, true
 }
 
-func waitForBrokerIdle(t *testing.T, broker *Broker) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		broker.mu.Lock()
-		idle := broker.active == ""
-		broker.mu.Unlock()
-		if idle {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("broker did not become idle")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
 	executor := &recordingExecutor{done: make(chan struct{})}
 	server := httptest.NewServer(New(executor).Handler())
@@ -269,9 +252,18 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 		t.Fatal(err)
 	}
 	close(blocked)
-	waitForBrokerIdle(t, broker)
+	time.Sleep(10 * time.Millisecond)
 	if got := operationStatus(t, server, "delivery-write-failure").Status; got != "running" {
 		t.Fatalf("unpersisted terminal status became visible as %q", got)
+	}
+	broker.mu.Lock()
+	active := broker.active
+	broker.mu.Unlock()
+	if active != "delivery-write-failure" {
+		t.Fatalf("active operation released before durable terminal checkpoint: %q", active)
+	}
+	if got := postStatus(t, server, `{"operation_id":"delivery-write-failure-next","adapter":"fx-factory-release","commit_sha":"`+testSHA+`"}`); got != http.StatusConflict {
+		t.Fatalf("new operation admitted after terminal write failure: %d", got)
 	}
 	if executor.callCount() != 1 {
 		t.Fatalf("physical executions=%d, want 1", executor.callCount())
@@ -389,7 +381,8 @@ func TestLockedOperationRejectsAdapterAndTargetMutationAtomically(t *testing.T) 
 	if calls != 2 || strings.Join(adapters, ",") != "fx-factory-release,fx-factory-release" {
 		t.Fatalf("unexpected executor calls=%d adapters=%v", calls, adapters)
 	}
-	if got := broker.items["lock-retry-1"].Posts; got != 3 {
-		t.Fatalf("durable POST observations=%d, want 3", got)
+	item, ok = operationSnapshot(broker, "lock-identity-1")
+	if !ok || item.Posts != 2 {
+		t.Fatalf("durable POST observations=%d, want 2", item.Posts)
 	}
 }
