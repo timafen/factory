@@ -6782,6 +6782,8 @@ def recover_merge_intents(conf, state):
     merge merely because the task cursor was saved first.
     """
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
+        if intent.get("phase") == "completed":
+            continue
         if _intent_has_wait(state, task_id):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
@@ -6803,6 +6805,7 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "work_id": intent.get("work_id", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
@@ -6814,8 +6817,21 @@ def recover_merge_intents(conf, state):
             wait = {"task_id": task_id, "base": intent.get("base", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
-            if generation:
-                intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
+            # The merge-intent is durable JSON.  Deployment adapters return a
+            # generation mapping in production, but do not let an accidental
+            # object (for example a test seam) leak into the state snapshot.
+            generation_id = generation.get("id") if isinstance(generation, dict) else ""
+            if isinstance(generation_id, str) and generation_id:
+                intent["phase"] = "waiting"; intent["generation_id"] = generation_id
+                save(STATE_PATH, state)
+            elif generation is None:
+                # Repositories without a delivery adapter are complete as
+                # soon as their merge is durable; there is no release to wait
+                # for before closing the Verify task.
+                intent["phase"] = "completed"
+                mark_final(task_id, "Verify", True)
+                notify(conf, "Задача выполнена", intent.get("base", "Выпуск принят"),
+                       tags="white_check_mark", click=intent.get("link") or f"{UI_BASE}/work")
                 save(STATE_PATH, state)
 
 
@@ -7133,7 +7149,8 @@ def cycle(conf, state):
                     link = try_url(result, rid)
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": implementation_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": implementation_head,
+                        "work_id": work_id, "link": link or ""}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)

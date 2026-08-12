@@ -1738,7 +1738,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
             stack.enter_context(mock.patch.object(pilot, "notify", notifications))
             for name in noops:
-                stack.enter_context(mock.patch.object(pilot, name))
+                stack.enter_context(mock.patch.object(
+                    pilot, name, return_value=None if name == "deploy_after_merge" else mock.DEFAULT))
 
             pilot.cycle(self.conf, state)
             review = tasks[-1]
@@ -1974,7 +1975,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             merge = stack.enter_context(mock.patch.object(
                 pilot, "gh_merge", return_value=(True, "merged")))
             for name in noops:
-                stack.enter_context(mock.patch.object(pilot, name))
+                stack.enter_context(mock.patch.object(
+                    pilot, name, return_value=None if name == "deploy_after_merge" else mock.DEFAULT))
 
             pilot.save(self.works_path, {
                 work_a: {"run_generation": "run-a", "base_title": base},
