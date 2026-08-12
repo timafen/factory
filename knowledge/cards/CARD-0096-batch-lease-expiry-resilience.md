@@ -1,18 +1,18 @@
 # CARD-0096 — Активные работы не теряют lease синхронной пачкой
 
-Implementation commit: 404fee2ce6a209ec78df32e295f5a8a9010b1866 — разнесены heartbeat-renewal, deadline-aware retry и короткая store-транзакция.
+Implementation commit: ac824ad5682d53ed50dda1bde05353b29e7d28a9 — повтор heartbeat сохраняет бюджет lease, а пуловый сценарий проверяет десять runtime.
 
 ## HEAD
 
-- Status: Implemented — готово к Verify.
-- Branch: `factory/c7e2fc58-4b5-d166b0c2-474`.
+- Status: Implemented — готово к повторному Review.
+- Branch: `factory/3c22c13c-edd-30e68460-ff2`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
-- Owner impact: краткая очередь heartbeat-запросов больше не уничтожает разом
-  активные агентские сессии одного worker.
-- Scope: разнесённый deadline-aware renewal на worker и короткая транзакция
-  heartbeat в control plane; без UI, миграции и изменения публичного API.
-- Evidence: `go test -count=1 -run 'Test(ConcurrentAttemptsStaggerLeaseRenewalsUnderDelay|LeaseRenewalScheduleDispersesAttempts|HeartbeatDoesNotReconcileNeighboringExpiredLease)$' ./internal/worker ./internal/controlplane` → PASS; `git diff --check` → PASS.
-- One next action: Verify прогонит полный `go test ./...` и проверит доставку ветки.
+- Owner impact: краткая очередь heartbeat-запросов больше не заставляет worker
+  переждать остаток аренды после временной ошибки.
+- What changed: повтор renewal ограничивается оставшимся lease-бюджетом; десять
+  fake-runtime через Manager/Store подтверждают renewal, отсутствие `lost` и успех.
+- Evidence: `go test -count=1 -run 'Test(LeaseRenewalRetry|CodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot)$' ./internal/worker` → PASS; `git diff --check` → PASS.
+- One next action: повторный Review проверит изменения относительно свежего main.
 
 ## LOG
 
@@ -23,6 +23,13 @@ Implementation commit: 404fee2ce6a209ec78df32e295f5a8a9010b1866 — разнес
 manifest. Heartbeat control plane теперь меняет только свою attempt; соседние
 истёкшие попытки освобождаются штатным sweep. Целевые worker/control-plane тесты,
 пачечный integration-сценарий и `git diff --check` прошли.
+
+### 2026-08-12 — Implement
+
+Повтор heartbeat теперь сокращает задержку до остатка lease за вычетом бюджета
+следующего запроса, поэтому краткий сбой у deadline не превращается в `lease_lost`.
+Интеграционный пул Manager/Store поднимает десять fake-runtime, наблюдает renewal
+каждой attempt и подтверждает, что все десять работ завершаются успешно без `lost`.
 
 ### 2026-08-12 — Specification
 
