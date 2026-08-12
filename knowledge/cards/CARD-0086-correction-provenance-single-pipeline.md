@@ -4,7 +4,7 @@
 
 - Status: Implemented and tested; Pilot remains operationally disabled.
 - Branch: `factory/82db3b1f-901-430c6234-3d3c`.
-- Implementation commit: c61c72ed9224856e2321b2d9713eb1b45b39cfa9 — resume,
+- Implementation commit: 16b4a15bca0fe02c31eda2237e60f3e22b2c9f89 — resume,
   budget and diagnostic repair isolate same-title work by durable `work_id`.
 - What changed: owner resume selects only its `work_id` pause, history and metadata;
   title lookup is restricted to legacy records without provenance.
@@ -71,7 +71,7 @@ Pilot tests, migration-027 dependency test, full Go tests/build and diff check p
 
 ### 2026-08-11 — Implement
 
-Implementation commit: c61c72ed9224856e2321b2d9713eb1b45b39cfa9 — owner resume
+Implementation commit: 16b4a15bca0fe02c31eda2237e60f3e22b2c9f89 — owner resume
 now uses durable `work_id`, preserving a separate same-title pause and task
 history. Root metadata is recorded after creation, and budget/diagnostic repair
 storage follows the same ID. Focused resume Go tests and the Pilot unit suite pass.
