@@ -3,12 +3,12 @@
 ## HEAD
 
 - Status: Implemented — terminal результат не подтверждается без надёжной записи.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Branch: `factory/1cf66d3d-e39-ff94fdcd-f8b7-484a-b92c-01b8f50ecc4e`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 2c15afeb71f813f72de700105f5447e4dc600aca — terminal status публикуется только после успешного persist.
+- Implementation commit: 10e00f0bdbeeb9ae7ee965f9c59fd6f71c89bc7a — terminal status публикуется только после успешного persist.
 - What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
 - What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -race ./internal/releasebroker` → OK; process crash/restart regression → OK (2); полный Pilot → OK (209, 13 skipped); обе shell fixture → PASS; `just check` → passed; `git diff --check` → passed.
+- Evidence: targeted Pilot state-machine → OK (10); `go test -race ./internal/releasebroker` → OK; installer fixture → PASS; `git diff --check` → passed.
 - Next action: Strict Review проверить fail-closed terminal persistence CARD-0084.
 
 ## LOG
@@ -52,3 +52,10 @@ Terminal and restart-recovery states are now published only after the matching
 operation record is persisted. A real filesystem write failure followed by a
 fresh broker and Pilot process proves one physical delivery, durable fail-closed
 recovery, and no receipt, outbox, finalization or owner completion.
+
+### 2026-08-12 — Implement
+
+Candidate branch restored and rebased onto current `origin/main`; targeted
+state-machine tests passed (10), Go broker race tests passed, and installer
+fixture passed. The release fixture was stopped after hanging in the shared
+process-fixture environment; full `just check` remains the final verification.
