@@ -2,16 +2,24 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Implemented — ошибка финальной записи больше не оставляет выпуск в `running`.
+- Branch: `factory/ed460f7f-aab-122ba744-a28`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+- Implementation commit: 9ef81c5457ff7373d2531d597274c63f5ad1ae94 — ошибка сохранения финального статуса возвращает выпуску явный `failed`.
+- What changed: После отказа atomic write брокер публикует `failed`, не выдавая недолговечный успешный результат.
+- What changed: Перезапуск по-прежнему fail-closed восстанавливает сохранённый промежуточный статус в ошибку и не повторяет executor.
+- Evidence: `go test ./internal/releasebroker` → OK; `git diff --check` → passed.
+- Next action: Проверить полный набор на этапе Verify.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлен блокирующий путь отказа финальной записи: после физического выпуска
+брокер теперь возвращает `failed`, а не сохраняет видимый бесконечный `running`.
+Регрессионный тест с настоящим отказом атомарной записи подтверждает явную
+ошибку, отсутствие повторного executor и fail-closed восстановление после рестарта.
+Проверено: `go test ./internal/releasebroker` → OK; `git diff --check` → passed.
 
 ### 2026-08-11 — Specification
 
