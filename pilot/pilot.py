@@ -1723,25 +1723,27 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
 RESCUE_PATH = f"{HOME}/pilot/cap_rescues.json"
 
 
-def cap_rescues(base, stage):
-    return int((load(RESCUE_PATH, {}) or {}).get(f"{base}::{stage}", 0))
+def cap_rescues(base, stage, work_id=""):
+    key = work_storage_key(base, work_id)
+    return int((load(RESCUE_PATH, {}) or {}).get(f"{key}::{stage}", 0))
 
 
-def note_cap_rescue(base, stage):
+def note_cap_rescue(base, stage, work_id=""):
     rec = load(RESCUE_PATH, {}) or {}
-    key = f"{base}::{stage}"
+    key = f"{work_storage_key(base, work_id)}::{stage}"
     rec[key] = int(rec.get(key, 0)) + 1
     save(RESCUE_PATH, rec)
 
 
 def create_cap_rescue(base, stage, body, conf=None, parent=None,
-                      correction_kind="execution_retry"):
+                      correction_kind="execution_retry", work_id=""):
     """Create a return task before consuming its durable rescue allowance."""
     created = create_child_task(body, parent, conf, correction_kind)
     task = created.get("task") if isinstance(created, dict) else None
     if not isinstance(task, dict) or not task.get("id"):
         raise RuntimeError(f"{stage} return: create_task returned no task")
-    note_cap_rescue(base, stage)
+    storage_id = work_id or task_durable_work_id(parent or {})
+    note_cap_rescue(base, stage, storage_id)
     return created
 
 
@@ -2899,7 +2901,7 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
-                expected_card=""):
+                expected_card="", work_id=""):
     """Create Review context only from a freshly fetched, pinned snapshot."""
     snapshot = fresh_branch_snapshot(repo_identity, branch)
     # Test-only/legacy callers without a remote identity retain the small
@@ -2921,7 +2923,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         state_ = "нет" if snapshot.get("state") == "missing" else "есть"
     files = snapshot.get("files") or []
     if state_ == "нет":
-        note_cap = cap_rescues(base, "GATE")
+        note_cap = cap_rescues(base, "GATE", work_id)
         if note_cap >= 2:
             return None  # дважды возвращали за то же — пусть решает Ревью
         log(f"GATE '{base}': ветка {branch!r} не запушена — возвращаю в разработку без Ревью")
@@ -3007,7 +3009,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                                  "в поставке остались только файлы области "
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
                                  "Проверяй ветку " + clean + ".")}
-        if foreign and cap_rescues(base, "DIRT") < 1:
+        if foreign and cap_rescues(base, "DIRT", work_id) < 1:
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
                     "cap_stage": "DIRT",
@@ -3276,16 +3278,24 @@ DIAG_REPAIR_PATH = f"{HOME}/pilot/diagnosis_repairs.json"
 TERMINAL_TASK_STATES = ("succeeded", "failed", "cancelled")
 
 
-def _save_diag_repair(base, repair):
+def _diag_repair_key(base, work_id="", task=None, tasks=None):
+    return work_storage_key(base, work_id, task, tasks)
+
+
+def _save_diag_repair(base, repair, work_id=""):
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
-    repairs[base] = repair
+    key = _diag_repair_key(base, work_id or repair.get("work_id", ""))
+    repair["base"] = base
+    if work_id:
+        repair["work_id"] = work_id
+    repairs[key] = repair
     save(DIAG_REPAIR_PATH, repairs)
 
 
-def _fail_diag_repair(conf, base, repair, reason):
+def _fail_diag_repair(conf, base, repair, reason, work_id=""):
     repair["status"] = "failed"
     repair["failure"] = str(reason)[:500]
-    _save_diag_repair(base, repair)
+    _save_diag_repair(base, repair, work_id)
     log(f"DIAG REPAIR STOP base={base!r}: {repair['failure']}")
     notify(conf, "Автопочинка остановлена",
            f"{base}\n\nПричина: {repair['failure']}\n"
@@ -3314,20 +3324,22 @@ def _all_tasks_for_diag_repair():
 
 def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
     """Cancel one proven looping run. A later sweep resumes it after terminal state."""
+    work_id = task_durable_work_id(candidate, tasks)
+    repair_key = _diag_repair_key(base, work_id, candidate, tasks)
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
-    if base in repairs:
+    if repair_key in repairs:
         return False
     try:
         all_tasks = _all_tasks_for_diag_repair()
     except Exception as e:
         repair = {"status": "failed", "task_id": candidate.get("id", "")}
         _fail_diag_repair(conf, base, repair,
-                          f"не удалось проверить все активные запуски: {e}")
+                          f"не удалось проверить все активные запуски: {e}", work_id)
         return False
     live = []
     live_ids = set()
     for task in all_tasks:
-        if (base_title(task.get("title", "")) != base
+        if (not same_task_work(task, candidate)
                 or task.get("state") not in ("running", "queued", "preparing")):
             continue
         task_id = task.get("id")
@@ -3345,7 +3357,7 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
                   f"найдено активных запусков — {len(live)}")
         repair = {"status": "failed", "task_id": candidate.get("id", ""),
                   "failure": reason}
-        _save_diag_repair(base, repair)
+        _save_diag_repair(base, repair, work_id)
         log(f"DIAG REPAIR SKIP base={base!r}: {reason}")
         notify(conf, "Автопочинка не начата", f"{base}\n\nПричина: {reason}",
                priority="high", tags="warning", click=f"{UI_BASE}/work")
@@ -3355,7 +3367,7 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
     except Exception as e:
         repair = {"status": "failed", "task_id": candidate["id"]}
         _fail_diag_repair(conf, base, repair,
-                          f"не удалось прочитать зациклившийся запуск: {e}")
+                          f"не удалось прочитать зациклившийся запуск: {e}", work_id)
         return False
     task = detail.get("task") or {}
     workflow = detail.get("workflow") or {}
@@ -3374,6 +3386,7 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         "reason": str(verdict.get("причина") or "")[:1000],
         "solution": str(verdict.get("решение") or "")[:2000],
         "request_key": str(uuid.uuid4()),
+        "work_id": work_id,
     }
     required = {
         "название задачи": repair["title"],
@@ -3387,25 +3400,25 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         _fail_diag_repair(
             conf, base, repair,
             "до отмены не удалось сохранить данные для безопасного продолжения: "
-            + ", ".join(missing))
+            + ", ".join(missing), work_id)
         return False
     # A failed run reaches this path from cycle() after it is already terminal;
     # no cancellation is needed and reconciliation may resume it immediately.
     if terminal_candidate:
-        _save_diag_repair(base, repair)
+        _save_diag_repair(base, repair, work_id)
         reconcile_diag_repairs(conf, tasks)
         return True
     # Persist before the HTTP call: after an uncertain response we must never
     # cancel a second time. Cancelling the same identified task is idempotent.
-    _save_diag_repair(base, repair)
+    _save_diag_repair(base, repair, work_id)
     try:
         api(f"/tasks/{candidate['id']}/cancel", {})
     except Exception as e:
         _fail_diag_repair(conf, base, repair,
-                          f"отмена зациклившегося запуска не подтверждена: {e}")
+                          f"отмена зациклившегося запуска не подтверждена: {e}", work_id)
         return False
     repair["status"] = "cancellation_requested"
-    _save_diag_repair(base, repair)
+    _save_diag_repair(base, repair, work_id)
     log(f"DIAG REPAIR CANCEL task={candidate['id']} base={base!r}")
     notify(conf, "Чиню застрявшую работу",
            f"{base}\n\nПричина: {cut(repair['reason'], 220)}\n"
@@ -3419,16 +3432,19 @@ def reconcile_diag_repairs(conf, tasks):
     """Resume each diagnosed repair once, and only after its source is terminal."""
     repairs = load(DIAG_REPAIR_PATH, {}) or {}
     by_id = {t.get("id"): t for t in tasks}
-    for base, repair in list(repairs.items()):
+    for repair_key, repair in list(repairs.items()):
+        base = repair.get("base") or repair_key
+        work_id = str(repair.get("work_id") or "").strip()
         status = repair.get("status")
         source = by_id.get(repair.get("task_id")) or {
             "id": repair.get("task_id"), "title": repair.get("title", "")
         }
-        closed_reason = work_lifecycle_block(base, source, tasks)
+        closed_reason = work_lifecycle_block(
+            base, source, tasks, work_id=work_id)
         if closed_reason:
             repair["status"] = "closed"
             repair["closed_reason"] = closed_reason
-            _save_diag_repair(base, repair)
+            _save_diag_repair(base, repair, work_id)
             log(f"DIAG REPAIR CLOSED base={base!r}: {closed_reason}")
             continue
         if status == "cancel_pending":
@@ -3440,10 +3456,11 @@ def reconcile_diag_repairs(conf, tasks):
                 api(f"/tasks/{repair['task_id']}/cancel", {})
             except Exception as e:
                 _fail_diag_repair(conf, base, repair,
-                                  f"отмена зациклившегося запуска не подтверждена: {e}")
+                                  f"отмена зациклившегося запуска не подтверждена: {e}",
+                                  work_id)
                 continue
             repair["status"] = "cancellation_requested"
-            _save_diag_repair(base, repair)
+            _save_diag_repair(base, repair, work_id)
             status = "cancellation_requested"
             log(f"DIAG REPAIR CANCEL RECOVERED task={repair['task_id']} base={base!r}")
         if status not in ("cancellation_requested", "resume_pending"):
@@ -3487,16 +3504,16 @@ def reconcile_diag_repairs(conf, tasks):
         # exact body; the stable request key makes task creation idempotent.
         if status == "cancellation_requested":
             repair["status"] = "resume_pending"
-            _save_diag_repair(base, repair)
+            _save_diag_repair(base, repair, work_id)
         try:
             result = create_child_task(body, source, conf, "diagnostic_repair")
         except Exception as e:
             _fail_diag_repair(conf, base, repair,
-                              f"одноразовое продолжение не удалось: {e}")
+                              f"одноразовое продолжение не удалось: {e}", work_id)
             continue
         repair["status"] = "resumed"
         repair["resumed_task_id"] = (result.get("task") or {}).get("id", "")
-        _save_diag_repair(base, repair)
+        _save_diag_repair(base, repair, work_id)
         log(f"DIAG REPAIR RESUMED base={base!r} task={repair['resumed_task_id']}")
         notify(conf, "Застрявшая работа продолжена",
                f"{base}\n\nЗапуск остановлен, найденное исправление передано "
@@ -3511,11 +3528,15 @@ def load_tasks_safe(limit=60):
         return []
 
 
-def recent_stage_text(tasks, base, limit=3):
+def recent_stage_text(tasks, base, limit=3, work_id="", reference=None):
     """Последние отчёты и ошибки стадий этой работы — материал для разбора."""
     out = []
     for t in tasks:
-        if base not in (t.get("title") or ""):
+        if work_id and task_durable_work_id(t, tasks) != work_id:
+            continue
+        if not work_id and reference is not None and not same_task_work(t, reference):
+            continue
+        if not work_id and reference is None and base not in (t.get("title") or ""):
             continue
         if t.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
@@ -3533,10 +3554,12 @@ def recent_stage_text(tasks, base, limit=3):
     return "\n\n".join(out)[:9000]
 
 
-def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
+def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None, work_id=""):
     """Зовём сильную модель разобраться и говорим владельцу по-человечески.
     Один разбор на работу — дальше конвейер действует по найденному решению."""
-    diag_already_counted = cap_rescues(base, "DIAG") >= 1
+    work_id = work_id or task_durable_work_id(repair_task or {}, tasks)
+    repair_key = _diag_repair_key(base, work_id, repair_task, tasks)
+    diag_already_counted = cap_rescues(base, "DIAG", work_id) >= 1
     # Repair tasks used to bypass this guard. As a result, every later stage
     # return paid for another senior diagnosis even though begin_diag_repair()
     # would refuse a second repair for the same work. The only safe exception
@@ -3545,11 +3568,12 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     # repair once.
     if diag_already_counted:
         repairs = load(DIAG_REPAIR_PATH, {}) or {}
-        if repair_task is None or base in repairs:
+        if repair_task is None or repair_key in repairs:
             return None
     if not diag_already_counted:
-        note_cap_rescue(base, "DIAG")
-    tail = recent_stage_text(tasks, base)
+        note_cap_rescue(base, "DIAG", work_id)
+    tail = recent_stage_text(
+        tasks, base, work_id=work_id, reference=repair_task)
     try:
         text, eng = brain(conf, DIAG_PROMPT.format(n=rounds, base=base, tail=tail),
                           timeout=240)
@@ -3606,7 +3630,7 @@ def diag_sweep(conf, tasks):
         # The live sweep is an early warning, not a minute-by-minute brain
         # loop. A terminal stage can still invoke deep_diagnose later through
         # route_question, where a safe repair has enough evidence to start.
-        if cap_rescues(base, "DIAG") >= 1:
+        if cap_rescues(base, "DIAG", work_id) >= 1:
             continue
         rounds = max(stage_attempts(tasks, "Implement + Test", t),
                      stage_attempts(tasks, "Review", t))
@@ -3615,7 +3639,7 @@ def diag_sweep(conf, tasks):
         try:
             stage = m.group(1).strip()
             verdict = deep_diagnose(conf, base, stage, rounds, tasks,
-                                    repair_task=t)
+                                    repair_task=t, work_id=work_id)
             if verdict and verdict.get("нужен_владелец"):
                 pause_work(conf, base, work_id=work_id)
                 stages = [s.get("workflow") for s in conf.get("stages", [])]
@@ -3628,7 +3652,9 @@ def diag_sweep(conf, tasks):
                     reason or f"Работа прошла {rounds} кругов и не движется.",
                     ("Как поступить? Предложение диагностики: " + solution)
                     if solution else "Как поступить дальше?",
-                    [], recent_stage_text(tasks, base), work_id=work_id,
+                    [], recent_stage_text(
+                        tasks, base, work_id=work_id, reference=t),
+                    work_id=work_id,
                 )
                 rec["owner_only"] = True
                 rec["escalation_reason"] = (
@@ -3677,7 +3703,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         try:
             diag_tasks = load_tasks_safe()
             v = deep_diagnose(conf, base, stage, attempts_so_far, diag_tasks,
-                              repair_task=repair_task)
+                              repair_task=repair_task, work_id=work_id)
             if v and str(v.get("решение") or "").strip():
                 situation = (situation + "\n\nРАЗБОР СТАРШЕЙ МОДЕЛИ: "
                              + str(v.get("причина") or "") + " Решение: "
@@ -3697,7 +3723,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
-        if cap_rescues(base, "LOOP") >= int(conf.get("max_loop_rescues", 2)):
+        if cap_rescues(base, "LOOP", work_id) >= int(conf.get("max_loop_rescues", 2)):
             v = {"decision": "owner",
                  "reason": "orchestrator already broke this loop twice"}
         else:
@@ -3709,7 +3735,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch, work_id=work_id):
             return False
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-            note_cap_rescue(base, "LOOP")
+            note_cap_rescue(base, "LOOP", work_id)
             rec = write_question(task_id, stage,
                                  accept_forward(stage, v.get("answer", "")) or resume_stage,
                                  base, repo_id,
@@ -3765,7 +3791,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # Потолок — защита от бессмысленного повтора, а не признак того, что
         # решение стало владельческим. Сначала спрашиваем оркестратора, прямо
         # запретив ему отвечать «перезапусти».
-        used = cap_rescues(base, stage)
+        used = cap_rescues(base, stage, work_id)
         limit = conf.get("max_cap_rescues", 2)
         if used < limit:
             v = orchestrator_answer(conf, stage, base,
@@ -3777,7 +3803,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                     work_id=work_id):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
-                note_cap_rescue(base, stage)
+                note_cap_rescue(base, stage, work_id)
                 rec = write_question(task_id, stage,
                                      accept_forward(stage, v.get("answer", "")) or resume_stage,
                                      base, repo_id,
@@ -4257,7 +4283,7 @@ def record_new_works(conf, tasks, max_age_min=180):
             continue
         if key not in first or n < first[key][0]:
             first[key] = (n, t.get("created_at") or "", base,
-                          t.get("work_id") or "", t)
+                          task_durable_work_id(t, tasks), t)
     for _key, (n, _at, base, work_id, task) in first.items():
         skipped = stages[: n - 1]
         # The durable request key is the strongest evidence: an Automation ran
@@ -4331,8 +4357,8 @@ def handle_answers(conf, workflows, workers, tasks):
                 selected_worker = candidate
                 log(f"ESCALATE '{q.get('title','')[:40]}' {stage}: "
                     f"{rounds} провала — {was} -> {candidate}")
-                if cap_rescues(q.get("title") or "", "ESCNOTE") < 1:
-                    note_cap_rescue(q.get("title") or "", "ESCNOTE")
+                if cap_rescues(q.get("title") or "", "ESCNOTE", work_id) < 1:
+                    note_cap_rescue(q.get("title") or "", "ESCNOTE", work_id)
                     notify(conf, "Исполнитель повышен",
                            (q.get("title") or "") + "\nЭтап «" + str(stage)
                            + "» провалился " + str(rounds)
@@ -4350,7 +4376,7 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base, work_id=work_id))
         br, implementation_head = selected_delivery(base, br, work_id=work_id)
-        branch_line = resume_branch_line(base, br, rounds)
+        branch_line = resume_branch_line(base, br, rounds, work_id=work_id)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
         context = (
@@ -4749,13 +4775,14 @@ def extract_branch(result, prev_context):
     return ""
 
 
-def resume_branch_line(base, br, rounds=0):
+def resume_branch_line(base, br, rounds=0, work_id=""):
     """Как продолжать работу: поверх старой ветки или с чистого листа.
     Ветка, которую уже возвращали за чужие файлы, тащит их в каждый круг —
     такую собираем заново от свежей главной и переносим только своё."""
     if not br:
         return ""
-    dirty = cap_rescues(base, "DIRT") > 0 or cap_rescues(base, "GATE") > 0
+    dirty = (cap_rescues(base, "DIRT", work_id) > 0
+             or cap_rescues(base, "GATE", work_id) > 0)
     if dirty or rounds >= 3:
         return (
             f"Прошлая работа лежит в ветке: {br}\n"
@@ -7048,7 +7075,8 @@ def cycle(conf, state):
                 continue
             # Сбой окружения, а не работы: вход в модель протух, сеть моргнула.
             # Владельцу тут делать нечего — повторяем этап сами.
-            if INFRA_SIGNS.search(err or "") and cap_rescues(base, "INFRA") < 3:
+            if (INFRA_SIGNS.search(err or "")
+                    and cap_rescues(base, "INFRA", work_id) < 3):
                 try:
                     create_cap_rescue(base, "INFRA", {
                                  "request_key": str(uuid.uuid4()),
@@ -7292,7 +7320,7 @@ def cycle(conf, state):
                 log(f"SPEC BRANCH WAIT {base[:40]!r}: состояние ветки неизвестно")
                 continue
             if branch_missing or branch_empty:
-                if cap_rescues(base, "SPEC_BRANCH") >= 1:
+                if cap_rescues(base, "SPEC_BRANCH", work_id) >= 1:
                     log(f"SPEC BRANCH STOP {base[:40]!r}: возврат уже использован, "
                         "разработку не запускаю")
                     continue
@@ -7332,7 +7360,7 @@ def cycle(conf, state):
 
         # Ворота Спецификации: без машинно проверяемых обещаний дальше нельзя.
         if (wf == "Specification" and not PROMISE_LINE.search(result or "")
-                and cap_rescues(base, "SPEC") < 1):
+                and cap_rescues(base, "SPEC", work_id) < 1):
             back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
             nl = chr(10)
             spec_ctx = nl.join([
@@ -7376,7 +7404,7 @@ def cycle(conf, state):
         # same stage, so the next stage cannot guess which revision to use.
         if wf == "Specification":
             head_reason = specification_head_gate(result)
-            if head_reason and cap_rescues(base, "SPEC_HEAD") >= 1:
+            if head_reason and cap_rescues(base, "SPEC_HEAD", work_id) >= 1:
                 log(f"SPEC HEAD STOP {base[:40]!r}: возврат уже использован, "
                     "разработку не запускаю")
                 continue
@@ -7418,8 +7446,12 @@ def cycle(conf, state):
         gate_note = ""
         if next_stage == "Review" and branch:
             rid_g = detail["task"].get("repository_id") or ""
-            g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
-                            area_repo=rid_g, expected_card=card)
+            gate_kwargs = {"area_repo": rid_g, "expected_card": card}
+            if work_id:
+                gate_kwargs["work_id"] = work_id
+            g = review_gate(
+                conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
+                **gate_kwargs)
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:
@@ -7433,7 +7465,8 @@ def cycle(conf, state):
                     "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
                     "Повторить проверку после восстановления доступа к репозиторию?",
                     ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
+                    g["note"], attempts_so_far=0, branch=branch,
+                    work_id=work_id)
                 continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]

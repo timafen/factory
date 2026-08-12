@@ -760,6 +760,18 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                     pilot.create_cap_rescue("Работа", stage, {}, {}, parent)
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 1)
 
+    def test_cap_rescues_with_same_title_are_isolated_by_work_id(self):
+        with mock.patch.object(pilot, "RESCUE_PATH", self.rescue_path):
+            pilot.note_cap_rescue("Одинаковая работа", "DIAG", "work-a")
+            pilot.note_cap_rescue("Одинаковая работа", "INFRA", "work-a")
+
+            self.assertEqual(
+                pilot.cap_rescues("Одинаковая работа", "DIAG", "work-a"), 1)
+            self.assertEqual(
+                pilot.cap_rescues("Одинаковая работа", "DIAG", "work-b"), 0)
+            self.assertEqual(
+                pilot.cap_rescues("Одинаковая работа", "INFRA", "work-b"), 0)
+
     def test_review_gate_defers_missing_branch_cap_until_return_task_exists(self):
         with mock.patch.object(pilot, "branch_report", return_value=("нет", [])), \
                 mock.patch.object(pilot, "cap_rescues", return_value=0), \
@@ -1163,6 +1175,49 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertIn("исправить проверку состояния", self.created[0]["context"])
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
+    def test_same_title_repairs_are_isolated_and_both_resume(self):
+        title = "[auto] [3/5 Implement + Test] Одинаковая работа"
+        first = dict(self.task, id="first-loop", title=title, work_id="work-a")
+        second = dict(self.task, id="second-loop", title=title, work_id="work-b")
+        verdict = {"причина": "цикл", "решение": "починить",
+                   "нужен_владелец": False}
+
+        def repair_api(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": [first, second], "next_cursor": None}
+            if path in ("/tasks/first-loop", "/tasks/second-loop"):
+                return {
+                    "task": {
+                        "repository_id": "repo-id", "worker_id": "worker-id",
+                        "context": "Branch: factory/shared-title",
+                    },
+                    "workflow": {"revision_id": "revision-id"},
+                }
+            if path.endswith("/cancel"):
+                return {"task": {"id": path.split("/")[2]}}
+            raise AssertionError(path)
+
+        with mock.patch.object(pilot, "api", side_effect=repair_api):
+            self.assertTrue(pilot.begin_diag_repair(
+                self.conf, "Одинаковая работа", "Implement + Test",
+                verdict, [first, second], first))
+            self.assertTrue(pilot.begin_diag_repair(
+                self.conf, "Одинаковая работа", "Implement + Test",
+                verdict, [first, second], second))
+
+        self.assertEqual(set(self.repairs), {"work-a", "work-b"})
+        stopped = [dict(first, state="cancelled"), dict(second, state="cancelled")]
+        with mock.patch.object(
+                pilot, "create_task",
+                side_effect=lambda body, _conf:
+                self.created.append(body) or {"task": {"id": body["request_key"]}}):
+            pilot.reconcile_diag_repairs(self.conf, stopped)
+
+        self.assertEqual(len(self.created), 2)
+        self.assertEqual(self.repairs["work-a"]["status"], "resumed")
+        self.assertEqual(self.repairs["work-b"]["status"], "resumed")
+
     def test_restart_replays_cancel_pending_for_same_task(self):
         self.repairs = {"Починить отчёт": self.saved_repair("cancel_pending")}
 
@@ -1424,10 +1479,10 @@ class DiagnosisRepairTests(unittest.TestCase):
     def test_loop_rescue_does_not_grant_another_full_round_allowance(self):
         rescues = {"LOOP": 0}
 
-        def cap_rescues(_base, stage):
+        def cap_rescues(_base, stage, _work_id=""):
             return rescues.get(stage, 0)
 
-        def note_cap_rescue(_base, stage):
+        def note_cap_rescue(_base, stage, _work_id=""):
             rescues[stage] = rescues.get(stage, 0) + 1
 
         conf = dict(self.conf, deep_diag_rounds=99, max_stage_attempts=3,
