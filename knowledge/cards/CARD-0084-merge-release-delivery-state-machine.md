@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented — финальная запись результата драйвера теперь fail-closed.
-- Branch: `factory/9a5f1881-8de-c3901c14-426`.
+- Status: Implemented — надёжный выпуск перенесён на свежую `main` без включения Pilot.
+- Branch: `factory/4c25e502-88d-2806b81a-1a0`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 00692b43dcbfc11524d0a866b8bde42a96d50542 — финальный `succeeded` драйвера проверяется явно.
-- What changed: Отказ atomic write после физического выпуска возвращает ошибку, не публикуя durable `succeeded`.
-- What changed: Fresh broker/Pilot restart сохраняет failed outcome, один executor и отсутствие receipt, outbox, `mark_final` и owner done.
-- Evidence: broker race → OK; real process regression → OK (3); полный Pilot → OK (210, 13 skipped); обе shell fixture → PASS; `just check` и `just build` → passed; `git diff --check` → passed.
-- Next action: Strict Review проверить коррекцию финальной записи CARD-0084.
+- Implementation commit: abf5b480e3446873495a4e38f176ab2febb8902a — fail-closed финальная запись драйвера перенесена поверх свежей основной ветки.
+- What changed: Durable terminal persistence, immutable delivery identity и единственный физический executor сохранены поверх base `36ce322e2b6685dd9a87f4d2c947f61538654ae1`.
+- What changed: Fresh-review поведение CARD-0087 сохранено; Pilot/live Workflow revisions не включались.
+- Evidence: broker `-race` → PASS; real process regression → 11 PASS; полный Pilot → 213 PASS, 13 skipped; обе shell fixture → PASS.
+- Evidence: `just check`, `just build`, `git diff --check` → PASS; three-dot → `behind_by=0`.
+- Next action: Strict Review проверить интеграционную ветку CARD-0084 относительно свежей `main`.
 
 ## LOG
 
@@ -59,3 +60,10 @@ The release driver now checks its authoritative final `succeeded` write and
 returns a non-success result when that atomic rename fails after physical
 delivery. A real shell fault plus fresh broker and Pilot processes prove one
 executor, durable failure and no receipt, outbox, finalization or owner completion.
+
+### 2026-08-11 — Implement
+
+Надёжный release broker, Pilot и release driver перенесены на `main` из PR134;
+fresh-review поведение CARD-0087 сохранено, Pilot не включён. Broker race,
+11 restart/write-failure тестов, полный Pilot (213), обе shell fixture,
+`just check`, `just build` и three-dot сравнение прошли; открытых рисков нет.
