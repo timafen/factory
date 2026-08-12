@@ -12,6 +12,47 @@ function task(id: string, stage: string, state: Task["state"], minute: number): 
 }
 
 describe("build", () => {
+  it("keeps same-title work cards and durable status separate by work_id", () => {
+    const first = { ...task("first-task", "Review", "failed", 1), work_id: "work-first" };
+    const second = { ...task("second-task", "Review", "failed", 2), work_id: "work-second" };
+    const groups = build([first, second], {}, [], {
+      "work-first": { origin: "owner" },
+      "work-second": { origin: "assistant" },
+    }, {
+      "work-first": { state: "stopped_owner", text: "первая пауза" },
+      "work-second": { state: "stopped_owner", text: "вторая пауза" },
+    }, {
+      "work-first": { files: ["first.ts"] },
+      "work-second": { files: ["second.ts"] },
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.find((group) => group.workId === "work-first")).toMatchObject({
+      status: { kind: "paused", happened: "первая пауза" },
+      promise: { files: ["first.ts"] },
+      meta: { origin: "owner" },
+    });
+    expect(groups.find((group) => group.workId === "work-second")).toMatchObject({
+      status: { kind: "paused", happened: "вторая пауза" },
+      promise: { files: ["second.ts"] },
+      meta: { origin: "assistant" },
+    });
+  });
+
+  it("keeps renamed stages in one work_id group and uses the latest title", () => {
+    const old = { ...task("old", "Triage", "succeeded", 1), work_id: "stable-work" };
+    const renamed = {
+      ...task("new", "Specification", "running", 2),
+      title: "[auto] [2/5 Specification] Новое имя",
+      work_id: "stable-work",
+    };
+
+    const groups = build([old, renamed], {}, []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ base: "Новое имя", workId: "stable-work" });
+    expect(groups[0].items).toHaveLength(2);
+  });
+
   it("marks the live repeated stage as again and retains later stage history", () => {
     const group = build([
       task("implement-1", "Implement + Test", "succeeded", 1),

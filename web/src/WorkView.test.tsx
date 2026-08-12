@@ -26,7 +26,7 @@ function mockAPI(data: Record<string, unknown>) {
   }));
 }
 
-function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (base: string) => void | Promise<void> } = {}) {
+function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (work: { title: string; work_id?: string }) => void | Promise<void> } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}><WorkView tasks={tasks} workers={[]} pending={false} error={null}
     fetching={false} updatedAt={Date.now()} onTask={() => undefined}
@@ -90,7 +90,7 @@ it("separates owner decision, pause, dead end, automatic repair, and archive", a
   fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
   expect(answer).toHaveBeenCalledOnce();
   expect(resume).toHaveBeenCalledOnce();
-  expect(resume).toHaveBeenCalledWith("Пауза владельца");
+  expect(resume).toHaveBeenCalledWith({ title: "Пауза владельца" });
 
   expect(screen.getByRole("button", { name: "Архив · 1" })).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Архив · 1" }));
@@ -113,6 +113,16 @@ it("keeps the paused card and shows the resume error", async () => {
   expect(screen.queryByText("Нет доступного исполнителя")).not.toBeInTheDocument();
   expect(screen.queryByText(/same-origin|cross_origin_request/i)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Продолжить" })).toBeVisible();
+});
+
+it("sends the paused work_id when resuming a provenance work", async () => {
+  const resume = vi.fn();
+  const paused = { ...task("paused-id", "[auto] [1/5 Triage] Одинаковая работа", "failed"), work_id: "work-id" };
+  mockAPI({ statuses: { "work-id": { state: "stopped_owner", text: "пауза" } } });
+  view([paused], { onResume: resume });
+
+  fireEvent.click(await screen.findByRole("button", { name: "Продолжить" }));
+  expect(resume).toHaveBeenCalledWith({ title: "Одинаковая работа", work_id: "work-id" });
 });
 
 it("shows the reason for every repeated Review return", async () => {
