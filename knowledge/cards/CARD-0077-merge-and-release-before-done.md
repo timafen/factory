@@ -9,7 +9,7 @@
   создаёт delivery receipt, а `rc=8`/коалесцирование сохраняют ожидание.
 - What changed: эпики и «Сделано недавно» признают готовность только по receipt
   поставки; UI показывает «Ожидает слияния и выпуска».
-- Evidence: целевые `PostMergeDeployTest`, `PostMergeDeliveryCompletionTests`, `EpicCompletionReceiptTests` и `RecentDoneTest` → 26 OK; полный `python3 -m unittest -v pilot.test_pilot` → 190 OK, 1 FAIL (`PipelineWatchMergeTests.test_verify_pass_is_processed_once`).
+- Evidence: целевые `PostMergeDeployTest`, `PostMergeDeliveryCompletionTests`, `EpicCompletionReceiptTests` и `RecentDoneTest` → 26 OK; полный `python3 -m unittest -v pilot.test_pilot` → 202 OK, 1 FAIL (`PipelineWatchMergeTests.test_verify_pass_is_processed_once`).
 - Evidence: чистый web-набор после `npm ci`: lint и typecheck OK, 14 файлов/145 тестов OK, production build OK.
 - Next action: обновить `PipelineWatchMergeTests.test_verify_pass_is_processed_once` под ожидание выпуска и повторить полный Verify.
 
@@ -51,6 +51,6 @@ Python-тестами и 11 UI-тестами Work.
 | Коалесцирование, lock и restart сохраняют границу поколения | `PostMergeDeployTest` и `EpicCompletionReceiptTests` | PASS: 21 целевая проверка. |
 | Ошибка выпуска не объявляет работу готовой | `PostMergeDeployTest` | PASS: обработка ненулевого rc и безопасных диагностик покрыта. |
 | Обычная завершённая работа остаётся в Done | `web/src/Work.test.ts` в полном `npm test` | PASS: standalone success остаётся в Done; 145 web-тестов зелёные. |
-| Полный набор проекта | `python3 -m unittest -v pilot.test_pilot` | BLOCKED: 190/191 OK; `PipelineWatchMergeTests.test_verify_pass_is_processed_once` ожидает `mark_final` непосредственно после merge, что больше не соответствует контракту. |
+| Полный набор проекта | `python3 -m unittest -v pilot.test_pilot` | BLOCKED: 202/203 OK; `PipelineWatchMergeTests.test_verify_pass_is_processed_once` ожидает `mark_final` непосредственно после merge, что больше не соответствует контракту. |
 
 Дополнительно: `git diff --check` прошёл; lint, typecheck и production build web-пакета прошли после чистой установки зависимостей. Для полного Verify требуется исправить указанную устаревшую проверку.
