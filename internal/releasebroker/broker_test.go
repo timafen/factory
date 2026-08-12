@@ -227,6 +227,7 @@ func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 
 func TestBrokerDoesNotPublishTerminalSuccessWhenPersistFails(t *testing.T) {
 	dir := t.TempDir()
+	secureTestDirectory(t, dir)
 	blocked := make(chan struct{})
 	broker, err := NewAt(dir, &recordingExecutor{done: blocked})
 	if err != nil {
