@@ -2,14 +2,22 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: `factory/fac9cc7b-e87-43c63c3f-c46`.
-Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
-What changed: Review/Verify resolve remote HEAD, fetch base/candidate refs in an isolated repository, record immutable SHA values, and block infrastructure failures without cached-ref fallback. Live Workflow revisions 7→8→9 confirmed new rules, rollback, and reapplication; Pilot selects each workflow's current revision for new tasks.
-Evidence: pinned comparison used base `0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622` and candidate `7051218999e6dd67a3085c65adb51deb52b8c5a7`; full Linux CI-equivalent, Pilot, and real-server browser suites passed from a clean detached candidate checkout.
-Next action: human merge the verified branch.
+Status: Implemented — awaiting repeated Review.
+Branch: `factory/fbfc83d6-91c-7d003cdd-58f`.
+Implementation commit: 0ad547d2ad72476c1ea177e52cbb1a4f2826cbfe — Review/Verify сравнивают закреплённые SHA в изолированном bare-репозитории.
+What changed: authoritative base/candidate refs fetch-ятся в отдельные refs bare-репозитория; delivery scope вычисляется точной командой `<base_sha>...<candidate_sha>`. Merge-base используется отдельно только для метрик.
+Evidence: `python3 -m unittest pilot.test_pilot -q` — 226 tests OK (13 skipped); regression фиксирует `git init --bare` и точные аргументы pinned diff; `just build` — PASS.
+Next action: повторить независимый Review относительно свежего remote default branch.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлены оба блокирующих замечания повторного Review: snapshot теперь создаётся
+как bare-репозиторий, base/candidate fetch-ятся в его изолированные refs, а scope
+вычисляется строго как `base_sha...candidate_sha`. Регрессия наблюдает точные
+аргументы Git. `python3 -m unittest pilot.test_pilot -q` — 226 tests OK
+(13 skipped); `just build` и `git diff --check` — PASS.
 
 ### 2026-08-12 — Verify
 
