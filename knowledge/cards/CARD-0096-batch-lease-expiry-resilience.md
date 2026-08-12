@@ -1,22 +1,28 @@
 # CARD-0096 — Активные работы не теряют lease синхронной пачкой
 
-Implementation commit: pending — этап Specification не меняет продуктовый код; Implement заменит pending на полный SHA отдельного коммита реализации.
+Implementation commit: 404fee2ce6a209ec78df32e295f5a8a9010b1866 — разнесены heartbeat-renewal, deadline-aware retry и короткая store-транзакция.
 
 ## HEAD
 
-- Status: Specified — готово к Implement + Test.
-- Branch: `factory/14b0811a-bd9-27c4662f-9c5`.
+- Status: Implemented — готово к Verify.
+- Branch: `factory/c7e2fc58-4b5-d166b0c2-474`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
-- Owner impact: краткая очередь heartbeat-запросов больше не должна разом
-  уничтожать все активные агентские сессии одного worker.
+- Owner impact: краткая очередь heartbeat-запросов больше не уничтожает разом
+  активные агентские сессии одного worker.
 - Scope: разнесённый deadline-aware renewal на worker и короткая транзакция
   heartbeat в control plane; без UI, миграции и изменения публичного API.
-- Evidence planned: целевая регрессия с десятью одновременно стартовавшими
-  attempts и краткой задержкой heartbeat сохраняет все десять в `running`.
-- Next action: реализовать спецификацию, отдельным коммитом прогнать целевые тесты
-  и заменить `pending` полным SHA этого implementation-коммита.
+- Evidence: `go test -count=1 -run 'Test(ConcurrentAttemptsStaggerLeaseRenewalsUnderDelay|LeaseRenewalScheduleDispersesAttempts|HeartbeatDoesNotReconcileNeighboringExpiredLease)$' ./internal/worker ./internal/controlplane` → PASS; `git diff --check` → PASS.
+- One next action: Verify прогонит полный `go test ./...` и проверит доставку ветки.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+На worker добавлен стабильный разброс renewal в диапазоне 70–100% интервала,
+ограничение контекста оставшимся lease-бюджетом и обновление supervisor до записи
+manifest. Heartbeat control plane теперь меняет только свою attempt; соседние
+истёкшие попытки освобождаются штатным sweep. Целевые worker/control-plane тесты,
+пачечный integration-сценарий и `git diff --check` прошли.
 
 ### 2026-08-12 — Specification
 
