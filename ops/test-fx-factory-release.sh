@@ -836,6 +836,9 @@ run_release() {
     FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_DELIVERY_ID="${FACTORY_DELIVERY_ID:-}" \
+    FACTORY_DELIVERY_STATE_DIR="$case_dir/delivery-state" \
+    FACTORY_DELIVERY_STATUS_FAULT="${FACTORY_DELIVERY_STATUS_FAULT:-}" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
     FACTORY_RELEASE_AS="$fixture_release_as" FACTORY_RELEASE_OWNER="$fixture_release_owner" \
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
@@ -1156,14 +1159,14 @@ final_status_failed="$temporary/final-delivery-status-write-fail"
 final_status_id=factory-1-fedcba9876543210fedcba9876543210
 make_fixture "$final_status_failed" final-delivery-status-write-fail
 set +e
-FACTORY_DELIVERY_ID="$final_status_id" \
+FACTORY_DELIVERY_ID="$final_status_id" FACTORY_DELIVERY_STATUS_FAULT="succeeded:rename" \
   run_release "$final_status_failed" final-delivery-status-write-fail
 final_status_rc=$?
 set -e
 [ "$final_status_rc" -eq 4 ] \
   || fail "final delivery status write failure returned $final_status_rc instead of 4"
 final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_status_id.status")
-[ "$final_status_value" = launching ] \
+[ "$final_status_value" = running ] \
   || fail "failed final delivery status write published: $final_status_value"
 [ "$(grep -Fxc 'restart factory-server.service' "$final_status_failed/events")" -eq 1 ] \
   || fail "final status fixture did not perform exactly one physical release"
