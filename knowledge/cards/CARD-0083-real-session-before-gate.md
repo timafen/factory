@@ -2,15 +2,25 @@
 
 ## HEAD
 
-Status: BLOCKED: реальный root bootstrap/probe/rollback не выполнен; worker UID 994 и `sudo` запрещён через `no new privileges`.
-Branch: factory/f2dc0140-801-bb9f9af1-47e.
-Implementation commit: 749487e7c51905685a50f1b7e8ccbf6b5b7d53ef — закреплённый SHA-256 синхронизирован с финальным cgroup helper до Gate.
-What changed: bootstrap, installer и release используют один SHA-256 фактического helper; тест сверяет все три digest до root-only проверки.
-What changed: bootstrap канонизирует direct-child source, проверяет root owner и mode всей цепочки/файлов и откатывает helper, installer и bootstrap при ошибке.
-Evidence: статическая SHA-256 сверка и shell-регрессии helper/installer/release → PASS; non-root bootstrap → явный SKIP.
-One next action: повторный Review должен подтвердить согласованность digest; затем на root-runner выполнить живой bootstrap/probe/rollback.
+Status: READY FOR REVIEW: первая установка на чистом хосте оформлена как ручное действие root; Gate остаётся закрыт до живого bootstrap marker.
+Branch: factory/b7045add-70d-5f739684-e56.
+Implementation commit: 3d078dd0c8532940c40ab4d4581837cda24cc385 — описана безопасная первая установка и добавлена регрессия чистого root bootstrap без fx.
+What changed: `ops/README.md` требует root checkout, ручную сверку detached `origin/main` и запуск install-скрипта до первого `fx`.
+What changed: root-fixture installer-теста живёт в защищённом `/run`, начинает без helper и доказывает, что установка не запускает `fx`.
+Evidence: `bash -n ops/install-factory-control.sh ops/test-install-factory-control.sh` и `bash ops/test-install-factory-control.sh` → PASS.
+One next action: root на целевом хосте выполняет процедуру из `ops/README.md`, затем запускает живой `fx factory cgroup-helper-bootstrap` для marker.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Замкнутый путь первой установки заменён документированной ручной процедурой:
+root клонирует репозиторий, сверяет commit `origin/main` и запускает
+`install-factory-control.sh` с bootstrap-флагом, не вызывая `fx`. Root-ветка
+регрессии теперь использует защищённый `/run` fixture, начинается без helper и
+проверяет успешную установку при `fx`, который завершился бы ошибкой при запуске.
+`bash -n` и `bash ops/test-install-factory-control.sh` прошли; живой marker всё
+ещё требует отдельного запуска root на целевом cgroup v2-хосте.
 
 ### 2026-08-12 — Implement
 
