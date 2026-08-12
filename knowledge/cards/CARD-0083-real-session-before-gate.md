@@ -1,71 +1,63 @@
-# Реальная session регистрируется до запуска gate
-
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
+# CARD-0083 — Реальная session регистрируется до запуска gate
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/4c92c207-803-93fc28aa-d9e.
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
-What changed: the complete gate chain starts only through validated absolute, root-owned executables; PATH shadowing cannot replace Node, npm, npx, or the gate launcher.
-Evidence: pinned remote comparison `base_sha=8dcb96ede53b14d3834af851252afa29786462c9`, `candidate_sha=ae4f780d1e8e2cf7dbb2c73c6efbe6aeebafedda`; target shell suite PASS.
-Evidence: `just check` passed formatting, vet, vulnerability scan, staticcheck, boundary, and all Go tests; UI checks were not runnable because clean environment lacks `web/node_modules/.bin/eslint` (exit 127).
-One next action: human merges after deciding whether to install UI dependencies and rerun the general check.
+Status: BLOCKED: реальный root bootstrap/probe/rollback не выполнен; worker UID 994 и `sudo` запрещён через `no new privileges`.
+Branch: factory/f2dc0140-801-bb9f9af1-47e.
+Implementation commit: 16ec945096d53dc464d99d746250239b369d6fbc — cgroup helper ограничен доверенной цепочкой и ставится до Gate без потери lifecycle релизов.
+What changed: bootstrap канонизирует direct-child source, проверяет root owner и mode всей цепочки/файлов и откатывает helper, installer и bootstrap при ошибке.
+What changed: release сохраняет поколения, manifest, journal, recovery, status/rollback/restore-db; marker и закреплённый SHA проверяются до Gate, остановленный launcher входит в cgroup до старта.
+Evidence: helper/installer/release shell-регрессии → PASS; non-root bootstrap → явный SKIP; `go test ./...`, `go build ./...`, 159 UI tests и UI build → PASS.
+One next action: на root-runner выполнить `bash ops/test-factory-cgroup-bootstrap.sh` и сохранить PASS живых install/probe/rollback.
 
 ## LOG
 
-### 2026-08-12 — Verify
+### 2026-08-11 — Implement
 
-| Критерий | Команда / проверка | Результат |
+Security correction after strict review: cgroup helper больше не может получить
+родительский или чужой путь через имя группы; отдельная регрессия доказывает, что
+`..` не открывает и не меняет parent `cgroup.kill`. Чистый bootstrap ставит
+root-owned helper и control installer, проверяет mode/SHA-256, а release использует
+только установленный installer и останавливается до candidate gate при missing или
+altered helper. Shell hostile/installer fixtures, Go/UI build and tests, syntax и
+`git diff --check` прошли; Pilot не включался.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда/проверка | Наблюдение |
 | --- | --- | --- |
-| Gate-цепочка запускается только по доверенным путям | `bash ops/test-fx-factory-release.sh` | PASS: проверены trusted executable, PATH-shadow, Node/npm/npx, реальная session, handshake, параллельные gate, единая установка и общий откат. |
-| Регрессии смежного релизного поведения | тот же shell-suite | PASS: регистрация, rollback, signal cleanup и отсутствие утечек процессов подтверждены. |
-| Полный набор проекта | `just check` | НАХОДКА: форматирование, vet, govulncheck, staticcheck, boundary и Go-тесты PASS; UI lint не запустился в чистом окружении из-за отсутствующего `eslint` (`exit 127`). |
-| Закреплённая область поставки | isolated bare fetch; `git diff --name-only base_sha...candidate_sha` | PASS: `knowledge/cards/CARD-0083-real-session-before-gate.md`, `ops/fx-factory-release`, `ops/test-fx-factory-release.sh`; implementation commit `be58e8096302044be7e96ee96a9e32aef93ddd08` — предок кандидата и меняет код. |
-| Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check` | PASS. |
+| Небезопасное имя cgroup не может достичь родителя | `bash ops/test-factory-gate-cgroup.sh` | PASS: `.`, `..`, traversal, `/` и `\\` отвергнуты до записи `cgroup.kill`. |
+| Bootstrap ставит согласованную защищённую пару control tools | `bash ops/test-install-factory-control.sh` | PASS: невалидные источники отвергнуты, установленная пара сохранена. |
+| Release проверяет helper до candidate gate | `bash ops/test-fx-factory-release.sh` | PASS: hostile и missing/altered-helper fixtures прошли. |
+| Реальная среда использует cgroup v2 | `stat -fc %T /sys/fs/cgroup` | PASS: `cgroup2fs`; реальный helper не запущен, так как worker UID 994 не root. |
+| Полный Go-набор и сборка | `go test ./...`, `go build ./...` | BLOCKED: локальная Go 1.25.12 toolchain/cache сообщает отсутствующие stdlib packages до тестов проекта. |
+| Полный UI-набор и build | `cd web && npm ci && npm test -- --run && npm run build` | BLOCKED: два timeout по 5 s в несвязанных `Projects`/`Dialog`; общий UI build конкурировал с процессами других worktree. |
 
-Полный набор не стал причиной возврата: отказ относится к отсутствующей локальной
-UI-зависимости, а целевой gate-suite прошёл полностью.
-
-### 2026-08-11 — Implement
-
-Реальный wrapper после `setsid` записывает SID, PGID и ready атомарной заменой файла,
-до запуска `$AS` и UI/Go gate. Shell-фикстуры принудительно форкают GNU `setsid` и
-посредник `$AS`, отправляют HUP/INT/TERM до и после readiness, оставляют дочерние
-процессы игнорировать TERM и подтверждают bounded cleanup, отсутствие процессов и
-отсутствие production install. Полный shell-тест, Go test/build и UI production build прошли.
-
-### 2026-08-11 — Implement
-
-Forking `$AS`, возвращающий 0 до конца gate, больше не скрывает ошибку настоящей
-команды: её wrapper атомарно публикует финальный status, а session-supervisor ждёт
-его с bounded fail-closed semantics. Adversarial shell-сценарии подтвердили успех
-forked gate, отказ с точным `status=1`, запрет установки, отсутствие потомков и
-отказ при пропавшем результате; прежние readiness/signal проверки сохранены.
-Shell-suite прошёл трижды, Go test/build и UI production build прошли.
-
-### 2026-08-11 — Implement
-
-Строгая модель угроз признала прежний файл недоверенным: `$AS` работает с тем же UID,
-знает путь и может атомарно заменить даже синтаксически правильный `status=0`.
-Файловый result protocol удалён; gate теперь идёт через фиксированный root-owned
-identity launcher, а supervisor принимает только kernel wait status этой цепочки.
-Тестовый fork-capable `$AS` записал stale, corrupt, valid и replayed success до
-настоящего `exit 1`: выпуск вернул 5, не установил ничего и не оставил процессов.
-
-### 2026-08-11 — Implement
-
-Review-воспроизведение показало PATH bypass: подменённый `setsid` мог записать
-правдоподобный, но несуществующий SID/PGID и вернуть `0`. Gate-цепочка теперь
-использует только проверенные абсолютные executables, а nonce/ack доказывает живую
-session и её прямую связь с конкретным `setsid --fork --wait` supervisor до старта
-gate. PATH-shadow, forged/prewritten handshake, missing session, real fork fail/success
-и HUP/INT/TERM cleanup прошли shell-suite трижды; Go test/build и UI test/build зелёные.
+Вердикт: BLOCKED — требуемое root-доказательство bootstrap/helper и полный чистый набор не получены; кодовые shell-регрессии прошли.
 
 ### 2026-08-12 — Implement
 
-UI gate теперь передаёт проверенные `npm` и `npx` закреплённому абсолютному Node,
-поэтому подложенный `PATH/node` больше не превращает невозможную команду в успех.
-Вложенный release gate в фикстуре заменён bounded stub: целевой self-test завершился
-с PASS за 150 секунд без рекурсивного роста процессов. Полный Verify зелёный до
-неизменённого browser-контракта pause/resume; его отдельный повтор воспроизвёл дефект main.
+Повторный полный набор на свободном worker прошёл: `go test ./...`,
+`go build ./...`, `cd web && npm test -- --run` и `cd web && npm run build`.
+Хост использует cgroup v2 (`cgroup2fs`), но процесс работает от UID 994, а
+`sudo -n id` требует пароль. Поэтому обязательный root-bootstrap в изолированный
+каталог и реальный запуск helper не выполнялись; до них статус остаётся BLOCKED.
+
+### 2026-08-12 — Implement
+
+Добавлена узкая одноразовая команда fx factory cgroup-helper-bootstrap: она
+принимает только доверенный bootstrap-каталог, атомарно ставит control-пару,
+делает живой cgroup v2 probe, создаёт marker и восстанавливает прежние файлы
+при любой ошибке. Release теперь не открывает Gate без этого marker.
+Целевые shell-проверки и syntax прошли; worker не может выполнить root-only часть.
+
+### 2026-08-12 — Implement
+
+Реализация заново перенесена на свежий main без замены release lifecycle:
+сохранены `status`, `rollback`, `restore-db`, generation manifest, journal и
+восстановление после прерывания. Bootstrap теперь отвергает неканонический путь,
+непосредственно не вложенный каталог, небезопасные owner/mode всей цепочки и
+изменённый helper; установка откатывает все три control-файла при ошибке.
+Release-регрессия подтвердила marker/hash до Gate, cgroup attach до первой команды
+Gate и штатные crash/recovery/rollback сценарии. Root-проверка честно завершилась
+`SKIP`; Go и 159 UI тестов, обе сборки и целевые shell-проверки прошли.
