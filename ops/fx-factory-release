@@ -56,6 +56,7 @@ TRUSTED_NPM=/usr/bin/npm
 TRUSTED_GO=/usr/bin/go
 TRUSTED_GIT=/usr/bin/git
 TRUSTED_CHMOD=/usr/bin/chmod
+TRUSTED_MKDIR=/usr/bin/mkdir
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -258,7 +259,8 @@ validate_trusted_executable() { # validate_trusted_executable <absolute path>
 for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
-  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD"; do
+  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD" \
+  "$TRUSTED_MKDIR"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
@@ -735,20 +737,49 @@ sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD
 expected_gate_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
   rev-parse "$sha:ops/test-fx-factory-release.sh") \
   || { fail "в кандидате нет обязательного gate script"; cleanup; exit 4; }
+expected_gate_release_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  rev-parse "$sha:ops/fx-factory-release") \
+  || { fail "в кандидате нет обязательного release helper для gate"; cleanup; exit 4; }
 trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$REL/trusted-gate-XXXXXX") \
   || { fail "не смог создать доверенный каталог gate"; cleanup; exit 4; }
-trusted_gate_script="$trusted_gate_dir/test-fx-factory-release.sh"
-if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+trusted_gate_root="$trusted_gate_dir/ops"
+trusted_gate_script="$trusted_gate_root/test-fx-factory-release.sh"
+if ! "$TRUSTED_MKDIR" -p -- "$trusted_gate_root/systemd" \
+  || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
     show "$sha:ops/test-fx-factory-release.sh" >"$trusted_gate_script" \
-  || ! "$TRUSTED_CHMOD" 500 "$trusted_gate_script" \
-  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ]; then
+  || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    show "$sha:ops/fx-factory-release" >"$trusted_gate_root/fx-factory-release" \
+  || ! "$TRUSTED_CHMOD" 555 "$trusted_gate_script" "$trusted_gate_root/fx-factory-release" \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ] \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/fx-factory-release")" != "$expected_gate_release_blob" ]; then
   fail "gate script не совпадает с криптографически проверенным Git-объектом"
   cleanup
   exit 4
 fi
+trusted_systemd_files=0
+while IFS= read -r -d '' trusted_gate_path; do
+  case "$trusted_gate_path" in ops/systemd/*) ;; *) fail "некорректный путь доверенного systemd tree"; cleanup; exit 4 ;; esac
+  trusted_gate_relative=${trusted_gate_path#ops/}
+  expected_systemd_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    rev-parse "$sha:$trusted_gate_path") || { fail "не смог проверить systemd tree для gate"; cleanup; exit 4; }
+  if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+      show "$sha:$trusted_gate_path" >"$trusted_gate_root/$trusted_gate_relative" \
+    || ! "$TRUSTED_CHMOD" 444 "$trusted_gate_root/$trusted_gate_relative" \
+    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/$trusted_gate_relative")" != "$expected_systemd_blob" ]; then
+    fail "не смог извлечь доверенное дерево systemd для gate"
+    cleanup
+    exit 4
+  fi
+  trusted_systemd_files=$((trusted_systemd_files + 1))
+done < <("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  ls-tree -r -z --name-only "$sha" -- ops/systemd)
+[ "$trusted_systemd_files" -gt 0 ] \
+  || { fail "в кандидате нет обязательного дерева systemd для gate"; cleanup; exit 4; }
+"$TRUSTED_CHMOD" 711 "$trusted_gate_dir" "$trusted_gate_root" "$trusted_gate_root/systemd" \
+  || { fail "не смог закрыть доверенный каталог gate"; cleanup; exit 4; }
 if [ -n "$OWNER" ] && { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
-  || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 700 ]; }; then
-  fail "доверенный каталог gate доступен рабочему пользователю"
+  || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 711 ]; }; then
+  fail "доверенный каталог gate допускает изменение рабочим пользователем"
   cleanup
   exit 4
 fi
