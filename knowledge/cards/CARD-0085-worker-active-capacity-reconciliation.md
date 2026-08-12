@@ -2,7 +2,7 @@
 
 ## HEAD
 
-- Status: Verified PASS — merged into `main`.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
   migration 026 и гарантированная очистка reconciliation journal.
@@ -15,6 +15,17 @@
 - One next action: наблюдать reconciliation-метрики после следующего restart воркера.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Потерянный ответ, restart/reconnect и восстановление всех слотов | `go test -race -timeout 10m ./internal/controlplane ./internal/worker -run '^(TestMetricsCountsCapacityReconciliationsInWindow|TestSweepExpiredPrunesExpiredReconciliationRowsWhenWorkersAreIdle|TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart|TestRegistrationAuditsCachedCapacityBeforeReplacingIt|TestCapacityReconciliationMigrationUpgrades025AndKeepsRollbackReadable|TestReconnectAfterLostCompletionRestoresEveryWorkerSlot)$' -count=1` | PASS, controlplane 52.189s; worker 31.853s |
+| Полный Go suite и сборка | `go test -timeout 20m ./...; go build ./...` | Go tests выявили существующий таймаут `TestSameRepositoryRuntimeAndCleanupCanOverlap`; сборка PASS |
+| TypeScript-проверка веб-клиента | `cd web && npx tsc -p tsconfig.app.json --noEmit` | BLOCKED локально: TypeScript не установлен в окружении |
+| Рабочее дерево и область поставки | `git status --short --branch` и pinned `base_sha...candidate_sha` comparison | чисто до записи этой карточки; кандидат меняет только эту карточку |
+
+Целевые сценарии восстановления слотов проходят под `-race`. Полный suite имеет отдельный таймаут в worker integration test; TypeScript-проверка требует установки зависимости окружения.
 
 ### 2026-08-12 — Implement
 
