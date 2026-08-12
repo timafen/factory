@@ -461,6 +461,13 @@ for fault in write rename file-sync dir-sync; do
     || fail "terminal $fault fault ran the physical executor more than once"
   grep -F 'не смог надёжно подтвердить успешный выпуск' "$terminal/output" >/dev/null \
     || fail "terminal $fault failure was not reported"
+  set +e
+  FACTORY_DELIVERY_ID="$terminal_id" run_release "$terminal" "terminal-delivery-status-$fault"
+  retry_rc=$?
+  set -e
+  [ "$retry_rc" -eq 4 ] || fail "uncertain $fault retry returned $retry_rc instead of 4"
+  [ "$(grep -Fxc 'restart factory-server.service' "$terminal/events")" -eq 1 ] \
+    || fail "uncertain $fault retry ran the physical executor again"
 done
 
 identity_retry="$temporary/identity-transient"
@@ -602,12 +609,14 @@ make_fixture "$locked" locked
 exec 8>"$locked/release.lock"
 flock -n 8 || fail "could not acquire fixture release lock"
 set +e
-run_release "$locked" locked
+FACTORY_DELIVERY_ID=locked-delivery-0123456789abcdef run_release "$locked" locked
 status=$?
 set -e
 flock -u 8
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked.status")" = locked ] \
+  || fail "concurrent release did not durably record locked status"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"

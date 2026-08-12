@@ -242,6 +242,20 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
 }
 
+func TestDiskBrokerRefusesCorruptStateWithoutExecuting(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "corrupt.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingExecutor{}
+	if _, err := NewAt(dir, executor); err == nil {
+		t.Fatal("corrupt state was accepted")
+	}
+	if executor.callCount() != 0 {
+		t.Fatalf("physical executions=%d, want 0", executor.callCount())
+	}
+}
+
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")

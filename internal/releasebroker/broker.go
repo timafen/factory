@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -163,8 +164,14 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		}
 		var item operation
 		data, err := os.ReadFile(filepath.Join(stateDir, entry.Name()))
-		if err != nil || json.Unmarshal(data, &item) != nil || !operationIDPattern.MatchString(item.Request.OperationID) {
-			continue
+		if err != nil {
+			return nil, fmt.Errorf("read operation state %q: %w", entry.Name(), err)
+		}
+		if err := json.Unmarshal(data, &item); err != nil {
+			return nil, fmt.Errorf("decode operation state %q: %w", entry.Name(), err)
+		}
+		if !valid(item.Request) || item.Status == "" {
+			return nil, fmt.Errorf("invalid operation state %q", entry.Name())
 		}
 		// A broker restart cannot prove an old in-process executor still exists.
 		// Fail closed instead of launching it again.
