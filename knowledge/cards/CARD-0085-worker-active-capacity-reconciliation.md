@@ -2,8 +2,8 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
+- Status: Implemented — повторная поставка готова к Review.
+- Branch: `factory/912305d8-ff3-8c70610b-6a2`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
   migration 026 и гарантированная очистка reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
@@ -11,10 +11,17 @@
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
 - Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
-  `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
+  `go build ./...` → PASS; fresh three-dot scope содержит только эту карточку.
+- One next action: повторно выполнить Review чистой поставки.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Свежий `origin/main` уже содержит реализацию из implementation commit, поэтому
+повторный перенос кода не требуется. Поставка пересобрана от свежей базы и
+содержит только актуализацию CARD-0085 для повторного Review. Целевая race-проверка
+шести сценариев reconciliation и `go build ./...` — PASS.
 
 ### 2026-08-12 — Verify
 
