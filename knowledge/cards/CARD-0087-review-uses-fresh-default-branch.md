@@ -3,13 +3,12 @@
 ## HEAD
 
 Status: implemented; Pilot/live Workflow revisions remain unchanged.
-Branch: `factory/ccb67bbc-aa2-1984ff28-05f`.
-Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сохраняет проверку кандидата после продвижения main.
-What changed: fresh isolated snapshot pins default-base, candidate and their shared merge-base; scope is calculated only as pinned `merge_base_sha...candidate_sha`.
-What changed: default-branch advancement is explicit context, not BLOCKED; missing or unrelated history and resolution/fetch failures remain BLOCKED. Legacy `branch_report` remains an injectable compatibility seam.
-Evidence: `python3 -m unittest pilot.test_pilot` → PASS (202 tests); bare-remote regression covers an old-main candidate after remote main advances.
-Evidence: `go test ./...`, `go build ./cmd/factory-server`, JSON config validation and `git diff --check` → PASS.
-Next action: create and smoke new immutable Review/Verify revisions, then pin their IDs in live Pilot config.
+Branch: `factory/0b933443-daf-3aa76b07-abe`.
+Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
+What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
+Evidence: `umask 077; go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
+Evidence: `umask 077; go test ./...`, `python3 -m unittest pilot.test_pilot`, JSON validation, `go build ./cmd/factory-server` и `git diff --check` → PASS.
+Next action: создать и проверить новые immutable-ревизии Review/Verify перед их закреплением в live Pilot config.
 
 ## LOG
 
@@ -42,3 +41,10 @@ main через их pinned общий merge-base. Продвижение баз
 Регрессия использует реальный bare remote и не зависит от cached refs; полный
 `python3 -m unittest pilot.test_pilot` проходит: 202 tests OK. Также PASS:
 `go test ./...`, `go build ./cmd/factory-server`, JSON config и `git diff --check`.
+
+### 2026-08-11 — Implement
+
+Из `pilot/config.example.json` удалены метаданные rollout Review/Verify,
+которые не являются настройкой сервера и отклонялись строгим декодером.
+Проверки PASS при `umask 077`: focused schema test, `go test ./...`,
+`python3 -m unittest pilot.test_pilot`, JSON validation, build и diff check.
