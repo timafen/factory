@@ -4,7 +4,7 @@
 
 Status: Implemented — awaiting repeated Review.
 Branch: `factory/07015c72-001-735446d0-6e9`.
-Implementation commit: ffcb95b6f7b928fcd8e17a23c93fe97066c3002e — пустая pinned-поставка возвращается на доработку как `REQUEST CHANGES`.
+Implementation commit: ffcb95b658971f8153543c9febba7b39dbb19e2a — пустая pinned-поставка возвращается на доработку как `REQUEST CHANGES`.
 What changed: успешный pinned snapshot с пустым diff теперь явно считается недоставленной реализацией; добавлена регрессия на настоящем bare snapshot.
 Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests -q` — 4 tests OK; `git diff --check` — PASS.
 Next action: повторить независимый Review относительно свежего remote default branch.
