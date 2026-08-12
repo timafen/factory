@@ -2,15 +2,15 @@
 
 ## HEAD
 
-Implementation commit: d060ede7f9e7904aa2898a228240b1818de1ecf8 — повторный restart подтверждает durable `failed` без новой физической доставки.
+Implementation commit: 802e974a75a00a2250115c3573af1a6229983ad0 — crash-регрессия прямо подтверждает durable `failed` после первого восстановления.
 
-- Status: Implemented — усиление restart-регрессии готово к review.
-- Branch: `factory/a3cb13db-49c-5099bd14-4af`.
+- Status: Implemented — доказательство durable recovery усилено после review.
+- Branch: `factory/ad8c271e-c9a-710d95df-468`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
 - What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Второй broker restart читает уже durable `failed` и по-прежнему сохраняет ровно один вызов executor.
-- Evidence: crash regression ×20 и `go test -race ./internal/releasebroker` → OK; Pilot delivery class → 10 OK; `just build` → OK.
-- Next action: Review проверить доказательство второго restart после terminal write failure.
+- What changed: После первого recovery тест читает и десериализует state-файл, явно проверяя статус `failed`; затем второй restart подтверждает отсутствие повторной доставки.
+- Evidence: `go test -count=1 ./internal/releasebroker` → OK.
+- Next action: Review проверить обновлённое durable-доказательство.
 
 ## LOG
 
@@ -69,3 +69,9 @@ recovery, and no receipt, outbox, finalization or owner completion.
 The terminal-write regression now starts a second fresh broker after recovery
 has persisted `failed`. It proves the recovery result itself survives another
 process boundary and the physical executor remains at exactly one invocation.
+
+### 2026-08-12 — Implement
+
+The terminal-write regression now reads and unmarshals the operation state file
+after first recovery, explicitly asserting durable `failed` before the second
+restart proves the executor still has exactly one physical invocation.
