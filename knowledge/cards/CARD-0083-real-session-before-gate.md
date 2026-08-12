@@ -3,16 +3,21 @@
 ## HEAD
 
 Status: Implemented — awaiting human merge.
-Branch: factory/92c05a1d-a0a-437ef620-ec1.
-Implementation commit: 71baa59ef6efb819ee32db163347235a7ef6b4c3 — checkout и gate inputs изолированы от `$AS`, Node закреплён абсолютно, drain process group ограничен.
-What changed: `/usr/bin/git` получает исходники в root-owned read-only snapshot; нестандартный `$AS` отклоняется до checkout/gate/install.
-What changed: UI запускается через проверенные `/usr/bin/node` и абсолютные npm/npx entrypoints с `PATH=/usr/bin:/bin`; успешный gate с потомком получает bounded TERM→KILL, reap и failure.
-Preserved: абсолютные trusted tools, live SID/PGID/supervisor/nonce handshake, signal cleanup, kernel wait result и запрет production install до обоих gates; Pilot не включён.
-Evidence: hostile `$AS`/checkout, fake `PATH/node`, real orphan, fork/fail/signal suite ×2 → PASS; процессов и install не осталось.
-Evidence: `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS; `go test ./...` повторяет baseline CARD-0087 schema failure.
+Branch: factory/855755c9-69b-05eff4cd-62e.
+Implementation commit: 9e29d276ad05f0eb9bd839a847806ea4c27b7fd5 — checkout и gate inputs изолированы от `$AS`, Node закреплён абсолютно, drain process group ограничен.
+What changed: `/usr/bin/git` получает исходники в root-owned read-only snapshot; нестандартный `$AS` отклоняется до checkout, gate и install.
+What changed: UI запускается проверенными `/usr/bin/node` и абсолютными npm/npx entrypoints с `PATH=/usr/bin:/bin`; потомок успешного gate завершает gate ошибкой после bounded TERM→KILL и reap.
+Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `git diff --check origin/main...HEAD` → PASS.
 One next action: human merge into main.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Реализация перенесена на свежий `origin/main`; implementation-коммит закрепляет
+доверенный checkout и Node-цепочку, а тестовая фикстура подтверждает отказ для
+подменённого `$AS`/Node и очистку потомка успешного gate. Целевой shell-набор,
+проверка синтаксиса и `git diff --check` прошли.
 
 ### 2026-08-11 — Implement
 
