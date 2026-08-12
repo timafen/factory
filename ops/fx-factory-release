@@ -338,7 +338,7 @@ trap on_release_exit EXIT
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
   local name=$1 log=$2 pid_file=$3 i
   shift 3
-  "$GATE_SESSION_LAUNCHER" --wait "$GATE_SHELL" -c '
+  "$GATE_IDENTITY_LAUNCHER" -H -u factory "$GATE_SESSION_LAUNCHER" --wait "$GATE_SHELL" -c '
     trap - INT
     printf "%s\\n" "$$" > "$1"
     shift

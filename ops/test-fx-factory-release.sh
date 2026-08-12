@@ -7,6 +7,15 @@ temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# The checked-in chain must use the system sudo.  Fixtures execute as the
+# unprivileged `factory` account, which deliberately has no sudo permission,
+# so their private copy substitutes only the sudo boundary and retains the
+# real absolute setsid binary.
+grep -Fx 'GATE_IDENTITY_LAUNCHER=/usr/bin/sudo' "$RELEASE" >/dev/null \
+  || fail "test gates do not pin /usr/bin/sudo"
+grep -F '"$GATE_IDENTITY_LAUNCHER" -H -u factory "$GATE_SESSION_LAUNCHER" --wait' "$RELEASE" >/dev/null \
+  || fail "test gates do not enter the factory account before setsid"
+
 assert_file() { grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
 wait_for_file() {
   local file=$1 i
@@ -321,6 +330,13 @@ done
 : >"$TEST_SETSID_STARTED"
 exit 0
 EOF
+  cat >"$case_dir/bin/sudo" <<'EOF'
+#!/bin/bash
+[ "$1 $2 $3" = '-H -u factory' ] || exit 9
+shift 3
+printf '%s\n' "$(id -un)" >>"$TEST_GATE_IDENTITIES"
+exec "$@"
+EOF
   cat >"$case_dir/bin/df" <<'EOF'
 #!/bin/bash
 if [ "$TEST_MODE" = disk-full ]; then
@@ -361,8 +377,18 @@ EOF
   chmod +x "$case_dir/bin/"*
 }
 
+fixture_release() {
+  case_dir=$1
+  /bin/sed \
+    -e 's|^GATE_IDENTITY_LAUNCHER=/usr/bin/sudo$|GATE_IDENTITY_LAUNCHER="${FACTORY_TEST_GATE_SUDO}"|' \
+    -e 's|\[ -x "$gate_binary" \] && \[ "$(/usr/bin/stat -Lc %u "$gate_binary" 2>/dev/null)" = 0 \]|[ -x "$gate_binary" ]|' \
+    "$RELEASE" >"$case_dir/fx-factory-release"
+  chmod +x "$case_dir/fx-factory-release"
+}
+
 run_release() {
   case_dir=$1 mode=$2
+  fixture_release "$case_dir"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
@@ -372,6 +398,7 @@ run_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_IDENTITIES="$case_dir/gate-identities" \
     TEST_SETSID_STARTED="$case_dir/setsid-started" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -383,7 +410,8 @@ run_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS='env FACTORY_RELEASE_AS_WAS_NONEMPTY=1' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_TEST_GATE_SUDO="$case_dir/bin/sudo" \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -394,7 +422,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
+    /bin/bash "$case_dir/fx-factory-release" main >"$case_dir/output" 2>&1
 }
 
 run_driver() {
@@ -415,6 +443,7 @@ run_driver() {
 
 start_release() {
   case_dir=$1 mode=$2
+  fixture_release "$case_dir"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
@@ -424,6 +453,7 @@ start_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_IDENTITIES="$case_dir/gate-identities" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -434,7 +464,8 @@ start_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS='env FACTORY_RELEASE_AS_WAS_NONEMPTY=1' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_TEST_GATE_SUDO="$case_dir/bin/sudo" \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
@@ -444,7 +475,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+    /bin/bash "$case_dir/fx-factory-release" main >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
 
@@ -452,6 +483,8 @@ success="$temporary/success"
 make_fixture "$success" parallel-success
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
+grep -Fx 'factory' "$success/gate-identities" >/dev/null \
+  || fail "test gates did not run as factory with nonempty FACTORY_RELEASE_AS"
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
