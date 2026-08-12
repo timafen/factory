@@ -389,6 +389,21 @@ func TestDiskBrokerFailsClosedOnInvalidOperationState(t *testing.T) {
 	}
 }
 
+func TestDiskBrokerFailsClosedOnJSONDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "delivery-directory.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingExecutor{}
+	_, err := NewAt(dir, executor)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("NewAt error=%v, want non-regular operation state", err)
+	}
+	if calls := executor.callCount(); calls != 0 {
+		t.Fatalf("physical executions=%d, want 0", calls)
+	}
+}
+
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")

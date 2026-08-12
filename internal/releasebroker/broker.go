@@ -164,10 +164,10 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		return nil, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		if !entry.Type().IsRegular() {
+		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("operation state %q is not a regular file", entry.Name())
 		}
 		var item operation
