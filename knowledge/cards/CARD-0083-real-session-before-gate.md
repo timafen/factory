@@ -3,7 +3,7 @@
 ## HEAD
 
 Status: Implemented — awaiting human merge.
-Implementation commit: ffcaeb87607798898d807bdf416aa5167f102767 — доверенная цепочка gate закреплена абсолютными системными путями.
+Implementation commit: 9f6b07ea2fd8d8a60c1ca3f7a9b95acabe9922c7 — `setsid --wait` передаёт итог настоящего gate через kernel wait, а пути цепочки закреплены.
 Branch: factory/3f6b4aad-25e-c8aab9c3-1d0.
 What changed: gate запускается через проверенные root-owned `/usr/bin/setsid`, `/bin/bash` и `/usr/bin/sudo`, независимо от `PATH` и `$AS`.
 Evidence: `bash ops/test-fx-factory-release.sh` → PASS; вредоносный `setsid` из `PATH` не вызывается, failing gate возвращает `5`, установки и перезапуска нет.
