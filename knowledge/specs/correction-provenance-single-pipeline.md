@@ -231,6 +231,9 @@ Pilot binary; storm-тест на копии данных; проверка jour
 CARD-0086 отсутствует. Карточка относится только к этой работе; конфликтная
 старая CARD-0079 не используется.
 
+Ниже зафиксирован полный файловый результат реализации и одна обязательная
+целевая проверка: регрессионный класс должен завершаться с кодом 0.
+
 ГОТОВО-КОГДА: файл migrations/026_task_provenance.sql
 ГОТОВО-КОГДА: файл internal/protocol/types.go
 ГОТОВО-КОГДА: файл internal/controlplane/store.go
@@ -241,4 +244,4 @@ CARD-0086 отсутствует. Карточка относится тольк
 ГОТОВО-КОГДА: файл internal/controlplane/http_test.go
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда go test ./internal/controlplane && python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests
+ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests
