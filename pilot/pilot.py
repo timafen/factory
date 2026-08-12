@@ -7598,6 +7598,8 @@ def recover_merge_intents(conf, state):
     merge merely because the task cursor was saved first.
     """
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
+        if intent.get("phase") == "completed":
+            continue
         if _intent_has_wait(state, task_id):
             continue
         # A content conflict cannot heal by repeating the same merge request.
@@ -7644,6 +7646,7 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "work_id": intent.get("work_id", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
