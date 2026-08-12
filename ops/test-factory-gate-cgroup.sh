@@ -29,4 +29,3 @@ for name in . .. ../parent parent/child 'parent\\child' ; do
 done
 
 echo "PASS: cgroup helper rejects traversal before parent cgroup.kill"
-
