@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Status: Implemented — ожидает проверки и слияния.
+- Branch: `factory/594bc805-676-fff208e1-843`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 6befc66e076aa94a15a65bbf15a50a4adc3d1e1f — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -count=1 ./internal/releasebroker` → OK (9); `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `just build` → OK; `git diff --check` → passed. Полный `just check` блокируется таймаутом независимого `internal/controlplane` при SQLite migration.
-- Next action: Человеку принять решение о слиянии с учётом независимого таймаута `internal/controlplane`.
+- Implementation commit: 0432dced97bd128b238a8bb5ee03c57dc7be3789 — проверка locked retry читает исходную операцию и подтверждает durable POST.
+- What changed: Повторная доставка после снятия блокировки проверяется без ложной паники; terminal-status write failure покрыт shell и реальным Pilot/broker restart.
+- What changed: Реализация fail-closed остаётся на свежем `main`; перенесены только отсутствовавшие регрессионные проверки.
+- Evidence: broker `-race` → PASS; Pilot process tests → 11 PASS; shell fixtures, install fixture, TypeScript и build → PASS.
+- Next action: Review проверить три целевых теста относительно свежего `main`.
 
 ## LOG
 
@@ -62,3 +62,10 @@ recovery, and no receipt, outbox, finalization or owner completion.
 | Соседние recovery/lock/outbox сценарии | тот же Pilot class | OK: crash boundaries, lock join, N+1, immutable journals и legacy audit-only. |
 | Сборка и чистота | `FACTORY_DATA_HOME=$(mktemp -d ...) just build`; `git diff --check` | Собраны три бинаря; whitespace ошибок нет. |
 | Полный регресс | `just check`; отдельно `go test -timeout 25s -count=1 ./internal/controlplane` | Не завершён: независимый control-plane timeout на SQLite migration (`TestHTTPEfficiencyReturnsBothFixedComparablePeriods`); файлы control-plane не менялись. |
+
+### 2026-08-12 — Implement
+
+После переноса на свежий `main` сохранены только три отсутствовавшие регрессии:
+отказ финальной записи статуса, process restart Pilot/broker и durable POST после lock retry.
+`go test -race -count=1 ./internal/releasebroker`, 11 процессных Pilot-тестов,
+обе shell-fixtures, `npx tsc -p tsconfig.app.json --noEmit` и `just build` прошли.
