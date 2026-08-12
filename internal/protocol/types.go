@@ -304,6 +304,8 @@ type CreateTaskRequest struct {
 	TimeoutSeconds             int        `json:"timeout_seconds"`
 	WorkflowRevisionID         string     `json:"workflow_revision_id,omitempty"`
 	AttachmentIDs              []string   `json:"attachment_ids,omitempty"`
+	ParentTaskID               string     `json:"parent_task_id,omitempty"`
+	CorrectionKind             string     `json:"correction_kind,omitempty"`
 	DescriptionProvided        bool       `json:"-"`
 	ContextProvided            bool       `json:"-"`
 	WorkflowRevisionIDProvided bool       `json:"-"`
@@ -355,6 +357,9 @@ type Task struct {
 	RepositoryID   string    `json:"repository_id"`
 	TimeoutSeconds int       `json:"timeout_seconds"`
 	ReadOnly       bool      `json:"read_only"`
+	WorkID         string    `json:"work_id,omitempty"`
+	ParentTaskID   string    `json:"parent_task_id,omitempty"`
+	CorrectionKind string    `json:"correction_kind,omitempty"`
 	State          string    `json:"state"`
 	CreatedAt      time.Time `json:"created_at"`
 }

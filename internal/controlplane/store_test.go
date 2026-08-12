@@ -1597,6 +1597,41 @@ func createTestTask(t *testing.T, store *Store, requestKey, workerID, repository
 	return task
 }
 
+func TestTaskProvenanceValidationAndReplay(t *testing.T) {
+	store := newTestStore(t)
+	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 2, Health: "healthy",
+		Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := createTestTask(t, store, "provenance-root", worker.ID, worker.Repositories[0].ID)
+	if root.Task.WorkID != root.Task.ID || root.Task.ParentTaskID != "" || root.Task.CorrectionKind != "" {
+		t.Fatalf("root provenance = %#v", root.Task)
+	}
+	childInput := protocol.CreateTaskRequest{RequestKey: "provenance-child", Title: "child", Description: "continue", WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60, ParentTaskID: root.Task.ID, CorrectionKind: "review_return"}
+	child, created, err := store.CreateTask(context.Background(), childInput)
+	if err != nil || !created {
+		t.Fatalf("create child: created=%v err=%v", created, err)
+	}
+	if child.Task.WorkID != root.Task.ID || child.Task.ParentTaskID != root.Task.ID || child.Task.CorrectionKind != "review_return" {
+		t.Fatalf("child provenance = %#v", child.Task)
+	}
+	replay, created, err := store.CreateTask(context.Background(), childInput)
+	if err != nil || created || replay.Task.WorkID != root.Task.ID {
+		t.Fatalf("replay = %#v created=%v err=%v", replay.Task, created, err)
+	}
+	for _, input := range []protocol.CreateTaskRequest{
+		{RequestKey: "provenance-no-parent", Title: "bad", Description: "bad", WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60, CorrectionKind: "review_return"},
+		{RequestKey: "provenance-bad-kind", Title: "bad", Description: "bad", WorkerID: worker.ID, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60, ParentTaskID: root.Task.ID, CorrectionKind: "bad"},
+	} {
+		if _, _, err := store.CreateTask(context.Background(), input); err == nil {
+			t.Fatalf("invalid provenance accepted: %#v", input)
+		}
+	}
+}
+
 func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
 	store := newTestStore(t)
 	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 1, Health: "healthy", Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}}})

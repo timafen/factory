@@ -2171,7 +2171,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", "") or "")
         if m:
-            groups.setdefault(m.group(2).strip(), []).append((m.group(1).strip(), t))
+            groups.setdefault(t.get("work_id") or m.group(2).strip(), []).append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     for base, lst in groups.items():
@@ -2243,6 +2243,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
                                      "\nПредыдущий этап: " + stages[far] + "\n" +
                                      identity_lines)[:60000],
                          "worker_id": worker["id"], "repository_id": rid,
+                         "parent_task_id": (src or {}).get("id", ""),
                          "timeout_seconds": conf.get("timeout_seconds", 7200),
                          "workflow_revision_id": nw["revision_id"]}, conf)
             created_task = created.get("task") if isinstance(created, dict) else None
@@ -3925,6 +3926,12 @@ def record_new_works(conf, tasks, max_age_min=180):
     # не соответствует и потому никогда не снимает архивную границу.
     reopened = set()
     for task in tasks:
+        if any(task.get(key) for key in ("work_id", "parent_task_id", "correction_kind")):
+            if (task.get("parent_task_id") or task.get("correction_kind")
+                    or task.get("work_id") != task.get("id")):
+                log("pilot_duplicate_root_prevented task_id=%s work_id=%s parent_task_id=%s correction_kind=%s" %
+                    (task.get("id", ""), task.get("work_id", ""), task.get("parent_task_id", ""), task.get("correction_kind", "")))
+                continue
         title = task.get("title") or ""
         base = base_title(title)
         meta = known.get(base) or {}
@@ -3953,6 +3960,9 @@ def record_new_works(conf, tasks, max_age_min=180):
     # самая ранняя стадия каждой работы среди свежих задач
     first = {}
     for t in tasks:
+        if any(t.get(key) for key in ("work_id", "parent_task_id", "correction_kind")):
+            if t.get("parent_task_id") or t.get("correction_kind") or t.get("work_id") != t.get("id"):
+                continue
         title = t.get("title") or ""
         if not title.startswith(PREFIX):
             continue
@@ -4065,6 +4075,8 @@ def handle_answers(conf, workflows, workers, tasks):
             "context": context,
             "worker_id": worker["id"],
             "repository_id": q.get("repository_id", ""),
+            "parent_task_id": (src_task or {}).get("id", ""),
+            "correction_kind": "answer_resume",
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
         }
@@ -7117,6 +7129,7 @@ def cycle(conf, state):
             "context": context,
             "worker_id": worker["id"],
             "repository_id": detail["task"].get("repository_id") or detail.get("repository", {}).get("id", ""),
+            "parent_task_id": detail["task"].get("id", ""),
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
         }
