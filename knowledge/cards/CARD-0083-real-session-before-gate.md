@@ -2,17 +2,24 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/5d250fde-09f-9cbb7136-05f.
-Implementation commit: 741c717ecbf8fc96bb0b3de079c8bbde1a250820 — вся release-цепочка закреплена абсолютными tools, каждый gate изолирован cgroup v2.
-What changed: безопасный root PATH устанавливается до первого external command; checkout, lock, ownership, gates, installation и cleanup используют проверенные абсолютные executables.
-What changed: gate останавливается до attach в отдельную cgroup; успех требует пустой cgroup, остатки получают bounded TERM→KILL и приводят к отказу без install.
-Preserved: root-owned immutable checkout, абсолютный Node, SID/PGID/supervisor/nonce, signal cleanup, kernel wait status и запрет install до двух gates; Pilot выключен.
-Evidence: hostile PATH и real escaped-setsid/fork/fail/signal shell-suite ×3 → PASS; live процессов и install не осталось.
-Evidence: `go test ./...`, `go build ./...`, 157 UI tests/build, `bash -n`, `git diff --check` → PASS.
-One next action: human merge into main.
+Status: Implemented — awaiting review and human merge.
+Branch: factory/094a5d8c-64e-efc3d744-90d.
+Implementation commit: 2fd8c19bf1e28fee57a3908d674648c84b92acf0 — штатная установка атомарно ставит обязательный factory-gate-cgroup вместе с release-gate.
+What changed: `install-factory-control.sh` доставляет helper в `/usr/local/libexec/factory-gate-cgroup` с правами `0755` и откатывает его при частичной замене.
+What changed: тест установки проверяет чистую машину, обычное обновление, запуск установленного release-gate и откат всех трёх control-файлов.
+Evidence: `bash ops/test-install-factory-control.sh` → PASS; `bash ops/test-fx-factory-release.sh` → PASS; `bash -n` и `git diff --check` → PASS.
+One next action: repeat independent review of the complete diff before merge.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Штатный атомарный установщик теперь кладёт `factory-gate-cgroup` в доверенный
+`/usr/local/libexec` одновременно с `fx` и release driver. Чистая установка и
+обычное обновление подтверждают наличие исполняемого helper с `0755` и запуск
+release-gate; искусственный частичный сбой восстанавливает все три цели.
+`bash ops/test-install-factory-control.sh`, `bash ops/test-fx-factory-release.sh`,
+syntax checks и `git diff --check` прошли.
 
 ### 2026-08-11 — Implement
 
