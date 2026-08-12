@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Implement PASS — код поставлен, UI-проверки заблокированы повреждёнными npm-зависимостями.
-- Branch: `factory/206f0982-6b7-71cc712c-e4f`.
-Implementation commit: c01920f7dfd7a034f3e67ce4a0a7fbf77dfe4364 — проверка единственности кнопки сохранения Settings.
-- What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()`.
-- Evidence: `just check` Go-часть PASS; целевой Playwright и UI-check не запустились: `playwright`/`eslint`/`tsc` отсутствуют в npm bin.
-- One next action: повторить UI-проверки после исправления установки `web/node_modules`.
+- Status: Implement PASS — полная поставка проверена.
+- Branch: `factory/c4ed5639-1cd-6e93102b-ddb`.
+Implementation commit: c01920fa8489b758acb78fe4c2a741d2783dc70c — проверка единственности кнопки сохранения Settings.
+- What changed: Settings E2E scoped к `.settings-page`; кнопка выбирается exact role/name без `.first()` и должна существовать в единственном числе.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `npm run test:browser` (21 passed) и `just check` PASS.
+- One next action: передать в Verify.
 
 ## LOG
 
@@ -27,3 +27,13 @@ Targeted Playwright: `audits every Factory screen on desktop and phone`, legacy 
 Доказательства: `just check` завершил Go vet, vulnerability scan, staticcheck и
 `go test ./...`; UI-проверки заблокированы повреждённой npm-установкой (`tsc`,
 `eslint` и Playwright CLI не находятся после `npm ci`).
+
+### 2026-08-12 — Implement
+
+Зависимости интерфейса восстановлены воспроизводимо через `npm ci` из lock-файла
+без изменения версий. Исправлен SHA реализации в HEAD: он указывает на существующий
+кодовый коммит E2E, а не на ошибочно записанный идентификатор.
+
+Доказательства: `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint`, `npm test`
+(158 passed), `npm run build`, E2E Settings и весь Playwright-набор (21 passed),
+а также `just check` завершились PASS.
