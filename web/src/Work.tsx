@@ -17,7 +17,13 @@ type Verdict = { action?: string; final_pass?: boolean; stage?: string;
                  // Где владельцу открыть сделанное и посмотреть.
                  try_url?: string; proof?: string; return_reason?: string;
 };
-type Question = { task_id?: string; status?: string; question?: string };
+type Question = {
+  task_id?: string;
+  status?: string;
+  question?: string;
+  escalation_reason?: string;
+  reservation?: { stage?: string; answered_at?: string };
+};
 type HistoryEntry = { task_id: string; text: string };
 type WorkMeta = {
   origin?: string;
@@ -173,6 +179,9 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const live = g.items.find((i) => LIVE.includes(i.task.state));
     const waiting = g.items.find((i) => openQ.has(i.task.id));
     const noWorker = g.items.find((i) => noWorkerQ.has(i.task.id));
+    const reservedQuestion = g.items.map((i) => questions.find((q) => q.task_id === i.task.id
+      && Boolean(q.reservation) && (q.status === "answered" || q.status === "no_worker")))
+      .find(Boolean);
     const passed = g.items.some((i) => i.verdict?.final_pass === true);
     const rework = g.items.some((i) => i.verdict?.final_pass === false
       || (i.stage === "Review" && i.verdict?.action === "stop"));
@@ -247,6 +256,14 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
           owner: "Участие владельца не требуется.",
         };
       }
+    } else if (reservedQuestion) {
+      g.status = {
+        kind: "queued", label: "Ответ принят — слот зарезервирован", tone: "warn",
+        happened: "Ответ владельца принят; эта работа ждёт зарезервированный слот.",
+        next: reservedQuestion.escalation_reason
+          || "Factory запустит эту работу первой, когда слот снова станет допустимым.",
+        owner: "Участие владельца не требуется.",
+      };
     } else if (noWorker) {
       g.status = {
         kind: "queued", label: "Ждёт свободного исполнителя", tone: "warn",
