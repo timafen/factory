@@ -16,11 +16,12 @@ import (
 const testSHA = "0123456789abcdef0123456789abcdef01234567"
 
 type recordingExecutor struct {
-	mu      sync.Mutex
-	adapter string
-	sha     string
-	calls   int
-	done    chan struct{}
+	mu       sync.Mutex
+	adapter  string
+	sha      string
+	calls    int
+	done     chan struct{}
+	finished chan struct{}
 }
 
 type sequenceExecutor struct {
@@ -57,6 +58,9 @@ func (executor *recordingExecutor) Execute(_ context.Context, adapter, sha strin
 	executor.mu.Unlock()
 	if executor.done != nil {
 		<-executor.done
+	}
+	if executor.finished != nil {
+		close(executor.finished)
 	}
 	return "succeeded"
 }
@@ -116,23 +120,6 @@ func operationSnapshot(broker *Broker, id string) (operation, bool) {
 		return operation{}, false
 	}
 	return *item, true
-}
-
-func waitForBrokerIdle(t *testing.T, broker *Broker) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		broker.mu.Lock()
-		idle := broker.active == ""
-		broker.mu.Unlock()
-		if idle {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("broker did not become idle")
-		}
-		time.Sleep(time.Millisecond)
-	}
 }
 
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
@@ -245,7 +232,8 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "state")
 	blocked := make(chan struct{})
-	executor := &recordingExecutor{done: blocked}
+	finished := make(chan struct{})
+	executor := &recordingExecutor{done: blocked, finished: finished}
 	broker, err := NewAt(dir, executor)
 	if err != nil {
 		t.Fatal(err)
@@ -269,12 +257,23 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 		t.Fatal(err)
 	}
 	close(blocked)
-	waitForBrokerIdle(t, broker)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not finish")
+	}
 	if got := operationStatus(t, server, "delivery-write-failure").Status; got != "running" {
 		t.Fatalf("unpersisted terminal status became visible as %q", got)
 	}
 	if executor.callCount() != 1 {
 		t.Fatalf("physical executions=%d, want 1", executor.callCount())
+	}
+	second := `{"operation_id":"delivery-after-write-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, second); got != http.StatusConflict {
+		t.Fatalf("POST after ambiguous terminal write=%d, want %d", got, http.StatusConflict)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("physical executions after rejected concurrent delivery=%d, want 1", executor.callCount())
 	}
 
 	if err := os.Remove(dir); err != nil {

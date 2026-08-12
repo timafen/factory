@@ -350,9 +350,9 @@ func (b *Broker) execute(item *operation) {
 	updated.Status = status
 	if err := b.persist(&updated); err == nil {
 		*item = updated
-	}
-	if b.active == item.Request.OperationID {
-		b.active = ""
+		if b.active == item.Request.OperationID {
+			b.active = ""
+		}
 	}
 	b.mu.Unlock()
 }
