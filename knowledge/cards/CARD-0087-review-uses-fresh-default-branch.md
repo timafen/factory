@@ -2,14 +2,26 @@
 
 ## HEAD
 
-Status: READY FOR REVIEW: live Workflow revisions Review/Verify are released, smoked, rolled back, and reapplied; new tasks resolve their current immutable revision.
+Status: Verified PASS — awaiting human merge.
 Branch: `factory/fac9cc7b-e87-43c63c3f-c46`.
 Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
 What changed: Review/Verify resolve remote HEAD, fetch base/candidate refs in an isolated repository, record immutable SHA values, and block infrastructure failures without cached-ref fallback. Live Workflow revisions 7→8→9 confirmed new rules, rollback, and reapplication; Pilot selects each workflow's current revision for new tasks.
-Evidence: Factory was released from fresh `main`; smoke reports Review and Verify at revision 9 with the fresh-base rule, after revision 8 rollback; health is HTTP 200.
-Next action: repeat independent Review against the fresh remote default branch.
+Evidence: pinned comparison used base `0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622` and candidate `7051218999e6dd67a3085c65adb51deb52b8c5a7`; full Linux CI-equivalent, Pilot, and real-server browser suites passed from a clean detached candidate checkout.
+Next action: human merge the verified branch.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Сравнение закреплено на свежем remote default | `git ls-remote --symref origin HEAD`; isolated bare fetch; `git diff 0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622...7051218999e6dd67a3085c65adb51deb52b8c5a7` | PASS: default — `refs/heads/main`; оба полных SHA зафиксированы до сравнения; scope — только CARD-0087. |
+| Реализационный коммит валиден | `git merge-base --is-ancestor ac3ef660715a20f7b50711a57f7d787f63883598 7051218999e6dd67a3085c65adb51deb52b8c5a7`; `git show --name-only` | PASS: коммит — предок кандидата, не tip карточки и меняет `pilot/config.example.json`, `pilot/pilot.py`, `pilot/test_pilot.py`. |
+| Свежая база, SHA, BLOCKED и сохранение ветки | `python3 -m unittest pilot.test_pilot -q` | PASS: 214 тестов; fixture доказывает exact pinned scope, SHA reporting, infrastructure BLOCKED и отсутствие switch/reset worker branch. |
+| Полная Go и статическая регрессия | `just test`; `just vet`; `just vuln`; `just staticcheck`; `just boundary`; `just format-check` | PASS: все Go-пакеты, анализ, vulnerability scan и архитектурная граница чисты. |
+| UI и живой сервер | `just ui-check`; `just ui-build 0`; `just test-browser` | PASS: lint/typecheck/158 component tests; embedded assets актуальны; 21 Playwright-сценарий прошёл против реального Go-сервера. |
+| Сборка и эксплуатационные сценарии | `just build`; `just test-tooling`; `just test-release`; `just test-launcher` | PASS: бинарники собраны, release воспроизводим, tooling и launcher прошли. |
+| Live rollout и rollback | зафиксированный smoke revisions 7→8→9; `sudo -n /usr/local/bin/fx factory status`; `sudo -n /usr/local/bin/fx factory health` | PASS: новая политика применена, штатно откатана и повторно применена; Factory сейчас active, интерфейс и данные — HTTP 200. |
 
 ### 2026-08-11 — Verify
 
