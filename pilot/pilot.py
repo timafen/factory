@@ -2268,7 +2268,14 @@ def work_status_write(mem):
         elif why == "give_up":
             out[base] = {"state": "stuck",
                          "text": "не могу сдвинуть сам: этап закончился, "
-                                 "следующий не запускается"}
+                                 "следующий не запускается"
+                                 + ((" — " + rec["reason"])
+                                    if rec.get("reason") else "")}
+        elif why == "nudge_failed":
+            out[base] = {"state": "stuck",
+                         "text": "конвейер встал, продолжить не вышло: "
+                                 + (rec.get("reason")
+                                    or "панель отказала, попробую ещё")}
         elif why == "nudged":
             out[base] = {"state": "nudged",
                          "text": "конвейер встал, я запустил следующий этап сам"}
@@ -2295,6 +2302,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
                 "tasks"].append((m.group(1).strip(), t))
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
+    gave_up = []
     for work_key, group in groups.items():
         base, lst = group["base"], group["tasks"]
         allowed = []
@@ -2340,10 +2348,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if int(rec["nudges"]) >= STALL_NUDGES:
             if rec.get("why") != "give_up":
                 rec["why"] = "give_up"
-                notify(conf, "Не могу продолжить сам",
-                       base + "\nЭтап «" + stages[far] + "» закончился, "
-                       "а следующий не запускается даже после двух попыток.",
-                       priority="high", tags="warning")
+                gave_up.append((base, stages[far]))
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
@@ -2385,7 +2390,39 @@ def pipeline_watch(conf, tasks, workflows, workers):
             notify(conf, "Сдвинул застрявшую работу",
                    base + "\n" + stages[far] + " → " + nxt, tags="wrench")
         except Exception as e:
-            log("watch_create_error", repr(e))
+            # Неудача обязана стоить попытки и сдвигать окно ожидания, иначе
+            # сторож долбит панель каждые полминуты до бесконечности — так
+            # уже было: 2600 отказов в час по давно закрытым работам.
+            reason = _http_err(e) if isinstance(e, urllib.error.HTTPError) else str(e)
+            if "stage deferred" in reason:
+                rec["since"] = now      # слот занят — мягкая пауза без счёта
+                log("watch_deferred " + repr(base[:60]) + ": " + reason[:120])
+                continue
+            rec["nudges"] = int(rec["nudges"]) + 1
+            rec["since"] = now
+            rec["why"] = "nudge_failed"
+            rec["reason"] = cut(reason, 180)
+            log("watch_create_error " + repr(base[:60]) + ": " + reason[:300])
+    for key in list(mem):
+        if key not in groups:
+            # задач этой работы больше нет в панели — запись выдохлась,
+            # держать её значит толкать призраков вместо живых работ
+            mem.pop(key, None)
+    if gave_up:
+        if len(gave_up) == 1:
+            base, stage = gave_up[0]
+            notify(conf, "Не могу продолжить сам",
+                   base + "\nЭтап «" + stage + "» закончился, "
+                   "а следующий не запускается даже после двух попыток.",
+                   priority="high", tags="warning")
+        else:
+            listing = "\n".join(b for b, _ in sorted(gave_up)[:6])
+            if len(gave_up) > 6:
+                listing += "\n… и ещё " + str(len(gave_up) - 6)
+            notify(conf, "Не могу продолжить " + str(len(gave_up)) + " работ",
+                   listing + "\n\nПанель не даёт запустить следующий этап "
+                   "даже после двух попыток — причины на экране «Работа».",
+                   priority="high", tags="warning")
     save(STALL_PATH, mem)
     try:
         work_status_write(mem)

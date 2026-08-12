@@ -2,6 +2,7 @@ import contextlib
 import base64
 import datetime
 import importlib
+import io
 import json
 import os
 import socket
@@ -1845,6 +1846,68 @@ class PipelineWatchTests(unittest.TestCase):
 
         self.assertEqual(self.memory, {})
         self.assertEqual(self.created, [])
+
+    def test_failed_nudge_costs_attempt_backs_off_and_keeps_reason(self):
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+
+        def boom(body, conf):
+            raise urllib.error.HTTPError(
+                "http://panel/api/v1/tasks", 400, "Bad Request", None,
+                io.BytesIO(b'{"error":{"code":"work_closed"}}'))
+
+        with mock.patch.object(pilot, "create_task", side_effect=boom):
+            self.watch()
+            self.watch()   # то же мгновение: окно ожидания уже сдвинуто
+
+        rec = self.memory["Встроенный патруль"]
+        self.assertEqual(rec["nudges"], 1)
+        self.assertEqual(rec["since"], self.now)
+        self.assertEqual(rec["why"], "nudge_failed")
+        self.assertIn("work_closed", rec["reason"])
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
+        self.assertIn("work_closed",
+                      self.work_status["Встроенный патруль"]["text"])
+
+        self.now += pilot.STALL_WAIT
+        with mock.patch.object(pilot, "create_task", side_effect=boom):
+            self.watch()   # вторая неудача тратит последнюю попытку
+        self.now += pilot.STALL_WAIT
+        with mock.patch.object(pilot, "create_task", side_effect=boom):
+            self.watch()   # попытки кончились — сдаёмся
+            self.watch()   # и молчим, а не сдаёмся второй раз
+
+        self.assertEqual(self.memory["Встроенный патруль"]["why"], "give_up")
+        self.assertEqual(len(self.notifications), 1)
+        self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_slot_deferral_pauses_without_burning_attempts(self):
+        self.memory = {
+            "Встроенный патруль": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        with mock.patch.object(
+            pilot, "create_task",
+            side_effect=pilot.ParallelWorkLimit("parallel_work_limit: stage deferred"),
+        ):
+            self.watch()
+
+        rec = self.memory["Встроенный патруль"]
+        self.assertEqual(rec["nudges"], 0)
+        self.assertEqual(rec["since"], self.now)
+        self.assertNotEqual(rec.get("why"), "nudge_failed")
+        self.assertEqual(self.notifications, [])
+
+    def test_records_for_vanished_works_are_purged(self):
+        self.memory = {
+            "Призрак давно закрытой работы": {"since": 1, "nudges": 2, "why": "give_up"}
+        }
+        self.watch()
+
+        self.assertNotIn("Призрак давно закрытой работы", self.memory)
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.notifications, [])
 
     def test_gives_up_after_two_nudges_and_notifies_only_once(self):
         self.memory = {
