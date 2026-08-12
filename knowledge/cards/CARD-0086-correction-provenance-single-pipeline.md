@@ -2,19 +2,22 @@
 
 ## HEAD
 
-- Status: Implemented and fully tested; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: 86a0ff83e39cc84c7a9e49e4ee061e675a5cf1cb — durable task provenance and correction-safe single-pipeline Pilot grouping.
+- Status: Implemented; Pilot remains operationally disabled pending Review.
+- Branch: `factory/7243aec3-454-cc665488-5af`.
+- Implementation commit: 4d6907154d0cbe7fe5f53856d624f7bf879ae95c — lifecycle and diagnostics use durable work identity.
 - What changed: migration 027 and the task API persist root/parent/correction
   identity; every direct continuation path inherits the original `work_id`.
 - What changed: Pilot uses explicit provenance before legacy title fallback and
   durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: `go test ./...` → PASS; `python3 -m unittest -v pilot.test_pilot`
-  → PASS (204 tests); `go build ./...` → PASS.
-- Next action: deploy control plane then Pilot binary while Pilot stays disabled,
-  and smoke-test provenance before any separate enablement decision.
+- Evidence: `python3 -m unittest -q pilot.test_pilot.CorrectionProvenanceStormTests pilot.test_pilot.ClosedWorkLifecycleTests` → 13 PASS.
+- Next action: conduct a new Review before any Pilot enablement decision.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+Modern lifecycle reads and reopens archive receipts by `work_id`; diagnostics count provenance attempts.
+Targeted correction, restart and reopening tests: 13 PASS. Pilot remains disabled.
 
 ### 2026-08-11 — Specification
 
