@@ -51,6 +51,7 @@ FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
+MAX_TERMINAL_TASKS_PER_CYCLE = 4
 
 
 class ParallelWorkLimit(RuntimeError):
@@ -6630,7 +6631,11 @@ def recover_merge_intents(conf, state):
 
 def cycle(conf, state):
     stages = [s["workflow"] for s in conf["stages"]]
-    activity = {"task_created": False, "answer_applied": False}
+    activity = {
+        "task_created": False,
+        "answer_applied": False,
+        "terminal_backlog": False,
+    }
     conf["_cycle_activity"] = activity
     overlap_wait_decisions = state.setdefault("overlap_wait_decisions", {})
     if not isinstance(overlap_wait_decisions, dict):
@@ -6797,6 +6802,12 @@ def cycle(conf, state):
     except Exception as e:
         log("work_archive_cleanup_error", repr(e))
 
+    terminal_examined = 0
+    terminal_limit = max(
+        int(conf.get("max_terminal_tasks_per_cycle",
+                     MAX_TERMINAL_TASKS_PER_CYCLE)),
+        1,
+    )
     for t in tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
@@ -6812,6 +6823,11 @@ def cycle(conf, state):
             state["processed"].append(tid)
             log(f"stage_ended task={tid} — не продолжаю: {closed_reason}")
             continue
+
+        if terminal_examined >= terminal_limit:
+            activity["terminal_backlog"] = True
+            break
+        terminal_examined += 1
 
         detail = api(f"/tasks/{tid}")
         wf = (detail.get("workflow") or {}).get("title")
@@ -7294,15 +7310,17 @@ def cycle(conf, state):
 
     # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
-    try:
-        fresh_tasks = api("/tasks?limit=100").get("tasks") or []
-        autostart_plan(conf, fresh_tasks, workflows, workers)
-    except Exception as e:
-        log("plan_autostart_error", repr(e))
+    if not activity["terminal_backlog"]:
+        try:
+            fresh_tasks = api("/tasks?limit=100").get("tasks") or []
+            autostart_plan(conf, fresh_tasks, workflows, workers)
+        except Exception as e:
+            log("plan_autostart_error", repr(e))
 
     hint = next_poll_hint(
         conf, tasks,
-        fast=(new_terminal or activity["task_created"] or activity["answer_applied"]),
+        fast=(new_terminal or activity["task_created"] or activity["answer_applied"]
+              or activity["terminal_backlog"]),
     )
     conf.pop("_cycle_activity", None)
     conf.pop("_active_work_tasks", None)
