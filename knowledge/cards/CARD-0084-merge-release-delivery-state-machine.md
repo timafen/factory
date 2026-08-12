@@ -69,3 +69,12 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Implement
+
+Новый цикл переноса взят от свежего remote `main`: все изменения CARD-0084,
+включая более позднюю durable terminal-status correction, уже интегрированы.
+Локально повторён `go test -race ./internal/releasebroker` — PASS. Собственный
+`just check` прошёл vet, vulncheck и staticcheck, но в общей перегруженной среде
+превысил 360 секунд на `go test ./...`; актуальная HEAD карточки сохраняет
+полностью успешную Verify более поздней интеграции.
