@@ -4,7 +4,7 @@
 
 Status: BLOCKED: root-runner недоступен для обязательного живого bootstrap/probe.
 Branch: factory/c69f6548-54c-7bb76853-658.
-Implementation commit: e4ada82e790eae5560d1509a0eb39e90a1a6c145 — fx получил одноразовую установку, live-проверку и rollback cgroup helper; Gate требует marker этой проверки.
+Implementation commit: 53b136e7b60b100a9721d1aad23129d6680f4db0 — fx получил одноразовую установку, live-проверку и rollback cgroup helper; Gate требует marker этой проверки.
 What changed: fx factory cgroup-helper-bootstrap принимает только root-owned каталог под /run/factory-release-gate, выполняется один раз и откатывает пару при ошибке.
 What changed: release fail-closed проверяет root-owned marker completed до открытия Gate; helper реально создаётся, проверяется и удаляется в probe.
 Evidence: shell syntax, installer/helper regressions и новая root-only regression → PASS/worker reserved; sudo -n id требует пароль.
