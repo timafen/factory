@@ -4,17 +4,28 @@ Implementation commit: ac824ad5682d53ed50dda1bde05353b29e7d28a9 — повтор
 
 ## HEAD
 
-- Status: Implemented — готово к повторному Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/3c22c13c-edd-30e68460-ff2`.
+- Implementation commit: `ac824ad5682d53ed50dda1bde05353b29e7d28a9`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
 - Owner impact: краткая очередь heartbeat-запросов больше не заставляет worker
   переждать остаток аренды после временной ошибки.
 - What changed: повтор renewal ограничивается оставшимся lease-бюджетом; десять
   fake-runtime через Manager/Store подтверждают renewal, отсутствие `lost` и успех.
-- Evidence: `go test -count=1 -run 'Test(LeaseRenewalRetry|CodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot)$' ./internal/worker` → PASS; `git diff --check` → PASS.
-- One next action: повторный Review проверит изменения относительно свежего main.
+- Evidence: полный `go test ./...` прошёл; пять целевых worker/control-plane регрессий прошли; `git diff --check` чист.
+- One next action: человек проверит и вольёт ветку.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Разнесение renewal | `TestLeaseRenewalScheduleDispersesAttempts` | PASS: десять attempt получают не менее трёх корзин и не выходят за deadline. |
+| Пачка из десяти attempts | `TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay`, `TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot` | PASS: renewals распределены, все работы завершаются без `lost`. |
+| Retry у deadline | `TestLeaseRenewalRetryStaysWithinLeaseBudget`, `TestLeaseRenewalRetryLeavesTimeForHeartbeatNearExpiry` | PASS: повтор ограничен бюджетом и оставляет время запросу. |
+| Изоляция heartbeat | `TestHeartbeatDoesNotReconcileNeighboringExpiredLease` | PASS: соседняя истёкшая attempt завершается только sweep. |
+| Совместимость и регрессии | `go test ./...`; `git diff --check` | PASS; миграций и нового endpoint нет. |
 
 ### 2026-08-12 — Implement
 
