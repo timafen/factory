@@ -1,11 +1,11 @@
 # CARD-0095 — Мониторинг Codex проверяет конечный auth.json
 
-Implementation commit: 27a95285bbf796b75d9d9e19239ba21ac0c26bd8 — Существующая Automation переключается на checker на месте с проверкой сохранности расписания и истории.
+Implementation commit: 709a717c7ddf8e9ac20863046e7e49aefb67f3eb — Существующая Automation переключается на checker на месте с проверкой сохранности расписания и истории.
 
 ## HEAD
 
 - Status: Implemented — замечание Review об аудите Automation закрыто.
-- Branch: `factory/c98d0695-c80-b1c6ac3f-56a`.
+- Branch: `factory/a95b3ad4-282-c73cedf2-52c`.
 - Specification:
   `knowledge/specs/codex-auth-symlink-permission-monitoring.md`.
 - Scope: устранить ложную тревогу о режиме `777` у auth-симлинка и сохранить
