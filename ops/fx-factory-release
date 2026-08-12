@@ -58,8 +58,14 @@ PY
 write_journal() { # phase generation previous
   local temporary="$JOURNAL.new"
   umask 077
-  printf 'phase=%q\ngeneration=%q\nprevious=%q\n' "$1" "$2" "$3" >"$temporary" \
-    && sync_path "$temporary" && mv -f "$temporary" "$JOURNAL" && sync_path "$REL" || return
+  case "$1" in prepared|old-stopped|pair-installed|services-started|committed|db_restore_required) ;; *) return 1 ;; esac
+  case "$2:$3" in *[!A-Za-z0-9_./:-]*) return 1 ;; esac
+  printf 'phase=%s\ngeneration=%s\nprevious=%s\n' "$1" "$2" "$3" >"$temporary" \
+    && chmod 600 "$temporary" || return
+  if [ "$(id -u)" -eq 0 ]; then chown root:root "$temporary" || return; fi
+  sync_path "$temporary" && mv -f "$temporary" "$JOURNAL" && chmod 600 "$JOURNAL" || return
+  if [ "$(id -u)" -eq 0 ]; then chown root:root "$JOURNAL" || return; fi
+  sync_path "$REL" || return
   if [ "${FACTORY_RELEASE_CRASH_AFTER_PHASE:-}" = "$1" ]; then
     kill -KILL "$$"
   fi
@@ -67,7 +73,17 @@ write_journal() { # phase generation previous
 
 read_journal() {
   phase= generation= previous=
-  [ ! -e "$JOURNAL" ] || . "$JOURNAL"
+  [ ! -e "$JOURNAL" ] && return 0
+  while IFS='=' read -r key value; do
+    case "$key" in
+      phase) phase=$value ;;
+      generation) generation=$value ;;
+      previous) previous=$value ;;
+      *) fail "неизвестное поле journal"; return 1 ;;
+    esac
+  done <"$JOURNAL" || return 1
+  case "$phase" in prepared|old-stopped|pair-installed|services-started|committed|db_restore_required) ;; *) fail "повреждённый journal"; return 1 ;; esac
+  case "$generation:$previous" in *[!A-Za-z0-9_./:-]*) fail "опасный путь в journal"; return 1 ;; esac
 }
 
 manifest_hash() { sha256sum "$1/manifest.json" | awk '{print $1}'; }
@@ -152,9 +168,9 @@ PY
 stop_factory_units() {
   local unit
   while read -r unit; do systemctl stop "$unit" || return; done < <(worker_service_list)
-  systemctl stop "$PILOT_SERVICE" 2>/dev/null || true
-  systemctl stop "$INTAKE_SERVICE" 2>/dev/null || true
-  systemctl stop "$BROKER_SERVICE" 2>/dev/null || true
+  for unit in "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
+    if systemctl -q is-active "$unit" 2>/dev/null; then systemctl stop "$unit" || return; fi
+  done
   systemctl stop "$SERVER_SERVICE"
 }
 
@@ -203,7 +219,7 @@ PY
 rollback_to_generation() { # generation, owner-facing reason
   local target=$1 reason=$2 live_ledger generation_ledger
   fail "$reason — возвращаю полный прежний комплект"
-  stop_factory_units || true
+  stop_factory_units || { fail "не удалось подтвердить остановку Factory-служб"; return 6; }
   install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
   cp -f "$target/release-info.json" "$INFO.new" && mv -f "$INFO.new" "$INFO" || return
   live_ledger=$(database_ledger "$DATABASE") || return
@@ -217,7 +233,6 @@ rollback_to_generation() { # generation, owner-facing reason
   fi
   restore_service_state "$target/services.tsv" || return
   verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
-  ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
   rm -f "$JOURNAL"
   sync_path "$REL"
 }
@@ -271,19 +286,27 @@ case "$ref" in
       || { fail "snapshot path/hash не совпадает с manifest"; exit 4; }
     [ "$confirmation" = "RESTORE-FACTORY-DATABASE" ] \
       || { fail "восстановление БД — отдельная опасная операция; добавьте точный token RESTORE-FACTORY-DATABASE"; exit 2; }
-    stop_factory_units || { fail "не удалось остановить все Factory-службы"; exit 6; }
+    read_journal || exit 9
+    [ "${phase:-}" = db_restore_required ] \
+      && [ "${generation:-}" = "$generation_path" ] \
+      || { fail "нет journal, связанного с выбранным snapshot; службы не изменялись"; exit 9; }
     restored="$DATABASE.restore.$$.new"
+    [ ! -e "$DATABASE-wal" ] && [ ! -e "$DATABASE-shm" ] \
+      || { fail "live DB имеет WAL/SHM sidecar; сначала выполните checkpoint"; exit 6; }
+    [ ! -e "$restored-wal" ] && [ ! -e "$restored-shm" ] 2>/dev/null \
+      || { fail "restore создал неожиданный WAL/SHM sidecar"; exit 6; }
+    stop_factory_units || { fail "не удалось остановить все Factory-службы"; exit 6; }
     failed="$DATABASE.failed.$(date +%Y%m%dT%H%M%S)"
     [ ! -e "$restored" ] && [ ! -e "$failed" ] || { fail "путь восстановления уже существует"; exit 4; }
     "$generation_path/payload/factory-server" -database "$restored" -restore "$snapshot" \
       || { fail "выбранный server не подтвердил восстановленную БД"; exit 6; }
+    [ ! -e "$restored-wal" ] && [ ! -e "$restored-shm" ] \
+      || { fail "restore оставил WAL/SHM рядом с новой БД"; exit 6; }
     database_ledger "$restored" >/dev/null || exit 6
     mv "$DATABASE" "$failed" && mv "$DATABASE.v2-control-plane" "$failed.v2-control-plane" \
       && mv "$restored" "$DATABASE" && mv "$restored.v2-control-plane" "$DATABASE.v2-control-plane" \
       || { fail "atomic DB switch не завершён; службы оставлены остановленными"; exit 7; }
     sync_path "$(dirname "$DATABASE")"
-    read_journal
-    [ "${phase:-}" = db_restore_required ] || { fail "БД восстановлена, но нет ожидающего journal; службы оставлены остановленными"; exit 9; }
     restore_service_state "$generation/services.tsv" || exit 7
     verify_generation_runtime "$generation" || exit 7
     rm -f "$JOURNAL" && sync_path "$REL"
