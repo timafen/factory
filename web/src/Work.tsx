@@ -20,7 +20,7 @@ type Verdict = { action?: string; final_pass?: boolean; stage?: string;
 type Question = { task_id?: string; status?: string; question?: string };
 type HistoryEntry = { task_id: string; text: string };
 type WorkMeta = {
-  origin?: "owner" | "assistant" | "orchestrator";
+  origin?: string;
   start_stage?: string;
   skipped?: string[];
   reason?: string;
@@ -29,8 +29,11 @@ type WorkMeta = {
 };
 const ORIGIN_RU: Record<string, string> = {
   owner: "поставил ты",
-  assistant: "поставил Клод",
-  orchestrator: "развернулось из эпика",
+  assistant: "поставил помощник",
+  orchestrator: "запустила Factory",
+  worker: "поставила Factory по находке",
+  agent: "поставила Factory по находке",
+  patrol: "поставил патруль",
 };
 
 const TONE: Record<string, { bg: string; fg: string }> = {

@@ -67,7 +67,7 @@ describe("Overview active work", () => {
     render(createElement(Overview, { onNav }));
     const section = await screen.findByRole("region", { name: "Сейчас в работе" });
     expect(await within(section).findByText("Новый обзор")).toBeVisible();
-    expect(within(section).getByText("поставил Клод")).toBeVisible();
+    expect(within(section).getByText("поставил помощник")).toBeVisible();
     expect(within(section).getByText("этап: Review")).toBeVisible();
     fireEvent.click(within(section).getByText("Новый обзор"));
     expect(onNav).toHaveBeenCalledWith("work");

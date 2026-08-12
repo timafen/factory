@@ -108,7 +108,7 @@ type ActiveTask = {
   state: "queued" | "running" | string;
   created_at?: string;
 };
-type WorkMeta = { origin?: "owner" | "assistant" | "orchestrator" };
+type WorkMeta = { origin?: string };
 export type RecentDone = {
   title: string; detail?: string; at?: string;
   status?: "merged" | "passed" | "failed" | "legacy";
@@ -123,8 +123,11 @@ type OverviewWork = {
 
 const ORIGIN_RU: Record<string, string> = {
   owner: "поставил ты",
-  assistant: "поставил Клод",
-  orchestrator: "развернулось из эпика",
+  assistant: "поставил помощник",
+  orchestrator: "запустила Factory",
+  worker: "поставила Factory по находке",
+  agent: "поставила Factory по находке",
+  patrol: "поставил патруль",
 };
 
 const MAX_TASK_PAGES = 500;
