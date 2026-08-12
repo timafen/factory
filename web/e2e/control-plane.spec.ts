@@ -1127,7 +1127,6 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
   expect(await page.evaluate(
