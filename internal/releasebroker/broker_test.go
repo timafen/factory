@@ -287,6 +287,17 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	if err != nil {
 		t.Fatal(err)
 	}
+	data, err := os.ReadFile(filepath.Join(dir, "delivery-write-failure.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted operation
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != "failed" {
+		t.Fatalf("persisted recovery status=%q, want failed", persisted.Status)
+	}
 	restartedServer := httptest.NewServer(restarted.Handler())
 	defer restartedServer.Close()
 	if got := operationStatus(t, restartedServer, "delivery-write-failure").Status; got != "failed" {
