@@ -2,36 +2,25 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
+- Status: Implemented — awaiting review.
+- Branch: `factory/fed32c44-f7a-29102768-303`.
+- Implementation commit: cb91282b624b581e7637f297d77f9365aaca0eee — проверка
+  серверного счётчика активных lease после повторной регистрации воркера.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
   registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
-  `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
+- Evidence: `go test ./internal/controlplane -run '^TestRegistrationAuditsCachedCapacityBeforeReplacingIt$' -count=1` → PASS;
+  full Go suite and build pending after rebase.
+- One next action: пройти повторное Review на свежей `origin/main`.
 
 ## LOG
 
-### 2026-08-12 — Verify
-
-| Критерий | Проверка | Результат |
-|---|---|---|
-| Потерянный ответ, restart/reconnect и восстановление всех слотов | `go test -race -timeout 10m ./internal/controlplane ./internal/worker -run '^(TestMetricsCountsCapacityReconciliationsInWindow|TestSweepExpiredPrunesExpiredReconciliationRowsWhenWorkersAreIdle|TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart|TestRegistrationAuditsCachedCapacityBeforeReplacingIt|TestCapacityReconciliationMigrationUpgrades025AndKeepsRollbackReadable|TestReconnectAfterLostCompletionRestoresEveryWorkerSlot)$' -count=1` | PASS, controlplane 52.189s; worker 31.853s |
-| Полный Go suite и сборка | `go test -timeout 20m ./...; go build ./...` | Go tests выявили существующий таймаут `TestSameRepositoryRuntimeAndCleanupCanOverlap`; сборка PASS |
-| TypeScript-проверка веб-клиента | `cd web && npx tsc -p tsconfig.app.json --noEmit` | BLOCKED локально: TypeScript не установлен в окружении |
-| Рабочее дерево и область поставки | `git status --short --branch` и pinned `base_sha...candidate_sha` comparison | чисто до записи этой карточки; кандидат меняет только эту карточку |
-
-Целевые сценарии восстановления слотов проходят под `-race`. Полный suite имеет отдельный таймаут в worker integration test; TypeScript-проверка требует установки зависимости окружения.
-
 ### 2026-08-12 — Implement
 
-Свежий `origin/main` уже содержит реализацию из commit `7b0e963d2f8ae6c6d80570ed9af890b3b24501d7`;
-повторный перенос кода не потребовался. Целевая race-проверка шести сценариев,
-`go build ./...` и `cd web && npx tsc -p tsconfig.app.json --noEmit` прошли.
+Добавлена регрессия, которая после повторной регистрации проверяет выдачу
+серверного числа активных lease вместо устаревшего cached `active_count`.
+Целевой тест `TestRegistrationAuditsCachedCapacityBeforeReplacingIt` проходит.
 
 ### 2026-08-11 — Verify
 
