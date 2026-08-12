@@ -3,6 +3,7 @@ package releasebroker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -239,6 +240,98 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	}
 	close(blocked)
 	waitForOperationStatus(t, server, "delivery-1", "succeeded")
+}
+
+func TestDiskBrokerRefusesCorruptOperationRecord(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "damaged.json"), []byte(`{"request":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAt(dir, &recordingExecutor{}); err == nil {
+		t.Fatal("broker started with a corrupt durable operation record")
+	}
+}
+
+func TestPersistFailsClosedOnSynchronizationErrors(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		breakPersistence func(*Broker)
+	}{
+		{name: "temporary file fsync", breakPersistence: func(b *Broker) {
+			b.syncFile = func(*os.File) error { return errors.New("file fsync failed") }
+		}},
+		{name: "state directory fsync", breakPersistence: func(b *Broker) {
+			b.syncDir = func(string) error { return errors.New("directory fsync failed") }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			broker, err := NewAt(t.TempDir(), &recordingExecutor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.breakPersistence(broker)
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"sync-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusServiceUnavailable {
+				t.Fatalf("POST status=%d, want %d", got, http.StatusServiceUnavailable)
+			}
+			if _, ok := operationSnapshot(broker, "sync-failure"); ok {
+				t.Fatal("operation became visible after a synchronization error")
+			}
+		})
+	}
+}
+
+func TestTerminalSynchronizationErrorsNeverPublishSuccess(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		breakFourthSync func(*Broker)
+	}{
+		{name: "temporary file fsync", breakFourthSync: func(b *Broker) {
+			calls := 0
+			b.syncFile = func(file *os.File) error {
+				calls++
+				if calls == 4 {
+					return errors.New("terminal file fsync failed")
+				}
+				return file.Sync()
+			}
+		}},
+		{name: "state directory fsync", breakFourthSync: func(b *Broker) {
+			calls := 0
+			original := b.syncDir
+			b.syncDir = func(path string) error {
+				calls++
+				if calls == 4 {
+					return errors.New("terminal directory fsync failed")
+				}
+				return original(path)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &recordingExecutor{}
+			broker, err := NewAt(t.TempDir(), executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.breakFourthSync(broker)
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"terminal-sync-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			waitForBrokerIdle(t, broker)
+			if got := operationStatus(t, server, "terminal-sync-failure").Status; got != "running" {
+				t.Fatalf("unpersisted terminal status became visible as %q", got)
+			}
+			if executor.callCount() != 1 {
+				t.Fatalf("physical executions=%d, want 1", executor.callCount())
+			}
+		})
+	}
 }
 
 func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(t *testing.T) {
