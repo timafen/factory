@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
+Status: BLOCKED: verification worker stalled during full suite.
 Implementation commit: 9f6b07ea2fd8d8a60c1ca3f7a9b95acabe9922c7 — `setsid --wait` передаёт итог настоящего gate через kernel wait, а пути цепочки закреплены.
 Branch: factory/3f6b4aad-25e-c8aab9c3-1d0.
 What changed: gate запускается через проверенные root-owned `/usr/bin/setsid`, `/bin/bash` и `/usr/bin/sudo`, независимо от `PATH` и `$AS`.
