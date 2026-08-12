@@ -2,14 +2,21 @@
 
 ## HEAD
 
-Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned; full Pilot suite has 3 compatibility-test errors.
-Branch: `factory/c92696e9-aa7-d6595696-a5d`.
-Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
-What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
-Evidence: Go and web suites pass; `python3 -m unittest pilot.test_pilot` fails with 3 stale `branch_report` compatibility-test errors.
-Next action: restore compatibility/update the three Pilot tests, then create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots must remain unchanged.
+Status: implemented and verified.
+Branch: `factory/16f9dc13-c12-270afe6b-8a2`.
+Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
+What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
+Evidence: `python3 -m unittest pilot.test_pilot -q` — PASS, 202 tests OK.
+Next action: create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots remain intentionally unchanged according to the handoff.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Актуализирован HEAD карточки после исправления ложной блокировки: успешный
+результат `python3 -m unittest pilot.test_pilot -q` — 202 tests OK. Карточка
+ссылается на финальный кодовый коммит `ff076ae565626fec8a3150414307e2c66d231b11`;
+live revisions намеренно не менялись согласно передаче.
 
 ### 2026-08-11 — Verify
 
