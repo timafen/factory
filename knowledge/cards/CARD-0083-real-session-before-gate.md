@@ -2,13 +2,13 @@
 
 ## HEAD
 
-Status: IMPLEMENTED: полный Verify пройден.
-Branch: factory/e4258c26-c0d-c2b5d27e-3d2.
-Implementation commit: a12ceded7e78b18ee1968afb2ea1d92704ca2b5c — cleanup gate не может завершить тестовый раннер или группу самого релиза.
-What changed: shell-фикстура запускает release в отдельной session; `fx-factory-release` отказывается сигналить собственной process group.
-What changed: реальная SID/PGID подтверждается до UI и Go gate, а сигнал завершает только подтверждённую группу.
-Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n` и `git diff --check` завершились успешно.
-One next action: передать ветку на review.
+Status: IMPLEMENTED: блокирующее замечание review исправлено, проверки зелёные.
+Branch: factory/068641a8-6d1-ffd09b88-a69.
+Implementation commit: 7b0bb7640d523799327ce2171b3c580f8a6a2df3 — handshake с PGID релиза отклоняется до запуска gate, launcher и потомки очищаются TERM→KILL.
+What changed: wrapper сверяет реальный PGID с группой релиза до публикации readiness и `exec` gate.
+What changed: регрессионная фикстура подменяет SID/PGID на release PGID и подтверждает bounded cleanup без запуска gate и утечек процессов.
+Evidence: release shell suite — PASS; Go test/build — PASS; UI 158 tests/build/lint — PASS.
+One next action: повторить Review ветки.
 
 ## LOG
 
@@ -44,3 +44,11 @@ release-механизмом. Фикстура isolирует session релиз
 Verify-worker и завершился успешно: handshake реальной session предшествует gate,
 а сценарии HUP/INT/TERM дочищают forked процессы. `bash -n` и
 `git diff --check` по `9123aa42b01a39ce7f1fa998568189ab6d38b07b...HEAD` также успешны.
+
+### 2026-08-12 — Implement
+
+Handshake с SID/PGID, совпадающими с process group релиза, теперь отклоняется
+в wrapper до readiness и `exec` gate. Ошибочный launcher и уже созданные им
+потомки завершаются ограниченным TERM→KILL без сигнала группе самого релиза.
+Регрессионный release-сценарий, Go test/build, UI 158 tests/build/lint,
+`bash -n` и `git diff --check` завершились успешно.
