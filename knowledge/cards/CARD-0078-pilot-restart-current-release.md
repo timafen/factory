@@ -1,17 +1,18 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
+Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-выпуск ставит restart Пилота после metadata под общим lock.
+
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/da82a1cd-7c3-a77428a6-399`.
+- Status: Implemented — awaiting review.
+- Branch: `factory/99fcf773-995-eff220e2-9f2`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: d75788cbba43f8613a668c14c30a16e38ac6d4d4 — ранний
-  rollback сохраняет прежний `release-info` при отказе установки brain.
-- What changed: снимок наличия и содержимого `release-info` перенесён до
-  первой rollback-capable операции; добавлен ранний failure-тест.
-- Evidence: полный `just check`, `just test-worker-race`, `just test-browser`
-  и целевой shell-тест прошли; проверены порядок метаданных, общий lock и rollback.
-- Next action: человек принимает решение о слиянии.
+- Implementation commit: c695193793e93b9576602882918d0e206b859361 — restart
+  Пилота в generation-модели защищён общим lock.
+- What changed: обновлённый brain планирует restart после публикации
+  `release-info`; неизменённый brain его не ставит.
+- Evidence: `bash ops/test-fx-factory-release.sh` и `go test -p 1 ./... -count=1` — PASS.
+- Next action: review изменения и merge.
 
 ## LOG
 
@@ -52,3 +53,12 @@
 | Restart удерживает lock на всё выполнение | проверка захваченной команды shell-fixture | PASS: `/usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE"`. |
 | Отказы и rollback не оставляют новые метаданные | сценарии `brain-install-fail` и `systemd-run-fail` | PASS: прежний info восстановлен либо новый удалён. |
 | Смежные регрессии проекта | `just check`, `just test-worker-race`, `just test-browser` | PASS: Go, статанализ, UI и 20 browser-сценариев прошли. |
+
+### 2026-08-11 — Implement
+
+Защита отложенного restart перенесена на generation-драйвер без возврата
+старого драйвера: изменённый brain ставит transient unit только после записи
+`release-info`, а `/usr/bin/flock -n` использует тот же release-lock. Целевой
+shell-тест проверил порядок, занятый и свободный lock, отсутствие restart при
+неизменённом brain и rollback при ошибке `systemd-run`; последовательный
+`go test -p 1 ./... -count=1` также прошёл.
