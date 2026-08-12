@@ -1,16 +1,14 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 7a3cad982966e3ff689f473add6a7222eb5d5db7 — gate запускается только по проверенным абсолютным путям.
+Implementation commit: 9c5dc01aed55dcb758bd0fb47c785c8c5ef01e0e — gate запускается только по проверенным абсолютным путям.
 
 ## HEAD
 
-Status: Implemented — ready for review.
+Status: BLOCKED — UI gate всё ещё допускает подмену `PATH/node`, а целевая фикстура рекурсивно запускает сама себя.
 Branch: factory/69d506bf-bc3-68d5fa71-963.
-Implementation commit: 7a3cad982966e3ff689f473add6a7222eb5d5db7 — gate запускается только по проверенным абсолютным путям.
-What changed: `setsid`, оболочка, UI/Go-команды и gate-script закреплены за абсолютными root-owned путями; `$AS` исключён из цепочки результата.
-What changed: nonce-handshake принимается только от живого session leader, а результатом gate остаётся kernel wait status доверенного launcher.
-Evidence: `bash ops/test-fx-factory-release.sh`, `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `git diff --check` → PASS; fixture с подменённым `PATH`-`setsid` не входит в gate-цепочку.
-One next action: rerun Review against this published branch.
+Implementation commit: 9c5dc01aed55dcb758bd0fb47c785c8c5ef01e0e — gate запускается только по проверенным абсолютным путям.
+Evidence summary: pinned comparison `9123aa42b01a39ce7f1fa998568189ab6d38b07b...1da13ab6cb6eb0056401a78df7dbf7e42f26d07e`; обычные UI/Go/build/security проверки зелёные, но `/usr/bin/npx` и `/usr/bin/npm` принимают подложенный `PATH/node` и возвращают ложный успех, а `bash ops/test-fx-factory-release.sh` уходит в рекурсивный self-test.
+One next action: закрепить доверенный Node/runtime для UI gate и восстановить bounded-перехват вложенного release self-test, затем повторить Verify.
 
 ## LOG
 
@@ -61,3 +59,13 @@ Review-воспроизведение показало PATH bypass: подмен
 session и её прямую связь с конкретным `setsid --fork --wait` supervisor до старта
 gate. PATH-shadow, forged/prewritten handshake, missing session, real fork fail/success
 и HUP/INT/TERM cleanup прошли shell-suite трижды; Go test/build и UI test/build зелёные.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Наблюдаемый результат |
+|---|---|---|
+| Сравнение с актуальной удалённой базой | `git ls-remote --symref origin HEAD`; изолированный fetch; сравнение только закреплённых SHA | base `9123aa42b01a39ce7f1fa998568189ab6d38b07b`, candidate `1da13ab6cb6eb0056401a78df7dbf7e42f26d07e`; непустой diff из трёх ожидаемых файлов |
+| Вся UI gate-цепочка использует доверенные executables | `PATH=<node -> /bin/true> /usr/bin/npx definitely-not-a-real-command` и аналогично для `/usr/bin/npm` | BLOCKED: обе невозможные команды вернули `0`, потому что root-owned launchers используют `#!/usr/bin/env node` |
+| Целевая release-фикстура ограниченно завершается | `bash ops/test-fx-factory-release.sh` | BLOCKED: фиксированный `/bin/bash` обошёл fixture-перехват и рекурсивно запустил self-test; за 65 секунд дерево выросло до 366 процессов, после `TERM` cleanup оставил 0 |
+| Смежные UI/Go/release проверки | `just ui-check`, `just ui-build 0`, `just test-tooling`, `just build`, `just test-release`, `just test-launcher`, `just vet`, `just vuln`, `just staticcheck`, `just boundary`, `just test`, `just test-worker-race` | PASS: 158 UI-тестов, все Go-пакеты и race-сценарии зелёные; release-артефакты воспроизводимы; embedded UI не изменился |
+| Синтаксис и чистота diff | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check 9123aa4...1da13ab` | PASS |
