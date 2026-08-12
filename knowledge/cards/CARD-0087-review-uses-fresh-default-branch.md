@@ -2,15 +2,24 @@
 
 ## HEAD
 
-Status: Done — реализация влита в `main` через PR #135; отдельная поставка Verify закрыта как ненужная.
-Branch: `factory/56e8a2c8-266-c4b7a5ba-fa9`.
+Status: Verified PASS — awaiting human merge.
+Branch: `factory/328299ee-9b7-dc24fba0-d5c`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot убраны неподдерживаемые метаданные rollout.
 What changed: `pilot/config.example.json` теперь содержит только поля серверной схемы; план rollout остаётся в карточке, а не в runtime-конфигурации.
-Evidence: реализационный коммит — предок свежего `origin/main` `07491cc7b26bbc47dca9f8fd5109f2c665f1fa53`; до этой записи `origin/main...HEAD` был пуст.
-Evidence: JSON validation и `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` → PASS.
-Next action: закрыть текущую задачу без повторного этапа Verify.
+Evidence: pinned base `35320922ba648844634816442028be3ca03835e5`, candidate `b1264d9d4724e64eea69549b9e2c04b45d94f475`; реализационный коммит — предок обоих. Функциональная правка уже в `main`, а в candidate до этой записи только карточка.
+Evidence: JSON validation, строгая серверная схема, `go test ./...`, 226 Pilot-тестов, TypeScript, web lint и web tests → PASS.
+Next action: человек подтверждает merge документационной записи Verify.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Неподдерживаемое поле удалено и пример принимается сервером | `python3 -m json.tool pilot/config.example.json`; `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS: JSON валиден, строгая серверная схема принимает пример; `rollout` отсутствует. |
+| Полная регрессия | `go test ./...`; `python3 -m unittest pilot.test_pilot` | PASS: все Go-пакеты; 226 тестов Pilot OK (13 skipped). |
+| Web-регрессия | `cd web && npx tsc -p tsconfig.app.json --noEmit`; `npm run lint`; `npm test` | PASS. |
+| Поставка и реализационный коммит согласованы | pinned `35320922ba648844634816442028be3ca03835e5...b1264d9d4724e64eea69549b9e2c04b45d94f475`; `merge-base --is-ancestor 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` | PASS: code commit меняет `pilot/config.example.json`, уже входит в base; candidate содержит только эту карточку. |
 
 ### 2026-08-11 — Verify
 
