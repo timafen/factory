@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/protocol"
@@ -363,5 +364,93 @@ func TestBackupRejectsWritableDestinationDirectory(t *testing.T) {
 	}
 	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
 		t.Fatalf("writable destination received a backup: %v", err)
+	}
+}
+
+func TestOnlinePreReleaseSnapshotSurvivesForwardOnlyLedgerAndRestoresSeparately(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	live := filepath.Join(root, "live", "factory.sqlite3")
+	store, err := Open(ctx, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Exercise VACUUM INTO while the live connection is actively committing.
+	stop := make(chan struct{})
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = store.db.ExecContext(ctx, `UPDATE schema_migrations SET applied_at = applied_at`)
+			}
+		}
+	}()
+	snapshot := filepath.Join(root, "release", "database.sqlite3")
+	if err := BackupDatabase(ctx, live, snapshot); err != nil {
+		close(stop)
+		writer.Wait()
+		t.Fatalf("online pre-release snapshot: %v", err)
+	}
+	close(stop)
+	writer.Wait()
+
+	snapshotBefore, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var currentLedger int
+	if err := store.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&currentLedger); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `CREATE TABLE forward_only_027(value TEXT);
+		INSERT INTO schema_migrations(version, applied_at) VALUES (?, 0)`, currentLedger+1); err != nil {
+		t.Fatal(err)
+	}
+	liveAfterMigration, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A normal code rollback is deliberately a no-op for SQLite.
+	liveAfterCodeRollback, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(liveAfterMigration, liveAfterCodeRollback) {
+		t.Fatal("code rollback changed the live database")
+	}
+	snapshotAfter, err := os.ReadFile(snapshot)
+	if err != nil || !bytes.Equal(snapshotBefore, snapshotAfter) {
+		t.Fatal("forward-only migration changed the immutable pre-release snapshot")
+	}
+
+	restored := filepath.Join(root, "restored", "factory.sqlite3")
+	if err := RestoreBackup(ctx, snapshot, restored); err != nil {
+		t.Fatalf("explicit restore to fresh destination: %v", err)
+	}
+	database, err := sql.Open("sqlite", "file:"+restored+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var restoredLedger int
+	if err := database.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&restoredLedger); err != nil {
+		t.Fatal(err)
+	}
+	if restoredLedger != currentLedger {
+		t.Fatalf("restored ledger = %d, want pre-release %d", restoredLedger, currentLedger)
+	}
+	var forwardTable int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name='forward_only_027'`).Scan(&forwardTable); err != nil {
+		t.Fatal(err)
+	}
+	if forwardTable != 0 {
+		t.Fatal("fresh restore contains the forward-only schema")
 	}
 }
