@@ -3,7 +3,7 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
+- Branch: `factory/dc886ef9-dfd-c6199d9c-60f`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
   migration 026 и гарантированная очистка reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
