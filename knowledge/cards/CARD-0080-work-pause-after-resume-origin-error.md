@@ -2,15 +2,20 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/f48d26e0-344-21705f71-21c`
-- Implementation commit: 000084fd7cc008d8df69d62dedf02c00d91d93a8 — HTTPS resume идёт через Chromium/SPKI, а proxy фиксирует и проверяет очищенные backend-заголовки.
-- Evidence summary: чистый `just check` прошёл Go/UI/lint/typecheck/tooling/launcher (14 UI-файлов, 157 тестов); production build собрал три бинарника, committed `web/dist` воспроизводим.
-- Evidence summary: единственный полный HTTPS browser-прогон с обычным Chromium собрал и прошёл все 21 тест за 3.4 минуты; сценарий resume/Origin №7 прошёл, TLS/browser errors отсутствуют.
-- Evidence summary: после прогона не осталось scoped-процессов или listeners; дерево было чистым до обновления этой карточки.
-- Next action: человек сливает `factory/f48d26e0-344-21705f71-21c` в `main`.
+- Status: Реализация доставлена в `main`; повторный Verify не запускается по решению владельца.
+- Branch: `factory/22f81140-80a-12900f24-cc4`
+- Implementation commit: 08211c263423a4d563aa56eca9b62f910a0bd240 — холодный HTTPS fixture получает увеличенный timeout для полного запуска setup.
+- Evidence summary: коммит реализации есть в свежем `origin/main` и является предком этой ветки; рабочее дерево до записи карточки чистое.
+- Evidence summary: повторная проверка намеренно не выполнялась, потому что реализация уже находится в `main`; полный HTTPS-прогон остаётся отдельной работой по CARD-0080.
+- Next action: выполнить отдельный полный HTTPS-прогон по CARD-0080.
 
 ## LOG
+
+### 2026-08-11 — Implement
+
+- Подтверждено, что реализация честного timeout холодного HTTPS-старта уже доставлена в `main` коммитом `08211c263423a4d563aa56eca9b62f910a0bd240`.
+- Новое кодовое изменение не создавалось по решению владельца; повторный Verify намеренно пропущен.
+- Полный HTTPS-прогон оставлен отдельной работой по CARD-0080.
 
 ### 2026-08-11 — Implement
 
