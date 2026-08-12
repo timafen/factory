@@ -76,7 +76,7 @@ type Group = {
   promise?: { files?: string[]; commands?: string[] };
 };
 
-type WorkKind = "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive";
+type WorkKind = "decision" | "repairing" | "active" | "queued" | "paused" | "stuck" | "done" | "archive";
 type WorkStatus = {
   kind: WorkKind;
   label: string;
@@ -195,7 +195,16 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       if (live.stage && g.items.slice(0, liveIndex).some((it) => it.stage === live.stage)) {
         g.reached[live.stage] = "again";
       }
-      if (rework) {
+      if (live.task.state === "queued") {
+        g.status = {
+          kind: "queued", label: "В очереди Factory", tone: "warn",
+          happened: rework
+            ? "Проверка вернула работу на доработку, следующий этап поставлен в очередь."
+            : "Текущий этап поставлен в очередь и ещё не выполняется.",
+          next: "Factory запустит этап, когда освободится подходящий исполнитель.",
+          owner: "Участие владельца не требуется.",
+        };
+      } else if (rework) {
         const rejected = [...g.items].reverse().find((it) => it.verdict?.final_pass === false);
         g.status = {
           kind: "repairing", label: "Исправляется автоматически", tone: "live",
@@ -209,7 +218,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         };
       } else {
         g.status = {
-          kind: "active", label: live.task.state === "queued" ? "В очереди Factory" : "Factory работает", tone: "live",
+          kind: "active", label: "Factory работает", tone: "live",
           happened: live.stage
             ? `Выполняется «${STAGE_RU[live.stage] ?? live.stage}».`
             : "Выполняется задача Factory.",
@@ -221,7 +230,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       }
     } else if (noWorker) {
       g.status = {
-        kind: "active", label: "Ждёт свободного исполнителя", tone: "warn",
+        kind: "queued", label: "Ждёт свободного исполнителя", tone: "warn",
         happened: "Ответ на вопрос уже есть, но исполнитель ещё не назначен.",
         next: "Factory ждёт свободного исполнителя.", owner: "Участие владельца не требуется.",
       };
@@ -300,7 +309,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
 /** Разделы не вычисляют движение по возрасту: их определяют только факт
  * активной задачи, открытый вопрос и состояние, которое записал пилот. */
 // eslint-disable-next-line react-refresh/only-export-components
-export function sectionOf(g: Group): "decision" | "repairing" | "active" | "paused" | "stuck" | "done" | "archive" {
+export function sectionOf(g: Group): "decision" | "repairing" | "active" | "queued" | "paused" | "stuck" | "done" | "archive" {
   if (g.meta?.closed && g.status.kind !== "done") return "archive";
   return g.status.kind;
 }
@@ -311,7 +320,8 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "stuck", title: "Factory не может продолжить", hint: "Автоматического следующего шага нет", accent: "#ffb4b4" },
   { key: "paused", title: "Поставлено на паузу", hint: "Продолжение включается в настройках", accent: "#8a94a6" },
   { key: "repairing", title: "Исправляется автоматически", hint: "Factory уже выполняет повторную попытку", accent: "#8ec5ff" },
-  { key: "active", title: "В работе", hint: "Factory выполняет известный активный шаг", accent: "#8ec5ff" },
+  { key: "active", title: "В работе прямо сейчас", hint: "Исполнитель уже выполняет этап", accent: "#8ec5ff" },
+  { key: "queued", title: "В очереди", hint: "Ждёт свободного подходящего исполнителя", accent: "#cf9b4e" },
   { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 
