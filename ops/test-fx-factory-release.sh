@@ -653,7 +653,7 @@ run_release "$forked_success" forked-gates-success \
   || fail "successful fork scenario unexpectedly used a filesystem result"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
 assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
-[ "$(grep -Fxc 'restart factory-server.service' "$forked_success/events")" -eq 1 ] \
+[ "$(grep -Fxc 'start factory-server.service' "$forked_success/events")" -eq 1 ] \
   || fail "successful fork scenario did not install exactly once"
 assert_no_fixture_processes "$forked_success"
 
