@@ -1,21 +1,25 @@
 # CARD-0085 — Самовосстановление счётчика занятости воркера
 
+Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — серверная очистка журнала сверок ёмкости при пустом `SweepExpired`.
+
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/b77bd6b3-1cc-c549126f-cd6`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
-- What changed: registration сохраняет старый `active_count` до server-time audit;
-  registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
-- What changed: integration покрывает потерянный `/complete`, restart/reconnect и
-  две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: `go test -timeout 20m ./... && go build ./...` → PASS (2:45.09);
-  focused `go test -race -timeout 10m ... -count=1` → PASS (29.34s, 6 tests);
-  fresh `origin/main...HEAD` → ровно 11 файлов, clean tree перед verify update.
-- One next action: выполнить human merge в `main`.
+- Status: Delivered in `origin/main`; targeted post-delivery verification PASS.
+- Branch: `factory/b07bd8b9-8dd-96ae9c01-3cc` (record of the delivery check).
+- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — registration and idle `SweepExpired` prune reconciliation records older than eight days using server time.
+- What changed: an idle maintenance sweep deletes stale journal rows without requiring an active lease and retains rows inside the eight-day window.
+- Evidence: `go test ./internal/controlplane -run '^TestSweepExpiredPrunesExpiredReconciliationRowsWhenWorkersAreIdle$' -count=1` → PASS (0.993s); implementation commit is an ancestor of fresh `origin/main` at `18745bf45cc899dc3c8641e73d3e93a0ea6a082e`.
+- One next action: rerun the unrelated full `internal/worker` integration suite on an uncontended host.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+No new code was required: the implementation commit is already in fresh `origin/main`.
+The idle regression passed and confirms that a clean slot delivery clears only stale
+reconciliation-journal rows while preserving the current retention window. The full
+`go test ./... && go build ./...` run reached `internal/worker` contention and timed
+out after the unrelated `TestIdleWorkerMakesOneClaimPerPollingInterval` condition.
 
 ### 2026-08-11 — Verify
 
