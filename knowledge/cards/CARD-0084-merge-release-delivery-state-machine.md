@@ -2,14 +2,15 @@
 
 ## HEAD
 
-- Status: Implemented — каждый статус release-driver подтверждён до публикации.
-- Branch: `factory/cdd9434b-e4e-dc241bb3-b55`.
+- Status: Implemented — strict-review recovery и privileged launch закрыты fail-closed.
+- Branch: `factory/35f73ebf-88b-6a60e59f-fbf`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 82e4971b75d0d7b4366036da682bffc4bebfbc52 — release-driver надёжно сохраняет каждый delivery status.
-- What changed: Единый helper делает create/write, file fsync, checked close, atomic rename и directory fsync; при ambiguous directory-sync восстанавливает прошлый статус.
-- What changed: `launching` и `running` fail-closed до lock/executor; terminal failure не подтверждает success, receipts, outbox или owner completion.
-- Evidence: expanded shell fixtures → PASS; broker `-race` → PASS; full Pilot → PASS; `just check`, `just build`, `git diff --check` → PASS.
-- Next action: CARD-0086 integration проверить candidate `82e4971b75d0d7b4366036da682bffc4bebfbc52` от base `3183424f924d440b686908f219d0013b7ee8c504`.
+- Implementation commit: 8b86b4647cf22ec128d6816ca21b58cccc2ade8e — восстановление merge и запуск release-driver закрыты durable proof.
+- What changed: До `gh merge` сохраняется immutable PR/repo/head identity; recovery читает merged PR/commit по номеру, поэтому squash/delete branch не вызывает повторный merge.
+- What changed: Broker хранит root-only operation/driver status, открывает process-group gate только после PID/running persistence и не публикует terminal без driver proof; Tarser fail-closed.
+- What changed: Driver проверяет owner/mode статуса и все шесть write-fault точек `running`/`failed` сохраняют безопасное `running` без ложного outcome.
+- Evidence: full Pilot 217 tests (13 skipped) → PASS; `go test -race ./internal/releasebroker` → PASS; shell/installer fixtures → PASS; `just check`, `just build`, `git diff --check` → PASS.
+- Next action: CARD-0086 integration проверить candidate `8b86b4647cf22ec128d6816ca21b58cccc2ade8e` от base `3183424f924d440b686908f219d0013b7ee8c504`.
 
 ## LOG
 
@@ -45,3 +46,12 @@ create/write, file fsync, checked close, atomic rename and directory fsync.
 Initial fault injection stops before lock or physical FX; terminal write,
 rename, file-sync and dir-sync faults retain `running`, return non-success and
 cannot create Pilot completion artifacts or a second executor on recovery.
+
+### 2026-08-11 — Implement
+
+Strict-review correction persists immutable PR identity before merge and reads
+the authoritative merged PR/commit after crash, including deleted squash
+branches. Broker/driver status is root-only and validated; a gated process
+group cannot reach release lock before durable PID/running, while unproven
+Tarser or failed terminal writes fail closed. Full Pilot (217), broker race,
+real shell security/fault fixtures, `just check`, and `just build` passed.
