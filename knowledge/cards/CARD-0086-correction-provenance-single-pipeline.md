@@ -16,6 +16,16 @@
 
 ## LOG
 
+### 2026-08-11 — Verify
+
+| Criterion | Evidence | Result |
+| --- | --- | --- |
+| Provenance create/replay/list/detail and parent deletion | focused `go test` control-plane provenance set | PASS |
+| Migration 027 dependency on 026 and atomic reopen | focused migration test | PASS |
+| Same-title correction after restart creates no duplicate root | `CorrectionProvenanceStormTests` (7 tests) | PASS |
+| Whole project and build | `just check`; `go build ./...` | PASS |
+| Delivery hygiene | rebase on current `main`; `git diff --check` | PASS |
+
 ### 2026-08-11 — Specification
 
 Current `main` was inspected. `record_new_works()` currently infers an owner
