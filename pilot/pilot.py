@@ -2085,17 +2085,15 @@ def explain_bad_plan_repository(conf, candidate, detail=""):
 
 
 def active_auto_works(tasks):
-    """Unique pipeline works that occupy an automatic-start slot."""
+    """Unique pipeline works that currently occupy an executor slot.
+
+    A work waiting for the owner's answer remains visible in Questions, but it
+    must not reduce execution capacity: no worker is running for it.
+    """
     active = set()
     for task in tasks:
         match = STAGE_TITLE_RE.match(task.get("title", "") or "")
         if match and task.get("state") in PLAN_ACTIVE_STATES:
-            active.add(task_work_id(task))
-    open_questions = {q.get("task_id") for q in load_questions()
-                      if q.get("status") == "open"}
-    for task in tasks:
-        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
-        if match and task.get("id") in open_questions:
             active.add(task_work_id(task))
     return active
 

@@ -1647,6 +1647,16 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         self.assertIs(
             pilot.live_or_done_at(tasks, other, 1), other)
 
+    @mock.patch.object(pilot, "load_questions", return_value=[{
+        "task_id": "waiting-work", "status": "open",
+    }])
+    def test_question_waiting_for_owner_does_not_consume_executor_slot(self, _questions):
+        waiting = dict(
+            self.root, id="waiting-work", work_id="waiting-work",
+            state="succeeded")
+
+        self.assertEqual(pilot.active_auto_works([waiting]), set())
+
 
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
@@ -3239,11 +3249,14 @@ class PlanAutostartTest(unittest.TestCase):
         set_idea.assert_called_once_with(
             "top", state="in_work", task_id="new-task", repo="factory-repo-id")
 
-    @mock.patch.object(pilot, "create_task")
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "new-task"}})
     @mock.patch.object(pilot, "ideas_all")
     @mock.patch.object(pilot, "load_questions")
-    def test_three_unique_active_or_owner_waiting_works_fill_slots(self, questions,
-                                                                  ideas, create):
+    def test_owner_waiting_work_does_not_block_free_executor_slot(
+            self, questions, ideas, create, _set_idea, _note_work, _notify):
         ideas.return_value = self.cards
         questions.return_value = [{"task_id": "waiting", "status": "open"}]
         tasks = [
@@ -3253,9 +3266,9 @@ class PlanAutostartTest(unittest.TestCase):
             {"id": "waiting", "title": "[auto] [2/5 Specification] C", "state": "failed"},
         ]
 
-        self.assertIsNone(pilot.autostart_plan(self.conf, tasks, self.workflows,
-                                               self.workers))
-        create.assert_not_called()
+        self.assertEqual(pilot.autostart_plan(
+            self.conf, tasks, self.workflows, self.workers), "new-task")
+        create.assert_called_once()
 
     @mock.patch.object(pilot, "create_task")
     @mock.patch.object(pilot, "ideas_all")
