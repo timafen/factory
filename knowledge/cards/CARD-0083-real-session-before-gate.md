@@ -3,14 +3,15 @@
 ## HEAD
 
 Status: BLOCKED: требуется root-runner для обязательной живой проверки helper и bootstrap.
-Branch: factory/bdeb3b62-b1e-fc42a2f1-976.
-Implementation commit: 2b5c1d9a43e2a49029f45f2fff425a4de83a3a30 — cgroup helper ограничен собственным корнем, а bootstrap ставит проверенный helper до gate.
+Branch: factory/2b980476-d70-f3423253-545.
+Implementation commit: 450c4b3eabf2b023da3228793e33a32902f0669e — cgroup helper ограничен собственным корнем, а bootstrap ставит проверенный helper до gate.
 What changed: helper отвергает `.`, `..`, separators и traversal; после канонизации допускает только путь строго ниже root-owned `CGROUP_ROOT`.
 What changed: trusted control bootstrap ставит helper и installer от root с mode `0755` и SHA-256; release не выполняет candidate installer и fail-closed проверяет owner/mode/hash до gate.
 Preserved: safe PATH, cgroup cleanup для escaped `setsid`, обязательные gates и выключенный Pilot.
 Evidence: `bash ops/test-factory-gate-cgroup.sh`, `bash ops/test-install-factory-control.sh`, `bash ops/test-fx-factory-release.sh` → PASS.
-Evidence: живой `stat -fc %T /sys/fs/cgroup` → `cgroup2fs`; worker UID 994, поэтому helper остановился на обязательной проверке `root is required` до действия. Полные Go/UI проверки не дали доказательства: Go toolchain/cache не собрал стандартную библиотеку, а UI-набор получил два несвязанных timeout при нагрузке.
-One next action: на root-runner выполнить bootstrap в изолированный каталог и запуск helper на cgroup v2, затем повторить полный Go/UI набор в исправной среде.
+Evidence: `go test ./...`, `go build ./...`, `cd web && npm test -- --run`, `cd web && npm run build` → PASS.
+Evidence: живой `stat -fc %T /sys/fs/cgroup` → `cgroup2fs`; worker UID 994, а `sudo -n id` требует пароль, поэтому реальный bootstrap/helper не запускался и остаётся обязательным.
+One next action: на свободном root-runner выполнить bootstrap в изолированный каталог и запуск helper на cgroup v2.
 
 ## LOG
 
@@ -36,3 +37,11 @@ altered helper. Shell hostile/installer fixtures, Go/UI build and tests, syntax 
 | Полный UI-набор и build | `cd web && npm ci && npm test -- --run && npm run build` | BLOCKED: два timeout по 5 s в несвязанных `Projects`/`Dialog`; общий UI build конкурировал с процессами других worktree. |
 
 Вердикт: BLOCKED — требуемое root-доказательство bootstrap/helper и полный чистый набор не получены; кодовые shell-регрессии прошли.
+
+### 2026-08-12 — Implement
+
+Повторный полный набор на свободном worker прошёл: `go test ./...`,
+`go build ./...`, `cd web && npm test -- --run` и `cd web && npm run build`.
+Хост использует cgroup v2 (`cgroup2fs`), но процесс работает от UID 994, а
+`sudo -n id` требует пароль. Поэтому обязательный root-bootstrap в изолированный
+каталог и реальный запуск helper не выполнялись; до них статус остаётся BLOCKED.
