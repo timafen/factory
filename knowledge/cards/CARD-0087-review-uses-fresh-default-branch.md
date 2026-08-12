@@ -4,7 +4,7 @@
 
 Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned; full Pilot suite has 3 compatibility-test errors.
 Branch: `factory/c92696e9-aa7-d6595696-a5d`.
-Implementation commit: f29e45dc382e35b0ef33453b6be3d19f83d2b58e — Review получает свежий pinned snapshot remote default branch.
+Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
 What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
 Evidence: Go and web suites pass; `python3 -m unittest pilot.test_pilot` fails with 3 stale `branch_report` compatibility-test errors.
 Next action: restore compatibility/update the three Pilot tests, then create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots must remain unchanged.
