@@ -863,11 +863,19 @@ chmod 600 "$services"
 printf 'services.tsv\t-\t600\t\n' >>"$inventory"
 
 step "создаю и повторно проверяю SQLite online snapshot"
-snapshot="$stage/database.sqlite3"
-"$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
+# The live database and all of its recovery-path ancestors belong to the
+# Factory service account.  Run the backup through the same account instead
+# of root, then copy the verified standalone snapshot into the root-managed
+# immutable generation.
+working_snapshot="$work/database.sqlite3"
+as_user "$SERVER_BIN" -database "$DATABASE" -backup "$working_snapshot" \
   || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
-[ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
+[ -f "$working_snapshot" ] && [ ! -e "$working_snapshot-wal" ] && [ ! -e "$working_snapshot-shm" ] \
   || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
+snapshot="$stage/database.sqlite3"
+cp -f "$working_snapshot" "$snapshot" \
+  && cp -f "$working_snapshot.v2-control-plane" "$snapshot.v2-control-plane" \
+  || { fail "не удалось перенести snapshot в поколение выпуска"; cleanup; exit 4; }
 chmod 600 "$snapshot" "$snapshot.v2-control-plane"
 ledger=$(database_ledger "$snapshot") || { cleanup; exit 4; }
 schema_digest=$(python3 - "$snapshot" <<'PY'

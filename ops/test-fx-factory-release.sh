@@ -49,6 +49,7 @@ case " $* " in
   *' -backup '*)
     echo backup-snapshot >>"$TEST_EVENTS"
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
+    case "$out" in */releases/.generation-*) exit 91;; esac
     python3 - "$db" "$out" <<'PY'
 import sqlite3,sys
 source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2]); source.backup(target); target.close(); source.close()
@@ -508,6 +509,7 @@ assert d['database']['sha256']==hashlib.sha256(open(r+'/database.sqlite3','rb').
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
+grep -F 'snapshot' "$success/output" >/dev/null || fail "release did not report snapshot creation"
 assert_before "$success/events" 'stop factory-server.service' 'start factory-server.service'
 assert_before "$success/events" 'start factory-server.service' 'start factory-worker.service'
 grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
