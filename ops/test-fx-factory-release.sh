@@ -48,6 +48,7 @@ make_fixture() {
   : >"$case_dir/worker.toml"
   : >"$case_dir/gate-children"
   : >"$case_dir/handshake-events"
+  : >"$case_dir/cgroup-extra"
 
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
@@ -66,7 +67,21 @@ echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_
 [ "${FACTORY_BRAIN_DEFER_PILOT_RESTART:-}" = 1 ] || exit 9
 : >"$FACTORY_BRAIN_RESTART_MARKER"
 BRAIN
-    touch "$destination/ops/install-server-browser.sh"
+    cat >"$destination/ops/provision-codex-auth.sh" <<'AUTH'
+#!/bin/bash
+echo "bash ops/provision-codex-auth.sh" >>"$TEST_GATES"
+[ "$TEST_MODE" != auth-provision-fail ]
+AUTH
+    cat >"$destination/ops/install-factory-control.sh" <<'CONTROL'
+#!/bin/bash
+echo "bash ops/install-factory-control.sh" >>"$TEST_GATES"
+[ "$TEST_MODE" != control-install-fail ]
+CONTROL
+    cat >"$destination/ops/install-server-browser.sh" <<'BROWSER'
+#!/bin/bash
+echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+[ "$TEST_MODE" != browser-install-fail ]
+BROWSER
     cat >"$destination/ops/test-fx-factory-release.sh" <<'RELEASE_GATE'
 #!/bin/bash
 echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
@@ -83,9 +98,7 @@ case "$TEST_MODE" in
 esac
 exit 0
 RELEASE_GATE
-    chmod +x "$destination/ops/install-brain.sh"
-    chmod +x "$destination/ops/install-project-release-broker.sh"
-    chmod +x "$destination/ops/install-server-browser.sh"
+    chmod +x "$destination/ops/"*.sh
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
@@ -144,6 +157,20 @@ case "$TEST_MODE:${1:-}" in
     ) &
     echo "$!" >"$TEST_ORPHAN_PID"
     ;;
+  escaped-setsid-after-success:tsc)
+    /usr/bin/setsid /bin/bash -c '
+      printf "%s\n" "$$" >"$TEST_ESCAPED_PID"
+      printf "%s\n" "$$" >>"$TEST_CGROUP_EXTRA"
+      trap "printf escaped-term\\n >>\"$TEST_GATE_CHILDREN\"" TERM
+      trap "" HUP INT
+      while :; do /bin/sleep 1; done
+    ' &
+    for ((i = 0; i < 100; i++)); do
+      [ -s "$TEST_ESCAPED_PID" ] && break
+      /bin/sleep 0.01
+    done
+    [ -s "$TEST_ESCAPED_PID" ] || exit 17
+    ;;
   signal-forked-gates:tsc)
     assert_gate_handshake ui-checks.session
     (
@@ -167,6 +194,13 @@ EOF
 printf 'path-node-invoked\n' >>"$TEST_SPOOF_EVENTS"
 exit 0
 EOF
+  for hostile_tool in dirname mkdir flock chown bash; do
+    cat >"$case_dir/bin/$hostile_tool" <<'EOF'
+#!/bin/bash
+printf 'hostile-%s-invoked\n' "${0##*/}" >>"$TEST_SPOOF_EVENTS"
+exit 99
+EOF
+  done
   cat >"$case_dir/bin/go" <<'EOF'
 #!/bin/bash
 echo "go $*" >>"$TEST_GATES"
@@ -326,6 +360,52 @@ EOF
 if [ "${1:-}" = -u ]; then shift 2; fi
 [ "${1:-}" != -- ] || shift
 exec "$@"
+EOF
+  cat >"$case_dir/trusted/factory-gate-cgroup" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+name=$2
+state="$TEST_CGROUP_DIR/$name.pids"
+descendants() {
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -z "$child" ] || descendants "$child"
+  done < <(/usr/bin/ps -eo pid=,ppid= | /usr/bin/awk -v p="$parent" '$2 == p {print $1}')
+}
+members() {
+  [ -r "$state" ] && while read -r root; do descendants "$root"; done <"$state"
+  [ -r "$TEST_CGROUP_EXTRA" ] && /usr/bin/sort -n -u "$TEST_CGROUP_EXTRA"
+}
+case "$1" in
+  create) : >"$state" ;;
+  attach) printf '%s\n' "$3" >>"$state" ;;
+  pids) members | /usr/bin/sort -n -u ;;
+  empty)
+    if [ -r "$TEST_CGROUP_EXTRA" ]; then
+      while read -r escaped_root; do
+        kill -0 -- "-$escaped_root" 2>/dev/null && exit 1
+      done <"$TEST_CGROUP_EXTRA"
+    fi
+    while read -r pid; do
+      [ -r "/proc/$pid/stat" ] || continue
+      process_stat=$(<"/proc/$pid/stat")
+      process_rest=${process_stat##*) }
+      read -r process_state _ <<<"$process_rest"
+      [ "$process_state" = Z ] || exit 1
+    done < <(members)
+    ;;
+  signal)
+    while read -r pid; do kill -"$3" "$pid" 2>/dev/null || true; done < <(members)
+    if [ -r "$TEST_CGROUP_EXTRA" ]; then
+      while read -r escaped_root; do
+        kill -"$3" -- "-$escaped_root" 2>/dev/null || true
+      done <"$TEST_CGROUP_EXTRA"
+    fi
+    ;;
+  remove) /usr/bin/rm -f -- "$state" ;;
+  *) exit 2 ;;
+esac
 EOF
   cat >"$case_dir/bin/sudo" <<'EOF'
 #!/bin/bash
@@ -492,6 +572,13 @@ EOF
     -e "s|^TRUSTED_NPX_CLI=.*$|TRUSTED_NPX_CLI=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM_CLI=.*$|TRUSTED_NPM_CLI=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/trusted/factory-gate-cgroup|" \
+    -e "s|^TRUSTED_SYSTEMCTL=.*$|TRUSTED_SYSTEMCTL=$case_dir/bin/systemctl|" \
+    -e "s|^TRUSTED_SLEEP=.*$|TRUSTED_SLEEP=$case_dir/bin/sleep|" \
+    -e "s|^TRUSTED_CURL=.*$|TRUSTED_CURL=$case_dir/bin/curl|" \
+    -e "s|^TRUSTED_MV=.*$|TRUSTED_MV=$case_dir/bin/mv|" \
+    -e "s|^TRUSTED_CHMOD=.*$|TRUSTED_CHMOD=$case_dir/bin/chmod|" \
+    -e "s|^TRUSTED_SYSTEMD_RUN=.*$|TRUSTED_SYSTEMD_RUN=$case_dir/bin/systemd-run|" \
     "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
 
@@ -501,7 +588,7 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|missing-session|orphan-after-success|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|missing-session|orphan-after-success|escaped-setsid-after-success|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
@@ -531,7 +618,8 @@ run_release() {
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
-    TEST_STUCK_CWD="$case_dir" \
+    TEST_STUCK_CWD="$case_dir" TEST_CGROUP_DIR="$case_dir" \
+    TEST_CGROUP_EXTRA="$case_dir/cgroup-extra" TEST_ESCAPED_PID="$case_dir/escaped.pid" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -571,7 +659,8 @@ start_release() {
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
-    TEST_STUCK_CWD="$case_dir" \
+    TEST_STUCK_CWD="$case_dir" TEST_CGROUP_DIR="$case_dir" \
+    TEST_CGROUP_EXTRA="$case_dir/cgroup-extra" TEST_ESCAPED_PID="$case_dir/escaped.pid" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -601,6 +690,10 @@ run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
+for hostile_tool in dirname mkdir flock chown bash; do
+  ! grep -Fx "hostile-$hostile_tool-invoked" "$success/spoof-events" >/dev/null 2>&1 \
+    || fail "successful release used hostile PATH wrapper: $hostile_tool"
+done
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
@@ -871,6 +964,22 @@ orphan_pid=$(<"$orphaned/orphan.pid")
 ! kill -0 "$orphan_pid" 2>/dev/null || fail "successful gate orphan survived group drain"
 [ ! -s "$orphaned/events" ] || fail "installation ran after successful gate leaked an orphan"
 assert_no_fixture_processes "$orphaned"
+
+escaped="$temporary/escaped-setsid-after-success"
+make_fixture "$escaped" escaped-setsid-after-success
+SECONDS=0
+set +e
+run_release "$escaped" escaped-setsid-after-success
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "escaped setsid child returned $status instead of build error 5"
+[ "$SECONDS" -lt 10 ] || fail "escaped setsid child was not drained in bounded time"
+escaped_pid=$(<"$escaped/escaped.pid")
+! kill -0 "$escaped_pid" 2>/dev/null || fail "escaped setsid child survived cgroup drain"
+[ ! -s "$escaped/events" ] || fail "installation ran after escaped setsid child"
+! grep -F 'go build ' "$escaped/gates" >/dev/null \
+  || fail "binaries were built after escaped setsid child"
+assert_no_fixture_processes "$escaped"
 
 missing_session="$temporary/missing-session"
 make_fixture "$missing_session" missing-session
