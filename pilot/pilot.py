@@ -907,8 +907,11 @@ def cleanup_work_archive(conf, tasks):
             task.get("id") or "",
         ))
         new_meta = work_key not in works
+        inferred_origin = (ORIGIN_ORCHESTRATOR
+                           if str(group[0].get("request_key") or "").startswith("automation:")
+                           else ORIGIN_OWNER)
         meta = works.setdefault(work_key, {
-            "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
+            "origin": inferred_origin, "start_stage": "", "skipped": [],
             "reason": "", "base_title": base,
             "at": group[0].get("created_at") or closed_at,
         })
