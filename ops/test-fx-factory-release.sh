@@ -49,6 +49,8 @@ make_fixture() {
   : >"$case_dir/gate-children"
   : >"$case_dir/handshake-events"
   : >"$case_dir/cgroup-extra"
+  printf 'completed\n' >"$case_dir/cgroup-bootstrap.done"
+  chmod 600 "$case_dir/cgroup-bootstrap.done"
 
   cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
@@ -581,6 +583,7 @@ EOF
     -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/trusted/factory-gate-cgroup|" \
     -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$fixture_cgroup_hash|" \
     -e "s|^TRUSTED_CONTROL_INSTALLER=.*$|TRUSTED_CONTROL_INSTALLER=$case_dir/trusted/factory-install-control|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
     -e "s|^TRUSTED_SYSTEMCTL=.*$|TRUSTED_SYSTEMCTL=$case_dir/bin/systemctl|" \
     -e "s|^TRUSTED_SLEEP=.*$|TRUSTED_SLEEP=$case_dir/bin/sleep|" \
     -e "s|^TRUSTED_CURL=.*$|TRUSTED_CURL=$case_dir/bin/curl|" \

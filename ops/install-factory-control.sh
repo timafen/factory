@@ -11,6 +11,7 @@ FX_TARGET=${FACTORY_FX_BIN:-/usr/local/bin/fx}
 RELEASE_TARGET=${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}
 INSTALLER_TARGET=${FACTORY_CONTROL_INSTALLER:-/usr/local/libexec/factory-install-control}
 GATE_TARGET=${FACTORY_GATE_CGROUP_HELPER:-/usr/local/libexec/factory-gate-cgroup}
+BOOTSTRAP_TARGET=${FACTORY_CGROUP_BOOTSTRAP:-/usr/local/libexec/factory-cgroup-bootstrap}
 OWNER=${FACTORY_CONTROL_OWNER-root:root}
 BOOTSTRAP=${FACTORY_CONTROL_BOOTSTRAP:-0}
 GATE_HELPER_SHA256=b241be54c609c4c172dab0796f4408081fa5e9d7f429eba694712ffd03f109ac
@@ -63,6 +64,11 @@ case "$BOOTSTRAP" in
     bash -n "$gate_source"
     targets+=("$INSTALLER_TARGET" "$GATE_TARGET")
     sources+=("$0" "$gate_source")
+    [ -f "$SRC/ops/factory-cgroup-bootstrap.sh" ] && [ ! -L "$SRC/ops/factory-cgroup-bootstrap.sh" ] \
+      || { echo 'invalid cgroup bootstrap source' >&2; exit 1; }
+    bash -n "$SRC/ops/factory-cgroup-bootstrap.sh"
+    targets+=("$BOOTSTRAP_TARGET")
+    sources+=("$SRC/ops/factory-cgroup-bootstrap.sh")
     ;;
   *) echo 'FACTORY_CONTROL_BOOTSTRAP must be 0 or 1' >&2; exit 1 ;;
 esac

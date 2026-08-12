@@ -76,6 +76,7 @@ TRUSTED_GO=/usr/bin/go
 TRUSTED_GATE_CGROUP=/usr/local/libexec/factory-gate-cgroup
 TRUSTED_GATE_CGROUP_SHA256=b241be54c609c4c172dab0796f4408081fa5e9d7f429eba694712ffd03f109ac
 TRUSTED_CONTROL_INSTALLER=/usr/local/libexec/factory-install-control
+TRUSTED_CGROUP_BOOTSTRAP_MARKER=/var/lib/factory/cgroup-helper-bootstrap.done
 TRUSTED_SHA256SUM=/usr/bin/sha256sum
 TRUSTED_DIRNAME=/usr/bin/dirname
 TRUSTED_FLOCK=/usr/bin/flock
@@ -131,6 +132,16 @@ validate_trusted_gate_cgroup() {
   [ "${hash%% *}" = "$TRUSTED_GATE_CGROUP_SHA256" ]
 }
 
+validate_cgroup_bootstrap_marker() {
+  local owner mode content
+  [ -f "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] || return 1
+  [ ! -L "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] || return 1
+  owner=$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" 2>/dev/null) || return 1
+  mode=$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" 2>/dev/null) || return 1
+  content=$("$TRUSTED_CAT" -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" 2>/dev/null) || return 1
+  [ "$owner" = "$TRUSTED_OWNER_UID" ] && [ "$mode" = 600 ] && [ "$content" = completed ]
+}
+
 for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_CHMOD" "$TRUSTED_MKDIR" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
@@ -152,6 +163,8 @@ validate_trusted_executable "$TRUSTED_CONTROL_INSTALLER" \
   || { fail "control installer не установлен безопасным bootstrap или нарушены owner/mode"; exit 4; }
 validate_trusted_gate_cgroup \
   || { fail "cgroup helper не установлен безопасным bootstrap или нарушены owner/mode/hash"; exit 4; }
+validate_cgroup_bootstrap_marker \
+  || { fail "обязательная одноразовая проверка cgroup helper ещё не выполнена"; exit 4; }
 
 # A caller-provided launcher must never control checkout or gate inputs. Keep
 # the historical empty no-switch mode for hermetic/operator use and accept the

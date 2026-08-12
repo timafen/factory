@@ -17,6 +17,10 @@
   `FACTORY_CONTROL_BOOTSTRAP=1`: это ставит root-owned cgroup helper и
   установленный control installer с проверкой режима и SHA-256. Обычный release
   использует только эту установленную пару и не выполняет helper из checkout.
+- `ops/factory-cgroup-bootstrap.sh` — одноразовая root-команда для текущего
+  сервера: проверяет доверенный bootstrap-каталог, живьём проверяет cgroup v2,
+  ставит helper с откатом при ошибке и оставляет marker, после которого Gate
+  допускается к запуску.
 - `ops/install-brain.sh` — установка мозга при выкате: проверка, замена,
   перезапуск, откат при беде. Вызывается из fx-factory-release.
 - `ops/provision-codex-auth.sh` — fail-closed проверка общего `auth.json` и
