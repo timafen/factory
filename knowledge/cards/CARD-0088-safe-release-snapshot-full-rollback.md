@@ -2,8 +2,27 @@
 
 ## HEAD
 
-Status: Specification — implementation required before migration 027; Pilot
-remains disabled.
+Status: Implemented and verified; Pilot remains disabled and no production
+release was performed.
+
+Branch: `factory/00a0a965-4e1-ac3fb722-fe9`
+
+Implementation commit: 044c941ee845c917967f3f2a25ed64d3367502a6 —
+выпуск сохраняет проверенный SQLite snapshot и immutable полный комплект,
+устанавливает пару через journal и полностью откатывает код/службы/metadata;
+DB restore остаётся отдельной подтверждаемой операцией.
+
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS; `go test ./...` → PASS;
+`python3 -m unittest pilot.test_pilot` → 202 PASS; UI type/test/build → 157 PASS
+и build PASS; `bash ops/test-factory-release-systemd.sh` → явный SKIP вне root
+systemd fixture; shell syntax и `git diff --check` → PASS.
+
+Next action: провести независимый Review реализации CARD-0088 до любого выпуска
+migration 027 или включения Pilot.
+
+## LOG
+
+### 2026-08-11 — Specification
 
 Finding: worker-discovered high-risk release finding, не ручное предложение
 владельца. Production не считать rollback-ready и не изменять в рамках этой
@@ -47,3 +66,15 @@ backup/restore 026→027, crash boundaries, retention/permissions/disk пров�
 реализации.
 
 Next action: передать CARD-0088 в Implement по точному scope спецификации.
+
+### 2026-08-11 — Implement
+
+Реализованы fail-closed preflight, online SQLite snapshot, канонический manifest
+полного поколения, fsync journal и восстановление после фазовых прерываний.
+Обычный rollback возвращает парные binaries, broker/control/brain, metadata и
+service states без изменения БД; несовместимый ledger требует отдельный
+проверенный `restore-db`, сохраняющий failed DB.
+
+Доказательство: обязательный release fixture PASS, Go `./...` PASS, Pilot 202
+PASS, UI 157 PASS и production build PASS, syntax/diff PASS. Реальная systemd
+фикстура добавлена и вне root/systemd окружения честно завершилась SKIP.
