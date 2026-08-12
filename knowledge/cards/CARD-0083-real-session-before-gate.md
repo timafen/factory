@@ -4,7 +4,7 @@
 
 Status: Implemented — awaiting human merge.
 Branch: factory/6c7e734d-75e-4a53d483-d59.
-Implementation commit: d0ed877e0fd44bf81f39f8337f8ef8fe9efbcacc — Gate запускается из закрытой копии, извлечённой и проверенной по Git blob SHA.
+Implementation commit: d0ed8773a2376da50f9420f60ef559ef511584bb — Gate запускается из закрытой копии, извлечённой и проверенной по Git blob SHA.
 What changed: handshake/session cleanup перенесены на свежий `main`; `$AS` исключён из цепочки запуска и результата.
 What changed: gate-сценарий извлекается из commit object в каталог mode `0700`, сверяется через `git hash-object` и запускается оттуда.
 Threat model: замена рабочего `ops/test-fx-factory-release.sh` после checkout не может превратить настоящий отказ Gate в успех.
