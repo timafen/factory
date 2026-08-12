@@ -3,15 +3,20 @@
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: `factory/16f9dc13-c12-270afe6b-8a2`.
-Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
+Branch: `factory/c8080811-e53-581e7a27-b43`.
+Implementation commit: afd3d9b7acce926389aa79f5eed1b85e4e8a39a9 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
 What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
-Evidence: закреплённое сравнение с remote `main` содержит только эту карточку; `python3 -m unittest pilot.test_pilot -q` — PASS, 214 tests OK.
+Evidence: свежий remote `main` — `d9dcf3cbee1fb902907b64f4e6118c8e9876303b`; `python3 -m unittest pilot.test_pilot -q` — PASS.
 Next action: human merges the documentation-only verification record; existing task snapshots remain intentionally unchanged according to the handoff.
 
 ## LOG
 
 ### 2026-08-12 — Verify
+
+Повторная публикация на свежем `origin/main`: заявленная старая ветка отсутствует,
+но кодовый предок уже входит в `main`; карточка обновлена для новой ветки.
+
+### 2026-08-12 — Implement
 
 | Критерий | Команда / проверка | Результат |
 | --- | --- | --- |
