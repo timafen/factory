@@ -438,7 +438,7 @@ describe("App", () => {
 
     expect(await within(resumedDialog).findByText("Migration finalized")).toBeVisible();
     expect(within(resumedDialog).getByText("/tmp/legacy/archive/legacy-migration")).toBeVisible();
-    expect(within(resumedDialog).getByRole("button", { name: "Review Imported ready issues" })).toBeVisible();
+    expect(within(resumedDialog).getByRole("button", { name: "Проверить Imported ready issues" })).toBeVisible();
     const importCall = fetch.mock.calls.find(([input, init]) => {
       const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return path === "/api/v1/migrations/legacy-poller/import" && init?.method === "POST";

@@ -728,7 +728,7 @@ function LegacyPollerMigrationDialog({
                   <div className="detail-actions">
                     {migration.automations.map((automation) => (
                       <button className="button button-secondary" key={automation.id} onClick={() => onAutomation(automation.id)}>
-                        Review {automation.title}
+                        Проверить {automation.title}
                       </button>
                     ))}
                   </div>
