@@ -2,16 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented PASS — готово к Verify.
-- Branch: `factory/e9d39374-b9f-f1031f59-fb1`.
+- Status: Implemented PASS — готово к Review.
+- Branch: `factory/28f4da49-ddb-34730e2a-67e`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 39f1eeab68b94d5d87e9b68cdb496f2e98c81ffe — broker fail-closed останавливает рестарт при повреждённой durable operation-записи.
-- What changed: Broker больше не теряет повреждённую или подменённую запись и не принимает тот же generation как новый физический выпуск.
-- What changed: Recovery проверяет canonical filename, immutable request, phase, posts и PID; четыре corrupt-state сценария доказывают ноль executor-вызовов.
-- Evidence: `go test -count=1 ./internal/releasebroker`; `go test -race -count=1 ./internal/releasebroker` → OK; Pilot state machine → 10/10 OK.
-- Evidence: release-driver и installer shell fixtures → PASS; systemd fixture → SKIP без root; `just build` → три бинаря собраны.
-- Evidence: ветка перебазирована на `origin/main` `9123aa42b01a39ce7f1fa998568189ab6d38b07b`; `git diff --check` → passed.
-- Next action: Verify повторяет полный `just check` на незагруженном runner и принимает решение по независимым timeout.
+Implementation commit: 11f6999d97d843ea943cb46e30116c8e1c724d8f — NewAt fail-closed отвергает `.json`-каталог как повреждённую durable-запись.
+- What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
+- What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
+- Evidence: `go test -count=1 ./internal/releasebroker` и `go test -race -count=1 ./internal/releasebroker` → OK; `just build` → бинарники собраны.
+- Next action: Review повторно проверяет fail-closed обработку `.json` durable-записей.
 
 ## LOG
 
@@ -86,3 +84,10 @@ broker, но остановился на прежних пятиминутных
 Обычный и race-прогоны broker, 10 процессных Pilot-сценариев, release-driver,
 installer и сборка подтвердили fail-closed recovery; systemd fixture штатно
 пропущен в непривилегированном окружении.
+
+### 2026-08-12 — Implement
+
+`.json`-каталог больше не пропускается как отсутствующая durable operation:
+`NewAt` завершает запуск ошибкой до чтения состояния. Регрессионный тест
+подтверждает ноль вызовов executor; обычный и race Go-прогоны broker, а также
+`just build`, прошли успешно.
