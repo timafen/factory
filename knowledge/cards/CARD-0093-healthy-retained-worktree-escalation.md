@@ -1,17 +1,18 @@
-Implementation commit: 8022bff9482a2215447a86876f85276c2267dbf6 — добавлена идемпотентная эскалация retained worktree здорового исполнителя без очистки результата.
+Implementation commit: 157f2ea77a67bc2b60749a014b2bffd2615c3152 — healthy retained эскалируется идемпотентно в утверждённый канал владельца по умолчанию без очистки результата.
 
 # CARD-0093 — Эскалация retained worktree здорового исполнителя
 
 ## HEAD
 
-- Status: Implemented — target tests pass
-- Branch: `factory/722112d6-de2-d418d077-8a0`
-- Implementation commit: `8022bff9482a2215447a86876f85276c2267dbf6`
+- Status: Implemented — checks and live delivery pass
+- Branch: `factory/fe45422b-ee5-9037a0d0-e01`
+- Implementation commit: `157f2ea77a67bc2b60749a014b2bffd2615c3152`
 - Specification: `knowledge/specs/healthy-retained-worktree-escalation.md`
 - What changed: healthy online retained получает одну durable-эскалацию на
-  точный снимок; сбой канала оставляет результат на месте и доступен для повтора.
-- Evidence: `bash ops/test-factory-janitor.sh` — 6 сценариев PASS; Go, UI,
-  tooling и launcher checks — PASS; `just build` — PASS.
+  точный снимок через `https://ntfy.sh/timafen-a8523d037f21` по умолчанию;
+  сбой канала не помечает событие доставленным и оставляет его для повтора.
+- Evidence: `bash ops/test-factory-janitor.sh` — 7 сценариев PASS; два живых
+  запуска — одна доставка/один snapshot; `just test` и `just build` — PASS.
 - Next action: проверить этапом Verify и влить ветку в `main`.
 
 ## LOG
@@ -29,6 +30,12 @@ retained worktree больше не останавливается, но так�
 online healthy retained worktree с durable ключом точного снимка. Целевой тест
 подтвердил однократную доставку, повтор для изменённой причины, безопасный сбой
 канала и неизменность существующей offline/unhealthy очистки: 6 сценариев PASS.
+
+### 2026-08-12 — Implement
+
+Утверждённый ntfy-канал задан production-default и покрыт сценарием без
+переменной окружения. Целевой тест дал 7 PASS; два живых запуска отправили одно
+уведомление и сохранили один snapshot; `just test` и `just build` прошли.
 
 ## Проверка готовности
 
