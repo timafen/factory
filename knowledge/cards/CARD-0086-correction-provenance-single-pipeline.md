@@ -3,16 +3,15 @@
 ## HEAD
 
 - Status: Implemented and tested; Pilot remains operationally disabled.
-- Branch: `factory/ffb2f1bd-e35-41637e93-24a` (base `origin/main`
+- Branch: `factory/69214378-750-e950d8ba-0df` (base `origin/main`
   `36ce322e2b6685dd9a87f4d2c947f61538654ae1`).
-- Implementation commit: 55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3 — durable
-  `work_id` isolation for same-title artifact, delivery and lifecycle state.
-- What changed: provenance-first corrections retain separate same-title work
-  branches through restart, Review, Verify, merge and archive.
-- What changed: a provenance child whose `work_id == legacy_parent.id` joins
-  its legacy parent’s one pipeline; migration 027 and its durable outbox remain exact-once.
-- Evidence: focused provenance/restart and migration checks → PASS; full Pilot
-  (209 tests), `go test ./...`, `go build ./...` and diff check → PASS.
+- Implementation commit: 4640ac31411c15b870c42da8860aa898bd282e44 — resume and Review durable state are isolated by `work_id`.
+- What changed: Work UI and `/api/v1/works/resume` pass `work_id`; pause,
+  metadata, history and child selection no longer merge same-title works.
+- What changed: Review promises, areas, return limits, dirty/gate state and
+  delivery artifacts use `work_id`; title fallback remains legacy-only.
+- Evidence: focused HTTPS browser, UI/API/Pilot and migration checks → PASS;
+  full Pilot 210/210, UI 159/159, Go excluding one known main schema test, builds and diff → PASS.
 - Next action: review and merge this correction; keep Pilot disabled pending its
   separate safe release-state-machine decision.
 
@@ -69,3 +68,17 @@ Review-base logic while applying the provenance, migration 027 and Pilot work.
 Focused same-title/legacy restart and migration checks passed; full Pilot (209
 tests), `go test ./...`, `go build ./...` and whitespace diff check passed.
 Pilot remains disabled; the implementation is `55cfcdabaafa8ddeb9b91a8ed70d75be5e51b3b3`.
+
+### 2026-08-11 — Implement
+
+Strict Review blockers were corrected end-to-end on a new branch. Resume now
+uses explicit `work_id` through the Work UI, API pause lookup, metadata,
+pipeline history and child selection; a two-pause regression proves the other
+same-title work stays paused and keeps its own history. The real Review gate
+regression proves promises, areas, return limits, gate/dirty decisions and
+delivery artifacts do not cross between two same-title work IDs, while legacy
+title fallback remains covered. Focused HTTPS browser, UI/API/Pilot and
+migration tests passed; full Pilot passed 210/210, full UI 159/159, lint and all
+builds passed. Full Go has only the separately tracked current-main failure
+`TestPilotConfigExampleMatchesServerSchema`; all Go tests pass when excluding
+that exact test. Pilot remains disabled.
