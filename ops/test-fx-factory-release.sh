@@ -39,7 +39,7 @@ assert_no_fixture_processes() {
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
+  mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
     "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
@@ -102,6 +102,7 @@ case "$*" in
     mkdir -p "$destination/pilot" "$destination/intake"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx" "$destination/ops/fx"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx-factory-release" "$destination/ops/fx-factory-release"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/test-fx-factory-release.sh" "$destination/ops/test-fx-factory-release.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/pilot.py" "$destination/pilot/pilot.py"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/context.md" "$destination/pilot/context.md"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/app.py" "$destination/intake/app.py"
@@ -343,6 +344,31 @@ case "$*" in
 esac
 EOF
   chmod +x "$case_dir/bin/"*
+  /bin/cp "$case_dir/bin/npx" "$case_dir/trusted/npx"
+  /bin/cp "$case_dir/bin/npm" "$case_dir/trusted/npm"
+  /bin/cp "$case_dir/bin/go" "$case_dir/trusted/go"
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+printf 'path-setsid-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/trusted/setsid" <<'EOF'
+#!/bin/bash
+exec /usr/bin/setsid --fork --wait "$@"
+EOF
+  chmod +x "$case_dir/trusted/"* "$case_dir/bin/setsid"
+
+  # The production paths must be root-owned. The isolated fixture substitutes
+  # only its local test tools and still keeps every gate executable absolute.
+  fixture_uid=$(id -u)
+  /bin/sed \
+    -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
+    -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
+    -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
+    -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
+    -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
+    -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
 
 run_release() {
@@ -355,7 +381,7 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -377,7 +403,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
+    /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
 }
 
 run_driver() {
@@ -406,7 +432,7 @@ start_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -427,7 +453,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+    /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
 
@@ -474,6 +500,17 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+# A caller-controlled PATH can offer a plausible but fake setsid. The gate
+# must still run from its verified absolute path and complete normally.
+path_shadow="$temporary/path-shadow-chain"
+make_fixture "$path_shadow" parallel-success
+run_release "$path_shadow" parallel-success \
+  || { cat "$path_shadow/output" >&2; fail "PATH-shadowed gate did not complete"; }
+! grep -Fx 'path-setsid-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH shadow entered the trusted gate chain"
+assert_file "$path_shadow/install/factory-server" '#!/bin/bash'
+assert_file "$path_shadow/install/factory-worker" '#!/bin/bash'
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
