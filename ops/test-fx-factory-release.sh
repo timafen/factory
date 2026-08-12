@@ -256,6 +256,13 @@ if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
 fi
 exec /bin/bash "$@"
 EOF
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+# Emulate the util-linux fork path: the launcher exits before its session.
+: >"$TEST_SETSID_FORKED"
+/usr/bin/setsid --fork --wait "$@" &
+exit 0
+EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
 case "$*" in
@@ -356,6 +363,7 @@ run_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_SETSID_FORKED="$case_dir/setsid-forked" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -407,6 +415,7 @@ start_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_SETSID_FORKED="$case_dir/setsid-forked" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -437,6 +446,7 @@ run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
+[ -e "$success/setsid-forked" ] || fail "fixture did not exercise the forked setsid launcher"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
