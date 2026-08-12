@@ -262,6 +262,9 @@ case "$*" in
   '-q is-active '*|'-q is-enabled '*) exit 1 ;;
   'show '*) exit 1 ;;
 esac
+if [ "${1:-}" = stop ] && [[ "${2:-}" = factory-pilot-restart-* ]]; then
+  rm -f "$TEST_DEFERRED_ACTIVE"
+fi
 echo "$1 $2" >>"$TEST_EVENTS"
 exit 0
 EOF
@@ -284,6 +287,7 @@ EOF
 echo 'release-info ready' >>"$TEST_EVENTS"
 echo "systemd-run $*" >>"$TEST_EVENTS"
 [ "$TEST_MODE" != systemd-run-fail ] || exit 1
+: >"$TEST_DEFERRED_ACTIVE"
 capture=0
 for arg in "$@"; do
   [ "$arg" != /usr/bin/flock ] || capture=1
@@ -295,6 +299,9 @@ EOF
 #!/bin/bash
 /bin/mv "$@" || exit
 target=${@: -1}
+if [ "$TEST_MODE" = previous-link-fail ] && [ "$target" = "$TEST_RELEASE_DIR/previous" ]; then
+  exit 1
+fi
 if [ "$TEST_MODE" = interrupt-between-install ] \
   && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
   : >"$TEST_INTERRUPT_MARK"
@@ -355,6 +362,8 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_DEFERRED_ACTIVE="$case_dir/deferred-pilot-restart-active" \
+    TEST_RELEASE_DIR="$case_dir/releases" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -441,6 +450,26 @@ for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
+
+restart_rollback="$temporary/restart-rollback"
+make_fixture "$restart_rollback" previous-link-fail
+set +e
+run_release "$restart_rollback" previous-link-fail
+status=$?
+set -e
+[ "$status" -ne 0 ] || fail "rollback after scheduled Pilot restart unexpectedly succeeded"
+assert_file "$restart_rollback/install/factory-server" old-server
+assert_file "$restart_rollback/live/pilot/pilot.py" 'old pilot'
+grep -F 'systemd-run ' "$restart_rollback/events" >/dev/null \
+  || fail "rollback fixture did not schedule the Pilot restart"
+if [ -e "$restart_rollback/deferred-pilot-restart-active" ]; then
+  deferred_command=$(sed "s|/bin/systemctl|$restart_rollback/bin/systemctl|" "$restart_rollback/deferred-pilot-restart")
+  TEST_EVENTS="$restart_rollback/events" /bin/bash -c "$deferred_command"
+fi
+[ ! -e "$restart_rollback/deferred-pilot-restart-active" ] \
+  || fail "rollback left the deferred Pilot restart active"
+! grep -Fx 'restart factory-pilot.service' "$restart_rollback/events" >/dev/null \
+  || fail "restored release restarted Pilot after rollback"
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
