@@ -10,9 +10,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+func TestLeaseRenewalScheduleDispersesAttempts(t *testing.T) {
+	interval := 10 * time.Second
+	seen := map[int64]bool{}
+	for index := 0; index < 10; index++ {
+		delay := leaseRenewalDelay("attempt-"+string(rune('a'+index)), interval, 0)
+		if delay < 7*time.Second || delay > interval {
+			t.Fatalf("delay %s outside 70-100%% interval", delay)
+		}
+		seen[int64(delay/(interval/10))] = true
+	}
+	if len(seen) < 3 {
+		t.Fatalf("renewals occupied %d time buckets; want at least 3", len(seen))
+	}
+	if leaseRenewalDelay("stable-attempt", interval, 0) != leaseRenewalDelay("stable-attempt", interval, 0) {
+		t.Fatal("renewal phase is not stable")
+	}
+}
+
+func TestLeaseRenewalRetryStaysWithinLeaseBudget(t *testing.T) {
+	for retry := 1; retry < 10; retry++ {
+		delay := leaseRenewalDelay("retry-attempt", 2*time.Second, retry)
+		if delay < 1400*time.Millisecond || delay > 2*time.Second {
+			t.Fatalf("retry %d delay %s outside retry interval", retry, delay)
+		}
+	}
+}
 
 func TestBuildPromptIncludesGrammaticalSafetyInstruction(t *testing.T) {
 	claim := protocol.Claim{

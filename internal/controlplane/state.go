@@ -446,9 +446,6 @@ func (s *Store) Heartbeat(ctx context.Context, attemptID, token string) (protoco
 	if _, err := tx.ExecContext(ctx, `UPDATE attempts SET lease_expires_at = ? WHERE id = ?`, expiry.UnixMilli(), attemptID); err != nil {
 		return protocol.HeartbeatResponse{}, unavailable(err)
 	}
-	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now.UnixMilli(), "heartbeat"); err != nil {
-		return protocol.HeartbeatResponse{}, unavailable(err)
-	}
 	if err := tx.Commit(); err != nil {
 		return protocol.HeartbeatResponse{}, unavailable(err)
 	}

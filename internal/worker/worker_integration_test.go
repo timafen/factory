@@ -3249,3 +3249,58 @@ func jsonValid(value []byte) bool {
 	var decoded any
 	return decoder.Decode(&decoded) == nil
 }
+
+func TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay(t *testing.T) {
+	var mutex sync.Mutex
+	first := make(map[string]time.Time)
+	allStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		attemptID := parts[len(parts)-2]
+		mutex.Lock()
+		if _, exists := first[attemptID]; !exists {
+			first[attemptID] = time.Now()
+			if len(first) == 10 {
+				close(allStarted)
+			}
+		}
+		mutex.Unlock()
+		time.Sleep(3 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"lease_expires_at":"2030-01-01T00:00:30Z","cancellation_requested":false}`)
+	}))
+	defer server.Close()
+	manager := &Manager{
+		client:  newClient(server.URL, server.Client()),
+		options: Options{LeaseRenewInterval: 40 * time.Millisecond, LeaseRetryInterval: 20 * time.Millisecond},
+	}
+	handles := make([]*attemptHandle, 0, 10)
+	for index := 0; index < 10; index++ {
+		handle := &attemptHandle{done: make(chan struct{}), heartbeatDone: make(chan struct{}), expiry: time.Now().Add(time.Second)}
+		handles = append(handles, handle)
+		go manager.heartbeatAttempt(handle, fmt.Sprintf("attempt-%d", index), strings.Repeat("a", 64))
+	}
+	select {
+	case <-allStarted:
+	case <-time.After(time.Second):
+		t.Fatal("not all attempts renewed")
+	}
+	mutex.Lock()
+	min, max := first["attempt-0"], first["attempt-0"]
+	for _, value := range first {
+		if value.Before(min) {
+			min = value
+		}
+		if value.After(max) {
+			max = value
+		}
+	}
+	spread := max.Sub(min)
+	mutex.Unlock()
+	if spread < 5*time.Millisecond {
+		t.Fatalf("renewals remained a synchronous batch: spread %s", spread)
+	}
+	for _, handle := range handles {
+		handle.stopHeartbeat()
+	}
+}
