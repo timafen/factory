@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned; full Pilot suite has 3 compatibility-test errors.
-Branch: `factory/c92696e9-aa7-d6595696-a5d`.
+Status: READY FOR REVIEW: live Workflow revisions Review/Verify are released, smoked, rolled back, and reapplied; new tasks resolve their current immutable revision.
+Branch: `factory/fac9cc7b-e87-43c63c3f-c46`.
 Implementation commit: ac3ef660715a20f7b50711a57f7d787f63883598 — Review получает свежий pinned snapshot remote default branch.
-What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
-Evidence: Go and web suites pass; `python3 -m unittest pilot.test_pilot` fails with 3 stale `branch_report` compatibility-test errors.
-Next action: restore compatibility/update the three Pilot tests, then create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots must remain unchanged.
+What changed: Review/Verify resolve remote HEAD, fetch base/candidate refs in an isolated repository, record immutable SHA values, and block infrastructure failures without cached-ref fallback. Live Workflow revisions 7→8→9 confirmed new rules, rollback, and reapplication; Pilot selects each workflow's current revision for new tasks.
+Evidence: Factory was released from fresh `main`; smoke reports Review and Verify at revision 9 with the fresh-base rule, after revision 8 rollback; health is HTTP 200.
+Next action: repeat independent Review against the fresh remote default branch.
 
 ## LOG
 
@@ -22,6 +22,14 @@ Next action: restore compatibility/update the three Pilot tests, then create and
 | Регрессии web | `npm run typecheck`; `npm test` | PASS: 14 файлов тестов, 155 тестов. |
 | Чистота поставки | `git diff --check`; `git diff --name-only origin/main...HEAD` | PASS: только запись Verify в карточке. |
 | Live rollout | проверка `## HEAD` и rollout-плана карточки | BLOCKED: immutable revisions не созданы и не закреплены; это обязательный критерий приёмки. |
+
+### 2026-08-11 — Implement
+
+Свежий `main` выпущен штатной командой `fx factory release main`; Factory health
+подтвердил HTTP 200. Для Review и Verify созданы immutable revisions: новая
+политика (7), штатный возврат к прежней (8) и повторное применение новой (9).
+Smoke чтением live Workflow API и revision history подтвердил, что обе текущие
+ревизии — 9 и содержат правило CARD-0087; существующие snapshots не менялись.
 
 ### 2026-08-11 — Specification
 
