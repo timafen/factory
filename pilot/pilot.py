@@ -608,8 +608,14 @@ def gh_merge(repo_identity, branch, title, expected_head=""):
         actual = ((current or {}).get("commit") or {}).get("sha", "")
         if actual != expected_head:
             return False, "delivery branch changed after Verify"
+    merge_args = ["gh", "pr", "merge", branch, "--repo", repo, "--squash",
+                  "--delete-branch"]
+    if expected_head:
+        # Unlike a separate branch lookup, GitHub evaluates this constraint
+        # atomically with the merge and closes the final force-push window.
+        merge_args.extend(["--match-head-commit", expected_head])
     r = subprocess.run(
-        ["gh", "pr", "merge", branch, "--repo", repo, "--squash", "--delete-branch"],
+        merge_args,
         capture_output=True, text=True, env=env, timeout=180)
     return r.returncode == 0, (r.stdout + r.stderr).strip()
 
@@ -6718,6 +6724,19 @@ def _merge_journaled(task_id):
         return False
 
 
+def _verified_merge_result(repo, branch, expected_head):
+    """Whether GitHub records this exact verified head as merged."""
+    owner = repo.split("/", 1)[0]
+    head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    pulls = gh_json(["api", f"repos/{repo}/pulls?state=all&head={head}&per_page=100"])
+    if not isinstance(pulls, list):
+        return False
+    return any(
+        pull.get("merged_at") and (pull.get("head") or {}).get("sha") == expected_head
+        for pull in (pulls or [])
+    )
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -6731,7 +6750,7 @@ def recover_merge_intents(conf, state):
         # A content conflict cannot heal by repeating the same merge request.
         # A separate correction task rebases the same branch and sends it
         # through Review and Verify again.
-        if intent.get("phase") in ("conflict", "repairing", "superseded"):
+        if intent.get("phase") in ("conflict", "repairing", "superseded", "stale"):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
@@ -6739,12 +6758,23 @@ def recover_merge_intents(conf, state):
             continue
         merged = intent.get("phase") in ("merged", "journaled", "waiting")
         if not merged:
-            compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
-            if compare is not None and compare.get("ahead_by") == 0:
+            api_repo = repo.split("github.com/")[-1]
+            expected_head = intent.get("commit_sha", "")
+            current = gh_json(["api", f"repos/{api_repo}/branches/{branch}"])
+            actual_head = ((current or {}).get("commit") or {}).get("sha", "")
+            exact_merge = _verified_merge_result(api_repo, branch, expected_head)
+            if actual_head and actual_head != expected_head:
+                intent.update({
+                    "phase": "stale",
+                    "merge_error": "delivery branch changed after Verify",
+                })
+                save(STATE_PATH, state)
+                continue
+            if exact_merge:
                 merged = True
             else:
                 ok, output = gh_merge(repo, branch, intent.get("base", branch),
-                                      intent.get("commit_sha", ""))
+                                      expected_head)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
