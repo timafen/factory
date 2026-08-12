@@ -412,11 +412,33 @@ FACTORY_DELIVERY_ID=factory-1-0123456789abcdef0123456789abcdef run_release "$ide
   || fail "same delivery id physically released Factory twice"
 [ "$(tr -d '\r\n' <"$idempotent/delivery-state/factory-1-0123456789abcdef0123456789abcdef.status")" = succeeded ] \
   || fail "generation fixture did not keep accepted durable status"
+[ "$(stat -c '%a' "$idempotent/delivery-state")" = 700 ] \
+  || fail "delivery state directory is not private"
+[ "$(stat -c '%a' "$idempotent/delivery-state/factory-1-0123456789abcdef0123456789abcdef.status")" = 600 ] \
+  || fail "delivery status file is not private"
+
+# A client that can talk to the broker socket must not be able to turn a
+# pre-seeded status into a completed release.  The real root driver rejects a
+# status file with client-writable permissions before it takes the release lock.
+hostile="$temporary/hostile-delivery-status"
+hostile_id="factory-1-hostile-0123456789abcdef0123456789abcdef"
+make_fixture "$hostile" parallel-success
+mkdir -p -m 700 "$hostile/delivery-state"
+printf 'succeeded\n' >"$hostile/delivery-state/$hostile_id.status"
+chmod 644 "$hostile/delivery-state/$hostile_id.status"
+set +e
+FACTORY_DELIVERY_ID="$hostile_id" run_release "$hostile" parallel-success
+hostile_rc=$?
+set -e
+[ "$hostile_rc" -eq 4 ] || fail "hostile preseed returned $hostile_rc instead of 4"
+[ ! -s "$hostile/events" ] || fail "hostile preseed reached the physical release"
+grep -F 'refusing untrusted delivery status' "$hostile/output" >/dev/null \
+  || fail "hostile preseed was not explained"
 
 # Every driver phase goes through the same durable helper.  Initial faults
 # must stop before the lock and physical executor; a fresh invocation may then
 # run exactly once and its next retry is a no-op from the durable success.
-for fault in write rename file-sync dir-sync; do
+for fault in create write file-sync close rename dir-sync; do
   initial="$temporary/initial-delivery-status-$fault"
   initial_id="factory-1-initial-$fault-0123456789abcdef"
   make_fixture "$initial" "initial-delivery-status-$fault"
@@ -441,9 +463,29 @@ for fault in write rename file-sync dir-sync; do
     || fail "durable retry after initial $fault fault reran the executor"
 done
 
+# A failure to persist `running` happens after the release lock but before any
+# clone/test/install work.  It must leave only the prior launching proof and
+# never let the physical executor start; every atomic-write boundary is covered.
+for fault in create write file-sync close rename dir-sync; do
+  running="$temporary/running-delivery-status-$fault"
+  running_id="factory-1-running-$fault-0123456789abcdef"
+  make_fixture "$running" "running-delivery-status-$fault"
+  set +e
+  FACTORY_DELIVERY_ID="$running_id" FACTORY_DELIVERY_STATUS_FAULT="running:$fault" \
+    run_release "$running" "running-delivery-status-$fault"
+  running_rc=$?
+  set -e
+  [ "$running_rc" -eq 4 ] \
+    || fail "running $fault fault returned $running_rc instead of 4"
+  [ "$(tr -d '\r\n' <"$running/delivery-state/$running_id.status")" = launching ] \
+    || fail "running $fault fault did not retain launching status"
+  [ ! -s "$running/events" ] \
+    || fail "running $fault fault reached the physical release"
+done
+
 # Terminal faults happen after the physical work.  They must leave the prior
 # durable running status, return non-success, and never publish `succeeded`.
-for fault in write rename file-sync dir-sync; do
+for fault in create write file-sync close rename dir-sync; do
   terminal="$temporary/terminal-delivery-status-$fault"
   terminal_id="factory-1-terminal-$fault-0123456789abcdef"
   make_fixture "$terminal" "terminal-delivery-status-$fault"
@@ -461,6 +503,27 @@ for fault in write rename file-sync dir-sync; do
     || fail "terminal $fault fault ran the physical executor more than once"
   grep -F 'не смог надёжно подтвердить успешный выпуск' "$terminal/output" >/dev/null \
     || fail "terminal $fault failure was not reported"
+done
+
+# Rollback has the same terminal durability boundary.  If writing `failed`
+# loses any atomic step, the driver exits non-successfully but leaves `running`;
+# the broker must therefore not infer a release_failed_rolled_back result from
+# its exit code alone (covered by the real FX broker test as well).
+for fault in create write file-sync close rename dir-sync; do
+  failed_delivery="$temporary/failed-delivery-status-$fault"
+  failed_id="factory-1-failed-$fault-0123456789abcdef"
+  make_fixture "$failed_delivery" server-fail
+  set +e
+  FACTORY_DELIVERY_ID="$failed_id" FACTORY_DELIVERY_STATUS_FAULT="failed:$fault" \
+    run_release "$failed_delivery" server-fail
+  failed_rc=$?
+  set -e
+  [ "$failed_rc" -eq 6 ] \
+    || fail "failed $fault fault returned $failed_rc instead of rollback error 6"
+  [ "$(tr -d '\r\n' <"$failed_delivery/delivery-state/$failed_id.status")" = running ] \
+    || fail "failed $fault fault published a terminal driver status"
+  ! grep -F 'succeeded' "$failed_delivery/delivery-state/$failed_id.status" >/dev/null \
+    || fail "failed $fault fault published success"
 done
 
 identity_retry="$temporary/identity-transient"

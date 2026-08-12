@@ -20,7 +20,33 @@ REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 DELIVERY_ID="${FACTORY_DELIVERY_ID:-}"
-DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}"
+DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-broker/driver-status}"
+
+# The broker launches this driver as root and passes a directory below its
+# StateDirectory.  Do not trust a status that a factory-server/socket client
+# could have written: both the directory and each pre-existing file must be
+# private to this process owner before a terminal result is read or replaced.
+secure_delivery_directory() {
+  local owner mode
+  umask 077
+  if [ -e "$DELIVERY_DIR" ]; then
+    [ -d "$DELIVERY_DIR" ] && [ ! -L "$DELIVERY_DIR" ] || return 1
+  else
+    mkdir -p -m 700 "$DELIVERY_DIR" || return 1
+  fi
+  owner=$(stat -c '%u' "$DELIVERY_DIR") || return 1
+  mode=$(stat -c '%a' "$DELIVERY_DIR") || return 1
+  [ "$owner" = "$(id -u)" ] && [ "$mode" = 700 ]
+}
+
+secure_delivery_file() {
+  local owner mode
+  [ ! -e "$DELIVERY_FILE" ] && return 0
+  [ -f "$DELIVERY_FILE" ] && [ ! -L "$DELIVERY_FILE" ] || return 1
+  owner=$(stat -c '%u' "$DELIVERY_FILE") || return 1
+  mode=$(stat -c '%a' "$DELIVERY_FILE") || return 1
+  [ "$owner" = "$(id -u)" ] && [ "$mode" = 600 ]
+}
 
 # The broker supplies an immutable generation id.  A terminal driver status is
 # checked before the release lock, so a retried broker POST cannot install the
@@ -29,6 +55,7 @@ DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}
 delivery_status() {
   [ -n "$DELIVERY_ID" ] || return 0
   local status=$1
+  secure_delivery_directory && secure_delivery_file || return 1
   python3 - "$DELIVERY_DIR" "$DELIVERY_FILE" "$status" <<'PY'
 import os
 import sys
@@ -116,8 +143,9 @@ PY
 
 if [ -n "$DELIVERY_ID" ]; then
   case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
-  mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
+  secure_delivery_directory || { echo "!! cannot prepare private delivery status storage" >&2; exit 4; }
   DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
+  secure_delivery_file || { echo "!! refusing untrusted delivery status" >&2; exit 4; }
   if [ -f "$DELIVERY_FILE" ]; then
     case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
       succeeded) exit 0 ;;

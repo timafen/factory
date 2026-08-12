@@ -18,6 +18,8 @@ grep -qx 'User=root' "$SOURCE_UNIT"
 grep -qx "Group=$BROKER_GROUP" "$SOURCE_UNIT"
 grep -qx 'NoNewPrivileges=true' "$SOURCE_UNIT"
 grep -qx 'StateDirectory=factory/release-broker' "$SOURCE_UNIT"
+grep -qx 'StateDirectoryMode=0700' "$SOURCE_UNIT"
+grep -qx 'UMask=0077' "$SOURCE_UNIT"
 grep -qx 'ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker' "$SOURCE_UNIT"
 
 if ! "$GETENT" group "$BROKER_GROUP" >/dev/null 2>&1; then

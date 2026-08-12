@@ -504,18 +504,118 @@ def _note_admitted_task(conf, response, body):
     tasks.append(task)
 
 
-def gh_merge(repo_identity, branch, title):
-    """Open (best-effort) and squash-merge the branch into the default branch."""
-    repo = repo_identity.split("github.com/")[-1]
+def merge_repository(repo_identity):
+    """Canonical GitHub repo name used by an immutable merge intent."""
+    repo = str(repo_identity or "").split("github.com/")[-1].removesuffix(".git").strip("/")
+    return repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) else ""
+
+
+def pull_snapshot(repo, selector):
+    """Read one PR through GitHub's authoritative API-backed CLI view."""
+    if not repo or selector in (None, ""):
+        return None
+    return gh_json(["pr", "view", str(selector), "--repo", repo, "--json",
+                    "number,id,url,headRefName,headRefOid,baseRefName,state,mergedAt,mergeCommit"])
+
+
+def pull_identity(repo, snapshot, branch, expected_sha):
+    """Validate and freeze the only PR that may be sent to `gh pr merge`."""
+    if not isinstance(snapshot, dict):
+        return None
+    try:
+        number = int(snapshot.get("number"))
+    except (TypeError, ValueError):
+        return None
+    node_id = snapshot.get("id") or snapshot.get("node_id") or ""
+    head = snapshot.get("headRefName") or (snapshot.get("head") or {}).get("ref") or ""
+    head_sha = snapshot.get("headRefOid") or (snapshot.get("head") or {}).get("sha") or ""
+    base = snapshot.get("baseRefName") or (snapshot.get("base") or {}).get("ref") or ""
+    if number < 1 or not node_id or head != branch or base != "main":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40,64}", str(head_sha)) or head_sha != expected_sha:
+        return None
+    return {"repository": repo, "pull_number": number, "pull_node_id": str(node_id),
+            "head_ref": head, "head_sha": head_sha, "base_ref": base}
+
+
+def prepare_merge_identity(intent):
+    """Find/create a PR, then return a durable identity before any merge call."""
+    repo = merge_repository(intent.get("repository", ""))
+    branch, commit_sha = intent.get("branch", ""), intent.get("commit_sha", "")
+    if not repo or not branch or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha or ""):
+        return None
+    snapshot = pull_snapshot(repo, branch)
+    if snapshot is None:
+        env = dict(os.environ, HOME=HOME)
+        try:
+            created = subprocess.run(
+                ["gh", "pr", "create", "--repo", repo, "--head", branch, "--base", "main",
+                 "--title", intent.get("base") or branch,
+                 "--body", "Automated by the Factory pipeline after Verify PASS."],
+                capture_output=True, text=True, env=env, timeout=120)
+        except (OSError, subprocess.SubprocessError) as error:
+            log("AUTO-MERGE cannot create or find PR", str(error)[:200])
+            return None
+        if created.returncode != 0:
+            log("AUTO-MERGE cannot create or find PR", (created.stdout + created.stderr).strip()[:200])
+            return None
+        snapshot = pull_snapshot(repo, branch)
+    return pull_identity(repo, snapshot, branch, commit_sha)
+
+
+def authoritative_merged_pull(intent):
+    """Return `merged`, `open`, `closed`, `unknown` or `conflict` for an intent.
+
+    The pull number/node/repo/head are stored before merge.  Querying by that
+    immutable number works after `--delete-branch` and after a squash merge,
+    unlike a branch comparison which can turn a crash into a second merge.
+    """
+    identity = intent.get("merge_identity") or {}
+    repo = merge_repository(intent.get("repository", ""))
+    if not repo or identity.get("repository") != repo:
+        return "conflict", ""
+    snapshot = pull_snapshot(repo, identity.get("pull_number"))
+    if snapshot is None:
+        return "unknown", ""
+    expected = pull_identity(repo, snapshot, identity.get("head_ref", ""), identity.get("head_sha", ""))
+    if not expected or any(expected.get(key) != identity.get(key) for key in
+                           ("repository", "pull_number", "pull_node_id", "head_ref", "head_sha", "base_ref")):
+        return "conflict", ""
+    state = str(snapshot.get("state") or "").upper()
+    merged = bool(snapshot.get("merged")) or state == "MERGED" or bool(snapshot.get("mergedAt"))
+    if merged:
+        merge = snapshot.get("mergeCommit") or snapshot.get("merge_commit") or {}
+        merge_sha = merge.get("oid") if isinstance(merge, dict) else ""
+        merge_sha = merge_sha or snapshot.get("merge_commit_sha") or ""
+        if not re.fullmatch(r"[0-9a-f]{40,64}", str(merge_sha)):
+            return "unknown", ""
+        return "merged", merge_sha
+    if state == "CLOSED":
+        return "closed", ""
+    if state == "OPEN":
+        return "open", ""
+    return "unknown", ""
+
+
+def gh_merge(repo_identity, branch, title, merge_identity=None):
+    """Squash-merge a previously persisted PR, never an untracked branch."""
+    repo = merge_repository(repo_identity)
     env = dict(os.environ, HOME=HOME)
-    subprocess.run(
-        ["gh", "pr", "create", "--repo", repo, "--head", branch,
-         "--title", title or branch,
-         "--body", "Automated by the Factory pipeline after Verify PASS."],
-        capture_output=True, text=True, env=env, timeout=120)
-    r = subprocess.run(
-        ["gh", "pr", "merge", branch, "--repo", repo, "--squash", "--delete-branch"],
-        capture_output=True, text=True, env=env, timeout=180)
+    selector = branch
+    if merge_identity:
+        if merge_identity.get("repository") != repo:
+            return False, "merge identity repository mismatch"
+        selector = str(merge_identity.get("pull_number") or "")
+        if not selector.isdigit():
+            return False, "merge identity has no pull number"
+    else:
+        return False, "missing immutable pull request identity"
+    try:
+        r = subprocess.run(
+            ["gh", "pr", "merge", selector, "--repo", repo, "--squash", "--delete-branch"],
+            capture_output=True, text=True, env=env, timeout=180)
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, str(error)
     return r.returncode == 0, (r.stdout + r.stderr).strip()
 
 
@@ -6420,20 +6520,31 @@ def _intent_has_wait(state, task_id):
 
 
 def _merge_journaled(task_id):
+    return _merge_journal_record(task_id) is not None
+
+
+def _merge_journal_record(task_id):
     try:
         with open(MERGES_PATH, encoding="utf-8") as stream:
-            return any(json.loads(line).get("task_id") == task_id
-                       for line in stream if line.strip())
+            records = list(stream)
     except (OSError, ValueError):
-        return False
+        return None
+    for line in reversed(records):
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if record.get("task_id") == task_id:
+            return record
+    return None
 
 
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
-    The intent is enough to ask GitHub whether its branch is already in main;
-    a crash after a successful external merge therefore cannot create a second
-    merge merely because the task cursor was saved first.
+    New intents record an immutable GitHub PR identity before `gh pr merge`.
+    Recovery checks that PR and its authoritative merge commit by number, so a
+    deleted source branch or squash merge cannot make us blindly merge again.
     """
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
         if _intent_has_wait(state, task_id):
@@ -6441,23 +6552,71 @@ def recover_merge_intents(conf, state):
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
             intent["phase"] = "failed"
+            save(STATE_PATH, state)
             continue
         merged = intent.get("phase") in ("merged", "journaled", "waiting")
         if not merged:
-            compare = gh_json(["api", f"repos/{repo.split('github.com/')[-1]}/compare/main...{branch}"])
-            if compare is not None and compare.get("ahead_by") == 0:
+            identity = intent.get("merge_identity")
+            if not identity:
+                identity = prepare_merge_identity(intent)
+                if not identity:
+                    # A branch deletion or GitHub outage is never a reason to
+                    # repeat a merge by branch name.  Leave the durable intent
+                    # for a later authoritative PR lookup.
+                    continue
+                intent["merge_identity"] = identity
+                intent["phase"] = "merge_ready"
+                save(STATE_PATH, state)
+
+            outcome, merge_sha = authoritative_merged_pull(intent)
+            if outcome == "merged":
+                intent["phase"] = "merged"
+                intent["merge_commit_sha"] = merge_sha
+                save(STATE_PATH, state)
                 merged = True
-            else:
-                ok, output = gh_merge(repo, branch, intent.get("base", branch))
-                log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
+            elif outcome == "open":
+                # Persist that the external merge may start before invoking
+                # it.  If the process dies in `gh`, the next process re-reads
+                # this exact PR instead of guessing from a deleted branch.
+                intent["phase"] = "merge_submitted"
+                save(STATE_PATH, state)
+                ok, output = gh_merge(repo, branch, intent.get("base", branch), identity)
+                log(f"AUTO-MERGE recovery pr={identity['pull_number']} ok={ok} :: {output[:200]}")
                 if not ok:
                     continue
+                # A successful CLI exit still is not a receipt.  Read the
+                # merged PR/commit once more; transient API ambiguity leaves
+                # the intent for recovery rather than publishing owner done.
+                outcome, merge_sha = authoritative_merged_pull(intent)
+                if outcome != "merged":
+                    continue
+                intent["phase"] = "merged"
+                intent["merge_commit_sha"] = merge_sha
+                save(STATE_PATH, state)
                 merged = True
-            intent["phase"] = "merged"
-            save(STATE_PATH, state)
+            elif outcome in ("closed", "conflict"):
+                intent["phase"] = "failed"
+                save(STATE_PATH, state)
+                continue
+            else:
+                # `unknown` intentionally does not retry gh merge.  It can be
+                # a GitHub outage immediately after a successful squash.
+                continue
         if merged:
-            receipt = {"task_id": task_id, "base": intent.get("base", ""),
-                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            receipt = intent.get("merge_receipt") or _merge_journal_record(task_id)
+            if not isinstance(receipt, dict):
+                receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                           "repository": merge_repository(repo),
+                           "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                if intent.get("merge_identity"):
+                    receipt["pull_number"] = intent["merge_identity"].get("pull_number")
+                    receipt["pull_node_id"] = intent["merge_identity"].get("pull_node_id")
+                if intent.get("merge_commit_sha"):
+                    receipt["merge_commit_sha"] = intent["merge_commit_sha"]
+                # The state copy survives a crash between this local receipt
+                # and its jsonl journal append, preserving one exact merge.
+                intent["merge_receipt"] = receipt
+                save(STATE_PATH, state)
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
             # let an already-processed Verify task suppress its missing wait.
@@ -6467,7 +6626,8 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
-            generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
+            generation = deploy_after_merge(conf, repo, state,
+                                            intent.get("merge_commit_sha") or intent.get("commit_sha", ""), wait)
             if generation:
                 intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
                 save(STATE_PATH, state)
