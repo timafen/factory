@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Implementation commit: 9f6b07ea2fd8d8a60c1ca3f7a9b95acabe9922c7 — `setsid --wait` передаёт итог настоящего gate через kernel wait, а пути цепочки закреплены.
-Branch: factory/3f6b4aad-25e-c8aab9c3-1d0.
-What changed: gate запускается через проверенные root-owned `/usr/bin/setsid`, `/bin/bash` и `/usr/bin/sudo`, независимо от `PATH` и `$AS`.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS; вредоносный `setsid` из `PATH` не вызывается, failing gate возвращает `5`, установки и перезапуска нет.
-One next action: merge the branch.
+Status: Implemented — awaiting review.
+Implementation commit: a818cec94e1f771ecf3a604635cf302694db53f5 — UI- и Go-gate входят через `/usr/bin/sudo -H -u factory` до `/usr/bin/setsid --wait`.
+Branch: factory/e1d7b175-f3b-0400f866-21f.
+What changed: gate выполняются ограниченным пользователем `factory`; `$AS` больше не определяет их identity. Системный `setsid` остаётся закреплённым и передаёт код gate через kernel wait.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; целевой fixture-suite проверяет `factory`, непустой `FACTORY_RELEASE_AS` и PATH-spoof `setsid`.
+One next action: run review and merge after PASS.
 
 ## LOG
 
@@ -18,3 +18,10 @@ One next action: merge the branch.
 успех, не запуская gate. Релиз игнорирует этот файл, ждёт настоящий gate и при
 его ошибке не устанавливает новые бинарники и не трогает службы. Целевой suite
 также повторяет cleanup и сценарии forked gate.
+
+### 2026-08-12 — Implement
+
+Исправлен review-блокер: каждая группа UI/Go-проверок теперь запускается строго
+через root-owned `/usr/bin/sudo -H -u factory` перед `/usr/bin/setsid --wait`.
+Фикстура с непустым `FACTORY_RELEASE_AS` подтверждает identity `factory`, а
+отдельная PATH-подмена `setsid` по-прежнему не запускается.
