@@ -32,7 +32,8 @@ wait_for_release_exit() {
   set -e
   kill "$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
-  [ ! -e "$marker" ] || fail "release supervisor did not stop within five seconds"
+  [ ! -e "$marker" ] \
+    || fail "release supervisor did not stop within five seconds: $marker"
 }
 line_of() { grep -nF "$2" "$1" | head -n 1 | cut -d: -f1; }
 assert_before() {

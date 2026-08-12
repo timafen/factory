@@ -439,6 +439,19 @@ test_gate_launchers_running() {
   return 1
 }
 
+reap_finished_test_gate_launchers() {
+  local index launcher state
+  for index in "${!gate_pids[@]}"; do
+    launcher=${gate_pids[$index]}
+    case "$launcher" in ''|*[!0-9]*) continue ;; esac
+    state=$(ps -o stat= -p "$launcher" 2>/dev/null | tr -d '[:space:]')
+    if ! kill -0 "$launcher" 2>/dev/null || [[ "$state" = Z* ]]; then
+      wait "$launcher" 2>/dev/null || true
+      gate_pids[$index]=''
+    fi
+  done
+}
+
 test_gate_startup_pending() {
   local index group_pid launcher
   for index in "${!gate_pids[@]}"; do
@@ -497,11 +510,10 @@ stop_test_gates() {
 
 wait_for_test_gates() {
   local index pid i
-  # Launcher может завершиться от TERM раньше потомка. Поэтому ограниченно
-  # ждём и группу, и pending launcher, затем отправляем KILL каждому из них.
+  # Launcher может завершиться от TERM раньше потомка. Ограниченно ждём и
+  # reap-им launcher; повторная рассылка TERM только нагружает trap потомков.
   for ((i = 0; i < 100; i++)); do
-    signal_test_gate_groups TERM
-    signal_pending_test_gate_launchers TERM
+    reap_finished_test_gate_launchers
     if ! test_gate_groups_running && ! test_gate_launchers_running \
       && ! test_gate_startup_pending; then
       break
@@ -513,6 +525,7 @@ wait_for_test_gates() {
     signal_test_gate_groups KILL
     signal_pending_test_gate_launchers KILL
     for ((i = 0; i < 100; i++)); do
+      reap_finished_test_gate_launchers
       if ! test_gate_groups_running && ! test_gate_launchers_running \
         && ! test_gate_startup_pending; then
         break
