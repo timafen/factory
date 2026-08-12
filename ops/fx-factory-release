@@ -737,8 +737,10 @@ if [ "$deferred_pilot_restart" = 1 ]; then
     /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
     || rollback "не смог отложить перезапуск Пилота" 7
 fi
-ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
-ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
+ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" \
+  || rollback "не опубликована ссылка на предыдущий выпуск" 7
+ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT" \
+  || rollback "не опубликована ссылка на текущий выпуск" 7
 write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
 rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
