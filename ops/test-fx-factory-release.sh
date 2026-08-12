@@ -40,7 +40,7 @@ assert_no_fixture_processes() {
 make_fixture() {
   case_dir=$1 mode=$2
   mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
-    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
+    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database" "$case_dir/cgroups"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
 # old-server
@@ -320,6 +320,51 @@ if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new
 fi
 exec /bin/chmod "$@"
 EOF
+  cat >"$case_dir/cgroup-helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+name=$2
+state="$TEST_CGROUP_DIR/$name.pids"
+descendants() {
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -z "$child" ] || descendants "$child"
+  done < <(/usr/bin/ps -eo pid=,ppid= | /usr/bin/awk -v p="$parent" '$2 == p {print $1}')
+}
+members() {
+  [ -r "$state" ] && while read -r root; do descendants "$root"; done <"$state"
+}
+printf 'cgroup %s %s\n' "$1" "$name" >>"$TEST_GATES"
+case "$1" in
+  create) : >"$state" ;;
+  attach) printf '%s\n' "$3" >>"$state" ;;
+  empty)
+    while read -r pid; do
+      [ -r "/proc/$pid/stat" ] || continue
+      process_stat=$(<"/proc/$pid/stat")
+      process_rest=${process_stat##*) }
+      read -r process_state _ <<<"$process_rest"
+      [ "$process_state" = Z ] || exit 1
+    done < <(members)
+    ;;
+  signal) while read -r pid; do kill -"$3" "$pid" 2>/dev/null || true; done < <(members) ;;
+  remove) /bin/rm -f -- "$state" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod 755 "$case_dir/cgroup-helper"
+  printf 'completed\n' >"$case_dir/cgroup-bootstrap.done"
+  chmod 600 "$case_dir/cgroup-bootstrap.done"
+  helper_hash=$(/usr/bin/sha256sum "$case_dir/cgroup-helper" | /usr/bin/awk '{print $1}')
+  helper_uid=$(/usr/bin/id -u)
+  /usr/bin/sed \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/cgroup-helper|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$helper_hash|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
+    -e "s|^TRUSTED_CGROUP_OWNER_UID=.*$|TRUSTED_CGROUP_OWNER_UID=$helper_uid|" \
+    "$RELEASE" >"$case_dir/release-under-test"
+  chmod 755 "$case_dir/release-under-test"
   cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
 case "$*" in
@@ -355,7 +400,7 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_CGROUP_DIR="$case_dir/cgroups" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -377,13 +422,13 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1
+    /bin/bash "$case_dir/release-under-test" main >"$case_dir/output" 2>&1
 }
 
 run_driver() {
   case_dir=$1; shift
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE=control \
-    PATH="$case_dir/bin:$PATH" FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
+    PATH="$case_dir/bin:$PATH" TEST_CGROUP_DIR="$case_dir/cgroups" FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" FACTORY_FX_BIN="$case_dir/install/fx" \
     FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" FACTORY_BRAIN_LIVE="$case_dir/live" \
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" FACTORY_RELEASE_DIR="$case_dir/releases" \
@@ -393,7 +438,7 @@ run_driver() {
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
-    /bin/bash "$RELEASE" "$@"
+    /bin/bash "$case_dir/release-under-test" "$@"
 }
 
 start_release() {
@@ -406,7 +451,7 @@ start_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
-    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_CGROUP_DIR="$case_dir/cgroups" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
@@ -427,9 +472,27 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    /bin/bash "$RELEASE" main >"$case_dir/output" 2>&1 &
+    /bin/bash "$case_dir/release-under-test" main >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
+
+for bootstrap_state in missing-marker altered-helper; do
+  refused="$temporary/$bootstrap_state"
+  make_fixture "$refused" parallel-success
+  if [ "$bootstrap_state" = missing-marker ]; then
+    rm -f "$refused/cgroup-bootstrap.done"
+  else
+    printf '\n# altered after bootstrap\n' >>"$refused/cgroup-helper"
+  fi
+  set +e
+  run_release "$refused" parallel-success
+  status=$?
+  set -e
+  [ "$status" -eq 4 ] || fail "$bootstrap_state did not fail closed before Gate"
+  [ ! -s "$refused/gates" ] || fail "$bootstrap_state reached Gate commands"
+  grep -F 'cgroup helper не прошёл обязательный root bootstrap' "$refused/output" >/dev/null \
+    || fail "$bootstrap_state refusal was not explicit"
+done
 
 success="$temporary/success"
 make_fixture "$success" parallel-success
@@ -441,6 +504,9 @@ for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
+assert_before "$success/gates" 'cgroup attach factory-release-gate-' 'npx tsc -p tsconfig.app.json --noEmit'
+grep -F 'cgroup remove factory-release-gate-' "$success/gates" >/dev/null \
+  || fail "successful Gate did not remove its cgroup"
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
@@ -474,6 +540,11 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+rm -f "$success/cgroup-bootstrap.done"
+run_driver "$success" --status >"$success/status-output" \
+  || fail "status was incorrectly coupled to the cgroup bootstrap marker"
+grep -F 'Factory: current=' "$success/status-output" >/dev/null \
+  || fail "status no longer reports the committed generation"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient

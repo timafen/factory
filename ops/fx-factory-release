@@ -36,6 +36,10 @@ GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
 JOURNAL="$REL/transaction"
+TRUSTED_GATE_CGROUP=/usr/local/libexec/factory-gate-cgroup
+TRUSTED_GATE_CGROUP_SHA256=2d7f2b5fa4302bb3f0bb40c439421b1a444d6094d571a619bd0695f16b988da6
+TRUSTED_CGROUP_BOOTSTRAP_MARKER=/var/lib/factory/cgroup-helper-bootstrap.done
+TRUSTED_CGROUP_OWNER_UID=0
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -301,12 +305,35 @@ if [ -e "$JOURNAL" ]; then
        rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
   esac
 fi
+
+validate_gate_cgroup_installation() {
+  local owner mode digest marker_owner marker_mode marker_content
+  [ -f "$TRUSTED_GATE_CGROUP" ] && [ ! -L "$TRUSTED_GATE_CGROUP" ] && [ -x "$TRUSTED_GATE_CGROUP" ] \
+    || return 1
+  owner=$(/usr/bin/stat -Lc %u -- "$TRUSTED_GATE_CGROUP") || return 1
+  mode=$(/usr/bin/stat -Lc %a -- "$TRUSTED_GATE_CGROUP") || return 1
+  digest=$(/usr/bin/sha256sum -- "$TRUSTED_GATE_CGROUP") || return 1
+  [ "$owner" = "$TRUSTED_CGROUP_OWNER_UID" ] && [ "$mode" = 755 ] \
+    && [ "${digest%% *}" = "$TRUSTED_GATE_CGROUP_SHA256" ] || return 1
+  [ -f "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] && [ ! -L "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] \
+    || return 1
+  marker_owner=$(/usr/bin/stat -Lc %u -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  marker_mode=$(/usr/bin/stat -Lc %a -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  marker_content=$(/usr/bin/cat -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  [ "$marker_owner" = "$TRUSTED_CGROUP_OWNER_UID" ] && [ "$marker_mode" = 600 ] \
+    && [ "$marker_content" = completed ]
+}
+
+validate_gate_cgroup_installation \
+  || { fail "cgroup helper не прошёл обязательный root bootstrap (owner/mode/hash/marker)"; exit 4; }
+
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_pids=()
 gate_pid_files=()
 gate_logs=()
 gate_names=()
+gate_cgroups=()
 cleanup() {
   stop_test_gates
   wait_for_test_gates
@@ -322,10 +349,27 @@ trap on_release_exit EXIT
 # setsid может forkнуть, поэтому PID фонового launcher не всегда совпадает с
 # PGID. Launcher обязан сообщить PGID до возврата из этой функции: сигнал в
 # этот момент ждёт готовности файла, а не убивает launcher и не теряет группу.
+wait_for_stopped_launcher() {
+  local pid=$1 i state
+  for ((i = 0; i < 500; i++)); do
+    state=$(/usr/bin/ps -o stat= -p "$pid" 2>/dev/null || true)
+    case "$state" in T*) return 0 ;; esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.01
+  done
+  return 1
+}
+
 start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
-  local name=$1 log=$2 pid_file=$3 i
+  local name=$1 log=$2 pid_file=$3 i cgroup
   shift 3
-  as_user setsid bash -c '
+  cgroup="factory-release-gate-$$-${#gate_pids[@]}"
+  "$TRUSTED_GATE_CGROUP" create "$cgroup" || return 1
+  gate_cgroups+=("$cgroup")
+  bash -c '
+    kill -STOP "$$"
+    exec "$@"
+  ' bash $AS setsid bash -c '
     trap - INT
     printf "%s\\n" "$$" > "$1"
     shift
@@ -335,6 +379,15 @@ start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <к
   gate_pid_files+=("$pid_file")
   gate_logs+=("$log")
   gate_names+=("$name")
+  if ! wait_for_stopped_launcher "${gate_pids[${#gate_pids[@]}-1]}" \
+    || ! "$TRUSTED_GATE_CGROUP" attach "$cgroup" "${gate_pids[${#gate_pids[@]}-1]}"; then
+    kill -KILL "${gate_pids[${#gate_pids[@]}-1]}" 2>/dev/null || true
+    wait "${gate_pids[${#gate_pids[@]}-1]}" 2>/dev/null || true
+    "$TRUSTED_GATE_CGROUP" remove "$cgroup" 2>/dev/null || true
+    fail "не смог поместить $name в отдельную cgroup до старта Gate"
+    return 1
+  fi
+  kill -CONT "${gate_pids[${#gate_pids[@]}-1]}" || return 1
   for ((i = 0; i < 500; i++)); do
     [ -s "$pid_file" ] && return 0
     sleep 0.01
@@ -344,7 +397,7 @@ start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <к
 }
 
 stop_test_gates() {
-  local pid_file group_pid i
+  local pid_file group_pid i cgroup
   for pid_file in "${gate_pid_files[@]}"; do
     [ -e "$pid_file" ] || continue
     group_pid=''
@@ -357,13 +410,35 @@ stop_test_gates() {
       *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
     esac
   done
+  for cgroup in "${gate_cgroups[@]:-}"; do
+    [ -n "$cgroup" ] || continue
+    "$TRUSTED_GATE_CGROUP" signal "$cgroup" TERM 2>/dev/null || true
+  done
 }
 
 wait_for_test_gates() {
-  local pid
+  local pid cgroup i clean
   for pid in "${gate_pids[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
+  clean=1
+  for cgroup in "${gate_cgroups[@]:-}"; do
+    [ -n "$cgroup" ] || continue
+    if ! "$TRUSTED_GATE_CGROUP" empty "$cgroup" 2>/dev/null; then
+      clean=0
+      "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL 2>/dev/null || true
+      for ((i = 0; i < 500; i++)); do
+        "$TRUSTED_GATE_CGROUP" empty "$cgroup" 2>/dev/null && break
+        sleep 0.01
+      done
+    fi
+    "$TRUSTED_GATE_CGROUP" empty "$cgroup" 2>/dev/null \
+      && "$TRUSTED_GATE_CGROUP" remove "$cgroup" 2>/dev/null || clean=0
+  done
+  gate_cgroups=()
+  gate_pids=()
+  gate_pid_files=()
+  [ "$clean" = 1 ]
 }
 
 print_test_gate_logs() {
@@ -390,6 +465,7 @@ run_parallel_test_gates() {
   gate_pid_files=()
   gate_logs=()
   gate_names=()
+  gate_cgroups=()
 
   # A shell started as a background job can inherit ignored SIGINT. Reset it
   # before installing our handler so INT follows the same cleanup path.
@@ -412,7 +488,7 @@ run_parallel_test_gates() {
     if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
     if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
     stop_test_gates
-    wait_for_test_gates
+    wait_for_test_gates || true
     trap - HUP INT TERM
     print_test_gate_logs
     fail "$failed_name завершилась с кодом $status"
@@ -427,7 +503,11 @@ run_parallel_test_gates() {
   status=$?
   if [ "$status" -ne 0 ]; then
     stop_test_gates
-    wait_for_test_gates
+    wait_for_test_gates || true
+  fi
+  if ! wait_for_test_gates; then
+    status=1
+    fail "после Gate в cgroup остались фоновые процессы"
   fi
   trap - HUP INT TERM
   print_test_gate_logs
