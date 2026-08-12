@@ -1,15 +1,18 @@
-Implementation commit: 33aa4b58d7f949420ba4d86cfc9639038fa0f3c8 — базовая реализация санитарного отбора retained worktree до этапа эскалации.
+Implementation commit: 8022bff9482a2215447a86876f85276c2267dbf6 — добавлена идемпотентная эскалация retained worktree здорового исполнителя без очистки результата.
 
 # CARD-0093 — Эскалация retained worktree здорового исполнителя
 
 ## HEAD
 
-- Status: Specification — awaiting implementation
-- Branch: `factory/acbce571-a16-a944abc7-d44`
+- Status: Implemented — target tests pass
+- Branch: `factory/722112d6-de2-d418d077-8a0`
+- Implementation commit: `8022bff9482a2215447a86876f85276c2267dbf6`
 - Specification: `knowledge/specs/healthy-retained-worktree-escalation.md`
-- Scope: healthy online retained остаётся нетронутым, но получает одну
-  идемпотентную эскалацию владельцу.
-- Implementation files: `ops/factory-janitor.sh`, `ops/test-factory-janitor.sh`
+- What changed: healthy online retained получает одну durable-эскалацию на
+  точный снимок; сбой канала оставляет результат на месте и доступен для повтора.
+- Evidence: `bash ops/test-factory-janitor.sh` — 6 сценариев PASS; Go, UI,
+  tooling и launcher checks — PASS; `just build` — PASS.
+- Next action: проверить этапом Verify и влить ветку в `main`.
 
 ## LOG
 
@@ -19,6 +22,13 @@ Implementation commit: 33aa4b58d7f949420ba4d86cfc9639038fa0f3c8 — базова
 retained worktree больше не останавливается, но также не попадает ни в очистку,
 ни в эскалацию. Следующий этап должен добавить отдельный durable поток
 уведомления, не ослабляя защиту результата и не меняя API очистки.
+
+### 2026-08-12 — Implement
+
+В `ops/factory-janitor.sh` добавлен отдельный notification-only поток для
+online healthy retained worktree с durable ключом точного снимка. Целевой тест
+подтвердил однократную доставку, повтор для изменённой причины, безопасный сбой
+канала и неизменность существующей offline/unhealthy очистки: 6 сценариев PASS.
 
 ## Проверка готовности
 
