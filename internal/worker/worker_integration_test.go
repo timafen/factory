@@ -1780,6 +1780,10 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	overflowTask := createTask(t, fixture.store, worker, "pool-10", "barrier", 300)
 	manager.reserveAndClaim(managerContext)
 	overflowRunning := waitForTaskState(t, fixture.store, overflowTask.Task.ID, "running")
+	waitFor(t, 10*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(logDirectory, overflowRunning.Attempts[0].ID+".ready"))
+		return err == nil
+	})
 	if err := os.WriteFile(filepath.Join(logDirectory, overflowRunning.Attempts[0].ID+".release"), []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
