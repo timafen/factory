@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — terminal результат не подтверждается без надёжной записи.
-- Branch: `factory/2c29f61e-762-453fb329-76b`.
+- Status: Implemented — финальная запись результата драйвера теперь fail-closed.
+- Branch: `factory/9a5f1881-8de-c3901c14-426`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 2c15afeb71f813f72de700105f5447e4dc600aca — terminal status публикуется только после успешного persist.
-- What changed: При отказе terminal write broker сохраняет последний durable non-terminal status; fresh restart атомарно фиксирует `failed` и не повторяет executor.
-- What changed: Реальный process regression подтверждает физическую доставку без receipt, outbox, `mark_final` и owner done при неоднозначной durability.
-- Evidence: `go test -race ./internal/releasebroker` → OK; process crash/restart regression → OK (2); полный Pilot → OK (209, 13 skipped); обе shell fixture → PASS; `just check` → passed; `git diff --check` → passed.
-- Next action: Strict Review проверить fail-closed terminal persistence CARD-0084.
+- Implementation commit: 00692b43dcbfc11524d0a866b8bde42a96d50542 — финальный `succeeded` драйвера проверяется явно.
+- What changed: Отказ atomic write после физического выпуска возвращает ошибку, не публикуя durable `succeeded`.
+- What changed: Fresh broker/Pilot restart сохраняет failed outcome, один executor и отсутствие receipt, outbox, `mark_final` и owner done.
+- Evidence: broker race → OK; real process regression → OK (3); полный Pilot → OK (210, 13 skipped); обе shell fixture → PASS; `just check` и `just build` → passed; `git diff --check` → passed.
+- Next action: Strict Review проверить коррекцию финальной записи CARD-0084.
 
 ## LOG
 
@@ -52,3 +52,10 @@ Terminal and restart-recovery states are now published only after the matching
 operation record is persisted. A real filesystem write failure followed by a
 fresh broker and Pilot process proves one physical delivery, durable fail-closed
 recovery, and no receipt, outbox, finalization or owner completion.
+
+### 2026-08-11 — Implement
+
+The release driver now checks its authoritative final `succeeded` write and
+returns a non-success result when that atomic rename fails after physical
+delivery. A real shell fault plus fresh broker and Pilot processes prove one
+executor, durable failure and no receipt, outbox, finalization or owner completion.
