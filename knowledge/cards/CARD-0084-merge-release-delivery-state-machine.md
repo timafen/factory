@@ -1,15 +1,16 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
+Implementation commit: b4d10b49d56743abc5d6a1de1d2722fdc3b8bb37 — broker сохраняет durable-операцию через fsync и отказывается стартовать с повреждённой записью.
+
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Verified PASS — ожидает слияния человеком.
+- Branch: `factory/7e42f1a1-7b1-e87f4e4e-946`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+- Implementation commit: b4d10b49d56743abc5d6a1de1d2722fdc3b8bb37 — broker сохраняет durable-операцию через fsync и отказывается стартовать с повреждённой записью.
+- What changed: После ребейза сохранены обе fail-closed границы: terminal-status виден только после durable-записи, а fsync файла и каталога обязателен для любой operation.
+- Evidence: Pilot→broker process class — 10/10; `go test -count=1 ./internal/releasebroker`, shell release/installer fixtures и `just build` — PASS. `just check` прошёл static checks, но общий Go-прогон остановили независимые 300-секундные таймауты `internal/controlplane` и `internal/worker`.
+- Next action: Человеку принять решение о слиянии с учётом независимых таймаутов полного набора.
 
 ## LOG
 
@@ -69,3 +70,17 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Единственная модель и legacy | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | PASS: V2 generations остаются единственным done-путём, legacy читается только как audit. |
+| Готовность и outbox | тот же process class | PASS: до durable terminal нет receipt/outbox, `mark_final(true)` или owner done; после accepted release по одному каждого. |
+| Recovery merge и launch safety | тот же process class | PASS: crash boundaries POST/wrapper/PID/running/terminal восстанавливаются свежим Pilot без второго physical release. |
+| N против N+1 | тот же process class | PASS: rc=8 присоединяет второй merge к N; запуск в `launching` создаёт ровно один successor. |
+| Terminal recovery и durable broker | `go test -count=1 ./internal/releasebroker` | PASS: corrupt record блокирует старт, fsync-error не публикует operation или terminal success. |
+| Release driver и установка broker | `bash ops/test-fx-factory-release.sh`; `bash ops/test-install-project-release-broker.sh` | PASS: fixture проверяет release/rollback; unit имеет `StateDirectory=factory/release-broker`. |
+| Изоляция и чистота | `git diff --name-only <pinned base>...<candidate>`; `git diff --check` | Только `internal/releasebroker/{broker.go,broker_test.go}` и CARD-0084; whitespace ошибок нет. |
+| Сборка | `FACTORY_DATA_HOME=$(mktemp -d ...) just build` | PASS: собраны server, worker и release-broker. |
+| Полный регресс | `FACTORY_DATA_HOME=$(mktemp -d ...) just check` | Static checks PASS; `internal/controlplane` и `internal/worker` завершились по 300-секундному timeout, вне диффа. |
