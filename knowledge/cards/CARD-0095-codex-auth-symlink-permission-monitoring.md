@@ -16,7 +16,8 @@ Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавл
 - What changed: checker использует `stat -Lc`, принимает только `regular file 600 factory factory`,
   не меняет ссылки и не читает содержимое токена; Automation «Патруль Factory» переведена на него.
 - Evidence: `bash ops/test-check-codex-auth-permissions.sh`, `bash ops/test-provision-codex-auth.sh`,
-  `just test-tooling` и `just build` — PASS; live checker подтвердил 11 безопасных целей.
+  `just test-tooling` и `just build` — PASS; live checker подтвердил 11 безопасных целей; Run now
+  завершился без новых подтверждённых находок.
 - Next action: Verify проверяет поставленный коммит относительно свежего `main`; известный риск —
   внеобластной `internal/worker.TestIdleWorkerMakesOneClaimPerPollingInterval`.
 
@@ -69,4 +70,6 @@ Implementation commit: cea86c67ad856d13b05e44cd936e7314cd58710b — Добавл
 
 Через штатный API обновлён context Automation «Патруль Factory»: версия 2, расписание `17 * * * *`
 сохранено, 68 исторических Occurrence сохранены, Automation снова enabled; live checker вернул 0,
-подтвердил 11 целей `regular file 600 factory factory` и не вывел содержимое токена.
+подтвердил 11 целей `regular file 600 factory factory` и не вывел содержимое токена. После этого
+Run now task завершился успешно с результатом «новых подтверждённых нерешённых находок нет»;
+matching run-now occurrence сохранился, повторная карточка о режиме 777 не создана.
