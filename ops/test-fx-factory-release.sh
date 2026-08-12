@@ -120,6 +120,12 @@ BRAIN
     cat >"$destination/ops/test-fx-factory-release.sh" <<'RELEASE_GATE'
 #!/bin/bash
 echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
+if [ "$TEST_MODE" = trusted-gate-integration ]; then
+  SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+  [ -x "$SCRIPT_DIR/fx-factory-release" ] || exit 31
+  [ -f "$SCRIPT_DIR/systemd/factory-release-broker.service" ] || exit 32
+  printf 'extracted-gate-after-handshake\n' >>"$TEST_HANDSHAKE_EVENTS"
+fi
 if [ "$TEST_MODE" = gate-result-spoof ]; then
   for ((i = 0; i < 400; i++)); do
     grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null 2>&1 && break
@@ -836,6 +842,15 @@ grep -F 'завершилась с кодом 1' "$tampered_gate/output" >/dev/n
 ! grep -F 'go build ' "$tampered_gate/gates" >/dev/null \
   || fail "binaries were built after the workspace gate was replaced"
 assert_no_fixture_processes "$tampered_gate"
+
+extracted_gate="$temporary/trusted-gate-integration"
+make_fixture "$extracted_gate" trusted-gate-integration
+run_release "$extracted_gate" trusted-gate-integration \
+  || { cat "$extracted_gate/output" >&2; fail "the extracted trusted gate did not run"; }
+grep -Fx 'extracted-gate-after-handshake' "$extracted_gate/handshake-events" >/dev/null \
+  || fail "the extracted gate did not run after a verified handshake"
+assert_file "$extracted_gate/install/factory-server" '#!/bin/bash'
+assert_no_fixture_processes "$extracted_gate"
 
 for signal in HUP TERM; do
   for attempt in 1 2 3 4 5; do
