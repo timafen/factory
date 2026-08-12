@@ -2169,6 +2169,9 @@ func TestReconnectAfterLostCompletionRestoresEveryWorkerSlot(t *testing.T) {
 	if firstDetail.Attempts[0].ID == secondDetail.Attempts[0].ID {
 		t.Fatal("a live barrier supervisor was duplicated instead of filling the second slot")
 	}
+	if restored, err := restartedStore.Worker(context.Background(), reconnected.ID()); err != nil || restored.ActiveCount != 2 {
+		t.Fatalf("reconnected worker active count = %d, %v; want both slots restored", restored.ActiveCount, err)
+	}
 	if detail, err := restartedStore.Task(context.Background(), completed.Task.ID); err != nil || detail.Execution.State != "succeeded" {
 		t.Fatalf("lost completion changed terminal task: state=%q err=%v", detail.Execution.State, err)
 	}
@@ -2179,6 +2182,9 @@ func TestReconnectAfterLostCompletionRestoresEveryWorkerSlot(t *testing.T) {
 	}
 	waitForTaskState(t, restartedStore, first.Task.ID, "succeeded")
 	waitForTaskState(t, restartedStore, second.Task.ID, "succeeded")
+	if restored, err := restartedStore.Worker(context.Background(), reconnected.ID()); err != nil || restored.ActiveCount != 0 {
+		t.Fatalf("completed worker active count = %d, %v; want all slots released", restored.ActiveCount, err)
+	}
 }
 
 func TestCodexStartsOnlyAfterAttemptStartIsAccepted(t *testing.T) {
