@@ -2500,6 +2500,7 @@ class WorkArchiveCleanupTests(unittest.TestCase):
         self.run_cleanup([patrol])
 
         self.assert_archived(patrol["title"])
+        self.assertEqual(self.works[patrol["title"]]["origin"], "orchestrator")
 
     def test_03_cancelled_product_schedule_is_not_patrol(self):
         product = {
@@ -2511,6 +2512,7 @@ class WorkArchiveCleanupTests(unittest.TestCase):
 
         self.run_cleanup([product])
 
+        self.assertEqual(self.works[product["title"]]["origin"], "orchestrator")
         self.assertNotIn("closed", self.works[product["title"]])
         self.assertNotIn("archived_attempts", self.works[product["title"]])
 
