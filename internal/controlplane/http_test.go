@@ -420,6 +420,26 @@ func TestHTTPWorkerRegistrationSupportsLegacyAndRuntimeAwareContracts(t *testing
 	}
 }
 
+func TestHTTPWorkerRegistrationReturnsServerDerivedActiveCount(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	response := fixture.request(http.MethodPut, "/api/v1/workers/derived-worker", "application/json", "", protocol.WorkerRegistration{
+		Name: "derived-worker", WorkerVersion: "legacy", RuntimeVersion: "test",
+		Capacity: 1, ActiveCount: 1, Health: "healthy",
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "factory", RemoteIdentity: "github.com/example/http-derived-capacity",
+		}},
+	})
+	requireStatus(t, response, http.StatusOK)
+	worker := decodeResponse[protocol.Worker](t, response)
+	if worker.ActiveCount != 0 {
+		t.Fatalf("HTTP active_count = %d; want server-derived 0 without active leases", worker.ActiveCount)
+	}
+	stored, err := fixture.store.Worker(context.Background(), "derived-worker")
+	if err != nil || stored.ActiveCount != 0 {
+		t.Fatalf("stored active_count = %d, %v; want derived 0", stored.ActiveCount, err)
+	}
+}
+
 func TestHTTPDeleteTaskHistory(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	worker := registerHTTPWorker(t, fixture, workerA, "factory", "github.com/owainlewis/factory", 1)

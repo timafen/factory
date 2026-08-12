@@ -82,9 +82,9 @@ func (manager *Manager) registration() protocol.WorkerRegistration {
 		Runtime:        manager.config.Runtime,
 		RuntimeVersion: manager.health.RuntimeVersion,
 		Capacity:       manager.config.MaxConcurrent,
-		// Kept on the wire for older control planes. The server derives capacity
-		// from leased attempts, so local supervisors cannot create ghost slots.
-		ActiveCount:                0,
+		// New control planes derive capacity from leased attempts, but older ones
+		// still use this value for admission during a rolling upgrade.
+		ActiveCount:                len(manager.slots),
 		Health:                     manager.health.State,
 		Repositories:               repositories,
 		SourceAccess:               append([]protocol.SourceAccess(nil), manager.health.SourceAccess...),

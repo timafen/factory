@@ -59,3 +59,18 @@ func TestWorkerRegistrationRetriesAfterCredentialWriteFailure(t *testing.T) {
 		t.Fatalf("stored=%q registrations=%d err=%v", stored, registrations, err)
 	}
 }
+
+func TestRegistrationReportsOccupiedLocalSlotsForOlderControlPlanes(t *testing.T) {
+	manager := &Manager{
+		config:  Config{Name: "Rolling worker", Runtime: protocol.RuntimeCodex, MaxConcurrent: 2},
+		options: Options{WorkerVersion: "test"},
+		slots:   make(chan struct{}, 2),
+		health:  health{State: "healthy", RuntimeVersion: "test"},
+	}
+	manager.slots <- struct{}{}
+
+	registration := manager.registration()
+	if registration.ActiveCount != 1 {
+		t.Fatalf("registration active_count = %d; want occupied local slot count 1", registration.ActiveCount)
+	}
+}

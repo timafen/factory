@@ -69,6 +69,11 @@ printf '%s' "$prompt" > "$FACTORY_TEST_CODEX_LOG/$attempt.prompt"
 echo "$$" > "$FACTORY_TEST_CODEX_LOG/$attempt.pid"
 echo '{"type":"thread.started","thread_id":"test-thread"}'
 case "$prompt" in
+  *FAKE_MODE=duplicate-guard*)
+	printf '%s\n' "$$" >> "$FACTORY_TEST_CODEX_LOG/$attempt.invocations"
+	printf 'completed by fake Codex' > "$result"
+	echo '{"type":"item.completed","item":{"type":"agent_message","text":"completed"}}'
+	;;
   *FAKE_MODE=success*)
 	printf 'completed by fake Codex' > "$result"
 	echo '{"type":"item.completed","item":{"type":"agent_message","text":"completed"}}'
@@ -2064,15 +2069,39 @@ func TestLostClaimAndCompletionResponsesAreIdempotent(t *testing.T) {
 	repository := createRepository(t, "replay")
 	codexPath := filepath.Join(t.TempDir(), "codex")
 	writeFakeCodex(t, codexPath)
-	manager := newTestManager(t, fixture, codexPath, filepath.Join(t.TempDir(), "worker"),
+	dataDirectory := filepath.Join(t.TempDir(), "worker")
+	manager := newTestManager(t, fixture, codexPath, dataDirectory,
 		map[string]repositoryFixture{"replay": repository}, 1)
-	startManager(t, manager)
+	cancel, done := startManager(t, manager)
 	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" })
-	task := createTask(t, fixture.store, worker, "replay", "success", 60)
+	task := createTask(t, fixture.store, worker, "replay", "duplicate-guard", 60)
 	detail := waitForTaskState(t, fixture.store, task.Task.ID, "succeeded")
 	if !droppedClaim.Load() || !droppedCompletion.Load() || len(detail.Attempts) != 1 {
 		t.Fatalf("dropped claim=%v completion=%v attempts=%d",
 			droppedClaim.Load(), droppedCompletion.Load(), len(detail.Attempts))
+	}
+	starts, err := os.ReadFile(filepath.Join(os.Getenv("FACTORY_TEST_CODEX_LOG"), detail.Attempts[0].ID+".invocations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Fields(string(starts)); len(lines) != 1 {
+		t.Fatalf("duplicate claim started %d supervisors; want exactly one", len(lines))
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newTestManager(t, fixture, codexPath, dataDirectory,
+		map[string]repositoryFixture{"replay": repository}, 1)
+	startManager(t, restarted)
+	restartedWorker := waitForWorker(t, fixture.store, restarted.ID(), func(worker protocol.Worker) bool {
+		return worker.Health == "healthy" && worker.ActiveCount == 0
+	})
+	second := createTask(t, fixture.store, restartedWorker, "replay", "success", 60)
+	secondDetail := waitForTaskState(t, fixture.store, second.Task.ID, "succeeded")
+	if len(secondDetail.Attempts) != 1 {
+		t.Fatalf("restart after lost completion response created %d attempts; want 1", len(secondDetail.Attempts))
 	}
 }
 
