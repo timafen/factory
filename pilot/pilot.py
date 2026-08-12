@@ -134,10 +134,50 @@ def has_task_provenance(task):
         "work_id", "parent_task_id", "correction_kind"))
 
 
-def task_work_id(task):
-    """Durable work identity for new rows, title identity only for legacy rows."""
+def task_durable_work_id(task, tasks=None):
+    """Return a durable work ID, never manufacturing one from a title.
+
+    New control-plane rows carry ``work_id`` directly.  A child made from a
+    pre-027 parent is the one compatible bridge: the API deliberately stores
+    that child's ``work_id`` as ``parent.id``.  While both rows are visible,
+    recognise the legacy parent as the same durable work too.  Everything else
+    without provenance stays legacy and is allowed to use a title only at the
+    caller's explicit fallback boundary.
+    """
     task = task or {}
-    return task.get("work_id") or base_title(task.get("title") or "")
+    work_id = str(task.get("work_id") or "").strip()
+    if work_id:
+        return work_id
+    if has_task_provenance(task):
+        return ""
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return ""
+    for peer in tasks or []:
+        if str((peer or {}).get("work_id") or "").strip() == task_id:
+            return task_id
+    return ""
+
+
+def task_work_id(task, tasks=None):
+    """Stable identity when present, otherwise a legacy title fallback."""
+    task = task or {}
+    durable = task_durable_work_id(task, tasks)
+    if durable:
+        return durable
+    if has_task_provenance(task):
+        return ""
+    return base_title(task.get("title") or "")
+
+
+def work_storage_key(base, work_id="", task=None, tasks=None):
+    """Key durable Pilot state by work ID; title is legacy-only compatibility."""
+    stable = str(work_id or "").strip()
+    if not stable and task is not None:
+        stable = task_durable_work_id(task, tasks)
+        if not stable and has_task_provenance(task):
+            return ""
+    return stable or base_title(base or "")
 
 
 def task_is_root(task):
@@ -149,16 +189,50 @@ def task_is_root(task):
 
 def same_task_work(task, reference):
     """Compare durable work IDs when present; use titles only for legacy rows."""
+    task = task or {}
     if isinstance(reference, dict):
-        if (task or {}).get("work_id") or reference.get("work_id"):
-            return bool((task or {}).get("work_id")
-                        and (task or {}).get("work_id") == reference.get("work_id"))
-        reference = base_title(reference.get("title") or "")
-    if (task or {}).get("work_id"):
-        return (task or {}).get("work_id") == reference
-    return base_title((task or {}).get("title") or "").strip() == str(
-        reference or "").strip()
+        reference = reference or {}
+        task_work_id = str(task.get("work_id") or "").strip()
+        reference_work_id = str(reference.get("work_id") or "").strip()
+        if task_work_id or reference_work_id:
+            if task_work_id and reference_work_id:
+                return task_work_id == reference_work_id
+            # A provenance child of a legacy parent inherits parent.id.  That
+            # direct ID is authoritative even though the old parent has no
+            # ``work_id`` column value of its own.
+            if task_work_id and not has_task_provenance(reference):
+                return task_work_id == str(reference.get("id") or "").strip()
+            if reference_work_id and not has_task_provenance(task):
+                return reference_work_id == str(task.get("id") or "").strip()
+            return False
+        if has_task_provenance(task) or has_task_provenance(reference):
+            return False
+        return base_title(task.get("title") or "").strip() == base_title(
+            reference.get("title") or "").strip()
+    if task.get("work_id"):
+        return str(task.get("work_id") or "").strip() == str(reference or "").strip()
+    if has_task_provenance(task):
+        return False
+    reference = str(reference or "").strip()
+    return (reference == str(task.get("id") or "").strip()
+            or base_title(task.get("title") or "").strip() == reference)
 
+
+def task_matches_work(task, base, work_id="", root_task_id=""):
+    """Match one expected work without letting a title override provenance.
+
+    ``root_task_id`` keeps the migration bridge for a legacy root whose new
+    children inherit that root ID as ``work_id``.  A title is usable only when
+    neither the expected work nor the candidate has durable provenance.
+    """
+    stable = str(work_id or "").strip()
+    if stable:
+        return same_task_work(task, stable)
+    root_task_id = str(root_task_id or "").strip()
+    if root_task_id:
+        return same_task_work(task, {"id": root_task_id, "title": base or ""})
+    return (not has_task_provenance(task)
+            and base_title(task.get("title") or "").strip() == (base or "").strip())
 
 def is_service_work(title):
     """Service runs are useful diagnostics, but are not owner work delivered."""
@@ -829,8 +903,8 @@ def note_work(base, origin, start_stage="", skipped=None, reason="", work_id="")
     повторные стадии её не трогают."""
     try:
         rec = load(WORKS_PATH, {})
-        key = work_id or base
-        if key in rec:
+        key = work_storage_key(base, work_id)
+        if not key or key in rec:
             return
         rec[key] = {
             "origin": origin,
@@ -840,6 +914,8 @@ def note_work(base, origin, start_stage="", skipped=None, reason="", work_id="")
             "reason": reason or "",
             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        if work_id:
+            rec[key]["work_id"] = str(work_id)
         save(WORKS_PATH, rec)
     except Exception as e:
         log("note_work_error", repr(e))
@@ -1211,12 +1287,6 @@ def launch_subtask(conf, epic, index, workflows, workers):
     skipped_note = ("" if start == 0 else
                     f"Стадии {', '.join(stages_all[:start])} пропущены: задача мелкая. "
                     "Работай сразу по описанию ниже.\n")
-    # Подзадача наследует происхождение эпика: если эпик завёл помощник,
-    # владельцу важно видеть именно это, а не безликое «развернулось само».
-    note_work(sub["title"], epic.get("origin") or ORIGIN_ORCHESTRATOR,
-              stage_name, stages_all[:start],
-              "задача мелкая — разбор и спецификация не окупаются"
-              if start else "")
     context = (
         f"Epic: {epic['name']} (id {epic['id']})\n"
         f"Overall goal: {epic['goal']}\n\n"
@@ -1238,9 +1308,20 @@ def launch_subtask(conf, epic, index, workflows, workers):
     }
     try:
         r = create_task(body, conf)
-        tid = r.get("task", {}).get("id")
+        created_task = r.get("task") or {}
+        tid = created_task.get("id")
+        work_id = created_task.get("work_id") or tid
+        if not tid:
+            raise RuntimeError("create_task returned no task.id")
+        # Подзадача наследует происхождение эпика.  Записываем только после
+        # успешного create, когда сервер уже выдал устойчивую identity.
+        note_work(sub["title"], epic.get("origin") or ORIGIN_ORCHESTRATOR,
+                  stage_name, stages_all[:start],
+                  "задача мелкая — разбор и спецификация не окупаются"
+                  if start else "", work_id=work_id)
         sub["status"] = "running"
         sub["task_id"] = tid
+        sub["work_id"] = work_id
         sub["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         save(f"{EPIC_DIR}/{epic['id']}.json", epic)
         log(f"epic '{epic['name']}' -> подзадача {index+1}/{len(epic['subtasks'])}: {sub['title']} ({tid})")
@@ -1259,6 +1340,7 @@ def start_epic(conf, epic, workflows, workers):
         return False, f"не удалось запустить первую подзадачу: {err}"
     epic["status"] = "running"
     epic["children"] = [{"task_id": tid, "title": epic["subtasks"][0]["title"],
+                         "work_id": epic["subtasks"][0].get("work_id", ""),
                          "complexity": epic["subtasks"][0].get("complexity", "medium")}]
     save(f"{EPIC_DIR}/{epic['id']}.json", epic)
     return True, (f"запущена подзадача 1 из {len(epic['subtasks'])}; "
@@ -1296,8 +1378,17 @@ def _unused_parallel_start(conf, epic, workflows, workers):
         }
         try:
             r = create_task(body, conf)
-            tid = r.get("task", {}).get("id")
-            created.append({"task_id": tid, "title": sub["title"], "complexity": cx})
+            created_task = r.get("task") or {}
+            tid = created_task.get("id")
+            work_id = created_task.get("work_id") or tid
+            if not tid:
+                raise RuntimeError("create_task returned no task.id")
+            note_work(sub["title"], epic.get("origin") or ORIGIN_ORCHESTRATOR,
+                      stage_name, work_id=work_id)
+            sub["task_id"] = tid
+            sub["work_id"] = work_id
+            created.append({"task_id": tid, "work_id": work_id,
+                            "title": sub["title"], "complexity": cx})
             log(f"epic-start '{epic['name']}' -> child {tid} :: {sub['title']}")
         except Exception as e:
             log(f"epic-start create failed for '{sub['title']}': {e!r}")
@@ -2279,13 +2370,13 @@ def plan_idea(idea_id):
     """Schedule a fresh run while keeping retries of that run idempotent."""
     idea = next((item for item in ideas_all() if item.get("id") == idea_id), None)
     generation = str(uuid.uuid4())
-    updated = set_idea(idea_id, state="planned", task_id="", reason="",
+    updated = set_idea(idea_id, state="planned", task_id="", work_id="", reason="",
                        run_generation=generation)
     if idea:
         reopen_work(idea.get("title", ""), generation)
     if isinstance(updated, dict):
         return updated
-    return dict(idea or {}, state="planned", task_id="", reason="",
+    return dict(idea or {}, state="planned", task_id="", work_id="", reason="",
                 run_generation=generation)
 
 
@@ -2311,7 +2402,7 @@ def cleanup_completed_plan_cards(tasks, final_stage_no):
         for task in tasks or []:
             if (task.get("created_at") or "") < since:
                 continue
-            if base_title(task.get("title", "")) != base:
+            if not same_task_work(task, linked):
                 continue
             if stage_no_of(task.get("title")) != final_stage_no:
                 continue
@@ -2729,14 +2820,17 @@ def autostart_plan(conf, tasks, workflows, workers):
                 raise
             explain_bad_plan_repository(conf, rec, str(error))
             continue
-        task_id = (created.get("task") or {}).get("id", "")
+        created_task = created.get("task") or {}
+        task_id = created_task.get("id", "")
         if not task_id:
             raise RuntimeError("create_task returned no task.id")
-        updates = {"state": "in_work", "task_id": task_id}
+        work_id = created_task.get("work_id") or task_id
+        updates = {"state": "in_work", "task_id": task_id, "work_id": work_id}
         if repository_id != stored_repository_id:
             updates["repo"] = repository_id
         set_idea(rec["id"], **updates)
-        note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
+        note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name,
+                  work_id=work_id)
         notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
         created_task = dict((created or {}).get("task") or {})
         created_task.setdefault("id", task_id)
@@ -4074,8 +4168,9 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         return False
     task = detail.get("task") or {}
     workflow = detail.get("workflow") or {}
+    work_id = task_durable_work_id(candidate, tasks)
     branch = (extract_branch(detail.get("context") or task.get("context") or "", "")
-              or branch_from_history(tasks, base))
+              or branch_from_history(tasks, base, work_id=work_id))
     repair = {
         "status": "cancel_pending" if running_candidate else "resume_pending",
         "task_id": candidate["id"],
@@ -4090,6 +4185,8 @@ def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
         "solution": str(verdict.get("решение") or "")[:2000],
         "request_key": str(uuid.uuid4()),
     }
+    if work_id:
+        repair["work_id"] = work_id
     required = {
         "название задачи": repair["title"],
         "репозиторий": repair["repository_id"],
@@ -4379,7 +4476,7 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
 
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    question, options, prior_result, attempts_so_far=0, branch="",
-                   repair_task=None):
+                   repair_task=None, work_id=""):
     """Try to resolve the question with the orchestrator; escalate if it's the
     owner's call OR if this stage has already been retried too many times."""
     cap = conf.get("max_stage_attempts", 3)
@@ -4458,7 +4555,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                "а не работа. Конвейер по этой задаче остановлен — нужен твой разбор.",
                priority="high", tags="warning", click=f"{UI_BASE}/answer")
         return True
-    if budget_stopped(base):
+    if budget_stopped(base, work_id=work_id):
         rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                              question, options, prior_result, branch)
         rec["escalation_reason"] = (
@@ -4577,11 +4674,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
 
 
 def write_question(task_id, stage, resume_stage, base, repo_id, situation, question,
-                   options, prior_result, branch="", status="open"):
+                   options, prior_result, branch="", status="open", work_id=""):
     """Record a pipeline stop that needs the owner. The UI shows these and the
     answer resumes the pipeline."""
     os.makedirs(QUESTION_DIR, exist_ok=True)
-    branch, implementation_head = selected_delivery(base, branch)
+    branch, implementation_head = selected_delivery(base, branch, work_id=work_id)
     rec = {
         "id": task_id,
         "task_id": task_id,
@@ -4601,6 +4698,8 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
         "status": status,          # open -> answered -> resolved
         "answer": "",
     }
+    if work_id:
+        rec["work_id"] = str(work_id)
     save(f"{QUESTION_DIR}/{task_id}.json", rec)
     return rec
 
@@ -4631,7 +4730,8 @@ def attach_question_work_id(task):
         save(path, question)
 
 
-def subtask_state(tasks, open_q, last_stage, base, since=""):
+def subtask_state(tasks, open_q, last_stage, base, since="", work_id="",
+                  root_task_id=""):
     """Что сейчас с подзадачей: 'none' — конвейер не начинался, 'working' —
     что-то выполняется, 'waiting' — ждёт ответа владельца, 'done' — прошла
     всю цепочку с настоящим PASS, 'stuck' — остановилась не дойдя до конца."""
@@ -4639,7 +4739,7 @@ def subtask_state(tasks, open_q, last_stage, base, since=""):
     mine = []
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or m.group(2).strip() != base:
+        if not m or not task_matches_work(t, base, work_id, root_task_id):
             continue
         # Задачи с тем же названием из прошлых прогонов не считаются: иначе
         # подзадача объявляется готовой по чужому давнему успеху.
@@ -4658,7 +4758,7 @@ def subtask_state(tasks, open_q, last_stage, base, since=""):
     return "stuck"
 
 
-def merge_receipt(base, since=""):
+def merge_receipt(base, since="", work_id=""):
     """Return one canonical successful-merge receipt for this subtask run.
 
     The task API deliberately forgets terminal history.  ``merges.jsonl`` is
@@ -4678,11 +4778,18 @@ def merge_receipt(base, since=""):
         except (TypeError, ValueError):
             continue
         at = str(record.get("at") or "")
-        if record.get("base") != base or not at:
+        record_work_id = str(record.get("work_id") or "").strip()
+        if work_id:
+            if record_work_id != str(work_id).strip():
+                continue
+        elif record_work_id or record.get("base") != base:
+            # A provenance receipt cannot complete a legacy/title-only run.
+            continue
+        if not at:
             continue
         if since and not receipt_after(at, since):
             continue
-        return {key: record[key] for key in ("task_id", "base", "at")
+        return {key: record[key] for key in ("task_id", "base", "work_id", "at")
                 if key in record}
     return None
 
@@ -4719,18 +4826,20 @@ def complete_subtask(sub, source, receipt, completed_at=""):
     })
 
 
-def task_completion_receipt(tasks, last_stage, base, since=""):
+def task_completion_receipt(tasks, last_stage, base, since="", work_id="",
+                            root_task_id=""):
     """Return the final successful task that proved this subtask complete."""
     for task in reversed(tasks):
         match = STAGE_TITLE_RE.match(task.get("title", ""))
         if not match or match.group(1).strip() != last_stage:
             continue
-        if match.group(2).strip() != (base or "").strip():
+        if not task_matches_work(task, base, work_id, root_task_id):
             continue
         if since and (task.get("created_at") or "") < since:
             continue
         if task.get("state") == "succeeded" and final_ok(task["id"], strict=True):
             return {"task_id": task["id"], "stage": last_stage,
+                    "work_id": task_durable_work_id(task, tasks),
                     "created_at": task.get("created_at", "")}
     return {"task_id": "", "stage": last_stage}
 
@@ -4764,11 +4873,13 @@ def advance_epics(conf, tasks, workflows, workers):
             floor = epic.get("started_at") or epic.get("created_at") or ""
             live = [t for t in tasks
                     if (STAGE_TITLE_RE.match(t.get("title", ""))
-                        and STAGE_TITLE_RE.match(t["title"]).group(2).strip() == sub["title"].strip()
+                        and task_matches_work(t, sub["title"], sub.get("work_id", ""),
+                                              sub.get("task_id", ""))
                         and t["state"] in ("running", "queued", "preparing")
                         and (not floor or (t.get("created_at") or "") >= floor))]
             if live:
                 sub.update({"status": "running", "task_id": live[0]["id"],
+                            "work_id": task_durable_work_id(live[0], tasks),
                             "started_at": live[0].get("created_at", ""), "adopted": True})
                 save(path, epic)
                 log(f"epic '{epic['name']}': подхватил уже идущую подзадачу {i+1} ({sub['title'][:40]})")
@@ -4784,21 +4895,25 @@ def advance_epics(conf, tasks, workflows, workers):
             if sub.get("status") not in ("running", "done"):
                 continue
             since = sub.get("started_at") or epic.get("started_at") or epic.get("created_at") or ""
-            state_now = subtask_state(tasks, open_q, last_stage, sub["title"], since)
+            work_id = sub.get("work_id") or ""
+            root_task_id = sub.get("task_id") or ""
+            state_now = subtask_state(tasks, open_q, last_stage, sub["title"], since,
+                                      work_id, root_task_id)
             if state_now == "done":
                 if sub.get("status") != "done":
-                    receipt = task_completion_receipt(tasks, last_stage, sub["title"], since)
+                    receipt = task_completion_receipt(
+                        tasks, last_stage, sub["title"], since, work_id, root_task_id)
                     complete_subtask(sub, "task_history", receipt)
                     finished.append(i)
             elif state_now == "none" and sub.get("status") == "running":
-                receipt = merge_receipt(sub["title"], since)
+                receipt = merge_receipt(sub["title"], since, work_id)
                 if receipt:
                     complete_subtask(sub, "merge_journal", receipt, receipt["at"])
                     finished.append(i)
             elif sub.get("status") == "done" and state_now in ("working", "waiting", "stuck"):
                 new_generation = state_now in ("working", "waiting") or any(
                     STAGE_TITLE_RE.match(task.get("title", ""))
-                    and STAGE_TITLE_RE.match(task["title"]).group(2).strip() == sub["title"].strip()
+                    and task_matches_work(task, sub["title"], work_id, root_task_id)
                     and sub.get("completed_at")
                     and receipt_after(task.get("created_at", ""), sub["completed_at"])
                     for task in tasks)
@@ -4809,7 +4924,8 @@ def advance_epics(conf, tasks, workflows, workers):
                 sub["status"] = "running"
                 matching = [t for t in tasks
                             if (STAGE_TITLE_RE.match(t.get("title", ""))
-                                and STAGE_TITLE_RE.match(t["title"]).group(2).strip() == sub["title"].strip())]
+                                and task_matches_work(t, sub["title"], work_id,
+                                                      root_task_id))]
                 if matching:
                     # Failed and stuck tasks also start a generation.  Once the
                     # API removes them, this boundary must still reject an old
@@ -4849,6 +4965,7 @@ def advance_epics(conf, tasks, workflows, workers):
                 started.append(i)
                 epic.setdefault("children", []).append(
                     {"task_id": tid, "title": subs[i]["title"],
+                     "work_id": subs[i].get("work_id", ""),
                      "complexity": subs[i].get("complexity", "medium")})
                 save(path, epic)
                 log(f"epic '{epic['name']}': параллельно пошла подзадача {i+1} ({subs[i]['title'][:40]})")
@@ -4870,6 +4987,7 @@ def advance_epics(conf, tasks, workflows, workers):
                 if tid:
                     epic.setdefault("children", []).append(
                         {"task_id": tid, "title": subs[nxt]["title"],
+                         "work_id": subs[nxt].get("work_id", ""),
                          "complexity": subs[nxt].get("complexity", "medium")})
                     save(path, epic)
                     done_n = sum(1 for s in subs if s.get("status") == "done")
@@ -5333,10 +5451,10 @@ def pushed_branch(candidates, repo_identity):
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def implementation_artifact(base):
+def implementation_artifact(base, work_id=""):
     """Return the durable, generation-scoped implementation branch and head."""
     works = load(WORKS_PATH, {}) or {}
-    meta = works.get(base) or {}
+    meta = works.get(work_storage_key(base, work_id)) or {}
     artifact = meta.get("implementation_artifact") or {}
     if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
         return {}
@@ -5346,7 +5464,7 @@ def implementation_artifact(base):
 
 
 def record_implementation_artifact(base, task_id, task_title, result, context,
-                                   repo_identity):
+                                   repo_identity, work_id=""):
     """Persist only a published implementation branch with a non-empty diff."""
     if is_service_work(base) or is_service_work(task_title):
         return {}
@@ -5366,10 +5484,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
             continue
         works = load(WORKS_PATH, {}) or {}
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        meta = works.setdefault(base, {
+        key = work_storage_key(base, work_id)
+        if not key:
+            return {}
+        meta = works.setdefault(key, {
             "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
-            "reason": "", "at": now,
+            "reason": "", "base_title": base, "at": now,
         })
+        if work_id:
+            meta.setdefault("work_id", str(work_id))
         artifact = {
             "branch": branch,
             "head": head,
@@ -5394,16 +5517,16 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
     return {}
 
 
-def canonical_implementation(base, branch=""):
+def canonical_implementation(base, branch="", work_id=""):
     """Prefer proven implementation identity over a later task's branch text."""
-    artifact = implementation_artifact(base)
+    artifact = implementation_artifact(base, work_id=work_id)
     return artifact.get("branch") or branch, artifact.get("head") or ""
 
 
-def delivery_artifact(base):
+def delivery_artifact(base, work_id=""):
     """Return the generation-scoped branch selected by the delivery gate."""
     works = load(WORKS_PATH, {}) or {}
-    meta = works.get(base) or {}
+    meta = works.get(work_storage_key(base, work_id)) or {}
     artifact = meta.get("delivery_artifact") or {}
     if (artifact.get("generation") or "") != (meta.get("run_generation") or ""):
         return {}
@@ -5413,17 +5536,22 @@ def delivery_artifact(base):
     return artifact
 
 
-def record_delivery_artifact(base, branch, head):
+def record_delivery_artifact(base, branch, head, work_id=""):
     """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
     head = (head or "").lower()
     if not branch or not FULL_GIT_SHA.fullmatch(head):
         return {}
     works = load(WORKS_PATH, {}) or {}
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    meta = works.setdefault(base, {
+    key = work_storage_key(base, work_id)
+    if not key:
+        return {}
+    meta = works.setdefault(key, {
         "origin": ORIGIN_OWNER, "start_stage": "", "skipped": [],
-        "reason": "", "at": now,
+        "reason": "", "base_title": base, "at": now,
     })
+    if work_id:
+        meta.setdefault("work_id", str(work_id))
     artifact = {
         "branch": branch,
         "head": head,
@@ -5435,16 +5563,16 @@ def record_delivery_artifact(base, branch, head):
     return artifact
 
 
-def selected_delivery(base, branch=""):
+def selected_delivery(base, branch="", work_id=""):
     """Prefer the gate-selected delivery branch; canonical is the fallback."""
-    artifact = delivery_artifact(base)
+    artifact = delivery_artifact(base, work_id=work_id)
     if artifact:
         return artifact["branch"], artifact["head"]
-    return canonical_implementation(base, branch)
+    return canonical_implementation(base, branch, work_id=work_id)
 
 
-def implementation_context_lines(base, branch=""):
-    branch, head = selected_delivery(base, branch)
+def implementation_context_lines(base, branch="", work_id=""):
+    branch, head = selected_delivery(base, branch, work_id=work_id)
     return ((f"Branch: {branch}\n" if branch else "")
             + (f"Implementation head: {head}\n" if head else ""))
 
@@ -5488,13 +5616,16 @@ def resume_branch_line(base, br, rounds=0):
         "Запушь СВОЮ ветку: `git push --force-with-lease -u origin HEAD`.\n\n")
 
 
-def branch_from_history(tasks, base, limit=8):
+def branch_from_history(tasks, base, limit=8, work_id=""):
     """Ветка работы могла потеряться: стадия рухнула, и её отчёт пуст.
     Тогда ищем ветку в контексте предыдущих задач той же работы — иначе
     следующая стадия увидит пустой diff и справедливо всё отвергнет."""
     seen = 0
     for t in tasks or []:
-        if base_title(t.get("title") or "") != base:
+        if work_id:
+            if not same_task_work(t, work_id):
+                continue
+        elif has_task_provenance(t) or base_title(t.get("title") or "") != base:
             continue
         seen += 1
         if seen > limit:
@@ -5757,28 +5888,32 @@ def task_cost_usd(attempt_ids):
 BUDGET_STOPS = f"{HOME}/pilot/budget_stops.json"
 
 
-def note_budget_stop(base):
+def note_budget_stop(base, work_id=""):
     """Работа, остановленная по деньгам, не должна перезапускаться сама.
     Иначе выходит круг: отмена -> автоответ «перезапусти» -> ещё один потолок.
     Так мы уже сожгли деньги дважды подряд без единой строчки кода."""
     try:
         rec = load(BUDGET_STOPS, {})
-        rec[base] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        key = work_storage_key(base, work_id)
+        if not key:
+            return
+        rec[key] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         save(BUDGET_STOPS, rec)
     except Exception as e:
         log("budget_stop_write_error", repr(e))
 
 
-def budget_stopped(base):
+def budget_stopped(base, work_id=""):
     try:
         rec = load(BUDGET_STOPS, {}) or {}
-        if base not in rec:
+        key = work_storage_key(base, work_id)
+        if not key or key not in rec:
             return False
         # Работу уже оживили (её нет в остановленных) — метка устарела:
         # снимаем, иначе любой обычный вопрос красится в «деньги».
         conf_disk = load(CONF_PATH, {}) or {}
-        if base not in (conf_disk.get("stopped_pipelines") or []):
-            rec.pop(base, None)
+        if not is_stopped(conf_disk, base, work_id=work_id):
+            rec.pop(key, None)
             save(BUDGET_STOPS, rec)
             return False
         return True
@@ -5862,13 +5997,13 @@ def _live(task):
     return task.get("state") in ("running", "queued", "preparing")
 
 
-def work_spent(tasks, base):
+def work_spent(tasks, base, work_id=""):
     """Сколько съела работа целиком — все стадии и все перезапуски. Считать по
     одной задаче бессмысленно: перезапуск заводит новую, и ровно так конвейер
     трижды заплатил один и тот же потолок."""
     atts = []
     for t in tasks:
-        if base_title(t.get("title") or "") != base:
+        if not task_matches_work(t, base, work_id):
             continue
         atts += attempts_of(t["id"], not _live(t))
     return task_cost_usd(atts)
@@ -5902,13 +6037,14 @@ def branch_head(branch):
     return m.group(0) if m else ""
 
 
-def stop_pipeline(conf, base):
+def stop_pipeline(conf, base, work_id=""):
     """Насовсем остановить работу: пилот её больше не двигает."""
     try:
         disk = load(CONF_PATH, {})
         sp = disk.get("stopped_pipelines") or []
-        if base not in sp:
-            sp.append(base)
+        key = work_storage_key(base, work_id)
+        if key and key not in sp:
+            sp.append(key)
             disk["stopped_pipelines"] = sp
             save(CONF_PATH, disk)
         conf["stopped_pipelines"] = sp
@@ -5916,7 +6052,8 @@ def stop_pipeline(conf, base):
         log("stop_pipeline_error", repr(e))
 
 
-def write_budget_retry(conf, task_id, stage, base, repo_id, complexity, branch, spent, cap):
+def write_budget_retry(conf, task_id, stage, base, repo_id, complexity, branch,
+                       spent, cap, work_id=""):
     """Автоматическое решение вместо вопроса владельцу: перезапустить ту же
     стадию ступенью дешевле и с прямым указанием сузить объём."""
     rec = write_question(
@@ -5924,7 +6061,7 @@ def write_budget_retry(conf, task_id, stage, base, repo_id, complexity, branch, 
         "Стадия съела ${:.2f} при потолке ${:.2f}, а рабочая ветка "
         "за это время не сдвинулась.".format(spent, cap),
         "Перезапустить ту же стадию на модели попроще и с более узким заданием?",
-        [], "", branch)
+        [], "", branch, work_id=work_id)
     rec["status"] = "answered"
     rec["answered_by"] = "budget"
     rec["complexity_hint"] = complexity
@@ -5967,11 +6104,18 @@ def budget_guard(conf, tasks, workers=None):
         if not m:
             continue
         stage, base = m.group(1).strip(), m.group(2).strip()
+        work_id = task_durable_work_id(t, tasks)
+        key = work_storage_key(base, work_id, task=t, tasks=tasks)
+        if not key:
+            continue
 
         wname = (by_id.get(t.get("worker_id")) or {}).get("name", "")
         cx = complexity_of(conf, stage, wname)
-        rec = st.setdefault(base, {"extensions": 0, "downgrades": 0,
-                                   "last_head": "", "stopped": ""})
+        rec = st.setdefault(key, {"extensions": 0, "downgrades": 0,
+                                  "last_head": "", "stopped": ""})
+        rec.setdefault("base_title", base)
+        if work_id:
+            rec.setdefault("work_id", work_id)
         ext = int(rec.get("extensions") or 0)
         cap = stage_cap(conf, stage, cx, wname) * (1.5 ** ext)
 
@@ -5988,10 +6132,12 @@ def budget_guard(conf, tasks, workers=None):
         if spent < cap:
             continue
 
+        branch = branch_from_history(tasks, base, work_id=work_id)
+        head = branch_head(branch)
         moved = bool(head) and head != (rec.get("last_head") or "")
         # credit — списание за прошлые сгоревшие заходы, в которых виновата
         # не работа, а наша собственная поломка.
-        total = work_spent(tasks, base) - float(rec.get("credit") or 0)
+        total = work_spent(tasks, base, work_id=work_id) - float(rec.get("credit") or 0)
         total = max(0.0, total)
         wcap = work_cap(conf, cx)
 
@@ -6027,8 +6173,8 @@ def budget_guard(conf, tasks, workers=None):
                             "долларов). Жечь дальше без нового плана не буду."
                             .format(total, wcap))
             changed = True
-            note_budget_stop(base)
-            stop_pipeline(conf, base)
+            note_budget_stop(base, work_id=work_id)
+            stop_pipeline(conf, base, work_id=work_id)
             log(f"BUDGET HARD STOP base={base!r} всего=${total:.2f} "
                 f"потолок работы=${wcap:.0f}")
             notify(conf, "Остановил работу · деньги",
@@ -6049,7 +6195,8 @@ def budget_guard(conf, tasks, workers=None):
             repo_id = (api(f"/tasks/{t['id']}").get("task") or {}).get("repository_id") or ""
         except Exception:
             pass
-        write_budget_retry(conf, t["id"], stage, base, repo_id, cheaper, branch, spent, cap)
+        write_budget_retry(conf, t["id"], stage, base, repo_id, cheaper, branch,
+                           spent, cap, work_id=work_id)
         log(f"BUDGET DOWNGRADE base={base!r} stage={stage} {cx} -> {cheaper} "
             f"потрачено=${spent:.2f} потолок=${cap:.2f}, движения нет")
         notify(conf, f"Перезапускаю дешевле · {stage}",
