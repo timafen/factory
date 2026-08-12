@@ -26,7 +26,10 @@ import glob
 import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
 
 API = "http://127.0.0.1:7337/api/v1"
-HOME = "/opt/factory-data"
+# Production keeps the fixed data root.  Tests and isolated tools may opt into
+# a disposable root before importing this module, so they can never overwrite
+# the live Pilot state while exercising cycle().
+HOME = os.environ.get("FACTORY_DATA_HOME", "/opt/factory-data")
 CONF_PATH = f"{HOME}/pilot/config.json"
 STATE_PATH = f"{HOME}/pilot/state.json"
 EPIC_DIR = f"{HOME}/pilot/epics"
