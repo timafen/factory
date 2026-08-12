@@ -71,6 +71,7 @@ test-tooling:
     ./scripts/test-build.sh
     ./scripts/test-update-go-minimum.sh
     ./ops/test-provision-codex-auth.sh
+    ./ops/test-check-codex-auth-permissions.sh
     ./ops/test-install-project-release-broker.sh
 
 # Test local startup, readiness, and signal handling.
