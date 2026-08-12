@@ -4,8 +4,8 @@
 
 - Status: Implemented and tested on current `main`; Pilot remains operationally disabled.
 - Branch: `factory/88d06a21-24e-825e0559-1fc` (base `origin/main`
-  `62832535c96b409ef7736440b5c95bca5e8a0d2a`).
-Implementation commit: 16de207ba84936cef07b8233c3d9b631779e0fd5 — strict `work_id` isolation is preserved through resume, Review and safe delivery.
+  `a10c16175cc87e3aff0ef131e3848a00a7a5b074`).
+Implementation commit: 8d6fbd95d79800a5fd2c64bb90eddbbb59265541 — strict `work_id` isolation is preserved through resume, Review and safe delivery.
 - What changed: same-title pauses, metadata, history, Review state and delivery
   artifacts remain isolated by `work_id`; title fallback is legacy-only.
 - Evidence: post-rebase provenance/release/UI/typecheck targets → PASS; prior
@@ -58,3 +58,11 @@ receipts. Post-rebase targeted Pilot (7), control-plane provenance/resume, UI
 (18) and TypeScript checks passed. Before the final base movement, full Pilot
 (222 tests, 13 skipped), UI (161), HTTPS Chromium (21), full Go, lint and both
 builds passed. Pilot remains operationally disabled.
+
+### 2026-08-12 — Implement
+
+Final no-conflict rebase onto `origin/main`
+`a10c16175cc87e3aff0ef131e3848a00a7a5b074` retained the owner-attribution
+correction from PR #149 and the complete `work_id` isolation. The implementation
+commit is `8d6fbd95d79800a5fd2c64bb90eddbbb59265541`; the seven provenance storm tests,
+the required TypeScript command and the three-dot whitespace check passed again.
