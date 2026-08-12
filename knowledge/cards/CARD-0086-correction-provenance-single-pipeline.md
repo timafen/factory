@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
+- Status: Implemented and targeted Review checks pass; Pilot remains operationally disabled.
+- Branch: `factory/18f786a9-81a-1d6bfca9-b57`.
+- Implementation commit: ef00a2ca1a7452d1bc2f78dae15a2c558416e114 — закреплён сценарий независимой pinned-проверки с нестандартной remote default branch.
 - What changed: migration 027 and the task API persist root/parent/correction
   identity; every direct continuation path inherits the original `work_id`.
 - What changed: Pilot uses explicit provenance before legacy title fallback and
   durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Evidence: 21 targeted Review tests and `go build ./...` pass; the scenario
+  resolves remote `stable`, fetches isolated refs and compares pinned SHAs.
+- Next action: repeat Review against the pinned delivery snapshot.
 
 ## LOG
 
@@ -47,3 +46,7 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+The authoritative Review path on fresh `main` was confirmed and its regression test strengthened to use remote default branch `stable`, advance that base after candidate publication, and verify the isolated pinned snapshot without cached refs. `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.SpecificationBranchHandoffTests -q` passed all 21 tests; `go build ./...` passed.
