@@ -2,8 +2,8 @@
 
 ## HEAD
 
-Status: Implemented and verified; Pilot remains disabled and no production
-release was performed.
+Status: Verified PASS — awaiting human merge; Pilot remains disabled and no
+production release was performed.
 
 Branch: `factory/00a0a965-4e1-ac3fb722-fe9`
 
@@ -12,13 +12,15 @@ Implementation commit: 044c941ee845c917967f3f2a25ed64d3367502a6 —
 устанавливает пару через journal и полностью откатывает код/службы/metadata;
 DB restore остаётся отдельной подтверждаемой операцией.
 
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS; `go test ./...` → PASS;
-`python3 -m unittest pilot.test_pilot` → 202 PASS; UI type/test/build → 157 PASS
-и build PASS; `bash ops/test-factory-release-systemd.sh` → явный SKIP вне root
-systemd fixture; shell syntax и `git diff --check` → PASS.
+Evidence: Verify повторно выполнил `bash ops/test-fx-factory-release.sh` → PASS,
+`go test ./...` → PASS и `python3 -m unittest pilot.test_pilot` → 202 PASS;
+shell syntax и `git diff --check` → PASS. Чистая установка web-зависимостей
+прошла, typecheck/lint прошли, но `npm test` выявил 4 существующих сбоя вне
+scope выпуска: три timeout и порядок brain-chain; `test-factory-release-systemd`
+честно завершился SKIP вне root systemd fixture.
 
-Next action: провести независимый Review реализации CARD-0088 до любого выпуска
-migration 027 или включения Pilot.
+Next action: человек принимает решение о merge после оценки известных web test
+failures; не выпускать migration 027 и не включать Pilot.
 
 ## LOG
 
@@ -78,3 +80,18 @@ service states без изменения БД; несовместимый ledger
 Доказательство: обязательный release fixture PASS, Go `./...` PASS, Pilot 202
 PASS, UI 157 PASS и production build PASS, syntax/diff PASS. Реальная systemd
 фикстура добавлена и вне root/systemd окружения честно завершилась SKIP.
+
+### 2026-08-11 — Verify
+
+| Критерий | Команда | Наблюдаемый результат |
+| --- | --- | --- |
+| Полный snapshot и согласованный release/rollback | `bash ops/test-fx-factory-release.sh` | PASS: fixture покрывает snapshot, manifest, journal, recovery и полный rollback комплекта. |
+| Регрессии control plane | `go test ./...` | PASS, включая `internal/controlplane`. |
+| Смежная Pilot-логика | `python3 -m unittest pilot.test_pilot` | 202 PASS. |
+| Скрипты и patch hygiene | `bash -n …`; `git diff --check` | PASS. |
+| Systemd fixture | `bash ops/test-factory-release-systemd.sh` | SKIP: окружение не root/systemd; release не выполнялся. |
+| Полный web suite | `npm ci`; typecheck/lint/test/build | `npm test`: 153 PASS, 4 FAIL вне изменённых файлов: 3 timeout и Settings brain-chain order; считать проектным долгом, не дефектом выпуска. |
+
+Проверены также корректность implementation commit (предок ветки, содержит
+изменения вне `knowledge/cards/`) и чистота diff. Релиз, миграция 027, restore
+DB и включение Pilot не выполнялись.
