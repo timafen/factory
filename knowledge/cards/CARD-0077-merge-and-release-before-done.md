@@ -2,16 +2,34 @@
 
 ## HEAD
 
-- Status: READY — `web/dist` пересобран из актуального `Work.tsx` и зафиксирован.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/15c34fad-104-aa16b05d-c21`.
 - Implementation commit: 6855bf10b35659cafdf51660bb9dfb577d6774f3 — обновлён закоммиченный embedded bundle интерфейса Work.
 - What changed: browser bundle теперь содержит карточку завершения, которая ждёт
   подтверждённый выпуск и не закрывает работу по занятому номеру.
-- Evidence: сборка и проверка чистоты `dist` → PASS; `just ui-check` → 159/159 PASS.
-- Next action: повторить полный browser e2e после исправления нестабильной отдачи
-  тестового ZIP-архива.
+- Evidence: pinned `base_sha=fc8548f244fe1eb2a1c653c224de668844e2f1a3`,
+  `candidate_sha=7d0ddbdd24217727eefffee7cb821edfdfd8032d`; Go full suite PASS,
+  UI lint/typecheck PASS, Vitest 159/159 PASS.
+- Next action: human merge the verified branch.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+Pinned snapshot: база `fc8548f244fe1eb2a1c653c224de668844e2f1a3`, кандидат
+`7d0ddbdd24217727eefffee7cb821edfdfd8032d`.
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Занятый номер не смешивает карточки завершения | `Work.test.ts`: repeated stages, retry и terminal Verify | PASS: повторная стадия отмечается отдельно, история поздней стадии сохраняется |
+| До подтверждённого выпуска работа не закрывается | `Work.test.ts`: `waits for a post-merge delivery before completing Verify` | PASS: статус «Ожидает слияния и выпуска», секция не `done` |
+| Обычная завершённая работа не сломана | `Work.test.ts`: standalone Done и pipeline verdict | PASS: standalone остаётся в «Сделано» |
+| Проектная регрессия отсутствует | `go test -timeout 5m ./...` | PASS: все Go-пакеты прошли |
+| Web-код собирается и проверяется | `npm run lint`; `npm run typecheck`; `npm test` | PASS; 159 тестов прошли |
+
+Смежная проверка `just check` сначала дошла до полного Go-набора, но остановилась
+на отсутствующем `web/node_modules/eslint`; после штатного `npm ci` UI-проверки
+прошли. Browser e2e не запускался: его build меняет закоммиченный dist-артефакт.
 
 ### 2026-08-11 — Implement
 
