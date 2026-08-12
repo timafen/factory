@@ -33,6 +33,15 @@ Next action: human merge this verified narrow config fix.
 
 Связь: worker-discovered finding из CARD-0085; CARD-0086 зарезервирована.
 
+### 2026-08-11 — Specification (уточнение после повторного запуска)
+
+Подтверждён реальный контур: `pilot/pilot.py` получает default branch с remote,
+создаёт изолированный временный Git-репозиторий и возвращает pinned
+`base_sha`/`candidate_sha`/`merge_base_sha`; `pilot/test_pilot.py` покрывает
+продвижение `main`, точный scope, BLOCKED и сохранение ветки воркера.
+Конфигурационный pinning не требуется. Обязательная проверка для реализации:
+`python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests`.
+
 ### Передача в реализацию
 
 - Спецификация: `knowledge/specs/review-fresh-default-branch.md`.

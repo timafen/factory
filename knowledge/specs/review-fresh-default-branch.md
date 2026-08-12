@@ -3,77 +3,82 @@
 ## Цель и влияние на владельца
 
 Устранить ложные REQUEST CHANGES и повторные раунды, возникающие из-за stale
-`origin/main` в retained worktree. Для чистой ветки GitHub compare (11 файлов,
-ahead_by=2) Review и Verify должны видеть ровно её фактический scope, а не 49
-чужих файлов. Отчёт должен отличать дефект кода от ошибки review-инфраструктуры.
+`origin/main` в retained worktree. Review и Verify должны видеть ровно
+фактический scope опубликованной ветки, а не файлы, пришедшие в основную ветку
+после её создания. Отчёт должен отличать дефект кода от ошибки
+review-инфраструктуры, чтобы владелец не получал ложный возврат на доработку.
 
 ## Технический подход и реальные файлы
 
-Работу начать от `origin/main`. В Review и Verify перед любым three-dot diff,
-log, ancestry или empty-delivery judgement определить remote default branch
-(`git remote get-url`/GitHub metadata согласно существующему source-access
-контракту), fetch-нуть exact remote ref с pruning/force-safe обновлением и
-сохранить immutable `base_sha` и `candidate_sha`. Все последующие команды
-работают с SHA, не с локальным cached ref; оба SHA попадают в verdict/report.
-Ошибку resolution/fetch трактовать как `BLOCKED`, не как чистый diff и не как
-REQUEST CHANGES. GitHub compare может corroborate результат, но не заменяет
-локально fetched SHAs. Worker-owned branch не переключать: использовать
-отдельный read-only worktree/temporary ref или `git -C` текущего worktree.
+Работу начать от `origin/main`. В `fresh_branch_snapshot` перед любым
+three-dot diff, log, ancestry или решением о пустой поставке определить
+default branch именно у remote через `git ls-remote --symref <url> HEAD`.
+В новом временном Git-репозитории получить и принудительно закрепить ref
+основной и кандидатной веток, затем записать immutable `base_sha`,
+`candidate_sha` и `merge_base_sha`. Scope кандидата считать только как
+`<merge_base_sha>...<candidate_sha>`: это сохраняет корректный diff, если
+основная ветка успела продвинуться после публикации кандидата.
+
+`review_gate` использует такой snapshot до подготовки контекста Review; Verify
+получает те же обязательные правила через общий stage prompt. Ошибку remote
+resolution, fetch или pin трактовать как `BLOCKED: review infrastructure`, не
+как чистый diff и не как REQUEST CHANGES. Worker-owned checkout не изменять:
+snapshot существует только во временном репозитории. GitHub compare допустим
+только как дополнительное подтверждение, но не заменяет pinned SHA.
 
 Точки реализации и тестов:
 
-- `pilot/pilot.py` — prompt/переходы Pipeline и обработка Review/Verify verdict;
-  добавить общий resolver/snapshot helper и human-readable infrastructure
-  reason.
-- `pilot/test_pilot.py` — unit/regression fixture, включая stale local
-  `origin/main`, advancing remote main, clean candidate, exact file scope,
-  SHA recording, fetch failure/BLOCKED и branch preservation.
-- `pilot/config.example.json` — source-of-truth mapping новых Review/Verify
-  revision IDs/rollout notes, если текущая схема требует явного pinning.
-- Live control plane (не репозиторный файл): immutable Workflow revisions
-  через `/api/v1/workflows/{workflow_id}/revisions`, затем Pilot config
-  `/opt/factory-data/pilot/config.json`; не менять существующие task snapshots.
-  Развёртывание — штатным `fx factory release main` после безопасного smoke.
+- `pilot/pilot.py` — `_default_branch`, `fresh_branch_snapshot` и `review_gate`:
+  isolated fetch/pin, классификация продвинувшейся базы и понятный BLOCKED
+  verdict. Общие правила для Review/Verify заданы в pipeline instructions.
+- `pilot/test_pilot.py` — `FreshDefaultBranchSnapshotTests`: реальный bare
+  remote, advancing `main`, точный scope кандидата, SHA fields, BLOCKED при
+  ошибке и сохранение рабочей ветки наблюдателя.
+
+`pilot/config.example.json` и live Workflow revisions не входят в эту работу:
+свежесть базы обеспечивается runtime helper, а не конфигурационным pinning.
 
 ## Последовательный план
 
-1. Зафиксировать текущую семантику source-access, default-branch resolution,
-   Review/Verify prompt и verdict schema; сохранить обратную совместимость.
-2. Реализовать fetch-and-pin helper с явной проверкой remote ref и SHA; внедрить
-   его до всех сравнений/решений обеих стадий и запретить stale fallback.
-3. Записывать base/candidate SHA, fetched ref и blocked reason в результат,
-   сохранив worker branch и existing running tasks неизменными.
-4. Добавить regression fixture: stale origin/main -> remote main advances ->
-   clean candidate; old path демонстрирует false files, новый — exact scope.
-5. Выпустить новые immutable Review/Verify revisions, обновить Pilot/new-task
-   selection, выполнить live smoke; rollback pin описать и проверить.
+1. Зафиксировать текущую семантику source-access, Review/Verify prompt и
+   verdict schema.
+2. Реализовать isolated fetch-and-pin helper с remote default-branch discovery
+   до всех сравнений и без fallback на cached refs.
+3. Передавать в Review pinned SHA, merge-base, список файлов и BLOCKED reason,
+   не меняя checkout воркера и существующие task snapshots.
+4. Добавить regression fixture: remote main advances после публикации чистого
+   кандидата; scope кандидата остаётся точным и наблюдатель остаётся на ветке.
+5. Проверить focused regression и существующий Pilot suite; при rollout
+   опубликовать immutable revision штатным выпуском, не мутируя running tasks.
 
 ## Критерии приёмки
 
-- Обе стадии fetch-ят exact resolved default ref до любого diff/log/ancestry/
+- Review и Verify получают remote default ref до любого diff/log/ancestry/
   empty decision и используют только fetched immutable SHAs.
 - Verdict/report содержит оба SHA и различает application defect и stale-review
   infrastructure; GitHub compare лишь подтверждает локальный результат.
 - Fetch или default resolution failure даёт BLOCKED; stale refs не рецензируются.
 - Worker branch никогда не switch/reset; running tasks не мутируются.
-- Regression fixture показывает старое false scope и новое exact scope.
-- Live revisions обновлены безопасно, Pilot и новые tasks используют их; rollback
-  к предыдущим revision_id документирован.
+- Regression fixture доказывает exact scope, продвинувшуюся основную ветку и
+  отсутствие смены ветки у наблюдателя.
+- Если требуется rollout, новые immutable revisions выпускаются безопасно;
+  running tasks сохраняют свои snapshots, rollback — возврат pin на прежнюю
+  revision.
 
 ## Тест-план
 
-Основная обязательная проверка: `python3 -m unittest pilot.test_pilot`.
-Добавить изолированный git fixture с отдельным bare remote и два commits main:
-  stale local base содержит лишний набор файлов, remote main продвинут, candidate
-  чистый; assert old comparison lists false files, new comparison lists exact 11
-  files and `ahead_by=2`. Отдельно проверить fetch/default failure => BLOCKED,
-  SHA fields, no branch switch и unchanged task snapshot. Запустить существующие
-  Pilot tests и live smoke новых revisions без изменения running tasks.
+Обязательная проверка: `python3 -m unittest
+pilot.test_pilot.FreshDefaultBranchSnapshotTests`.
+Изолированный fixture с bare remote создаёт кандидата из двух коммитов, затем
+продвигает `main` чужим файлом. Проверить exact 11 файлов и `ahead_by=2`,
+поля SHA, fetch/default failure => BLOCKED и неизменность ветки observer.
+Дополнительно запустить полный существующий Pilot suite; live smoke новых
+revisions нужен только при отдельном rollout.
 
 ## Риски и решения
 
-- Force-push/default-branch race: fetch ref, resolve SHA и проверить candidate
-  ancestry in one pinned operation; при несогласованности повторить или BLOCKED.
+- Force-push/default-branch race: fetch ref и pin SHA в одной isolated операции;
+  при несогласованности вернуть BLOCKED, не использовать cached fallback.
 - Remote permissions/network outage: явный BLOCKED с причиной, без cached fallback.
 - Retained worktree загрязнён: изолированный read-only comparison context.
 - Live rollout ломает новые задачи: immutable revisions, staged smoke и pin rollback;
@@ -83,10 +88,9 @@ REQUEST CHANGES. GitHub compare может corroborate результат, но 
 
 ## Карточка работы
 
-`knowledge/cards/CARD-0087-review-uses-fresh-default-branch.md` — новая карточка,
-номер проверен после CARD-0085 в `origin/main`; CARD-0086 зарезервирована.
+`knowledge/cards/CARD-0087-review-uses-fresh-default-branch.md` — закреплённая
+карточка текущей работы; продолжает её исходную запись реализации.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: файл pilot/config.example.json
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests
