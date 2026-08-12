@@ -3,15 +3,21 @@
 ## HEAD
 
 Status: Implemented — awaiting Review.
-Branch: factory/9cb3b8b4-65b-4ce5fd30-eff.
-Implementation commit: 72c91011d5fa877b989cd95a7f9251b14e4f2958 — остановка gate использует только проверенный PGID из памяти и его связь с launcher.
-What changed: handshake читается лишь при readiness; далее SID/PGID не берутся из доступного launcher-у файла.
-What changed: перед TERM/KILL лидер session обязан оставаться в дереве исходного launcher; иначе останавливается только это дерево без группового сигнала.
-Evidence: подмена обоих handshake на PGID посторонней session → release 130, внешний процесс не получил TERM; `bash ops/test-fx-factory-release.sh` → PASS.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`, `go test ./...`, `go build ./...`, `npm --prefix web run build`, `git diff --check` → PASS.
-One next action: повторно отправить опубликованную ветку на Review.
+Branch: factory/bb8ca82f-c03-f449cc1a-339.
+Implementation commit: cb044f70023a9ece1f33531f14c86adc261c3958 — gate запускается через проверенный абсолютный `/usr/bin/setsid`, а PATH-подмена безопасно отвергается.
+What changed: release проверяет root-владение и запрет group/world write для session launcher до gate и установки.
+What changed: регрессия подменяет `setsid` через `PATH` и подтверждает реальную ошибку gate и отсутствие установки.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS; `bash -n ...`, `git diff --check` → PASS.
+One next action: повторить Review доверенной цепочки gate.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Session launcher закреплён как `/usr/bin/setsid`; перед gate проверяются root-владелец
+и отсутствие записи для group/world. PATH-подмена больше не может сфабриковать
+успех: регрессия получила настоящий отказ gate, не допустила сборку и установку;
+целевой shell-набор прошёл.
 
 ### 2026-08-12 — Implement
 
