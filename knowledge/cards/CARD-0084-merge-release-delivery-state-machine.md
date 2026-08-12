@@ -1,13 +1,13 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 162d2c04563b82a42a937ef0d2fe57bd6670aee7 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
+Implementation commit: 162d2c0cc0066b88078b16567f2fb01c3f00e1b6 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
 
 ## HEAD
 
 - Status: Verified — backend PASS; полный `just check` остановлен на отсутствующем `eslint`.
 - Branch: `factory/dc92ce68-4ea-d680b52d-273`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 162d2c04563b82a42a937ef0d2fe57bd6670aee7 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
+- Implementation commit: 162d2c0cc0066b88078b16567f2fb01c3f00e1b6 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
 - What changed: Перед terminal-записью создаётся durable pending-маркер; committed-маркер появляется только после успешной записи и fsync файла. Перезапуск без committed-маркера переводит terminal в `failed`.
 - Evidence: новый сценарий rename→ошибка `syncDir`→restart, `go test -count=1 ./internal/releasebroker`, Pilot class 10/10 и `just build` — PASS; `just check` прошёл vet, vuln, staticcheck и все Go-тесты, но `web` lint получил `eslint: not found`.
 - Next action: Установить зависимости `web` и повторить `just check` перед слиянием.
