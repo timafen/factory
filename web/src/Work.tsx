@@ -1,3 +1,4 @@
+
 import { ChevronRight, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { runtimeLabel, taskStates, timeAgo } from "./format";
@@ -177,12 +178,19 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     // Сорвалась — только если сорвалась ПОСЛЕДНЯЯ попытка. Одна упавшая
     // стадия в середине истории не делает всю работу проваленной:
     // её могли перезапустить и довести.
-    const failed = g.items[g.items.length - 1]?.task.state === "failed";
+    const latestItem = g.items[g.items.length - 1];
+    const failed = latestItem?.task.state === "failed";
     const allCancelled = g.items.every((i) => i.task.state === "cancelled");
-    const completed = g.items[g.items.length - 1]?.task.state === "succeeded";
+    // A successful pipeline stage is only a handoff, not a completed work.
+    // Standalone tasks have no stage and may still finish immediately. Closed
+    // historical work keeps its existing archived completion semantics.
+    const completed = latestItem?.task.state === "succeeded"
+      && (!latestItem.stage || Boolean(g.meta?.closed));
     const awaitingDelivery = g.items.some((i) => i.stage === "Verify"
       && i.task.state === "succeeded" && i.verdict?.final_pass !== true
       && i.verdict?.final_pass !== false);
+    const awaitingNextStage = latestItem?.task.state === "succeeded"
+      && Boolean(latestItem.stage) && !passed && !g.meta?.closed && !awaitingDelivery;
 
     if (waiting) {
       g.status = {
@@ -265,6 +273,19 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         next: "После успешного выпуска работа будет отмечена завершённой.",
         owner: "Участие владельца не требуется.",
       };
+    } else if (awaitingNextStage) {
+      const stageIndex = STAGE_ORDER.indexOf(latestItem?.stage ?? "");
+      const nextStage = stageIndex >= 0 ? STAGE_ORDER[stageIndex + 1] : undefined;
+      g.status = {
+        kind: "queued", label: "Ждёт следующий этап", tone: "warn",
+        happened: latestItem?.stage
+          ? `Этап «${STAGE_RU[latestItem.stage] ?? latestItem.stage}» успешно завершён.`
+          : "Предыдущий этап успешно завершён.",
+        next: nextStage
+          ? `Следующий этап — «${STAGE_RU[nextStage] ?? nextStage}». Factory запустит его, когда освободится исполнитель.`
+          : "Factory обрабатывает результат и готовит следующий шаг.",
+        owner: "Участие владельца не требуется.",
+      };
     } else if (passed || completed) {
       g.status = {
         kind: "done", label: passed ? "работа принята" : "работа завершена", tone: "ok",
@@ -332,135 +353,7 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "decision", title: "Нужно твоё решение", hint: "Factory ждёт ответа на открытый вопрос", accent: "#ffb86b" },
   { key: "stuck", title: "Factory не может продолжить", hint: "Автоматического следующего шага нет", accent: "#ffb4b4" },
   { key: "paused", title: "Поставлено на паузу", hint: "Продолжение включается в настройках", accent: "#8a94a6" },
-  { key: "repairing", title: "Исправляется автоматически", hint: "Factory уже выполняет повторную попытку", accent: "#8ec5ff" },
-  { key: "active", title: "В работе прямо сейчас", hint: "Исполнитель уже выполняет этап", accent: "#8ec5ff" },
-  { key: "queued", title: "В очереди", hint: "Ждёт свободного подходящего исполнителя", accent: "#cf9b4e" },
-  { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
-];
-
-const RESUME_ERROR_MESSAGE = "Продолжение не выполнено. Проверь состояние Factory и повтори попытку.";
-
-export function WorkView({
-  tasks, workers, pending, error, fetching, updatedAt,
-  onTask, onAnswer, onResume, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
-}: ViewStateProps & {
-  tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
-  onTask: (id: string) => void; onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>; onDelegate: () => void;
-  hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
-}) {
-  const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
-  const [works, setWorks] = useState<Record<string, WorkMeta>>({});
-  const [statuses, setStatuses] = useState<Record<string, { state: string; text: string }>>({});
-  const [promises, setPromises] = useState<Record<string, { files?: string[]; commands?: string[] }>>({});
-  const [showArchive, setShowArchive] = useState(false);
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [history, setHistory] = useState<Record<string, string>>({});
-  const [byStage, setByStage] = useState(false);
-  const [open, setOpen] = useState<string>("");
-  const [resuming, setResuming] = useState("");
-  const [resumeError, setResumeError] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    const pull = async () => {
-      try {
-        const [v, q, wk, ws] = await Promise.all([
-          fetch("/api/v1/verdicts"), fetch("/api/v1/questions"), fetch("/api/v1/works"),
-          fetch("/api/v1/work-status"),
-        ]);
-        if (ws.ok && alive) setStatuses((await ws.json()) as Record<string, { state: string; text: string }>);
-        try {
-          const pr = await fetch("/api/v1/promises");
-          if (pr.ok && alive) setPromises((await pr.json()) as Record<string, { files?: string[]; commands?: string[] }>);
-        } catch { /* обещаний может не быть */ }
-        if (wk.ok && alive) setWorks((await wk.json()) as Record<string, WorkMeta>);
-        if (v.ok && alive) setVerdicts(((await v.json()) as { verdicts?: Record<string, Verdict> }).verdicts ?? {});
-        if (q.ok && alive) setQuestions(((await q.json()) as { questions?: Question[] }).questions ?? []);
-      } catch { /* без вердиктов покажем нейтрально */ }
-    };
-    void pull();
-    const h = window.setInterval(() => void pull(), 20000);
-    return () => { alive = false; window.clearInterval(h); };
-  }, []);
-
-  useEffect(() => {
-    const ids = (tasks ?? []).map((task) => task.id);
-    if (!ids.length) return;
-    let alive = true;
-    const batches: string[][] = [];
-    for (let start = 0; start < ids.length; start += 100) batches.push(ids.slice(start, start + 100));
-    void Promise.all(batches.map(async (batch) => {
-      const query = new URLSearchParams();
-      batch.forEach((id) => query.append("task_id", id));
-      const response = await fetch(`/api/v1/work-history?${query}`);
-      if (!response.ok) return [];
-      const data = await response.json() as { history?: HistoryEntry[] };
-      return data.history ?? [];
-    })).then((results) => {
-      if (alive) setHistory(Object.fromEntries(results.flat().map((item) => [item.task_id, item.text])));
-    }).catch(() => { /* без краткой истории остаётся обычный статус */ });
-    return () => { alive = false; };
-  }, [tasks]);
-
-  // Хук обязан вызываться до любых ранних выходов, иначе на втором
-  // рендере их станет меньше и React уронит весь экран.
-  const projectName = useProjectName();
-
-  if (pending) return <LoadingState label="Загружаю работу" />;
-  if (error && !tasks) return <ErrorState error={error} onRetry={onRefresh} />;
-
-  const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
-  const groups = build(tasks ?? [], verdicts, questions, works, statuses, promises);
-
-  return (
-    <div className="page page-work">
-      <ViewHeader title="Работа агентов" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
-      {error && <StaleBanner error={error} />}
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, color: muted }}>
-          {byStage ? "Каждая карточка — отдельный этап." : "Отдельно — твоё решение, паузы, настоящий тупик и работа, которую Factory продолжает сама."}
-        </span>
-        <span style={{ flex: 1 }} />
-        <button className="button" onClick={() => setByStage((v) => !v)}>
-          {byStage ? <><Rows3 size={14} /> Показать по работам</> : <><LayoutGrid size={14} /> Показать по этапам</>}
-        </button>
-      </div>
-
-      {(tasks ?? []).length === 0 ? (
-        <EmptyState
-          icon={<ListChecks size={22} />}
-          title="Работы пока нет"
-          description="Поставь первую задачу — она останется здесь даже после перезапуска."
-          action={<button className="button button-primary" onClick={onDelegate}><Plus size={16} /> Поставить задачу</button>}
-        />
-      ) : byStage ? (
-        <StageBoard tasks={tasks ?? []} verdicts={verdicts} workerMap={workerMap} onTask={onTask} />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
-          {SECTIONS.map((sec) => {
-            const rows = groups.filter((g) => sectionOf(g) === sec.key);
-            if (!rows.length) return null;
-            return (
-              <div key={sec.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10,
-                              borderLeft: "3px solid " + sec.accent, paddingLeft: 10 }}>
-                  <h2 style={{ fontSize: 15, margin: 0, color: sec.accent }}>{sec.title}</h2>
-                  <span style={{
-                    fontSize: 11, color: muted, border: "1px solid var(--border, #262c38)",
-                    borderRadius: 999, padding: "1px 8px",
-                  }}>{rows.length}</span>
-                  <span style={{ fontSize: 12.5, color: muted }}>{sec.hint}</span>
-                </div>
-                {rows.map((g) => (
-                  <GroupRow key={g.base} g={g} workerMap={workerMap}
-                            expanded={open === g.base}
-                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
-                            onTask={onTask} onAnswer={onAnswer} onResume={onResume}
-                            resuming={resuming === g.base} resumeError={resumeError}
-                            onResumeError={setResumeError} onResuming={setResuming}
-                            history={history}
-                            project={projectName(g.latest.repository_id)} />
+  { key: "repairing", title: "Исправляется автоматич…1910 tokens truncated…roject={projectName(g.latest.repository_id)} />
                 ))}
               </div>
             );
