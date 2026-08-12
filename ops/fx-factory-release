@@ -54,6 +54,8 @@ TRUSTED_AWK=/usr/bin/awk
 TRUSTED_NPX=/usr/bin/npx
 TRUSTED_NPM=/usr/bin/npm
 TRUSTED_GO=/usr/bin/go
+TRUSTED_GIT=/usr/bin/git
+TRUSTED_CHMOD=/usr/bin/chmod
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -256,7 +258,7 @@ validate_trusted_executable() { # validate_trusted_executable <absolute path>
 for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
-  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO"; do
+  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
@@ -363,11 +365,13 @@ gate_pgids=()
 gate_ready=()
 gate_logs=()
 gate_names=()
+trusted_gate_dir=
 test_gates_stopped=1
 test_gates_reaped=1
 cleanup() {
   stop_test_gates
   wait_for_test_gates
+  [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   rm -rf "$work"
 }
 on_release_exit() { cleanup; }
@@ -726,22 +730,28 @@ as_user git clone --quiet "$REPO" "$work/src" \
 as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
   || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
-trusted_gate_script="$work/src/ops/test-fx-factory-release.sh"
-case "$trusted_gate_script" in /*) ;; *) fail "gate script не имеет абсолютного пути"; cleanup; exit 4 ;; esac
-gate_script_owner=$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_script" 2>/dev/null) \
-  || { fail "не смог проверить gate script"; cleanup; exit 4; }
-work_owner=$("$TRUSTED_STAT" -Lc %u -- "$work" 2>/dev/null) \
-  || { fail "не смог проверить владельца сборки"; cleanup; exit 4; }
-gate_script_mode=$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_script" 2>/dev/null) \
-  || { fail "не смог проверить права gate script"; cleanup; exit 4; }
-if [ ! -f "$trusted_gate_script" ] || [ -L "$trusted_gate_script" ] \
-  || [ ! -r "$trusted_gate_script" ] || [ "$gate_script_owner" != "$work_owner" ] \
-  || (( (8#$gate_script_mode & 0022) != 0 )); then
-  fail "gate script не прошёл проверку доверенного пути"
+sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD) \
+  || { fail "не смог определить commit кандидата"; cleanup; exit 4; }
+expected_gate_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  rev-parse "$sha:ops/test-fx-factory-release.sh") \
+  || { fail "в кандидате нет обязательного gate script"; cleanup; exit 4; }
+trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$REL/trusted-gate-XXXXXX") \
+  || { fail "не смог создать доверенный каталог gate"; cleanup; exit 4; }
+trusted_gate_script="$trusted_gate_dir/test-fx-factory-release.sh"
+if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    show "$sha:ops/test-fx-factory-release.sh" >"$trusted_gate_script" \
+  || ! "$TRUSTED_CHMOD" 500 "$trusted_gate_script" \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ]; then
+  fail "gate script не совпадает с криптографически проверенным Git-объектом"
   cleanup
   exit 4
 fi
-sha=$(as_user git -C "$work/src" rev-parse HEAD)
+if [ -n "$OWNER" ] && { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
+  || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 700 ]; }; then
+  fail "доверенный каталог gate доступен рабочему пользователю"
+  cleanup
+  exit 4
+fi
 subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
 case "$subject" in
   "Merge pull request #"*)

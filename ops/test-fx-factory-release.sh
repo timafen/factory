@@ -86,11 +86,7 @@ PY
     "$case_dir/install/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
     "$case_dir/live/intake/app.py" "$case_dir/live/intake/plan.py"
-  mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" \
-    "$case_dir/releases" "$case_dir/repo/web"
-  printf 'old-server\n' >"$case_dir/install/factory-server"
-  printf 'old-worker\n' >"$case_dir/install/factory-worker"
-  chmod +x "$case_dir/install/factory-server" "$case_dir/install/factory-worker"
+  mkdir -p "$case_dir/trusted"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
   : >"$case_dir/gate-children"
@@ -133,13 +129,23 @@ if [ "$TEST_MODE" = gate-result-spoof ]; then
   exit 1
 fi
 case "$TEST_MODE" in
-  release-test-fail|forked-gate-fail|path-shadow-chain|handshake-file-spoof) exit 1 ;;
+  release-test-fail|forked-gate-fail|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
 esac
 exit 0
 RELEASE_GATE
     chmod +x "$destination/ops/install-brain.sh"
     chmod +x "$destination/ops/install-project-release-broker.sh"
     chmod +x "$destination/ops/install-server-browser.sh"
+    /usr/bin/git -C "$destination" init -q
+    /usr/bin/git -C "$destination" config user.name fixture
+    /usr/bin/git -C "$destination" config user.email fixture@example.invalid
+    /usr/bin/git -C "$destination" add .
+    /usr/bin/git -C "$destination" commit -qm fixture
+    ;;
+  *'checkout --quiet'*)
+    if [ "$TEST_MODE" = trusted-gate-tamper ]; then
+      printf '#!/bin/bash\nexit 0\n' >"$2/ops/test-fx-factory-release.sh"
+    fi
     ;;
   *'rev-parse HEAD'*) echo 1234567890abcdef ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
@@ -269,6 +275,10 @@ if [ "${1:-}" = test ]; then
   esac
   exit 0
 fi
+commit=
+for argument in "$@"; do
+  case "$argument" in *Commit=*) commit=${argument##*Commit=} ;; esac
+done
 output=
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then output=$2; shift 2; else shift; fi
@@ -309,6 +319,7 @@ WORKER
     ;;
   *) printf '#!/bin/bash\nexit 0\n' >"$output" ;;
 esac
+[ -z "$commit" ] || /bin/sed -i "s/1234567890abcdef/$commit/g" "$output"
 chmod +x "$output"
 EOF
   cat >"$case_dir/bin/bash" <<'EOF'
@@ -740,7 +751,7 @@ run_release "$forked_success" forked-gates-success \
   || fail "successful fork scenario unexpectedly used a filesystem result"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
 assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
-[ "$(grep -Fxc 'restart factory-server.service' "$forked_success/events")" -eq 1 ] \
+[ "$(grep -Fxc 'start factory-server.service' "$forked_success/events")" -eq 1 ] \
   || fail "successful fork scenario did not install exactly once"
 assert_no_fixture_processes "$forked_success"
 
@@ -812,6 +823,19 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
 done
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
+
+tampered_gate="$temporary/trusted-gate-tamper"
+make_fixture "$tampered_gate" trusted-gate-tamper
+set +e
+run_release "$tampered_gate" trusted-gate-tamper
+status=$?
+set -e
+[ "$status" -eq 5 ] || fail "a workspace-replaced gate returned $status instead of build error 5"
+grep -F 'завершилась с кодом 1' "$tampered_gate/output" >/dev/null \
+  || fail "the trusted Git-object copy did not preserve the real gate failure"
+! grep -F 'go build ' "$tampered_gate/gates" >/dev/null \
+  || fail "binaries were built after the workspace gate was replaced"
+assert_no_fixture_processes "$tampered_gate"
 
 for signal in HUP TERM; do
   for attempt in 1 2 3 4 5; do
