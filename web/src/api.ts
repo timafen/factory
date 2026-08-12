@@ -95,9 +95,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ version, settings }),
     }),
-  resumeWork: (title: string) => request<{ task: Task; stage: string; resumed: boolean }>("/api/v1/works/resume", {
+  resumeWork: ({ title, work_id }: { title: string; work_id?: string }) => request<{ task: Task; stage: string; resumed: boolean }>("/api/v1/works/resume", {
     method: "POST",
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, ...(work_id ? { work_id } : {}) }),
   }),
   metrics: (window: MetricsWindow) =>
     request<MetricsSummary>(
