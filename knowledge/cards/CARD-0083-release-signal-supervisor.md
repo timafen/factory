@@ -2,17 +2,17 @@
 
 ## HEAD
 
-- Status: Verified PASS — ready for Verify.
-- Branch: `factory/10f9d5f3-f5b-6c2ca72c-933`.
-- Implementation commit: cf900fcd66d70d2bd72181e448ea57bbbd6e7260 — сигнал
-  ограниченно ждёт PGID, затем останавливает pending launcher и его process group.
-- What changed: регистрация launcher защищена от сигнала до PID readiness;
-  stop-файл не даёт позднему setsid запустить test gate после остановки.
-  Supervisor обнаруживает готовую группу, выполняет TERM→KILL и reap без неограниченного wait.
-- Evidence: `bash ops/test-fx-factory-release.sh` — PASS для HUP/INT/TERM до
-  readiness UI и Go, watchdog, TERM-ignoring потомков, отсутствия процессов/install;
-  `go test ./...` и `bash scripts/test-build.sh` — PASS.
-- Next action: Verify подтверждает delivery ветки и результаты регрессии.
+- Status: Implemented — ready for repeated Review.
+- Branch: `factory/32cba600-231-1808620a-969`.
+Implementation commit: db620e29e4a9600f8dc92daa7b76d7d850fedefb — сессия
+  создаётся до intermediary launcher, fork setsid удерживается для reap.
+- What changed: реальный SID/PGID проверяется до запуска UI/Go gate; ранняя
+  остановка находит дочернего session leader и завершает всю группу.
+- Evidence: `bash ops/test-fx-factory-release.sh` — PASS для HUP/INT/TERM,
+  fork `setsid --wait`, intermediary UI/Go launcher, отсутствия процессов/install;
+  `bash scripts/test-build.sh` — PASS. Общий Go-прогон имеет внешний сбой
+  `TestTimeoutStopsIgnoringProcessGroup`, воспроизводимый без изменений Go-кода.
+- Next action: Review повторно проверяет ранний сигнал с fork/intermediary launcher.
 
 ## LOG
 
@@ -43,3 +43,11 @@ adversarial UI и Go потомками, подтвердив TERM→KILL, от�
 прошёл для HUP/INT/TERM до readiness UI и Go с watchdog, отсутствием процессов
 и production install; `go test ./...` и `bash scripts/test-build.sh` прошли;
 реализация — `cf900fcd66d70d2bd72181e448ea57bbbd6e7260`.
+
+### 2026-08-11 — Implement
+
+На ветке `factory/32cba600-231-1808620a-969` граница session перенесена перед
+`$AS`: fork intermediary launcher остаётся в известном PGID, а `setsid --wait`
+удерживает и reap-ит fork-ветку. Регрессия для UI и Go отправляет HUP/INT/TERM
+после создания дочерней сессии, но до PGID-handshake, и подтверждает отсутствие
+процессов и production install; реализация — `db620e29e4a9600f8dc92daa7b76d7d850fedefb`.
