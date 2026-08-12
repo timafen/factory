@@ -2,15 +2,14 @@
 
 ## HEAD
 
-- Status: BLOCKED: rebased Pilot storm verification does not reach owner
-  completion for an unrecognised release target; Pilot remains disabled.
-- Branch: `factory/31b80853-0f0-095f6283-3e1`.
-- Implementation commit: 7cf62afcbec972a5c1266606161407efaf002829 — migration dependency safety, real restart full-cycle proof, and durable duplicate-root outbox.
-- Evidence: pre-rebase clean-cache `go test ./...` → PASS; full Pilot suite →
-  PASS (209 tests); `go build ./...` → PASS. On fresh `main`, targeted Go
-  provenance tests pass, but two restart-cycle cases fail at owner completion.
-- Next action: integrate the provenance storm completion path with the new
-  release-state machine, then rerun full verification; keep Pilot disabled.
+- Status: PASS; Pilot remains disabled.
+- Branch: `factory/63ee7b58-ec0-e9738c0c-9f1`.
+- Implementation commit: 5be1a3fd5e5f71248d338a4e776f2ecefb118794 — external repository merges now create a durable merge-only delivery generation and complete the owner wait.
+- What changed: provenance Review/Verify corrections now reach owner completion
+  for an external repository without invoking a Factory-owned release adapter.
+- Evidence: `go test ./...` → PASS; `python3 -B -m unittest -v pilot.test_pilot`
+  → PASS (209 tests); `go build ./...` → PASS.
+- Next action: review and merge CARD-0086 after normal branch review.
 
 ## LOG
 
@@ -85,3 +84,13 @@ update; the implementation commit is an ancestor and changes code outside
 The current rebase preserves provenance helpers, child creation and durable
 outbox. It cannot be marked PASS while the acceptance scenario's final owner
 completion is blocked by the new release-target policy.
+
+### 2026-08-11 — Implement
+
+The release state machine now maps any external repository identity to a stable
+merge-only target. Its generation is completed from the durable merge receipt,
+so it writes the ordinary receipt/outbox and completes the owner wait without
+asking the Factory release broker to deploy a repository it does not operate.
+The restart storm tests exercise both Review and Verify corrections through
+this target. Final verification passed: `go test ./...`, all 209 Pilot tests,
+and `go build ./...`; Pilot enablement was not changed.
