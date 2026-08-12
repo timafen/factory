@@ -2786,6 +2786,16 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                          "Работа, которой нет в хранилище, не существует — проверить её нельзя. "
                          "Сделай: git push -u origin " + (branch or "<ветка>") +
                          " и сдай заново. Ничего не переписывай, только запушь и проверь дифф.")}
+    if state_ == "есть" and not files:
+        return {"back": True,
+                "alert": "Вернул сам: поставка не содержит реализации",
+                "alert_msg": ("Проверка pinned SHA завершилась успешно, но поставка "
+                              "не содержит ни одного изменения. Это недоставленная "
+                              "реализация; повтори Implement + Test."),
+                "note": ("REQUEST CHANGES\n"
+                         "Единственный blocker: pinned-проверка успешна, но diff "
+                         "пуст — реализация не доставлена. Добавь реализацию в "
+                         "ветку, закоммить и запушь её, затем сдай повторно.")}
     if state_ == "есть" and files:
         listing = "\n".join("  - " + f for f in files)
 

@@ -454,6 +454,29 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["state"], "blocked")
         self.assertIn("default branch", snapshot["reason"])
 
+    def test_pinned_snapshot_with_empty_diff_returns_request_changes(self):
+        """A real pinned snapshot with no delivery must return one blocker."""
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.commit(author, "README.md", "root\n")
+            self.git(author, "remote", "add", "origin", remote)
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+            self.git(author, "checkout", "-qb", "factory/empty", "main")
+            self.git(author, "push", "-qu", "origin", "factory/empty")
+
+            result = pilot.review_gate({}, "Работа", "factory/empty",
+                                       "file://" + remote)
+
+        self.assertTrue(result["back"])
+        self.assertEqual(result["note"].count("REQUEST CHANGES"), 1)
+        self.assertIn("Единственный blocker", result["note"])
+        self.assertIn("недоставленная реализация", result["alert_msg"])
+
     def test_review_gate_keeps_infrastructure_failure_out_of_request_changes(self):
         with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
                 "state": "blocked", "reason": "cannot fetch authoritative refs"}):
