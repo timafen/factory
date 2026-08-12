@@ -361,20 +361,20 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.git(work, "-c", "user.name=Test", "-c", "user.email=test@example.com",
                  "commit", "-qm", name)
 
-    def test_remote_main_advance_keeps_old_candidate_reviewable_without_cache(self):
-        """A real bare remote proves scope comes from pinned SHAs, not cached refs."""
+    def test_non_main_remote_default_advance_keeps_candidate_reviewable(self):
+        """A real non-main remote proves scope comes from pinned SHAs, not cached refs."""
         with tempfile.TemporaryDirectory() as tmp:
             remote = os.path.join(tmp, "remote.git")
             author = os.path.join(tmp, "author")
             observer = os.path.join(tmp, "observer")
             self.git(tmp, "init", "--bare", remote)
             self.git(tmp, "init", "-q", author)
-            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "checkout", "-qb", "stable")
             self.git(author, "remote", "add", "origin", remote)
             self.commit(author, "README.md", "root\n")
-            self.git(author, "push", "-qu", "origin", "main")
-            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
-            self.git(author, "checkout", "-qb", "factory/candidate", "origin/main")
+            self.git(author, "push", "-qu", "origin", "stable")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/stable")
+            self.git(author, "checkout", "-qb", "factory/candidate", "origin/stable")
             expected = ["delivery/file-%02d.txt" % i for i in range(1, 12)]
             for names, message in ((expected[:6], "first delivery batch"),
                                    (expected[6:], "second delivery batch")):
@@ -388,9 +388,9 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
                          "commit", "-qm", message)
             self.git(author, "push", "-qu", "origin", "factory/candidate")
 
-            self.git(author, "checkout", "-q", "main")
+            self.git(author, "checkout", "-q", "stable")
             self.commit(author, "foreign-from-advanced-main.txt", "not this delivery\n")
-            self.git(author, "push", "-q", "origin", "main")
+            self.git(author, "push", "-q", "origin", "stable")
 
             self.git(tmp, "clone", "-q", remote, observer)
 
@@ -401,8 +401,9 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
 
             snapshot = pilot.fresh_branch_snapshot("file://" + remote, "factory/candidate")
 
-            self.assertEqual(snapshot["state"], "ok")
+            self.assertEqual(snapshot["state"], "ok", snapshot)
             self.assertEqual(snapshot["files"], expected)
+            self.assertEqual(snapshot["default_branch"], "stable")
             self.assertEqual(snapshot["ahead_by"], 2)
             self.assertTrue(snapshot["base_advanced"])
             self.assertEqual(snapshot["base_ahead_by"], 1)
