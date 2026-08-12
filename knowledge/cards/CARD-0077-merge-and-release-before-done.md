@@ -2,18 +2,17 @@
 
 ## HEAD
 
-- Status: Implemented — проверено, ожидает слияния.
+- Status: BLOCKED — `web/dist` не соответствует изменённому `Work.tsx`.
 - Branch: `factory/ccd1e717-41d-48b32756-1c2`.
-- Implementation commit: 9a537b0a79d0ba68ee2ff0cf03ba0363f9c80a72 — сохранены актуальные защиты Review, CARD и crash-safe delivery вместе с ожиданием выпуска.
+- Implementation commit: 7f5f666d52c24662881ceccd72288545cf6f1456 — сохранены актуальные защиты Review, CARD и crash-safe delivery вместе с ожиданием выпуска.
 - What changed: terminal Verify до delivery receipt остаётся активным и показывает
   «Ожидает слияния и выпуска»; успешный выпуск завершает работу единожды.
 - What changed: сохранены pinned fresh snapshot, резервирование/передача номера
   карточки и восстановление merge intent до task cursor.
-- Evidence: целевые Python-регрессии snapshot/CARD/delivery → 18 OK;
-  `npm test -- --run src/Work.test.ts` → 11 OK.
-- Evidence: `npm run lint && npm run typecheck && npm run build` → PASS.
-- Next action: слить ветку; нестабильный таймаут полного Vitest в существующем
-  `WorkHistory.test.tsx` разобрать отдельно.
+- Evidence: Python → 214 OK; UI → 159 OK; Go, build, release, race, tooling и
+  launcher → PASS; обязательный browser-рецепт → FAIL на проверке `web/dist`.
+- Next action: пересобрать и закоммитить `web/dist`, затем повторить
+  `just test-browser`.
 
 ## LOG
 
@@ -58,3 +57,23 @@ Python-тестами и 11 UI-тестами Work.
 Обновлена `PipelineWatchMergeTests`: успешный merge фиксируется один раз,
 но `mark_final` не вызывается до подтверждённого выпуска. Полный Python-набор
 прошёл 191 тест; web lint/typecheck/build прошли, полный Vitest имеет таймауты.
+
+### 2026-08-12 — Verify
+
+Pinned snapshot: база `0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622`,
+кандидат `aebb86e02100ee9191a202e4ed5e6d4bd9e5f94a`.
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| 1. До подтверждённого выпуска нет ложного завершения | `python3 -m unittest pilot.test_pilot`; `test_recovery_journals_before_wait_without_second_merge`; `Work.test.ts` | PASS: ожидание сохраняется, UI остаётся активным |
+| 2. Успех завершает работу единожды | тот же Python-набор; `test_outbox_and_notification_journals_are_immutable` | PASS: receipt и уведомление не дублируются |
+| 3. Занятый выпуск требует следующего поколения | `test_lock_join_and_successor_are_distinct` | PASS: старое поколение не закрывает новый wait |
+| 4. Lock/retry переживает рестарт | `test_locked_retry_uses_same_real_broker_operation_after_second_merge` | PASS: повтор использует durable operation |
+| 5. Ошибка не создаёт ложный PASS и дубль тревоги | `test_real_rollback_failure_never_completes_waits`; `test_failed_broker_terminal_never_completes_waits` | PASS: ожидания не завершаются |
+| 6. Crash/restart не теряет и не дублирует результат | `test_state_file_crash_boundaries_recover_in_fresh_pilot_processes`; `test_terminal_write_failure_survives_real_broker_restart_without_false_done` | PASS: восстановление проходит на всех границах |
+| 7. Standalone Done не изменён | `just ui-check` (159 тестов), `Work.test.ts` (11 тестов) | PASS: standalone остаётся Done, terminal Verify ждёт выпуск |
+
+Смежные проверки: Go-пакеты, race, воспроизводимый release, tooling, launcher и
+сборка прошли. `just test-browser` заблокирован до Playwright: `npm run build`
+создаёт `index-CCEUfF1P.js`, удаляет закоммиченный `index-FbtnAMaY.js` и меняет
+`web/dist/index.html`; `git diff --exit-code -- dist` возвращает 1.
