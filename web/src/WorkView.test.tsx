@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkView } from "./Work";
@@ -35,6 +35,25 @@ function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (base
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("separates queued work from work running right now", async () => {
+  mockAPI({});
+  view([
+    task("running", "[auto] [3/5 Implement + Test] Уже выполняется", "running"),
+    task("queued", "[auto] [4/5 Review] Ждёт исполнителя", "queued"),
+  ]);
+
+  const runningSection = (await screen.findByRole("heading", { name: "В работе прямо сейчас" }))
+    .parentElement?.parentElement as HTMLElement;
+  const queuedSection = screen.getByRole("heading", { name: "В очереди" })
+    .parentElement?.parentElement as HTMLElement;
+
+  expect(within(runningSection).getByText("Уже выполняется")).toBeVisible();
+  expect(within(runningSection).queryByText("Ждёт исполнителя")).not.toBeInTheDocument();
+  expect(within(queuedSection).getByText("Ждёт исполнителя")).toBeVisible();
+  expect(within(queuedSection).queryByText("Уже выполняется")).not.toBeInTheDocument();
+  expect(screen.getByText("Текущий этап поставлен в очередь и ещё не выполняется.")).toBeVisible();
+});
 
 it("separates owner decision, pause, dead end, automatic repair, and archive", async () => {
   const answer = vi.fn();
