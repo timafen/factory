@@ -916,6 +916,103 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	}
 }
 
+func TestTerminalSyncFailuresStayFailClosedAcrossRestart(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		fail func(*Broker)
+	}{
+		{name: "file sync", fail: func(b *Broker) {
+			original := b.syncFile
+			failed := false
+			b.syncFile = func(file *os.File) error {
+				if !failed {
+					failed = true
+					return errors.New("injected file sync failure")
+				}
+				return original(file)
+			}
+		}},
+		{name: "file close", fail: func(b *Broker) {
+			original := b.closeFile
+			failed := false
+			b.closeFile = func(file *os.File) error {
+				err := original(file)
+				if !failed {
+					failed = true
+					return errors.Join(err, errors.New("injected file close failure"))
+				}
+				return err
+			}
+		}},
+		{name: "rename", fail: func(b *Broker) {
+			original := b.renameFile
+			failed := false
+			b.renameFile = func(oldPath, newPath string) error {
+				if !failed {
+					failed = true
+					return errors.New("injected rename failure")
+				}
+				return original(oldPath, newPath)
+			}
+		}},
+		{name: "directory sync", fail: func(b *Broker) {
+			original := b.syncDir
+			failed := false
+			b.syncDir = func(path string) error {
+				if !failed {
+					failed = true
+					return errors.New("injected directory sync failure")
+				}
+				return original(path)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			blocked := make(chan struct{})
+			executor := &recordingExecutor{done: blocked}
+			broker, err := NewAt(dir, executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"delivery-sync-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			waitForOperationStatus(t, server, "delivery-sync-failure", "running")
+			test.fail(broker)
+			close(blocked)
+			waitForBrokerIdle(t, broker)
+			if got := operationStatus(t, server, "delivery-sync-failure").Status; got != "running" {
+				t.Fatalf("unconfirmed terminal status became visible as %q", got)
+			}
+
+			var stored operation
+			data, err := os.ReadFile(filepath.Join(dir, "delivery-sync-failure.json"))
+			if err != nil || json.Unmarshal(data, &stored) != nil || stored.Status != "running" {
+				t.Fatalf("record after failed sync: item=%+v read_error=%v", stored, err)
+			}
+			restarted, err := NewAt(dir, executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restartedServer := httptest.NewServer(restarted.Handler())
+			defer restartedServer.Close()
+			if got := operationStatus(t, restartedServer, "delivery-sync-failure").Status; got != "failed" {
+				t.Fatalf("fresh restart status=%q, want failed", got)
+			}
+			if got := postStatus(t, restartedServer, body); got != http.StatusOK {
+				t.Fatalf("duplicate POST status=%d", got)
+			}
+			if calls := executor.callCount(); calls != 1 {
+				t.Fatalf("executor calls=%d, want 1", calls)
+			}
+		})
+	}
+}
+
 func TestDiskBrokerRejectsChangedDuplicateInput(t *testing.T) {
 	dir := t.TempDir()
 	blocked := make(chan struct{})
