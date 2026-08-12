@@ -1770,7 +1770,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                 return {"workers": list(workers.values())}
             if path == "/repositories":
                 return {"repositories": [{"id": "repo-id",
-                                           "remote_identity": "github.com/acme/repo"}]}
+                                           "remote_identity": "github.com/timafen/factory"}]}
             if path == "/workflows":
                 return {"workflows": [{"id": stage, "enabled": True,
                     "current_revision": {"id": data["revision_id"], "title": stage}}
@@ -1785,7 +1785,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "cleanup_orphaned_paused_pipelines", "handle_answers", "advance_epics",
             "pipeline_watch", "cleanup_work_archive", "area_extend", "collect_ideas",
             "record_implementation_artifact", "save_stage_verdict",
-            "retry_pending_factory_deploy", "autostart_plan", "deploy_after_merge",
+            "retry_pending_factory_deploy", "autostart_plan",
         )
         notifications = mock.Mock()
         with contextlib.ExitStack() as stack:
@@ -1815,6 +1815,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
             merge = stack.enter_context(mock.patch.object(pilot, "gh_merge",
                                                            return_value=(True, "merged")))
+            stack.enter_context(mock.patch.object(
+                pilot, "broker_operation", return_value={"status": "succeeded"}))
             final = stack.enter_context(mock.patch.object(pilot, "mark_final"))
             stack.enter_context(mock.patch.object(pilot, "notify", notifications))
             for name in noops:
@@ -1836,7 +1838,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                              for body in created))
         self.assertEqual([body.get("correction_kind", "") for body in created],
                          [kind, "", ""])
-        merge.assert_called_once_with("github.com/acme/repo", "factory/correction",
+        merge.assert_called_once_with("github.com/timafen/factory", "factory/correction",
                                       "Изменённое человеком имя")
         final.assert_called_once_with(verify["id"], "Verify", True)
         self.assertTrue(any(len(call.args) > 1 and call.args[1] == "Задача выполнена"
@@ -2011,7 +2013,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                 return {"workers": list(workers.values())}
             if path == "/repositories":
                 return {"repositories": [{"id": "repo-id",
-                                            "remote_identity": "github.com/acme/repo"}]}
+                                            "remote_identity": "github.com/timafen/factory"}]}
             if path == "/workflows":
                 return {"workflows": [{"id": stage, "enabled": True,
                     "current_revision": {"id": value["revision_id"], "title": stage}}
@@ -2025,7 +2027,7 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "rescue_queued", "supersede_stale_questions",
             "cleanup_orphaned_paused_pipelines", "advance_epics",
             "area_extend", "collect_ideas", "retry_pending_factory_deploy",
-            "autostart_plan", "deploy_after_merge", "notify",
+            "autostart_plan", "notify",
         )
         state = {"processed": []}
         with contextlib.ExitStack() as stack:
@@ -2053,6 +2055,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
                  else "factory/b-clean", "note": "clean"}))
             merge = stack.enter_context(mock.patch.object(
                 pilot, "gh_merge", return_value=(True, "merged")))
+            stack.enter_context(mock.patch.object(
+                pilot, "broker_operation", return_value={"status": "succeeded"}))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
@@ -2063,11 +2067,11 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             # These calls intentionally use the real artifact storage API.
             pilot.record_implementation_artifact(
                 base, "impl-a", f"[auto] [3/5 Implement + Test] {base}",
-                "BRANCH: factory/a-implementation", "", "github.com/acme/repo",
+                "BRANCH: factory/a-implementation", "", "github.com/timafen/factory",
                 work_id=work_a)
             pilot.record_implementation_artifact(
                 base, "impl-b", f"[auto] [3/5 Implement + Test] {base}",
-                "BRANCH: factory/b-implementation", "", "github.com/acme/repo",
+                "BRANCH: factory/b-implementation", "", "github.com/timafen/factory",
                 work_id=work_b)
 
             for suffix, source, work_id in (("a", sources[0], work_a),
@@ -2133,8 +2137,8 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             self.assertEqual(set(statuses), {work_a, work_b})
 
         self.assertEqual(merge.call_args_list, [
-            mock.call("github.com/acme/repo", "factory/a-clean", base),
-            mock.call("github.com/acme/repo", "factory/b-clean", base),
+            mock.call("github.com/timafen/factory", "factory/a-clean", base),
+            mock.call("github.com/timafen/factory", "factory/b-clean", base),
         ])
         self.assertFalse(any(" Triage]" in body["title"] or " Specification]" in body["title"]
                              for body in created))
