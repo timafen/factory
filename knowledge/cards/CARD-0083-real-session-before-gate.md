@@ -1,87 +1,18 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
-
 ## HEAD
 
-Status: Verified
-Branch: factory/fb5711ae-125-3c6494a9-967.
-Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
-What changed: после `wait -n` выпуск принимает результат только от одного из зарегистрированных `setsid --fork --wait` launcher.
-What changed: неизвестный или пустой PID завершения останавливает Gate и не допускает установку.
-Evidence: `just ui-check`, `npx tsc -p tsconfig.app.json --noEmit`, `just ui-build 0` (чистый `web/dist`) и `just test-browser-critical` → PASS.
-One next action: влить проверенную поставку.
+Status: Implemented — awaiting human merge.
+Branch: factory/92c05a1d-a0a-437ef620-ec1.
+Implementation commit: 71baa59ef6efb819ee32db163347235a7ef6b4c3 — checkout и gate inputs изолированы от `$AS`, Node закреплён абсолютно, drain process group ограничен.
+What changed: `/usr/bin/git` получает исходники в root-owned read-only snapshot; нестандартный `$AS` отклоняется до checkout/gate/install.
+What changed: UI запускается через проверенные `/usr/bin/node` и абсолютные npm/npx entrypoints с `PATH=/usr/bin:/bin`; успешный gate с потомком получает bounded TERM→KILL, reap и failure.
+Preserved: абсолютные trusted tools, live SID/PGID/supervisor/nonce handshake, signal cleanup, kernel wait result и запрет production install до обоих gates; Pilot не включён.
+Evidence: hostile `$AS`/checkout, fake `PATH/node`, real orphan, fork/fail/signal suite ×2 → PASS; процессов и install не осталось.
+Evidence: `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS; `go test ./...` повторяет baseline CARD-0087 schema failure.
+One next action: human merge into main.
 
 ## LOG
-
-### 2026-08-15 — Implement
-
-По утверждённому ответу владельца UI-зависимости установлены исключительно через
-`web/npm ci` без изменения lock-файлов. `just ui-check` и отдельный `npx tsc -p
-tsconfig.app.json --noEmit` прошли; `just ui-build 0` не оставил изменений в
-`web/dist`. `just test-browser-critical` прошёл все 5 сценариев Playwright.
-
-### 2026-08-15 — Implement
-
-После `wait -n` выпуск сверяет PID с обоими launcher, созданными для Gate:
-только так kernel exit status может разрешить установку. Неизвестный PID прерывает
-release и останавливает Gate. `bash -n` и полный `ops/test-fx-factory-release.sh`
-прошли, включая forked failure и forged result.
-
-### 2026-08-12 — Verify
-
-| Критерий | Команда / проверка | Результат |
-| --- | --- | --- |
-| Launcher ждёт оба forked Gate | `timeout 300 bash ops/test-fx-factory-release.sh` | PASS: fixture видит `--fork --wait` дважды. |
-| Ошибка Gate не теряется | тот же suite, `forked-gate-fail` | PASS: release возвращает code 5 и сохраняет Gate status 1. |
-| После отказа нет build/install | тот же suite | PASS: старые binaries целы, events пуст, `go build` не вызвался. |
-| Смежный release lifecycle | тот же suite | PASS: Gate, единая установка, регистрация, rollback и cleanup. |
-| Полный набор проекта | `just check` | НАХОДКА вне области: `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`); vet и govulncheck PASS. |
-| Синтаксис и чистота | `bash -n ...`; `git diff --check` | PASS. |
-
-Pinned review: base `5d9f3f330412bc59ab9b689d1ca3315ea137c0b3`, candidate `517fc3dd33f9fe4c2457df68cf1d8c9a3acd6790`;
-после rebase кодовый implementation commit — `d320c99f3948000fb7c11d21e749337a279d3e1d`.
-
-### 2026-08-12 — Implement
-
-После конфликтов с main проверка форкающего launcher дополнена явным контрактом
-`--fork --wait`: релиз ждёт kernel exit status обеих Gate-групп, а не ранний успех
-родительского launcher. Shell-suite подтвердил отказ с code 5 без установки и сборки.
-
-### 2026-08-12 — Implement
-
-После ответа владельца crash-cleanup запускается отдельно и каждый release, signal и driver-сценарий ограничен `/usr/bin/timeout`; recovery сбрасывает переменную crash hook.
-Исправлены повторное использование `path-shadow-chain`, неполный trusted-gate env в runner-ах и устаревший anti-spoof fixture; небезопасный result path по-прежнему не передаётся.
-Полный shell-suite завершился PASS для crash-фаз `prepared`, `old-stopped`, `pair-installed`, `services-started`, rollback, signal и PATH/anti-spoof проверок.
-
-### 2026-08-13 — Implement
-
-После ревью clone/checkout, определение commit и subject переведены с `as_user git`
-на root-owned `/usr/bin/git`, поэтому подменённый PATH-Git не участвует до проверки
-объекта. Возвращён fallback snapshot через свежесобранный server, когда установленный
-server не знает новую схему; фикстура проверяет оба сценария. `bash -n` и `git diff --check`
-прошли; полный shell-suite остановился на существующем crash-cleanup разделе.
-
-### 2026-08-12 — Implement
-
-Безопасный Gate перенесён поверх свежего `main`: исполняемый скрипт и полный набор
-его зависимостей извлекаются по blob из конкретного Git-commit в закрытый root-owned
-каталог. После разрешения конфликтов Node также закреплён абсолютным проверяемым путём.
-`bash -n` и `bash ops/test-fx-factory-release.sh` прошли, включая конкурентную подмену
-каталога, замену Gate и PATH-shadow для `setsid` и Node.
-
-### 2026-08-12 — Verify
-
-| Критерий | Команда / проверка | Результат |
-| --- | --- | --- |
-| Gate-цепочка запускается только по доверенным путям | `bash ops/test-fx-factory-release.sh` | PASS: проверены trusted executable, PATH-shadow, Node/npm/npx, реальная session, handshake, параллельные gate, единая установка и общий откат. |
-| Регрессии смежного релизного поведения | тот же shell-suite | PASS: регистрация, rollback, signal cleanup и отсутствие утечек процессов подтверждены. |
-| Полный набор проекта | `just check` | НАХОДКА: форматирование, vet, govulncheck, staticcheck, boundary и Go-тесты PASS; UI lint не запустился в чистом окружении из-за отсутствующего `eslint` (`exit 127`). |
-| Закреплённая область поставки | isolated bare fetch; `git diff --name-only base_sha...candidate_sha` | PASS: `knowledge/cards/CARD-0083-real-session-before-gate.md`, `ops/fx-factory-release`, `ops/test-fx-factory-release.sh`; implementation commit `be58e8096302044be7e96ee96a9e32aef93ddd08` — предок кандидата и меняет код. |
-| Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check` | PASS. |
-
-Полный набор не стал причиной возврата: отказ относится к отсутствующей локальной
-UI-зависимости, а целевой gate-suite прошёл полностью.
 
 ### 2026-08-11 — Implement
 
@@ -118,36 +49,19 @@ session и её прямую связь с конкретным `setsid --fork -
 gate. PATH-shadow, forged/prewritten handshake, missing session, real fork fail/success
 и HUP/INT/TERM cleanup прошли shell-suite трижды; Go test/build и UI test/build зелёные.
 
-### 2026-08-12 — Implement
+### 2026-08-11 — Implement
 
-UI gate теперь передаёт проверенные `npm` и `npx` закреплённому абсолютному Node,
-поэтому подложенный `PATH/node` больше не превращает невозможную команду в успех.
-Вложенный release gate в фикстуре заменён bounded stub: целевой self-test завершился
-с PASS за 150 секунд без рекурсивного роста процессов. Полный Verify зелёный до
-неизменённого browser-контракта pause/resume; его отдельный повтор воспроизвёл дефект main.
+Итоговая защита перенесена без промежуточных изменений на `main`
+`60cba840f39a453862c1c0f87f261fd453b09688` отдельным implementation-коммитом.
+Три shell-прогона, полный Go test/build, 157 UI-тестов, UI build, `bash -n`
+и `git diff --check` прошли; scope относительно свежей базы ограничен этой карточкой
+и двумя gate-скриптами. Pilot не включался.
 
-### 2026-08-12 — Verify
+### 2026-08-11 — Implement
 
-| Критерий | Команда / проверка | Результат |
-| --- | --- | --- |
-| Gate запускается только из доверенной неизменяемой цепочки | `timeout 300 bash ops/test-fx-factory-release.sh` | PASS: абсолютные Git/setsid/Node/npm/npx, nonce-handshake, real-session, PATH-shadow, spoof и конкурентная подмена Gate проверены. |
-| Crash recovery ограничен по времени | тот же shell-suite, фазы `prepared`, `old-stopped`, `pair-installed`, `services-started` | PASS: все журналы восстановлены, suite завершился сам с кодом 0. |
-| Регрессии release lifecycle | тот же shell-suite | PASS: регистрация, единая установка, rollback, HUP/TERM cleanup и отсутствие утечек процессов проверены. |
-| Полный набор проекта | `just check` | НАХОДКА вне области: vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
-| Закреплённая поставка | isolated bare fetch; `git diff --name-only e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3` | PASS: изменены только карточка и два release-скрипта; implementation commit `f97fe77d83f844426623f2a0e8a2a27ffb3cc603` валиден. |
-| Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; pinned `git diff --check` | PASS. |
-
-### 2026-08-12 — Implement
-
-Регрессия подделывает успешный result рядом с настоящим forked gate и требует вернуть
-исходную ошибку 5 без сборки и установки. Изолированный сценарий с внешним timeout,
-внутренним timeout и trap-очисткой завершился PASS с кодом 0; синтаксис и diff-check прошли.
-
-### 2026-08-12 — Verify
-
-| Критерий | Команда / проверка | Результат |
-| --- | --- | --- |
-| Ошибка настоящего forked gate не теряется за launcher | `timeout 180s env FACTORY_TEST_ONLY=forged-gate-result FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` | PASS: реальная ошибка gate победила поддельный успех, установка не запускалась, exit 0 у self-test. |
-| Смежное release-поведение | `bash -n` для обоих скриптов; pinned `git diff --check` | PASS: синтаксис и пробелы корректны. |
-| Полный набор проекта | `timeout 1200s just check` | НАХОДКА вне области: format, vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
-| Закреплённая область поставки | isolated bare fetch; `git diff --name-only c28b5bfc0c5bbb22c7d69d0749c316a2b340841e...2be97a66737caee20ee1a7390d1ba68f38a9f606` | PASS: изменены только карточка и `ops/test-fx-factory-release.sh`; implementation commit `13c8e8e0a04854c17c352eb8128eb85bb16fd04d` — предок кандидата и меняет код. |
+Security correction перенесена на свежий `main` `36ce322e2b6685dd9a87f4d2c947f61538654ae1`:
+gate читает root-owned замороженный checkout, не допускает caller-controlled `$AS`,
+а UI использует абсолютные Node/npm/npx с очищенным PATH. Успешный gate с реальным
+фоновым потомком ограниченно проходит TERM→KILL/reap и превращается в отказ без
+установки. Расширенный shell-suite ×2, Go build, 157 UI tests/build и syntax/diff прошли;
+полный Go test повторил существующий на `origin/main` отказ схемы поля CARD-0087.
