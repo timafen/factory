@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned.
+Status: BLOCKED: live Workflow revisions Review/Verify have not been created, smoked, or pinned; full Pilot suite has 3 compatibility-test errors.
 Branch: `factory/c92696e9-aa7-d6595696-a5d`.
 Implementation commit: f29e45dc382e35b0ef33453b6be3d19f83d2b58e — Review получает свежий pinned snapshot remote default branch.
 What changed: Review resolves remote HEAD, fetches base/candidate refs in an isolated repository, records immutable SHA values and blocks infrastructure failures without cached-ref fallback.
-Evidence: `python3 -m unittest pilot.test_pilot`, `go test ./...`, `go build ./cmd/factory-server`, `npm run typecheck` and `npm test` → PASS.
-Next action: create and smoke immutable live Review/Verify revisions, then pin their IDs; existing task snapshots must remain unchanged.
+Evidence: Go and web suites pass; `python3 -m unittest pilot.test_pilot` fails with 3 stale `branch_report` compatibility-test errors.
+Next action: restore compatibility/update the three Pilot tests, then create and smoke immutable live Review/Verify revisions before pinning their IDs; existing task snapshots must remain unchanged.
 
 ## LOG
 
@@ -17,6 +17,7 @@ Next action: create and smoke immutable live Review/Verify revisions, then pin t
 | --- | --- | --- |
 | Свежая база и точный scope | `python3 -m unittest pilot.test_pilot` | PASS: real bare-remote fixture показывает stale scope из 12 файлов и pinned scope из 11 файлов, `ahead_by=2`, SHA и сохранение ветки воркера. |
 | Инфраструктурный сбой не обвиняет код | тот же набор, `FreshDefaultBranchSnapshotTests` | PASS: failure resolution/fetch даёт BLOCKED без REQUEST CHANGES. |
+| Полный Pilot-набор | `python3 -m unittest pilot.test_pilot -q` | BLOCKED: 202 tests, 3 errors — два `CardNumberReservationTests` получают blocked result вместо старого `back`, а `SpecificationBranchHandoffTests` ожидает прежний `branch_report`/gh seam. |
 | Регрессии runtime | `go test ./...`; `go build ./cmd/factory-server` | PASS. |
 | Регрессии web | `npm run typecheck`; `npm test` | PASS: 14 файлов тестов, 155 тестов. |
 | Чистота поставки | `git diff --check`; `git diff --name-only origin/main...HEAD` | PASS: только запись Verify в карточке. |
