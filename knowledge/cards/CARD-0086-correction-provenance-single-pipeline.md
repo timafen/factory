@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and tested on current `main`; Pilot remains operationally disabled.
+- Branch: `factory/88d06a21-24e-825e0559-1fc` (base `origin/main`
+  `62832535c96b409ef7736440b5c95bca5e8a0d2a`).
+Implementation commit: 16de207ba84936cef07b8233c3d9b631779e0fd5 — strict `work_id` isolation is preserved through resume, Review and safe delivery.
+- What changed: same-title pauses, metadata, history, Review state and delivery
+  artifacts remain isolated by `work_id`; title fallback is legacy-only.
+- Evidence: post-rebase provenance/release/UI/typecheck targets → PASS; prior
+  final tree full Pilot 222 tests (13 skipped), UI 161/161, HTTPS Chromium
+  21/21, full Go, lint and builds → PASS.
+- Next action: review and merge this correction while keeping Pilot disabled.
 
 ## LOG
 
@@ -47,3 +46,15 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Rebased the complete same-title isolation onto `origin/main`
+`62832535c96b409ef7736440b5c95bca5e8a0d2a`, retaining the merged correction
+provenance and process-based release recovery. Merge intents, merge journals,
+delivery waits and final receipts now carry `work_id`; the restart regression
+uses the real safe-release path and proves two identical titles retain separate
+receipts. Post-rebase targeted Pilot (7), control-plane provenance/resume, UI
+(18) and TypeScript checks passed. Before the final base movement, full Pilot
+(222 tests, 13 skipped), UI (161), HTTPS Chromium (21), full Go, lint and both
+builds passed. Pilot remains operationally disabled.
