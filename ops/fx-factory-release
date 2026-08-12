@@ -40,6 +40,7 @@ GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
 GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
 GATE_IDENTITY_LAUNCHER=/usr/bin/sudo
+GATE_SESSION_LAUNCHER=/usr/bin/setsid
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -237,6 +238,17 @@ esac
 # status is authoritative. OWNER='' is the explicit no-switch mode used by the
 # hermetic test fixture (and by an operator already running as the target UID).
 gate_identity=()
+if [ ! -x "$GATE_SESSION_LAUNCHER" ] \
+  || [ "$(stat -Lc %u "$GATE_SESSION_LAUNCHER" 2>/dev/null)" != 0 ]; then
+  fail "нет доверенного session launcher для test gate"
+  exit 4
+fi
+gate_session_launcher_mode=$(stat -Lc %a "$GATE_SESSION_LAUNCHER" 2>/dev/null) \
+  || { fail "не смог проверить session launcher для test gate"; exit 4; }
+if (( (8#$gate_session_launcher_mode & 0022) != 0 )); then
+  fail "session launcher для test gate доступен на запись не только root"
+  exit 4
+fi
 if [ -n "$OWNER" ]; then
   gate_user=${OWNER%%:*}
   if ! [[ "$gate_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
@@ -474,7 +486,7 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
   local name=$1 log=$2 handshake=$3 launcher
   shift 3
   rm -f -- "$handshake"
-  setsid --wait bash -c '
+  "$GATE_SESSION_LAUNCHER" --fork --wait bash -c '
     handshake=$1
     shift
     trap - HUP INT TERM

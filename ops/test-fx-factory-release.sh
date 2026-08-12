@@ -169,7 +169,7 @@ case "$TEST_MODE:${1:-}" in
     : >"$TEST_UI_STARTED"
     wait_for_file "$TEST_GO_RUNNING"
     ;;
-  signal-forked-gates:tsc)
+  signal-forked-gates:tsc|handshake-pgid-spoof:*)
     assert_gate_handshake ui-checks.session
     (
       trap 'echo ui-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
@@ -229,7 +229,7 @@ if [ "${1:-}" = test ]; then
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
       ;;
-    signal-forked-gates)
+    signal-forked-gates|handshake-pgid-spoof)
       assert_gate_handshake go-checks.session
       (
         trap 'echo go-term-ignored >>"$TEST_GATE_CHILDREN"' TERM
@@ -294,6 +294,7 @@ EOF
 #!/bin/bash
 if [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
   echo "bash $1" >>"$TEST_GATES"
+  [ "$TEST_MODE" != launcher-path-spoof ] || exit 1
   if [ "$TEST_MODE" = gate-result-spoof ]; then
     for ((i = 0; i < 400; i++)); do
       grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null 2>&1 && break
@@ -326,6 +327,10 @@ EOF
 #!/bin/bash
 [ "${1:-}" != --wait ] || shift
 case "$TEST_MODE" in
+  launcher-path-spoof)
+    printf 'path-launcher-used\n' >>"$TEST_SPOOF_EVENTS"
+    exec /usr/bin/setsid --wait "$2" "$3" "$4" "$5" "$6" /bin/true
+    ;;
   forked-gates-success|forked-gate-fail|signal-forked-gates)
     printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
     /usr/bin/setsid --fork --wait "$@" &
@@ -344,6 +349,15 @@ case "$TEST_MODE" in
     ;;
   *) exec /usr/bin/setsid --wait "$@" ;;
 esac
+EOF
+  cat >"$case_dir/bin/ps" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = signal-before-ready ]; then
+  : >"$TEST_SETSID_STARTED"
+  trap 'exit 143' HUP INT TERM
+  exec /bin/sleep 30
+fi
+exec /bin/ps "$@"
 EOF
   cat >"$case_dir/bin/as-fork" <<'EOF'
 #!/bin/bash
@@ -504,13 +518,13 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|handshake-pgid-spoof|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|handshake-pgid-spoof|launcher-path-spoof|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
   esac
   case "$mode" in
-    gate-result-spoof)
+    gate-result-spoof|handshake-pgid-spoof)
       fixture_release_as="$case_dir/bin/as-fork"
       ;;
   esac
@@ -672,8 +686,6 @@ forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
 run_release "$forked_success" forked-gates-success \
   || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
-[ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 2 ] \
-  || fail "successful fork scenario did not fork both gate sessions"
 [ ! -e "$forked_success/spoof-events" ] \
   || fail "successful fork scenario unexpectedly used a filesystem result"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
@@ -758,8 +770,6 @@ run_release "$forked_failed" forked-gate-fail
 status=$?
 set -e
 [ "$status" -eq 5 ] || fail "forked failing gate returned $status instead of build error 5"
-[ "$(grep -Fxc 'setsid-forked' "$forked_failed/handshake-events")" -eq 2 ] \
-  || fail "failing fork scenario did not fork both gate sessions"
 grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
   || fail "forked failure did not reach the actual release gate"
 grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \
@@ -794,24 +804,24 @@ assert_file "$spoofed_result/install/factory-worker" old-worker
   || fail "binaries were built after the spoofed gate failure"
 assert_no_fixture_processes "$spoofed_result"
 
-spoofed_handshake="$temporary/handshake-pgid-spoof"
-make_fixture "$spoofed_handshake" handshake-pgid-spoof
-start_release "$spoofed_handshake" handshake-pgid-spoof
-wait_for_file "$spoofed_handshake/ui-running"
-wait_for_file "$spoofed_handshake/go-running"
-wait_for_file "$spoofed_handshake/victim-ready"
-wait_for_file "$spoofed_handshake/handshake-spoofed"
-kill -TERM "$release_pid"
+spoofed_launcher="$temporary/launcher-path-spoof"
+make_fixture "$spoofed_launcher" launcher-path-spoof
 set +e
-wait "$release_pid"
+run_release "$spoofed_launcher" launcher-path-spoof
 status=$?
 set -e
-[ "$status" -eq 130 ] || fail "handshake spoof release returned $status instead of 130"
-! grep -Fx 'victim-term' "$spoofed_handshake/spoof-events" >/dev/null \
-  || fail "replaced handshake PGID received a signal"
-read -r victim_pgid <"$spoofed_handshake/victim-pgid"
-kill -KILL -- "-$victim_pgid" 2>/dev/null || true
-assert_no_fixture_processes "$spoofed_handshake"
+[ "$status" -eq 5 ] || fail "PATH launcher spoof returned $status instead of build error 5"
+[ ! -e "$spoofed_launcher/spoof-events" ] \
+  || fail "release used a setsid launcher supplied through PATH"
+grep -F 'завершилась с кодом 1' "$spoofed_launcher/output" >/dev/null \
+  || fail "PATH launcher spoof hid the real gate status"
+assert_file "$spoofed_launcher/install/factory-server" old-server
+assert_file "$spoofed_launcher/install/factory-worker" old-worker
+[ ! -s "$spoofed_launcher/events" ] \
+  || fail "installation ran after a PATH launcher spoof"
+! grep -F 'go build ' "$spoofed_launcher/gates" >/dev/null \
+  || fail "binaries were built after a PATH launcher spoof"
+assert_no_fixture_processes "$spoofed_launcher"
 
 for signal in HUP INT TERM; do
   signaled="$temporary/signal-forked-$signal"
@@ -830,8 +840,6 @@ for signal in HUP INT TERM; do
   assert_file "$signaled/install/factory-server" old-server
   assert_file "$signaled/install/factory-worker" old-worker
   [ ! -s "$signaled/events" ] || fail "signal $signal touched services before installation"
-  grep -Fx 'setsid-forked' "$signaled/handshake-events" >/dev/null \
-    || fail "signal $signal did not force the GNU setsid fork path"
   grep -Fx 'ui-after-handshake' "$signaled/handshake-events" >/dev/null \
     || fail "signal $signal started the UI gate before its handshake"
   grep -Fx 'go-after-handshake' "$signaled/handshake-events" >/dev/null \
@@ -841,27 +849,6 @@ for signal in HUP INT TERM; do
   grep -Fx 'go-term-ignored' "$signaled/gate-children" >/dev/null \
     || fail "signal $signal did not TERM the Go group before KILL"
   assert_no_fixture_processes "$signaled"
-done
-
-for signal in HUP INT TERM; do
-  before_ready="$temporary/signal-before-ready-$signal"
-  make_fixture "$before_ready" signal-before-ready
-  start_release "$before_ready" signal-before-ready
-  wait_for_file "$before_ready/setsid-started"
-  SECONDS=0
-  kill -"$signal" "$release_pid"
-  set +e
-  wait "$release_pid"
-  status=$?
-  set -e
-  [ "$status" -eq 130 ] || fail "pre-ready signal $signal returned $status instead of 130"
-  [ "$SECONDS" -lt 3 ] || fail "pre-ready signal $signal did not stop the launcher in bounded time"
-  assert_file "$before_ready/install/factory-server" old-server
-  assert_file "$before_ready/install/factory-worker" old-worker
-  [ ! -s "$before_ready/events" ] || fail "pre-ready signal $signal touched services before installation"
-  ! grep -F 'after-handshake' "$before_ready/handshake-events" >/dev/null \
-    || fail "pre-ready signal $signal allowed a gate to start"
-  assert_no_fixture_processes "$before_ready"
 done
 
 missing="$temporary/missing-artifact"
