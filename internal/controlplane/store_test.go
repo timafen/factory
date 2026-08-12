@@ -96,6 +96,42 @@ func TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart(t *testing.T) {
 	}
 }
 
+func TestHeartbeatDoesNotReconcileNeighboringExpiredLease(t *testing.T) {
+	store := newTestStore(t)
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/heartbeat"})
+	first := createTestTask(t, store, "heartbeat-first", workerA, worker.Repositories[0].ID)
+	second := createTestTask(t, store, "heartbeat-second", workerA, worker.Repositories[0].ID)
+	firstClaim := claimTestTask(t, store, workerA, "heartbeat-first", tokenA)
+	secondClaim := claimTestTask(t, store, workerA, "heartbeat-second", tokenB)
+	if firstClaim.Task.ID != first.Task.ID || secondClaim.Task.ID != second.Task.ID {
+		t.Fatal("test claims selected unexpected tasks")
+	}
+	if _, err := store.db.Exec(`UPDATE attempts SET lease_expires_at = 0 WHERE id = ?`, secondClaim.Attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	var before int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM worker_capacity_reconciliations WHERE worker_id = ? AND trigger = 'heartbeat'`, workerA).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Heartbeat(context.Background(), firstClaim.Attempt.ID, tokenA); err != nil {
+		t.Fatal(err)
+	}
+	var after int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM worker_capacity_reconciliations WHERE worker_id = ? AND trigger = 'heartbeat'`, workerA).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("heartbeat reconciliation rows changed from %d to %d", before, after)
+	}
+	expired, err := store.SweepExpired(context.Background())
+	if err != nil || len(expired) != 1 || expired[0].AttemptID != secondClaim.Attempt.ID {
+		t.Fatalf("sweep result = %#v, %v", expired, err)
+	}
+	if again, err := store.SweepExpired(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("second sweep result = %#v, %v", again, err)
+	}
+}
+
 func TestRegistrationAuditsCachedCapacityBeforeReplacingIt(t *testing.T) {
 	store := newTestStore(t)
 	store.now = func() time.Time { return time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC) }

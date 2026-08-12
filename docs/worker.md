@@ -213,3 +213,10 @@ server and one or more workers as supervised Unix services.
 Remote VM and Kubernetes fleets are a planned extension. They require transport
 security and worker authentication before the loopback restriction can be
 removed.
+
+Lease renewals are distributed by a stable phase derived from the full attempt
+ID. A normal renewal occurs in the final 30% of the ten-second interval, while
+transport failures retry with the same bounded phase within the remaining lease
+budget. The server timestamp remains the sole source of the new deadline; the
+worker updates its supervisor before persisting the manifest. Heartbeat only
+extends the named attempt, and the regular expiry sweep handles ghost capacity.

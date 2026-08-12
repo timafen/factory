@@ -178,7 +178,8 @@ manual cleanup, or starts the internal attempt supervisor. The manager:
   agent startup;
 - registers every ten seconds and polls for claims every two seconds with
   jitter;
-- renews active leases every ten seconds;
+- renews active leases in a stable 70–100% phase of the ten-second interval,
+  so simultaneous attempts do not form a heartbeat herd;
 - runs up to the configured capacity, from one to 100 attempts, defaulting to
   ten;
 - reconciles manifests, worktrees, and process groups after restart.
@@ -346,6 +347,8 @@ contain the prepared worktree without changing task or execution identity.
   and reports a cancelled attempt.
 - An expired preparing or running lease moves the attempt to `lost` and its
   execution to `failed`.
+- A successful heartbeat extends only its own lease. Capacity reconciliation is
+  reserved for admission, registration, and the five-second expiry sweep.
 - Retrying is an explicit operator action available only for failed or cancelled
   executions. It returns the existing execution to `queued`, increments its
   retry count, and reuses the task's original resolved prompt even if its
