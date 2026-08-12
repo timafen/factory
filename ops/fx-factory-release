@@ -751,7 +751,7 @@ run_parallel_test_gates() {
   print_test_gate_logs
   if [ "$status" -eq 0 ]; then
     test_gates_stopped=1
-    test_gates_reaped=1
+    wait_for_test_gates || status=1
   fi
   [ "$status" -eq 0 ]
 }
