@@ -4,7 +4,7 @@
 
 - Status: READY — `web/dist` пересобран из актуального `Work.tsx` и зафиксирован.
 - Branch: `factory/15c34fad-104-aa16b05d-c21`.
-- Implementation commit: a4f89cf8a8bad2ce4aba25dfadad999314bb1400 — обновлён закоммиченный embedded bundle интерфейса Work.
+- Implementation commit: 6855bf10b35659cafdf51660bb9dfb577d6774f3 — обновлён закоммиченный embedded bundle интерфейса Work.
 - What changed: browser bundle теперь содержит карточку завершения, которая ждёт
   подтверждённый выпуск и не закрывает работу по занятому номеру.
 - Evidence: сборка и проверка чистоты `dist` → PASS; `just ui-check` → 159/159 PASS.
