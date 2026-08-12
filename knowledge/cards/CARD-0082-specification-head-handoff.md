@@ -2,14 +2,23 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
+Status: BLOCKED: выкаченная Factory старше implementation commit
+Branch: factory/8ba52741-e45-df234106-464
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — второй независимый невалидный Specification HEAD не создаёт Implement.
 What changed: cycle-test использует новые task/execution/attempt ID и новый невалидный HEAD; после исчерпания rescue работа получает SPEC HEAD STOP и не меняется в следующем цикле.
-Evidence summary: `just check`, сборка, UI unit/browser и целевые 23 Python-теста прошли; без production guard тест падает (`2 != 1`).
-One next action: human merge into main.
+Evidence summary: typecheck и сборка UI, 94 UI unit-теста, 202 теста Pilot, `go test ./...` и `go build ./...` прошли; `bee3952…` — предок текущей ветки и меняет `pilot/pilot.py`.
+One next action: выкатить main с implementation commit, затем однократно запустить Verify.
 
 ## LOG
+
+### 2026-08-11 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Полный локальный контур | `npm run typecheck`, `npm run build`, `npm test`, `python3 -m unittest pilot.test_pilot`, `go test ./... && go build ./...` | успешно: 94 UI unit-теста и 202 теста Pilot |
+| Реализационный SHA | `git merge-base --is-ancestor` и `git diff-tree` | `bee3952…` — предок и меняет `pilot/pilot.py` |
+| Выкаченная версия | `fx factory release-info --technical`, status и logs | BLOCKED: выкачен `2edcd9b…`, а не implementation commit `bee3952…` |
+| Живой интерфейс | запрос `https://factory.timafen.com` | сервис отвечает, но требует аутентификацию; функциональность непроверяема до выкладки нужной версии |
 
 ### 2026-08-11 — Verify
 
