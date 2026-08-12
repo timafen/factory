@@ -4,7 +4,7 @@
 
 Status: BLOCKED: реальный root bootstrap/probe/rollback не выполнен; worker UID 994 и `sudo` запрещён через `no new privileges`.
 Branch: factory/f2dc0140-801-bb9f9af1-47e.
-Implementation commit: 16ec945096d53dc464d99d746250239b369d6fbc — cgroup helper ограничен доверенной цепочкой и ставится до Gate без потери lifecycle релизов.
+Implementation commit: 327bec92c18a9e8ababe24e65b0d2362012d618e — cgroup helper ограничен доверенной цепочкой и ставится до Gate без потери lifecycle релизов.
 What changed: bootstrap канонизирует direct-child source, проверяет root owner и mode всей цепочки/файлов и откатывает helper, installer и bootstrap при ошибке.
 What changed: release сохраняет поколения, manifest, journal, recovery, status/rollback/restore-db; marker и закреплённый SHA проверяются до Gate, остановленный launcher входит в cgroup до старта.
 Evidence: helper/installer/release shell-регрессии → PASS; non-root bootstrap → явный SKIP; `go test ./...`, `go build ./...`, 159 UI tests и UI build → PASS.
