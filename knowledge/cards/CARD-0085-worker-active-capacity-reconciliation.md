@@ -2,20 +2,25 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/b77bd6b3-1cc-c549126f-cd6`.
+- Status: Verified PASS — merged into `main`.
+- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
   migration 026 и гарантированная очистка reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
   registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
 - What changed: integration покрывает потерянный `/complete`, restart/reconnect и
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: `go test -timeout 20m ./... && go build ./...` → PASS (2:45.09);
-  focused `go test -race -timeout 10m ... -count=1` → PASS (29.34s, 6 tests);
-  fresh `origin/main...HEAD` → ровно 11 файлов, clean tree перед verify update.
-- One next action: выполнить human merge в `main`.
+- Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
+  `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
+- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Свежий `origin/main` уже содержит реализацию из commit `7b0e963d2f8ae6c6d80570ed9af890b3b24501d7`;
+повторный перенос кода не потребовался. Целевая race-проверка шести сценариев,
+`go build ./...` и `cd web && npx tsc -p tsconfig.app.json --noEmit` прошли.
 
 ### 2026-08-11 — Verify
 
