@@ -410,6 +410,31 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertRegex(snapshot["candidate_sha"], r"^[0-9a-f]{40}$")
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
+    def test_unrelated_candidate_history_is_still_infrastructure_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            base_author = os.path.join(tmp, "base-author")
+            candidate_author = os.path.join(tmp, "candidate-author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", base_author)
+            self.git(base_author, "checkout", "-qb", "main")
+            self.git(base_author, "remote", "add", "origin", remote)
+            self.commit(base_author, "README.md", "root\n")
+            self.git(base_author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+            self.git(tmp, "init", "-q", candidate_author)
+            self.git(candidate_author, "checkout", "-qb", "factory/candidate")
+            self.git(candidate_author, "remote", "add", "origin", remote)
+            self.commit(candidate_author, "delivery.txt", "unrelated\n")
+            self.git(candidate_author, "push", "-qu", "origin", "factory/candidate")
+
+            snapshot = pilot.fresh_branch_snapshot(
+                "file://" + remote, "factory/candidate")
+
+            self.assertEqual(snapshot["state"], "blocked")
+            self.assertIn("unrelated history", snapshot["reason"])
+
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
         snapshot = pilot.fresh_branch_snapshot("file:///definitely/not/a/repository", "factory/candidate")
         self.assertEqual(snapshot["state"], "blocked")
