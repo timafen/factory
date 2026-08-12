@@ -4,7 +4,7 @@
 
 - Status: Implement PASS — review-блокеры устранены.
 - Branch: `factory/383ce63b-579-070e13b1-6e9`.
-Implementation commit: 1cddd85f3f92937685e1dee2e9b160c0908d8d9f — уведомления принимают только безопасные ссылки, а «Конвейер» полностью русифицирован.
+Implementation commit: feb40d2a08e9de717ff2c7f3d64cdbb326f2bdd5 — уведомления принимают только безопасные ссылки, а «Конвейер» полностью русифицирован.
 - What changed: `javascript:` и чужие адреса не становятся ссылками; разрешены относительные маршруты и URL публичного Factory origin. Экран «Конвейер» и его браузерная проверка используют русский текст.
 - Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 6 passed; `npm run test:browser -- --grep "audits every Factory screen on desktop and phone"` → целевой сценарий прошёл, bundle остался чистым.
 - One next action: повторить Review.
