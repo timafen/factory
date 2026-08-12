@@ -2910,6 +2910,26 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
     return None
 
 
+def verify_gate(repo_identity, branch):
+    """Pin the published delivery again before Verify can trigger a merge.
+
+    Review's snapshot is intentionally short-lived: the candidate may be
+    force-pushed or the default branch may advance while Verify is running.
+    A failed refresh is an infrastructure BLOCKED result, never permission to
+    merge the last cached or reported SHA.
+    """
+    snapshot = fresh_branch_snapshot(repo_identity, branch)
+    if snapshot.get("state") == "ok":
+        return {"ok": True, "snapshot": snapshot}
+    if snapshot.get("state") == "missing":
+        reason = "candidate branch is no longer published"
+    else:
+        reason = snapshot.get("reason") or "unknown review infrastructure failure"
+    return {"blocked": True, "note": (
+        "BLOCKED: review infrastructure. Невозможно заново получить свежую "
+        "основную ветку и закрепить SHA Verify до слияния. Причина: " + reason)}
+
+
 # ------------------------------------------------- настоящие лимиты подписок ---
 # Кодекс пишет остаток лимита в журнал каждой сессии (used_percent, окно,
 # время сброса). Антропик отвечает на служебную точку, которой пользуется
@@ -7008,6 +7028,15 @@ def cycle(conf, state):
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
+                    verify_snapshot = verify_gate(repo_identity, branch)
+                    if verify_snapshot.get("blocked"):
+                        route_question(
+                            conf, tid, "Verify", "Verify", base_title(title), rid,
+                            "Проверка не завершена: инфраструктура свежего сравнения веток недоступна.",
+                            "Повторить Verify после восстановления доступа к репозиторию?",
+                            ["Повтори проверку", "Покажи причину", "Останови работу"],
+                            verify_snapshot["note"], attempts_so_far=0, branch=branch)
+                        continue
                     link = try_url(result, rid)
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
