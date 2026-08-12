@@ -380,7 +380,8 @@ func (manager *Manager) heartbeatAttempt(handle *attemptHandle, attemptID, token
 			return
 		}
 		retry++
-		delay = leaseRenewalDelay(attemptID, manager.options.LeaseRetryInterval, retry)
+		delay = leaseRenewalRetryDelay(attemptID, manager.options.LeaseRetryInterval, retry,
+			time.Until(handle.leaseExpiry()), requestTimeout)
 	}
 }
 
@@ -398,6 +399,21 @@ func leaseRenewalDelay(attemptID string, interval time.Duration, retry int) time
 	}
 	value := binary.BigEndian.Uint64(digest[:8])
 	return interval*7/10 + time.Duration(value%uint64(span))
+}
+
+// leaseRenewalRetryDelay reserves time for the next heartbeat request. A
+// temporary failure near the lease deadline must retry immediately rather than
+// waiting through the remaining lease.
+func leaseRenewalRetryDelay(attemptID string, interval time.Duration, retry int, remaining, timeout time.Duration) time.Duration {
+	delay := leaseRenewalDelay(attemptID, interval, retry)
+	budget := remaining - timeout
+	if budget <= 0 {
+		return 0
+	}
+	if delay > budget {
+		return budget
+	}
+	return delay
 }
 
 func (handle *attemptHandle) stopHeartbeat() {

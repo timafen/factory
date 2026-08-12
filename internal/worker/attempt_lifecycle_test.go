@@ -42,6 +42,22 @@ func TestLeaseRenewalRetryStaysWithinLeaseBudget(t *testing.T) {
 	}
 }
 
+func TestLeaseRenewalRetryLeavesTimeForHeartbeatNearExpiry(t *testing.T) {
+	delay := leaseRenewalRetryDelay("near-expiry", 2*time.Second, 1,
+		1500*time.Millisecond, time.Second)
+	if delay > 500*time.Millisecond {
+		t.Fatalf("retry delay %s leaves no heartbeat budget before lease expiry", delay)
+	}
+	if delay != 500*time.Millisecond {
+		t.Fatalf("retry delay = %s, want remaining lease budget of 500ms", delay)
+	}
+
+	if delay := leaseRenewalRetryDelay("expired-budget", 2*time.Second, 1,
+		900*time.Millisecond, time.Second); delay != 0 {
+		t.Fatalf("retry delay = %s, want immediate retry", delay)
+	}
+}
+
 func TestBuildPromptIncludesGrammaticalSafetyInstruction(t *testing.T) {
 	claim := protocol.Claim{
 		Task: protocol.Task{
