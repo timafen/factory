@@ -5,7 +5,7 @@
 - Status: Implemented — целевые и полный набор составных проверок PASS.
 - Branch: `factory/b71825df-bbc-79411d2a-fdc4-469c-86af-e23d57648a04`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 98cb4fcc61f667f359f244c814f3c1046dd6d938 — legacy terminal recovery и атомарная запись commit-маркера.
+Implementation commit: 1205509d2bee866fc3e42b89f150460c759bf9c7 — legacy terminal recovery и атомарная запись commit-маркера.
 - What changed: terminal `.json` без V2 marker сохраняется как legacy read-only; повреждение marker закрывает только связанную операцию.
 - What changed: pending и committed markers пишутся через temp-файл, fsync, rename и fsync каталога; добавлены crash/restart-регрессии.
 - Evidence: broker Go/race, полный `just test`, UI, tooling/installer, launcher, staticcheck и `just build` — PASS.
