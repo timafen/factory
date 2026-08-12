@@ -3763,6 +3763,44 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertEqual(len(raised), 1)
         self.assertIn("codex-sol-medium → codex-sol-high", raised[0])
 
+    def test_parallel_limit_defers_answer_without_counting_a_failed_retry(self):
+        question = {
+            "id": "question-id", "task_id": "source-task",
+            "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Specification", "stage": "Triage",
+            "title": "Работа", "repository_id": "repo-id",
+        }
+        conf = {
+            "stages": [{"workflow": "Specification", "workers": {
+                "medium": "worker",
+            }}],
+            "timeout_seconds": 900,
+        }
+        workflows = {
+            "Specification": {"enabled": True, "revision_id": "revision"},
+        }
+        workers = {"worker": {"id": "worker-id"}}
+
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "load", return_value=dict(question)), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""), \
+                mock.patch.object(pilot, "stage_attempts", return_value=0), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "branch_from_history", return_value=""), \
+                mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "live_or_done_at", return_value=None), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    side_effect=pilot.ParallelWorkLimit("parallel_work_limit"),
+                ) as create, \
+                mock.patch.object(pilot, "save") as save:
+            applied = pilot.handle_answers(conf, workflows, workers, [])
+
+        self.assertEqual(applied, 0)
+        create.assert_called_once()
+        save.assert_not_called()
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
@@ -4408,6 +4446,30 @@ class HostLoadAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stage deferred"):
             pilot.create_task(body, conf)
         api.assert_called_once()
+
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api")
+    def test_all_handoffs_share_the_four_work_limit(self, api, _money, _questions):
+        api.side_effect = [
+            {"task": {"id": f"task-{index}"}} for index in range(4)
+        ]
+        conf = {"max_parallel_works": 4, "_active_work_tasks": []}
+
+        for index in range(4):
+            pilot.create_task({
+                "title": f"[auto] [2/5 Specification] Work {index}",
+            }, conf)
+
+        with self.assertRaisesRegex(pilot.ParallelWorkLimit,
+                                    "parallel_work_limit"):
+            pilot.create_task({
+                "title": "[auto] [2/5 Specification] Work 5",
+            }, conf)
+
+        self.assertEqual(api.call_count, 4)
+        self.assertEqual(len(pilot.active_auto_works(
+            conf["_active_work_tasks"])), 4)
 
     def test_overload_does_not_stop_cycle_services(self):
         conf = {"stages": [{"workflow": "Triage", "workers": {}}]}

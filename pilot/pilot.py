@@ -53,6 +53,10 @@ ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
 
 
+class ParallelWorkLimit(RuntimeError):
+    """A pipeline handoff must wait until another work slot is free."""
+
+
 def api(path, body=None):
     req = urllib.request.Request(API + path)
     if body is not None:
@@ -467,6 +471,12 @@ def context_with_agent_rules(context, conf=None):
 
 
 def create_task(body, conf=None):
+    active_tasks = (conf or {}).get("_active_work_tasks")
+    if (str(body.get("title", "")).startswith(PREFIX)
+            and isinstance(active_tasks, list)
+            and len(active_auto_works(active_tasks)) >= int(
+                (conf or {}).get("max_parallel_works", MAX_PARALLEL_WORKS))):
+        raise ParallelWorkLimit("parallel_work_limit: stage deferred")
     if conf and not host_load_admits(
             conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
             conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
@@ -543,13 +553,15 @@ def _note_admitted_task(conf, response, body):
     activity = (conf or {}).get("_cycle_activity")
     if isinstance(activity, dict):
         activity["task_created"] = True
-    tasks = (conf or {}).get("_host_load_tasks")
-    if tasks is None:
-        return
     task = dict((response or {}).get("task") or {})
     task.setdefault("title", body.get("title", ""))
     task.setdefault("state", "created")
-    tasks.append(task)
+    for key in ("_active_work_tasks", "_host_load_tasks"):
+        tasks = (conf or {}).get(key)
+        if (isinstance(tasks, list)
+                and not any(existing.get("id") == task.get("id")
+                            for existing in tasks)):
+            tasks.append(task)
 
 
 def gh_merge(repo_identity, branch, title):
@@ -4246,6 +4258,9 @@ def handle_answers(conf, workflows, workers, tasks):
             notify(conf, "Ответ принят, работа продолжена",
                    f"{q['title']}\nСтадия: {stage}", tags="arrow_forward",
                    click=f"{UI_BASE}/tasks/{tid}")
+        except ParallelWorkLimit:
+            log(f"answer resume deferred for {q['id']}: заняты все слоты работ")
+            break
         except Exception as e:
             q["resume_tries"] = tries + 1
             q["last_error"] = repr(e)[:200]
@@ -6696,6 +6711,11 @@ def cycle(conf, state):
     except Exception as e:
         log("day_cap_error", repr(e))
 
+    # Every automatic handoff in this cycle shares one live work-slot
+    # snapshot. Successful creates append to it, so a restart cannot fan an
+    # old backlog out past max_parallel_works before the next API poll.
+    conf["_active_work_tasks"] = tasks
+
     # Перегрузка больше не останавливает сторож и весь конвейер. Один запуск
     # гарантирован, затем допускаются только лёгкие стадии; память и диск —
     # аварийные исключения. Снимок используют все create_task ниже по циклу.
@@ -7261,7 +7281,9 @@ def cycle(conf, state):
         # current so another completed attempt for this same work sees the
         # newly created next stage through live_or_done_at() below.
         created_task = created.get("task") if isinstance(created, dict) else None
-        if isinstance(created_task, dict):
+        if (isinstance(created_task, dict)
+                and not any(item.get("id") == created_task.get("id")
+                            for item in tasks)):
             tasks.append(created_task)
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
@@ -7283,6 +7305,7 @@ def cycle(conf, state):
         fast=(new_terminal or activity["task_created"] or activity["answer_applied"]),
     )
     conf.pop("_cycle_activity", None)
+    conf.pop("_active_work_tasks", None)
     return hint
 
 
