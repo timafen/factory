@@ -2,14 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented — финальная запись результата драйвера теперь fail-closed.
-- Branch: `factory/9a5f1881-8de-c3901c14-426`.
+- Status: Implemented — terminal status становится видимым только после durable sync.
+- Branch: `factory/f22a0c29-3e3-9826683e-740`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 00692b43dcbfc11524d0a866b8bde42a96d50542 — финальный `succeeded` драйвера проверяется явно.
-- What changed: Отказ atomic write после физического выпуска возвращает ошибку, не публикуя durable `succeeded`.
-- What changed: Fresh broker/Pilot restart сохраняет failed outcome, один executor и отсутствие receipt, outbox, `mark_final` и owner done.
-- Evidence: broker race → OK; real process regression → OK (3); полный Pilot → OK (210, 13 skipped); обе shell fixture → PASS; `just check` и `just build` → passed; `git diff --check` → passed.
-- Next action: Strict Review проверить коррекцию финальной записи CARD-0084.
+- Implementation commit: 4e1c5906a4d5e8571904a132d3113e51e268b8ca — финальная запись broker синхронизируется с диском.
+- What changed: Temp record проходит file fsync/close, atomic rename и directory fsync до публикации terminal status; неоднозначный directory-sync откатывается к предыдущей durable записи.
+- What changed: Детерминированные sync/close/rename faults и fresh restart подтверждают fail-closed статус и единственный executor; Pilot остаётся выключенным.
+- Evidence: broker `-race` → PASS; durability faults ×20 → PASS; Pilot → 213 PASS, 13 skipped; обе shell fixture, `just check`, `just build`, `git diff --check` → PASS.
+- Next action: Strict Review проверить candidate `4e1c5906a4d5e8571904a132d3113e51e268b8ca` от base `36ce322e2b6685dd9a87f4d2c947f61538654ae1`.
 
 ## LOG
 
@@ -59,3 +59,11 @@ The release driver now checks its authoritative final `succeeded` write and
 returns a non-success result when that atomic rename fails after physical
 delivery. A real shell fault plus fresh broker and Pilot processes prove one
 executor, durable failure and no receipt, outbox, finalization or owner completion.
+
+### 2026-08-11 — Implement
+
+Broker now fsyncs every operation temp file and its containing directory before
+publishing a terminal result. Deterministic file-sync, close, rename and
+directory-sync faults retain the previous durable record; a fresh broker fails
+it closed without another executor. Broker race, 20 durability repetitions,
+213 Pilot tests, both shell fixtures, `just check`, build and diff all passed.
