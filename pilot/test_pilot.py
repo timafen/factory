@@ -3951,6 +3951,33 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
 
 class AdaptivePollingTests(unittest.TestCase):
+    def test_loop_retains_more_than_two_thousand_terminal_task_ids(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        ids = [f"terminal-{number}" for number in range(2501)]
+        state = {
+            "processed": list(ids),
+            "automation_results_processed": list(ids),
+            "epics_processed": list(ids),
+            "epic_starts_processed": list(ids),
+            "poll_terminal_seen": list(ids),
+        }
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "cycle", return_value={
+                    "seconds": 30, "reason": "idle",
+                }):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        for key in (
+                "processed", "automation_results_processed", "epics_processed",
+                "epic_starts_processed", "poll_terminal_seen"):
+            self.assertEqual(state[key], ids)
+
     def test_fully_idle_pipeline_keeps_thirty_second_interval(self):
         self.assertEqual(pilot.next_poll_hint({"poll_seconds": 30}, []), {
             "seconds": 30, "reason": "idle",

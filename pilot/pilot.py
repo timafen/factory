@@ -46,6 +46,7 @@ HOST_LOAD_ACTIVE_STATES = {"running", "queued", "pending", "created", "starting"
 HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
 HOST_LOAD_MINIMUM_ACTIVE = 1
 MAX_RETAINED_PER_REPOSITORY = 10
+PROCESSED_RETENTION = 10000
 FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
@@ -2201,7 +2202,7 @@ def remember_new_terminal_tasks(conf, state, tasks):
         task.get("id") for task in terminal
         if task.get("id") and task.get("id") not in already_seen
     )
-    state["poll_terminal_seen"] = seen_ids[-2000:]
+    state["poll_terminal_seen"] = seen_ids[-PROCESSED_RETENTION:]
     return fast
 
 
@@ -7329,12 +7330,18 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 log("cycle_error", repr(e))
                 failures += 1
                 hint = error_poll_hint(conf, failures, e)
-            state["processed"] = state["processed"][-2000:]
+            # This cursor must remain larger than the task history visible to
+            # cycle().  Otherwise an old terminal stage falls out, is treated
+            # as new again, and can reopen a completed pipeline forever.
+            state["processed"] = state["processed"][-PROCESSED_RETENTION:]
             state["automation_results_processed"] = state.get(
-                "automation_results_processed", [])[-2000:]
-            state["epics_processed"] = state.get("epics_processed", [])[-2000:]
-            state["epic_starts_processed"] = state.get("epic_starts_processed", [])[-2000:]
-            state["poll_terminal_seen"] = state.get("poll_terminal_seen", [])[-2000:]
+                "automation_results_processed", [])[-PROCESSED_RETENTION:]
+            state["epics_processed"] = state.get(
+                "epics_processed", [])[-PROCESSED_RETENTION:]
+            state["epic_starts_processed"] = state.get(
+                "epic_starts_processed", [])[-PROCESSED_RETENTION:]
+            state["poll_terminal_seen"] = state.get(
+                "poll_terminal_seen", [])[-PROCESSED_RETENTION:]
             record_poll_hint(state, hint, clock_fn())
             save(STATE_PATH, state)
         elif conf:
