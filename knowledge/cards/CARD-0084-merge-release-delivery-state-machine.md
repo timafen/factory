@@ -2,14 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — ожидает штатного выпуска из свежего `main`.
-- Branch: `factory/d54ca4c9-4e1-7cf82be9-b98`.
+- Status: Implemented PASS — готово к Verify.
+- Branch: `factory/e9d39374-b9f-f1031f59-fb1`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 1deb91c63adb734322361b3981e91eb85bd9962b — terminal success не становится наблюдаемым при ошибке его сохранения.
-- What changed: При ошибке terminal persist broker оставляет API и durable-файл в `running`; Pilot не может принять незафиксированный успех.
-- What changed: Добавлен regression через API и настоящее состояние на диске для ошибки финального сохранения.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → OK (10); `go test ./internal/releasebroker` → OK; shell release fixtures → OK; `just check` → passed.
-- Next action: Выполнить штатный `fx factory release` из свежего `main` и снять release-info, status, health и логи.
+Implementation commit: 39f1eeab68b94d5d87e9b68cdb496f2e98c81ffe — broker fail-closed останавливает рестарт при повреждённой durable operation-записи.
+- What changed: Broker больше не теряет повреждённую или подменённую запись и не принимает тот же generation как новый физический выпуск.
+- What changed: Recovery проверяет canonical filename, immutable request, phase, posts и PID; четыре corrupt-state сценария доказывают ноль executor-вызовов.
+- Evidence: `go test -count=1 ./internal/releasebroker`; `go test -race -count=1 ./internal/releasebroker` → OK; Pilot state machine → 10/10 OK.
+- Evidence: release-driver и installer shell fixtures → PASS; systemd fixture → SKIP без root; `just build` → три бинаря собраны.
+- Evidence: ветка перебазирована на `origin/main` `9123aa42b01a39ce7f1fa998568189ab6d38b07b`; `git diff --check` → passed.
+- Next action: Verify повторяет полный `just check` на незагруженном runner и принимает решение по независимым timeout.
 
 ## LOG
 
@@ -69,3 +71,18 @@ recovery, and no receipt, outbox, finalization or owner completion.
 при отказе финального persist API сохраняет `running`, а не публикует ложный
 `succeeded`. Новый test принудительно ломает финальную запись и подтверждает
 результат через API и JSON-файл; целевые Python/Go/shell проверки и `just check` прошли.
+
+### 2026-08-12 — Implement
+
+Broker recovery теперь fail-closed отвергает повреждённые, подменённые и
+неканоничные durable operation-записи вместо их молчаливой потери и возможного
+повторного физического выпуска. Обычный и race Go-прогоны, 10 Pilot-сценариев,
+release-driver/installer fixtures и сборка зелёные; полный `just check` подтвердил
+broker, но остановился на прежних пятиминутных timeout control-plane и worker.
+
+### 2026-08-12 — Implement
+
+Поставка восстановлена поверх свежего `origin/main` без посторонних файлов.
+Обычный и race-прогоны broker, 10 процессных Pilot-сценариев, release-driver,
+installer и сборка подтвердили fail-closed recovery; systemd fixture штатно
+пропущен в непривилегированном окружении.
