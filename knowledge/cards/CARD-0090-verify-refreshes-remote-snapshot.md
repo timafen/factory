@@ -5,14 +5,19 @@ Implementation commit: 5d0d47dd98288d239239f4bfcfd94d48480d51d6 — Verify за�
 ## HEAD
 
 Status: PASS.
-Branch: `factory/258e646d-645-ec915b9c-8a7`.
-Implementation commit: 5d0d47dd98288d239239f4bfcfd94d48480d51d6 — Verify закрепляет свежий remote snapshot перед автоматическим слиянием.
-What changed: перед merge Verify заново получает изолированный снимок основной и delivery-ветки; сбой remote остаётся `BLOCKED: review infrastructure`.
-What changed: сквозной fixture передаёт обязательный успешный snapshot и подтверждает его запрос для пересобранной delivery-ветки.
-Evidence: `just test` — PASS; `python3 -m unittest pilot.test_pilot` — 225 tests OK (13 skipped).
-Next action: Review сверить поставку с актуальной удалённой основной веткой.
+Branch: `factory/9a522826-8ad-b33ca087-1f9`.
+Implementation commit: 95bcb4c48ad924937dd380c72729e1f7239dcc0b — merge разрешён только для неизменившегося SHA, проверенного Verify.
+What changed: Verify сохраняет `candidate_sha`; перед merge текущий head ветки сверяется до и после создания PR.
+Evidence: `python3 -m unittest pilot.test_pilot.FreshDefaultBranchSnapshotTests pilot.test_pilot.RebuiltDeliveryBranchPipelineTests pilot.test_pilot.ImmutableMergeTests` — 6 tests OK.
+Next action: выполнить полный набор тестов после перебазирования на свежий `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Проверенный `candidate_sha` теперь является обязательной частью merge intent;
+расхождение с head delivery-ветки блокирует merge до запуска `gh pr merge`.
+Целевой cycle-тест имитирует force-push после Verify и подтверждает, что merge не запускается.
 
 ### 2026-08-12 — Implement
 
