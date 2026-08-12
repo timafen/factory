@@ -22,6 +22,10 @@
   ссылок `CODEX_HOME`; запускайте её с `FACTORY_CODEX_DATA_HOME` для проверки
   другого каталога. Она использует `stat -Lc` и принимает только
   `regular file 600 factory factory`, не читая содержимое токена.
+- `ops/update-codex-auth-monitoring-automation.py` — идемпотентно переключает
+  существующую Automation «Патруль Factory» на checker через штатный API. Команда
+  не создаёт новую Automation и после `PUT` проверяет прежние ID, расписание и
+  сохранность всех исторических Occurrence; JSON в stdout служит подтверждением.
 - `ops/systemd/` — справочные копии служб.
 
 Секреты — токен GitHub, ключи, temы ntfy, пароли — в репозиторий не идут
