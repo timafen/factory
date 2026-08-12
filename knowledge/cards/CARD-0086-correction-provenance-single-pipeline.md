@@ -2,7 +2,7 @@
 
 ## HEAD
 
-- Status: Implemented and tested; Pilot remains operationally disabled.
+- Status: BLOCKED: required rebase onto fresh `origin/main` conflicts in `pilot/pilot.py`; Pilot remains operationally disabled.
 - Branch: `factory/69214378-750-e950d8ba-0df` (base `origin/main`
   `36ce322e2b6685dd9a87f4d2c947f61538654ae1`).
 - Implementation commit: 4640ac31411c15b870c42da8860aa898bd282e44 — resume and Review durable state are isolated by `work_id`.
@@ -10,12 +10,27 @@
   metadata, history and child selection no longer merge same-title works.
 - What changed: Review promises, areas, return limits, dirty/gate state and
   delivery artifacts use `work_id`; title fallback remains legacy-only.
-- Evidence: focused HTTPS browser, UI/API/Pilot and migration checks → PASS;
-  full Pilot 210/210, UI 159/159, Go excluding one known main schema test, builds and diff → PASS.
-- Next action: review and merge this correction; keep Pilot disabled pending its
-  separate safe release-state-machine decision.
+- Evidence: same-title resume isolation and legacy fallback passed in the
+  control-plane target; full Go exposed only pre-existing configuration schema
+  and worker-integration failures outside this change.
+- Next action: resolve the `pilot/pilot.py` rebase conflict against fresh `main`,
+  then repeat verification; keep Pilot disabled pending its separate safe
+  release-state-machine decision.
 
 ## LOG
+
+### 2026-08-11 — Verify
+
+| Criterion | Command/check | Observed result |
+| --- | --- | --- |
+| Resume selects one same-title pipeline by durable identity | Targeted control-plane tests for work-ID isolation and legacy fallback | Passed: resuming the first `work_id` left the second pause and history intact; legacy title-only resume remains supported. |
+| Review state stays separated by durable identity | Three same-title Pilot regressions with `PYTHONPATH=.` | Passed: independent work IDs retain separate Review facts, artifacts, restart state and merge lifecycle. |
+| Whole-repository regression check | Go, build, Pilot and web test commands from a clean tree | Go ran 389–399 s and failed in unrelated `TestPilotConfigExampleMatchesServerSchema` and four worker integration timeouts; Pilot discovery used an invalid import context and web dependencies were absent (`eslint: not found`). |
+| Fresh-main delivery | `git fetch origin main && git rebase origin/main` | Blocked at the first replayed implementation commit by a content conflict in `pilot/pilot.py`; rebase was aborted, leaving the delivered implementation unchanged. |
+
+The implementation diff is whitespace-clean and the recorded implementation
+commit is an ancestor of the delivered branch. Verification cannot approve a
+merge until the fresh-main conflict is resolved and the suite is rerun.
 
 ### 2026-08-11 — Specification
 
