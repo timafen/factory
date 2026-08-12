@@ -3,13 +3,13 @@
 ## HEAD
 
 Status: Implemented — awaiting human merge.
-Branch: factory/92c05a1d-a0a-437ef620-ec1.
-Implementation commit: 71baa59ef6efb819ee32db163347235a7ef6b4c3 — checkout и gate inputs изолированы от `$AS`, Node закреплён абсолютно, drain process group ограничен.
-What changed: `/usr/bin/git` получает исходники в root-owned read-only snapshot; нестандартный `$AS` отклоняется до checkout/gate/install.
-What changed: UI запускается через проверенные `/usr/bin/node` и абсолютные npm/npx entrypoints с `PATH=/usr/bin:/bin`; успешный gate с потомком получает bounded TERM→KILL, reap и failure.
-Preserved: абсолютные trusted tools, live SID/PGID/supervisor/nonce handshake, signal cleanup, kernel wait result и запрет production install до обоих gates; Pilot не включён.
-Evidence: hostile `$AS`/checkout, fake `PATH/node`, real orphan, fork/fail/signal suite ×2 → PASS; процессов и install не осталось.
-Evidence: `go build ./...`, `cd web && npm ci && npm test && npm run build`, `bash -n`, `git diff --check` → PASS; `go test ./...` повторяет baseline CARD-0087 schema failure.
+Branch: factory/5d250fde-09f-9cbb7136-05f.
+Implementation commit: 741c717ecbf8fc96bb0b3de079c8bbde1a250820 — вся release-цепочка закреплена абсолютными tools, каждый gate изолирован cgroup v2.
+What changed: безопасный root PATH устанавливается до первого external command; checkout, lock, ownership, gates, installation и cleanup используют проверенные абсолютные executables.
+What changed: gate останавливается до attach в отдельную cgroup; успех требует пустой cgroup, остатки получают bounded TERM→KILL и приводят к отказу без install.
+Preserved: root-owned immutable checkout, абсолютный Node, SID/PGID/supervisor/nonce, signal cleanup, kernel wait status и запрет install до двух gates; Pilot выключен.
+Evidence: hostile PATH и real escaped-setsid/fork/fail/signal shell-suite ×3 → PASS; live процессов и install не осталось.
+Evidence: `go test ./...`, `go build ./...`, 157 UI tests/build, `bash -n`, `git diff --check` → PASS.
 One next action: human merge into main.
 
 ## LOG
@@ -65,3 +65,12 @@ gate читает root-owned замороженный checkout, не допус�
 фоновым потомком ограниченно проходит TERM→KILL/reap и превращается в отказ без
 установки. Расширенный shell-suite ×2, Go build, 157 UI tests/build и syntax/diff прошли;
 полный Go test повторил существующий на `origin/main` отказ схемы поля CARD-0087.
+
+### 2026-08-11 — Implement
+
+Security correction перенесена на зелёный `main` `3183424f924d440b686908f219d0013b7ee8c504`.
+Release устанавливает безопасный PATH до первого external command и валидирует абсолютные
+tools для checkout, lock, ownership, gates, установки и cleanup. Root launcher сначала
+останавливается, входит в отдельную cgroup v2 и только затем запускает `setsid`; escaped
+session очищается bounded TERM→KILL, делает gate неуспешным и не допускает install.
+Shell-suite ×3, полный Go test/build, 157 UI tests/build, syntax/diff прошли; Pilot не включён.
