@@ -2,17 +2,14 @@
 
 ## HEAD
 
-- Status: BLOCKED — `web/dist` не соответствует изменённому `Work.tsx`.
-- Branch: `factory/ccd1e717-41d-48b32756-1c2`.
-- Implementation commit: 7f5f666d52c24662881ceccd72288545cf6f1456 — сохранены актуальные защиты Review, CARD и crash-safe delivery вместе с ожиданием выпуска.
-- What changed: terminal Verify до delivery receipt остаётся активным и показывает
-  «Ожидает слияния и выпуска»; успешный выпуск завершает работу единожды.
-- What changed: сохранены pinned fresh snapshot, резервирование/передача номера
-  карточки и восстановление merge intent до task cursor.
-- Evidence: Python → 214 OK; UI → 159 OK; Go, build, release, race, tooling и
-  launcher → PASS; обязательный browser-рецепт → FAIL на проверке `web/dist`.
-- Next action: пересобрать и закоммитить `web/dist`, затем повторить
-  `just test-browser`.
+- Status: READY — `web/dist` пересобран из актуального `Work.tsx` и зафиксирован.
+- Branch: `factory/15c34fad-104-aa16b05d-c21`.
+- Implementation commit: a4f89cf8a8bad2ce4aba25dfadad999314bb1400 — обновлён закоммиченный embedded bundle интерфейса Work.
+- What changed: browser bundle теперь содержит карточку завершения, которая ждёт
+  подтверждённый выпуск и не закрывает работу по занятому номеру.
+- Evidence: сборка и проверка чистоты `dist` → PASS; `just ui-check` → 159/159 PASS.
+- Next action: повторить полный browser e2e после исправления нестабильной отдачи
+  тестового ZIP-архива.
 
 ## LOG
 
@@ -77,3 +74,10 @@ Pinned snapshot: база `0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622`,
 сборка прошли. `just test-browser` заблокирован до Playwright: `npm run build`
 создаёт `index-CCEUfF1P.js`, удаляет закоммиченный `index-FbtnAMaY.js` и меняет
 `web/dist/index.html`; `git diff --exit-code -- dist` возвращает 1.
+
+### 2026-08-12 — Implement
+
+Пересобран и закоммичен `web/dist` после подтверждения владельца; сборка повторно
+подтвердила совпадение артефакта с исходниками. `just ui-check` прошёл: 14 файлов,
+159 тестов. Полный browser e2e дошёл до Playwright, но остановился на тестовом
+ZIP-потоке: `file data stream has unexpected number of bytes` и обрезанный архив.
