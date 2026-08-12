@@ -383,6 +383,27 @@ if [ "$TEST_MODE" = gate-result-spoof ] && mkdir "$TEST_SPOOF_LOCK" 2>/dev/null;
     printf 'replayed-success\n' >>"$TEST_SPOOF_EVENTS"
   ) </dev/null >/dev/null 2>&1 &
 fi
+if [ "$TEST_MODE" = handshake-pgid-spoof ] && mkdir "$TEST_SPOOF_LOCK" 2>/dev/null; then
+  /usr/bin/setsid --fork /bin/bash -c '
+    trap "printf victim-term\\n >>\"$TEST_SPOOF_EVENTS\"; exit 0" TERM
+    read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 19
+    printf "%s\\n" "$pgid" >"$TEST_VICTIM_PGID"
+    : >"$TEST_VICTIM_READY"
+    while :; do /bin/sleep 1; done
+  ' &
+  (
+    for ((i = 0; i < 500; i++)); do
+      [ -e "$TEST_UI_RUNNING" ] && [ -e "$TEST_GO_RUNNING" ] && break
+      /bin/sleep 0.005
+    done
+    [ -e "$TEST_UI_RUNNING" ] && [ -e "$TEST_GO_RUNNING" ] || exit 19
+    read -r victim_pgid <"$TEST_VICTIM_PGID" || exit 19
+    for session in $(find "$TEST_RELEASE_DIR" -name '*.session' -type f); do
+      printf 'sid=%s pgid=%s ready=1\\n' "$victim_pgid" "$victim_pgid" >"$session"
+    done
+    : >"$TEST_HANDSHAKE_SPOOFED"
+  ) </dev/null >/dev/null 2>&1 &
+fi
 exec "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
@@ -483,7 +504,7 @@ configure_release_mode() {
   fixture_gate_ready_attempts=500
   fixture_gate_stop_attempts=100
   case "$mode" in
-    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|signal-forked-gates|signal-before-ready)
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|handshake-pgid-spoof|signal-forked-gates|signal-before-ready)
       fixture_gate_ready_attempts=20
       fixture_gate_stop_attempts=20
       ;;
@@ -509,6 +530,8 @@ run_release() {
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
+    TEST_VICTIM_PGID="$case_dir/victim-pgid" TEST_VICTIM_READY="$case_dir/victim-ready" \
+    TEST_HANDSHAKE_SPOOFED="$case_dir/handshake-spoofed" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -569,6 +592,8 @@ start_release() {
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
+    TEST_VICTIM_PGID="$case_dir/victim-pgid" TEST_VICTIM_READY="$case_dir/victim-ready" \
+    TEST_HANDSHAKE_SPOOFED="$case_dir/handshake-spoofed" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
@@ -768,6 +793,25 @@ assert_file "$spoofed_result/install/factory-worker" old-worker
 ! grep -F 'go build ' "$spoofed_result/gates" >/dev/null \
   || fail "binaries were built after the spoofed gate failure"
 assert_no_fixture_processes "$spoofed_result"
+
+spoofed_handshake="$temporary/handshake-pgid-spoof"
+make_fixture "$spoofed_handshake" handshake-pgid-spoof
+start_release "$spoofed_handshake" handshake-pgid-spoof
+wait_for_file "$spoofed_handshake/ui-running"
+wait_for_file "$spoofed_handshake/go-running"
+wait_for_file "$spoofed_handshake/victim-ready"
+wait_for_file "$spoofed_handshake/handshake-spoofed"
+kill -TERM "$release_pid"
+set +e
+wait "$release_pid"
+status=$?
+set -e
+[ "$status" -eq 130 ] || fail "handshake spoof release returned $status instead of 130"
+! grep -Fx 'victim-term' "$spoofed_handshake/spoof-events" >/dev/null \
+  || fail "replaced handshake PGID received a signal"
+read -r victim_pgid <"$spoofed_handshake/victim-pgid"
+kill -KILL -- "-$victim_pgid" 2>/dev/null || true
+assert_no_fixture_processes "$spoofed_handshake"
 
 for signal in HUP INT TERM; do
   signaled="$temporary/signal-forked-$signal"
