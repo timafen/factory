@@ -9,14 +9,25 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 source_dir=$temporary/source
 target_dir=$temporary/target
-mkdir -p "$source_dir/ops" "$target_dir/bin" "$target_dir/lib"
+mkdir -p "$source_dir/ops" "$target_dir/bin" "$target_dir/lib" "$target_dir/libexec"
 cp "$SCRIPT_DIR/fx" "$source_dir/ops/fx"
 cp "$SCRIPT_DIR/fx-factory-release" "$source_dir/ops/fx-factory-release"
-printf 'old fx\n' >"$target_dir/bin/fx"
-printf 'old release\n' >"$target_dir/lib/fx-factory-release"
+cp "$SCRIPT_DIR/factory-gate-cgroup" "$source_dir/ops/factory-gate-cgroup"
 
+launch_release_gate() {
+  local status
+  set +e
+  "$target_dir/lib/fx-factory-release" >/dev/null 2>&1
+  status=$?
+  set -e
+  [ "$status" -ne 126 ] && [ "$status" -ne 127 ] \
+    || fail "installed release gate did not launch (status $status)"
+}
+
+# A clean machine has none of the three control tools yet.
 FACTORY_FX_BIN="$target_dir/bin/fx" \
 FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
+FACTORY_GATE_CGROUP_HELPER="$target_dir/libexec/factory-gate-cgroup" \
 FACTORY_CONTROL_OWNER='' \
   bash "$INSTALLER" "$source_dir"
 
@@ -26,6 +37,13 @@ cmp -s "$source_dir/ops/fx-factory-release" "$target_dir/lib/fx-factory-release"
   || fail "release driver was not updated"
 [ -x "$target_dir/bin/fx" ] && [ -x "$target_dir/lib/fx-factory-release" ] \
   || fail "installed control tools are not executable"
+cmp -s "$source_dir/ops/factory-gate-cgroup" "$target_dir/libexec/factory-gate-cgroup" \
+  || fail "cgroup helper was not installed on a clean machine"
+[ -x "$target_dir/libexec/factory-gate-cgroup" ] \
+  || fail "installed cgroup helper is not executable"
+[ "$(stat -c %a "$target_dir/libexec/factory-gate-cgroup")" = 755 ] \
+  || fail "installed cgroup helper has unsafe permissions"
+launch_release_gate
 
 printf '#!/bin/bash\necho still-valid\n' >"$source_dir/ops/fx"
 printf 'not valid shell: (\n' >"$source_dir/ops/fx-factory-release"
@@ -33,6 +51,7 @@ cp "$target_dir/bin/fx" "$temporary/fx.before"
 cp "$target_dir/lib/fx-factory-release" "$temporary/release.before"
 if FACTORY_FX_BIN="$target_dir/bin/fx" \
    FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
+   FACTORY_GATE_CGROUP_HELPER="$target_dir/libexec/factory-gate-cgroup" \
    FACTORY_CONTROL_OWNER='' \
      bash "$INSTALLER" "$source_dir" >/dev/null 2>&1; then
   fail "invalid release driver was accepted"
@@ -46,6 +65,7 @@ cp "$SCRIPT_DIR/fx" "$source_dir/ops/fx"
 cp "$SCRIPT_DIR/fx-factory-release" "$source_dir/ops/fx-factory-release"
 printf 'sentinel fx\n' >"$target_dir/bin/fx"
 printf 'sentinel release\n' >"$target_dir/lib/fx-factory-release"
+printf 'sentinel cgroup\n' >"$target_dir/libexec/factory-gate-cgroup"
 mkdir -p "$temporary/fail-bin"
 cat >"$temporary/fail-bin/mv" <<'SH'
 #!/bin/bash
@@ -62,6 +82,7 @@ if PATH="$temporary/fail-bin:$PATH" \
    TEST_FAIL_MARK="$temporary/move-failed" \
    FACTORY_FX_BIN="$target_dir/bin/fx" \
    FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
+   FACTORY_GATE_CGROUP_HELPER="$target_dir/libexec/factory-gate-cgroup" \
    FACTORY_CONTROL_OWNER='' \
      bash "$INSTALLER" "$source_dir" >/dev/null 2>&1; then
   fail "partial installation unexpectedly succeeded"
@@ -70,5 +91,17 @@ grep -Fx 'sentinel fx' "$target_dir/bin/fx" >/dev/null \
   || fail "fx was not restored after partial installation"
 grep -Fx 'sentinel release' "$target_dir/lib/fx-factory-release" >/dev/null \
   || fail "release driver was not restored after partial installation"
+grep -Fx 'sentinel cgroup' "$target_dir/libexec/factory-gate-cgroup" >/dev/null \
+  || fail "cgroup helper was not restored after partial installation"
 
-echo "PASS: fx and the release driver update atomically"
+# A normal update replaces all three tools and leaves the release gate runnable.
+FACTORY_FX_BIN="$target_dir/bin/fx" \
+FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
+FACTORY_GATE_CGROUP_HELPER="$target_dir/libexec/factory-gate-cgroup" \
+FACTORY_CONTROL_OWNER='' \
+  bash "$INSTALLER" "$source_dir"
+cmp -s "$source_dir/ops/factory-gate-cgroup" "$target_dir/libexec/factory-gate-cgroup" \
+  || fail "cgroup helper was not updated with the release driver"
+launch_release_gate
+
+echo "PASS: fx, release gate and cgroup helper update atomically"
