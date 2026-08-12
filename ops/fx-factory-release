@@ -20,6 +20,9 @@ API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
+GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
+GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
+GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
 DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
 FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
 RELEASE_DRIVER="${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}"
@@ -36,6 +39,10 @@ GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
 JOURNAL="$REL/transaction"
+
+case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
+  *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
+esac
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -316,53 +323,251 @@ on_release_exit() { cleanup; }
 trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
-# их общего успеха. Каждая группа живёт в отдельной сессии: при остановке
-# выпуска завершается вся её группа процессов, включая возможных помощников
-# тестового раннера.
-# setsid может forkнуть, поэтому PID фонового launcher не всегда совпадает с
-# PGID. Launcher обязан сообщить PGID до возврата из этой функции: сигнал в
-# этот момент ждёт готовности файла, а не убивает launcher и не теряет группу.
-start_test_gate() { # start_test_gate <имя> <журнал> <pid-файл> <команда...>
-  local name=$1 log=$2 pid_file=$3 i
+# их общего успеха. Реальную SID/PGID сообщает оболочка, уже запущенная через
+# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid и $AS могут
+# forkнуть. До атомарной записи handshake ни $AS, ни сама команда не стартуют.
+# Отдельная оболочка вокруг самой команды атомарно публикует её итоговый статус:
+# статус $AS не авторитетен, потому что fork-обёртка может вернуть 0 раньше gate.
+read_test_gate_handshake() { # read_test_gate_handshake <файл>; sets gate_sid/gate_pgid
+  local handshake=$1 sid_field='' pgid_field='' ready_field='' extra=''
+  gate_sid=''
+  gate_pgid=''
+  [ -s "$handshake" ] || return 1
+  IFS=' ' read -r sid_field pgid_field ready_field extra <"$handshake" || return 1
+  case "$sid_field:$pgid_field:$ready_field:$extra" in
+    sid=*:pgid=*:ready=1:) ;;
+    *) return 1 ;;
+  esac
+  gate_sid=${sid_field#sid=}
+  gate_pgid=${pgid_field#pgid=}
+  case "$gate_sid:$gate_pgid" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+  # A setsid wrapper is the session and process-group leader. Rejecting any
+  # other record prevents a stale launcher PID from becoming a kill target.
+  [ "$gate_sid" = "$gate_pgid" ]
+}
+
+wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <файл>
+  local handshake=$1 i
+  for ((i = 0; i < GATE_READY_ATTEMPTS; i++)); do
+    read_test_gate_handshake "$handshake" && return 0
+    sleep "$GATE_POLL_DELAY"
+  done
+  read_test_gate_handshake "$handshake"
+}
+
+test_gate_group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+
+wait_for_test_gate_group_exit() { # wait_for_test_gate_group_exit <pgid>
+  local pgid=$1 i
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    test_gate_group_alive "$pgid" || return 0
+    sleep "$GATE_POLL_DELAY"
+  done
+  ! test_gate_group_alive "$pgid"
+}
+
+wait_for_test_gate_pids_exit() { # wait_for_test_gate_pids_exit <pid...>
+  local i pid alive
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    alive=0
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+    done
+    [ "$alive" = 0 ] && return 0
+    sleep "$GATE_POLL_DELAY"
+  done
+  for pid in "$@"; do
+    kill -0 "$pid" 2>/dev/null && return 1
+  done
+  return 0
+}
+
+test_gate_launcher_tree() { # test_gate_launcher_tree <launcher-pid>
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -n "$child" ] || continue
+    test_gate_launcher_tree "$child"
+  done < <(ps -eo pid=,ppid= | awk -v parent="$parent" '$2 == parent {print $1}')
+}
+
+reap_test_gate_launcher() { # reap_test_gate_launcher <launcher-pid>
+  local launcher=$1
+  if ! wait_for_test_gate_pids_exit "$launcher"; then
+    kill -KILL "$launcher" 2>/dev/null || true
+    wait_for_test_gate_pids_exit "$launcher" || true
+  fi
+  wait "$launcher" 2>/dev/null || true
+}
+
+stop_unready_test_gate_launcher() { # stop_unready_test_gate_launcher <launcher-pid>
+  local launcher=$1 i
+  local -a tree=()
+  mapfile -t tree < <(test_gate_launcher_tree "$launcher")
+  for ((i = ${#tree[@]} - 1; i >= 0; i--)); do
+    kill -TERM "${tree[$i]}" 2>/dev/null || true
+  done
+  if ! wait_for_test_gate_pids_exit "${tree[@]}"; then
+    for ((i = ${#tree[@]} - 1; i >= 0; i--)); do
+      kill -KILL "${tree[$i]}" 2>/dev/null || true
+    done
+    wait_for_test_gate_pids_exit "${tree[@]}" || true
+  fi
+  wait "$launcher" 2>/dev/null || true
+}
+
+stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
+  local launcher=$1 pgid=$2
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  if ! wait_for_test_gate_group_exit "$pgid"; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+    wait_for_test_gate_group_exit "$pgid" || true
+  fi
+  reap_test_gate_launcher "$launcher"
+}
+
+start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
+  local name=$1 log=$2 handshake=$3 result="${3}.result" launcher
+  local -a as_command=()
   shift 3
-  as_user setsid bash -c '
-    trap - INT
-    printf "%s\\n" "$$" > "$1"
-    shift
-    exec "$@"
-  ' bash "$pid_file" "$@" >"$log" 2>&1 &
-  gate_pids+=("$!")
-  gate_pid_files+=("$pid_file")
+  [ -z "$AS" ] || read -r -a as_command <<<"$AS"
+  rm -f -- "$handshake" "$result"
+  setsid --wait bash -c '
+    handshake=$1
+    result=$2
+    as_count=$3
+    stop_attempts=$4
+    poll_delay=$5
+    shift 5
+    as_command=("${@:1:as_count}")
+    shift "$as_count"
+    trap - HUP INT TERM
+    read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 125
+    case "$sid:$pgid" in
+      *[!0-9:]*|:*|*:) exit 125 ;;
+    esac
+    [ "$sid" = "$pgid" ] || exit 125
+    temporary_handshake=$(mktemp "${handshake}.tmp.XXXXXX") || exit 125
+    if ! printf "sid=%s pgid=%s ready=1\\n" "$sid" "$pgid" >"$temporary_handshake" \
+      || ! mv -f -- "$temporary_handshake" "$handshake"; then
+      rm -f -- "$temporary_handshake"
+      exit 125
+    fi
+
+    # This wrapper, rather than the possibly forking $AS launcher, observes the
+    # real gate. Each state is published by rename so the supervisor never
+    # accepts a partial or stale successful record.
+    "${as_command[@]}" bash -c '\''
+      result=$1
+      shift
+      publish_gate_result() {
+        local contents=$1 temporary_result
+        temporary_result=$(mktemp "${result}.tmp.XXXXXX") || return 1
+        if ! printf "%s\\n" "$contents" >"$temporary_result" \
+          || ! mv -f -- "$temporary_result" "$result"; then
+          rm -f -- "$temporary_result"
+          return 1
+        fi
+      }
+      publish_gate_result "state=running pid=$$" || exit 125
+      "$@"
+      gate_status=$?
+      publish_gate_result "state=finished status=$gate_status" || exit 125
+      exit "$gate_status"
+    '\'' bash "$result" "$@" &
+    as_pid=$!
+    wait "$as_pid"
+    as_status=$?
+
+    # A synchronous $AS has already waited for the writer. A forking $AS may
+    # return first, so follow the published writer PID while it belongs to this
+    # process group. Once it disappears, only bounded retries are allowed and
+    # any missing/malformed final record fails closed.
+    unsettled=0
+    while :; do
+      state_field= value_field= extra=
+      if [ -s "$result" ] \
+        && IFS=" " read -r state_field value_field extra <"$result"; then
+        case "$state_field:$value_field:$extra" in
+          state=finished:status=*:)
+            gate_status=${value_field#status=}
+            case "$gate_status" in
+              ""|*[!0-9]*) exit 125 ;;
+            esac
+            [ "$gate_status" -le 255 ] || exit 125
+            [ "$gate_status" -ne 0 ] && exit "$gate_status"
+            [ "$as_status" -eq 0 ] || exit 125
+            exit 0
+            ;;
+          state=running:pid=:*) ;;
+          state=running:pid=*:)
+            gate_pid=${value_field#pid=}
+            case "$gate_pid" in
+              ""|*[!0-9]*) gate_pid= ;;
+            esac
+            if [ -n "$gate_pid" ]; then
+              actual_pgid= process_state=
+              read -r actual_pgid process_state \
+                < <(ps -o pgid= -o stat= -p "$gate_pid") || true
+              case "$process_state" in Z*|"") ;; *)
+                if [ "$actual_pgid" = "$pgid" ]; then
+                  unsettled=0
+                  sleep "$poll_delay"
+                  continue
+                fi
+                ;;
+              esac
+            fi
+            ;;
+        esac
+      fi
+      ((unsettled++))
+      [ "$unsettled" -lt "$stop_attempts" ] || exit 125
+      sleep "$poll_delay"
+    done
+  ' bash "$handshake" "$result" "${#as_command[@]}" "$GATE_STOP_ATTEMPTS" \
+    "$GATE_POLL_DELAY" "${as_command[@]}" "$@" >"$log" 2>&1 &
+  launcher=$!
+  gate_pids+=("$launcher")
+  gate_handshakes+=("$handshake")
   gate_logs+=("$log")
   gate_names+=("$name")
-  for ((i = 0; i < 500; i++)); do
-    [ -s "$pid_file" ] && return 0
-    sleep 0.01
-  done
-  fail "не дождался отдельной process group для $name"
+  if wait_for_test_gate_handshake "$handshake"; then return 0; fi
+  fail "не дождался handshake реальной session для $name"
   return 1
 }
 
 stop_test_gates() {
-  local pid_file group_pid i
-  for pid_file in "${gate_pid_files[@]}"; do
-    [ -e "$pid_file" ] || continue
-    group_pid=''
-    for ((i = 0; i < 500; i++)); do
-      if [ -s "$pid_file" ]; then read -r group_pid <"$pid_file" || true; fi
-      case "$group_pid" in ''|*[!0-9]*) sleep 0.01 ;; *) break ;; esac
-    done
-    case "$group_pid" in
-      ''|*[!0-9]*) ;;
-      *) kill -TERM -- "-$group_pid" 2>/dev/null || true ;;
-    esac
+  local i launcher handshake
+  [ "$test_gates_stopped" = 0 ] || return 0
+  test_gates_stopped=1
+  for i in "${!gate_pids[@]}"; do
+    launcher=${gate_pids[$i]}
+    handshake=${gate_handshakes[$i]}
+    if wait_for_test_gate_handshake "$handshake"; then
+      stop_ready_test_gate "$launcher" "$gate_pgid"
+    else
+      stop_unready_test_gate_launcher "$launcher"
+    fi
   done
 }
 
 wait_for_test_gates() {
-  local pid
-  for pid in "${gate_pids[@]}"; do
-    wait "$pid" 2>/dev/null || true
+  local launcher
+  [ "$test_gates_reaped" = 0 ] || return 0
+  for launcher in "${gate_pids[@]}"; do
+    reap_test_gate_launcher "$launcher"
+  done
+  test_gates_reaped=1
+}
+
+wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <handshake>
+  local handshake=$1
+  read_test_gate_handshake "$handshake" || return 1
+  while test_gate_group_alive "$gate_pgid"; do
+    sleep "$GATE_POLL_DELAY"
   done
 }
 
@@ -385,11 +590,13 @@ on_test_gate_signal() {
 }
 
 run_parallel_test_gates() {
-  local completed status failed_name
+  local completed status failed_name completed_index other_index
   gate_pids=()
-  gate_pid_files=()
+  gate_handshakes=()
   gate_logs=()
   gate_names=()
+  test_gates_stopped=0
+  test_gates_reaped=0
 
   # A shell started as a background job can inherit ignored SIGINT. Reset it
   # before installing our handler so INT follows the same cleanup path.
@@ -398,12 +605,24 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal INT' INT
   trap 'on_test_gate_signal TERM' TERM
 
-  start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.pid" \
+  if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
     bash -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
-    bash "$work/src/web"
-  start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.pid" \
+    bash "$work/src/web"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    return 1
+  fi
+  if ! start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
     bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
-    bash "$work/src"
+    bash "$work/src"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    return 1
+  fi
 
   wait -n -p completed "${gate_pids[@]}"
   status=$?
@@ -419,18 +638,36 @@ run_parallel_test_gates() {
     return 1
   fi
 
-  if [ "$completed" = "${gate_pids[0]}" ]; then
-    wait "${gate_pids[1]}"
-  else
-    wait "${gate_pids[0]}"
+  completed_index=1
+  [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
+  if ! wait_for_test_gate_descendants "${gate_handshakes[$completed_index]}"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    fail "не смог подтвердить завершение process group ${gate_names[$completed_index]}"
+    return 1
   fi
+
+  other_index=0
+  [ "$completed_index" = 0 ] && other_index=1
+  wait "${gate_pids[$other_index]}"
   status=$?
+  if [ "$status" -eq 0 ] \
+    && ! wait_for_test_gate_descendants "${gate_handshakes[$other_index]}"; then
+    status=1
+  fi
   if [ "$status" -ne 0 ]; then
     stop_test_gates
     wait_for_test_gates
+    fail "${gate_names[$other_index]} завершилась с кодом $status"
   fi
   trap - HUP INT TERM
   print_test_gate_logs
+  if [ "$status" -eq 0 ]; then
+    test_gates_stopped=1
+    test_gates_reaped=1
+  fi
   [ "$status" -eq 0 ]
 }
 
