@@ -37,6 +37,49 @@ assert_no_fixture_processes() {
   fi
 }
 
+assert_preflight_refusal() {
+  local case_dir=$1
+  [ ! -s "$case_dir/events" ] || fail "preflight refusal touched services in $case_dir"
+  [ ! -s "$case_dir/gates" ] || fail "preflight refusal started build gates in $case_dir"
+  [ ! -e "$case_dir/releases/transaction" ] || fail "preflight refusal wrote a journal in $case_dir"
+  ! compgen -G "$case_dir/releases/build-*" >/dev/null \
+    || fail "preflight refusal created a build directory in $case_dir"
+  ! compgen -G "$case_dir/releases/.generation-*" >/dev/null \
+    || fail "preflight refusal created a candidate generation in $case_dir"
+  ! compgen -G "$case_dir/releases/.bootstrap-*" >/dev/null \
+    || fail "preflight refusal created a bootstrap generation in $case_dir"
+  grep -F 'живую metadata не исправляли автоматически' "$case_dir/output" >/dev/null \
+    || fail "preflight refusal did not explain metadata was left unchanged"
+  grep -F 'проверенная восстановимая исходная точка' "$case_dir/output" >/dev/null \
+    || fail "preflight refusal did not explain the required source state"
+}
+
+verify_immutable_generation() {
+  python3 - "$1" <<'PY'
+import hashlib,json,os,stat,sys
+root=sys.argv[1]
+raw=open(os.path.join(root,"manifest.json"),"rb").read()
+data=json.loads(raw)
+assert hashlib.sha256(raw).hexdigest()==open(os.path.join(root,"manifest.sha256")).read().strip()
+assert data.get("format")==1 and data.get("candidate_sha")
+for item in data.get("artifacts",[]):
+    path=os.path.join(root,item["source"])
+    info=os.lstat(path)
+    assert stat.S_ISREG(info.st_mode)
+    body=open(path,"rb").read()
+    assert len(body)==item["size"] and hashlib.sha256(body).hexdigest()==item["sha256"]
+    assert stat.S_IMODE(info.st_mode)==item["mode"]
+database=data.get("database",{})
+if database.get("snapshot"):
+    snapshot=os.path.join(root,database["snapshot"])
+    marker=snapshot+".v2-control-plane"
+    assert stat.S_IMODE(os.lstat(snapshot).st_mode)==0o600
+    assert stat.S_IMODE(os.lstat(marker).st_mode)==0o600
+    assert hashlib.sha256(open(snapshot,"rb").read()).hexdigest()==database["sha256"]
+    assert hashlib.sha256(open(marker,"rb").read()).hexdigest()==database["marker_sha256"]
+PY
+}
+
 make_fixture() {
   case_dir=$1 mode=$2
   mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
@@ -45,7 +88,7 @@ make_fixture() {
 #!/bin/bash
 # old-server
 case " $* " in
-  *' version '*) echo 'factory-server test old-release-sha' ;;
+  *' version '*) echo 'factory-server test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
   *' -backup '*)
     echo backup-snapshot >>"$TEST_EVENTS"
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
@@ -60,7 +103,7 @@ EOF
   cat >"$case_dir/install/factory-worker" <<'EOF'
 #!/bin/bash
 # old-worker
-[ "${1:-}" = version ] && echo 'factory-worker test old-release-sha'
+[ "${1:-}" = version ] && echo 'factory-worker test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
@@ -76,7 +119,7 @@ import sqlite3,sys
 d=sqlite3.connect(sys.argv[1]); d.execute('create table schema_migrations(version integer primary key, applied_at integer not null)'); d.execute('insert into schema_migrations values(1,0)'); d.commit(); d.close()
 open(sys.argv[1]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
 PY
-  printf '{"name":"old","sha":"old-release-sha"}\n' >"$case_dir/current.json"
+  printf '{"name":"old","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":"installed-old-release"}\n' >"$case_dir/current.json"
   # The real release gate runs this test under umask 077.  Set the fixture
   # modes explicitly so the rollback preflight verifies production-like
   # artifacts instead of inheriting the caller's umask.
@@ -86,6 +129,7 @@ PY
     "$case_dir/install/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
     "$case_dir/live/intake/app.py" "$case_dir/live/intake/plan.py"
+  chmod 600 "$case_dir/current.json"
   : >"$case_dir/events"
   : >"$case_dir/worker.toml"
 
@@ -118,7 +162,7 @@ BRAIN
     chmod +x "$destination/ops/install-project-release-broker.sh"
     chmod +x "$destination/ops/install-server-browser.sh"
     ;;
-  *'rev-parse HEAD'*) echo 1234567890abcdef ;;
+  *'rev-parse HEAD'*) echo 1234567890abcdef1234567890abcdef12345678 ;;
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
   *'log -1 --pretty=%B'*) printf 'Merge pull request #123 from factory/readable-release\n\nПроверочный релиз (#123)\n' ;;
 esac
@@ -199,7 +243,7 @@ case "$output" in
     cat >"$output" <<'SERVER'
 #!/bin/bash
 case " $* " in
-  *' version '*) echo 'factory-server test 1234567890abcdef' ;;
+  *' version '*) echo 'factory-server test 1234567890abcdef1234567890abcdef12345678' ;;
   *' -restore '*)
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -restore) source=$2; shift 2;; *) shift;; esac; done
     python3 - "$source" "$db" <<'PY'
@@ -215,7 +259,7 @@ SERVER
     [ "$TEST_MODE" != worker-build-fail ] || exit 1
     cat >"$output" <<'WORKER'
 #!/bin/bash
-[ "${1:-}" = version ] && { echo 'factory-worker test 1234567890abcdef'; exit 0; }
+[ "${1:-}" = version ] && { echo 'factory-worker test 1234567890abcdef1234567890abcdef12345678'; exit 0; }
 [ "${1:-}" = identity ] && {
   grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null || exit 9
   if [ "$TEST_MODE" = identity-transient ] && [ ! -e "$TEST_IDENTITY_MARK" ]; then
@@ -433,6 +477,7 @@ start_release() {
 
 success="$temporary/success"
 make_fixture "$success" parallel-success
+cp "$success/current.json" "$success/source-current.json"
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
 wait_for_file "$success/ui-started"
@@ -455,13 +500,31 @@ previous_generation=$(readlink -f "$success/releases/previous")
   || fail "committed generation has no immutable manifest"
 [ -f "$current_generation/database.sqlite3" ] && [ -d "$previous_generation" ] \
   || fail "release did not retain snapshot and previous complete generation"
-python3 - "$current_generation" <<'PY' || fail "manifest does not cover the complete release"
-import hashlib,json,sys
-r=sys.argv[1]; raw=open(r+'/manifest.json','rb').read(); d=json.loads(raw)
-assert hashlib.sha256(raw).hexdigest()==open(r+'/manifest.sha256').read().strip()
-names={x['source'] for x in d['artifacts']}
-assert {'payload/factory-server','payload/factory-worker','payload/factory-release-broker','payload/fx','payload/fx-factory-release','payload/pilot.py','payload/context.md','payload/intake-app.py','payload/intake-plan.py','release-info.json'} <= names
-assert d['database']['sha256']==hashlib.sha256(open(r+'/database.sqlite3','rb').read()).hexdigest()
+verify_immutable_generation "$current_generation" \
+  || fail "candidate generation did not pass immutable verification"
+verify_immutable_generation "$previous_generation" \
+  || fail "bootstrap generation did not pass immutable verification"
+python3 - "$current_generation" "$previous_generation" "$success/source-current.json" <<'PY' \
+  || fail "bootstrap manifest does not cover the complete installed release"
+import json,sys
+current,previous,source_info=sys.argv[1:]
+expected={
+ "payload/factory-server","payload/factory-worker","payload/factory-release-broker",
+ "payload/factory-release-broker.service","payload/factory-release-broker-dropin.conf",
+ "payload/fx","payload/fx-factory-release","payload/pilot.py","payload/context.md",
+ "payload/intake-app.py","payload/intake-plan.py","release-info.json","services.tsv",
+}
+candidate=json.load(open(current+"/manifest.json"))
+bootstrap=json.load(open(previous+"/manifest.json"))
+source=json.load(open(source_info))
+assert expected <= {item["source"] for item in candidate["artifacts"]}
+assert expected <= {item["source"] for item in bootstrap["artifacts"]}
+assert bootstrap["candidate_sha"]==source["sha"]
+assert bootstrap["source_release_id"]==source["release_id"]
+assert json.load(open(previous+"/release-info.json"))==source
+assert bootstrap["database"]["snapshot"]=="database.sqlite3"
+assert bootstrap["processes"]==candidate["processes"]
+assert bootstrap["services"]==candidate["services"]
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
@@ -474,6 +537,57 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+metadata_mode="$temporary/metadata-mode-0644"
+make_fixture "$metadata_mode" metadata-mode-0644
+cp "$metadata_mode/current.json" "$metadata_mode/source-current.json"
+chmod 644 "$metadata_mode/current.json"
+set +e
+run_release "$metadata_mode" metadata-mode-0644
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "metadata mode 0644 was not rejected before release work"
+assert_preflight_refusal "$metadata_mode"
+cmp "$metadata_mode/source-current.json" "$metadata_mode/current.json" \
+  || fail "metadata mode refusal rewrote the live metadata"
+[ "$(stat -c %a "$metadata_mode/current.json")" = 644 ] \
+  || fail "metadata mode refusal corrected permissions automatically"
+[ ! -e "$metadata_mode/releases/generations" ] \
+  || fail "metadata mode refusal created release history"
+
+missing_release_id="$temporary/missing-release-id"
+make_fixture "$missing_release_id" missing-release-id
+python3 - "$missing_release_id/current.json" <<'PY'
+import json,sys
+path=sys.argv[1]
+data=json.load(open(path)); data.pop("release_id")
+json.dump(data,open(path,"w"),sort_keys=True,separators=(",",":"))
+PY
+chmod 600 "$missing_release_id/current.json"
+cp "$missing_release_id/current.json" "$missing_release_id/source-current.json"
+set +e
+run_release "$missing_release_id" missing-release-id
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "missing release_id was not rejected before release work"
+assert_preflight_refusal "$missing_release_id"
+cmp "$missing_release_id/source-current.json" "$missing_release_id/current.json" \
+  || fail "missing release_id refusal rewrote the live metadata"
+[ ! -e "$missing_release_id/releases/generations" ] \
+  || fail "missing release_id refusal created release history"
+
+partial_history="$temporary/partial-history"
+make_fixture "$partial_history" partial-history
+mkdir -p "$partial_history/releases/generations/unfinished"
+ln -s "$partial_history/releases/generations/unfinished" "$partial_history/releases/current"
+set +e
+run_release "$partial_history" partial-history
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "partial release history was not rejected before release work"
+assert_preflight_refusal "$partial_history"
+[ -L "$partial_history/releases/current" ] && [ -d "$partial_history/releases/generations/unfinished" ] \
+  || fail "partial history refusal rewrote the existing history"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
