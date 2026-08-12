@@ -399,7 +399,11 @@ if [ "$deferred_pilot_restart" = 1 ]; then
 fi
 
 rollback_armed=0
-delivery_status succeeded
+if ! delivery_status succeeded; then
+  fail "не смог надёжно подтвердить успешный выпуск"
+  cleanup
+  exit 4
+fi
 cleanup
 ls -1dt "$REL"/build-* 2>/dev/null | tail -n +3 | xargs -r rm -rf
 exit 0
