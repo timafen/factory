@@ -1,18 +1,26 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: b4d10b49d56743abc5d6a1de1d2722fdc3b8bb37 — broker сохраняет durable-операцию через fsync и отказывается стартовать с повреждённой записью.
+Implementation commit: 162d2c04563b82a42a937ef0d2fe57bd6670aee7 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
 
 ## HEAD
 
-- Status: Verified PASS — ожидает слияния человеком.
-- Branch: `factory/7e42f1a1-7b1-e87f4e4e-946`.
+- Status: Verified — backend PASS; полный `just check` остановлен на отсутствующем `eslint`.
+- Branch: `factory/dc92ce68-4ea-d680b52d-273`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: b4d10b49d56743abc5d6a1de1d2722fdc3b8bb37 — broker сохраняет durable-операцию через fsync и отказывается стартовать с повреждённой записью.
-- What changed: После ребейза сохранены обе fail-closed границы: terminal-status виден только после durable-записи, а fsync файла и каталога обязателен для любой operation.
-- Evidence: Pilot→broker process class — 10/10; `go test -count=1 ./internal/releasebroker`, shell release/installer fixtures и `just build` — PASS. `just check` прошёл static checks, но общий Go-прогон остановили независимые 300-секундные таймауты `internal/controlplane` и `internal/worker`.
-- Next action: Человеку принять решение о слиянии с учётом независимых таймаутов полного набора.
+- Implementation commit: 162d2c04563b82a42a937ef0d2fe57bd6670aee7 — после ошибки fsync каталога terminal-успех не принимается при перезапуске.
+- What changed: Перед terminal-записью создаётся durable pending-маркер; committed-маркер появляется только после успешной записи и fsync файла. Перезапуск без committed-маркера переводит terminal в `failed`.
+- Evidence: новый сценарий rename→ошибка `syncDir`→restart, `go test -count=1 ./internal/releasebroker`, Pilot class 10/10 и `just build` — PASS; `just check` прошёл vet, vuln, staticcheck и все Go-тесты, но `web` lint получил `eslint: not found`.
+- Next action: Установить зависимости `web` и повторить `just check` перед слиянием.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Broker теперь fail-closed восстанавливает terminal-состояния после неопределённой
+долговечности каталога: pending/committed-маркеры разделяют rename и принятие
+результата. Сценарий ошибки `syncDir` после rename и перезапуска подтверждает,
+что успех не принимается и executor не повторяется; целевые Go/Pilot проверки,
+сборка и весь Go-регресс зелёные, UI lint заблокирован отсутствующим eslint.
 
 ### 2026-08-11 — Specification
 
