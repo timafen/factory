@@ -11,6 +11,12 @@ Next action: выполнить human merge в `main`.
 
 ## LOG
 
+### 2026-08-12 — Implement: исправление конфликта Pilot
+
+Ветка повторно основана на свежем `main` `33aa4b58d7f949420ba4d86cfc9639038fa0f3c8`; кодовый коммит `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` уже входит в базу и удаляет неподдерживаемые rollout-метаданные из примера Pilot.
+Целевая проверка `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` — PASS.
+Полный `just check` прошёл format, vet, vuln, staticcheck и controlplane, но вне области задачи нестабильный `internal/worker.TestIdleWorkerMakesOneClaimPerPollingInterval` завершился по таймауту.
+
 ### 2026-08-12 — Verify
 
 | Критерий | Команда / проверка | Результат |
