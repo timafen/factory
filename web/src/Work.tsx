@@ -65,7 +65,9 @@ const LIVE = ["running", "queued", "preparing"];
 const OLDER_ENOUGH = 30;
 
 type Group = {
+  key: string;
   base: string;
+  workId?: string;
   items: { task: Task; stage: string | null; verdict?: Verdict }[];
   latest: Task;
   status: WorkStatus;
@@ -112,13 +114,21 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   for (const t of tasks) {
     const { base, stage } = parse(t.title);
     const v = verdicts[t.id];
-    const g = map.get(base) ?? {
-      base, items: [], latest: t,
+    // New tasks are grouped only by durable provenance. A pre-027 parent may
+    // join its provenance child whose work_id equals that parent's task ID.
+    // Only rows with no such identity retain the legacy title grouping.
+    const workId = t.work_id || (tasks.some((peer) => peer.work_id === t.id) ? t.id : undefined);
+    const key = workId ? `work:${workId}` : `legacy:${base}`;
+    const g = map.get(key) ?? {
+      key, base, workId, items: [], latest: t,
       status: neutralStatus(), currentStage: null, reached: {},
     };
     g.items.push({ task: t, stage: stage ?? v?.stage ?? null, verdict: v });
-    if ((t.created_at ?? "") > (g.latest.created_at ?? "")) g.latest = t;
-    map.set(base, g);
+    if ((t.created_at ?? "") > (g.latest.created_at ?? "")) {
+      g.latest = t;
+      g.base = base;
+    }
+    map.set(key, g);
   }
 
   for (const g of map.values()) {
@@ -148,8 +158,9 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     }
     g.lap = lap;
 
-    g.meta = works[g.base];
-    g.promise = promises[g.base];
+    const stateKey = g.workId ?? g.base;
+    g.meta = works[stateKey];
+    g.promise = promises[stateKey];
     const recorded = g.meta?.skipped;
     if (recorded && recorded.length) {
       // Записано при заведении работы — гадать не нужно.
@@ -268,7 +279,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   // Правда о том, почему работа стоит. «Вернули на доработку, продолжаем»
   // — ложь, если конвейер по этой работе на паузе или встал совсем.
   for (const g of map.values()) {
-    const ws = statuses[g.base];
+    const ws = statuses[g.workId ?? g.base];
     if (!ws) continue;
     if (g.items.some((it) => LIVE.includes(it.task.state)) || g.status.kind === "decision") continue;
     if (ws.state === "stopped_owner") {
@@ -322,7 +333,7 @@ export function WorkView({
   onTask, onAnswer, onResume, onDelegate, onRefresh, hasMore, loadingMore, onLoadMore,
 }: ViewStateProps & {
   tasks?: Task[]; workers?: Worker[]; pending: boolean; error: Error | null;
-  onTask: (id: string) => void; onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>; onDelegate: () => void;
+  onTask: (id: string) => void; onAnswer?: () => void; onResume?: (work: { title: string; work_id?: string }) => void | Promise<void>; onDelegate: () => void;
   hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
 }) {
   const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
@@ -430,11 +441,11 @@ export function WorkView({
                   <span style={{ fontSize: 12.5, color: muted }}>{sec.hint}</span>
                 </div>
                 {rows.map((g) => (
-                  <GroupRow key={g.base} g={g} workerMap={workerMap}
-                            expanded={open === g.base}
-                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                  <GroupRow key={g.key} g={g} workerMap={workerMap}
+                            expanded={open === g.key}
+                            onToggle={() => setOpen(open === g.key ? "" : g.key)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
-                            resuming={resuming === g.base} resumeError={resumeError}
+                            resuming={resuming === g.key} resumeError={resumeError}
                             onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
@@ -458,11 +469,11 @@ export function WorkView({
                   </span>
                 )}
                 {showArchive && old.map((g) => (
-                  <GroupRow key={g.base} g={g} workerMap={workerMap}
-                            expanded={open === g.base}
-                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                  <GroupRow key={g.key} g={g} workerMap={workerMap}
+                            expanded={open === g.key}
+                            onToggle={() => setOpen(open === g.key ? "" : g.key)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
-                            resuming={resuming === g.base} resumeError={resumeError}
+                            resuming={resuming === g.key} resumeError={resumeError}
                             onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
@@ -487,7 +498,7 @@ export function WorkView({
 function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume, history, project,
   resuming, resumeError, onResuming, onResumeError }: {
   g: Group; workerMap: Map<string, Worker>; expanded: boolean;
-  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>;
+  onToggle: () => void; onTask: (id: string) => void; onAnswer?: () => void; onResume?: (work: { title: string; work_id?: string }) => void | Promise<void>;
   history: Record<string, string>;
   project?: string;
   resuming: boolean; resumeError: string; onResuming: (base: string) => void; onResumeError: (error: string) => void;
@@ -570,8 +581,8 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
             disabled={resuming}
             onClick={(e) => {
               e.stopPropagation();
-              onResumeError(""); onResuming(g.base);
-              Promise.resolve(onResume(g.base)).catch((error: unknown) => {
+              onResumeError(""); onResuming(g.key);
+              Promise.resolve(onResume({ title: g.base, ...(g.workId ? { work_id: g.workId } : {}) })).catch((error: unknown) => {
                 // Внутренний API-текст может раскрыть детали control plane или прокси.
                 void error;
                 onResumeError(RESUME_ERROR_MESSAGE);
