@@ -2,16 +2,16 @@
 
 ## HEAD
 
-- Status: Implemented and tested on fresh `main`; ready for repeated Review.
-- Branch: `factory/edc1f5b1-410-a19e0c85-755`.
-- Implementation commit: a042e43239d4d5dcf787cdf11d3e80464065a1b7 — real-restart correction proof, migration dependency guard, and durable duplicate-root outbox.
-- What changed: migration 027 validates migration 026 and migration ledger
-  versions come from filenames; Review/Verify corrections survive recreated state.
-- What changed: prevented duplicate roots remain as stable-ID durable outbox
-  events across every tested crash boundary.
-- Evidence: focused Go migration test PASS; two restart/outbox tests PASS;
-  all 225 Pilot tests PASS; `go test -timeout 5m ./...` PASS; build PASS.
-- Next action: repeat Review against this branch and its exact published SHA.
+- Status: Implemented and tested after rebase onto fresh `main`; ready for Review.
+- Branch: `factory/8d00120e-041-fbd90b7b-1f7`.
+Implementation commit: 909469702a7f550798425de5da9efd4328b50eec — доказательство рестарта, проверка схемы миграцией 028 и надёжный журнал предотвращённых дублей.
+- What changed: migration 026 is already present in `main`; the new migration 028
+  validates schemas 026 and 027 without changing the published migration 027.
+- What changed: Review/Verify corrections and stable-ID prevented-root events
+  survive recreated Pilot state and every tested outbox crash boundary.
+- Evidence: 5 focused Go tests PASS; 6 restart/outbox tests PASS; all 229 Pilot
+  tests PASS (13 skipped); `go vet ./...` PASS; Python compile PASS; build PASS.
+- Next action: repeat Review against the published branch and implementation SHA.
 
 ## LOG
 
@@ -54,3 +54,12 @@ The focused migration check passed, Review and Verify both completed one pipelin
 after persisted-state recreation, and crash-boundary outbox checks converged.
 The full 225-test Pilot suite, all Go tests, and `go build ./...` passed; the
 restart fixture was updated to complete through the current release broker path.
+
+### 2026-08-12 — Implement
+
+Rebased the restart proof onto `fc8548f244fe1eb2a1c653c224de668844e2f1a3`
+and preserved the current Pilot release flow. Because migration 027 is already
+published, its dependency check moved to the new side-effect-free migration 028;
+the regression rejects databases missing either prerequisite schema. Five
+focused Go tests, six correction-storm tests, all 229 Pilot tests, Go vet,
+Python compilation, and the binary build passed.
