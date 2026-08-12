@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -134,6 +135,9 @@ type Broker struct {
 	stateDir string
 	// persistTerminal is a test seam for a failed final state write.
 	persistTerminal func(*operation) error
+	syncFile        func(*os.File) error
+	rename          func(string, string) error
+	syncDir         func(string) error
 	mu              sync.Mutex
 	active          string
 	items           map[string]*operation
@@ -167,9 +171,13 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			continue
 		}
 		var item operation
-		data, err := os.ReadFile(filepath.Join(stateDir, entry.Name()))
-		if err != nil || json.Unmarshal(data, &item) != nil || !operationIDPattern.MatchString(item.Request.OperationID) {
-			continue
+		path := filepath.Join(stateDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read operation record %q: %w", entry.Name(), err)
+		}
+		if err := json.Unmarshal(data, &item); err != nil || !validOperation(item) || entry.Name() != item.Request.OperationID+".json" {
+			return nil, fmt.Errorf("invalid operation record %q", entry.Name())
 		}
 		// A broker restart cannot prove an old in-process executor still exists.
 		// Fail closed instead of launching it again.
@@ -190,7 +198,19 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 }
 
 func newBroker(stateDir string, executor Executor) *Broker {
-	return &Broker{executor: executor, stateDir: stateDir, items: make(map[string]*operation)}
+	return &Broker{
+		executor: executor, stateDir: stateDir, items: make(map[string]*operation),
+		syncFile: func(file *os.File) error { return file.Sync() },
+		rename:   os.Rename,
+		syncDir: func(path string) error {
+			directory, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer directory.Close()
+			return directory.Sync()
+		},
+	}
 }
 
 func (b *Broker) Handler() http.Handler {
@@ -218,7 +238,7 @@ func (b *Broker) persist(item *operation) error {
 		err = temporary.Chmod(0o600)
 	}
 	if err == nil {
-		err = temporary.Sync()
+		err = b.syncFile(temporary)
 	}
 	if closeErr := temporary.Close(); err == nil {
 		err = closeErr
@@ -226,15 +246,22 @@ func (b *Broker) persist(item *operation) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json")); err != nil {
+	if err := b.rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json")); err != nil {
 		return err
 	}
-	directory, err := os.Open(b.stateDir)
-	if err != nil {
-		return err
+	return b.syncDir(b.stateDir)
+}
+
+func validOperation(item operation) bool {
+	if !valid(item.Request) || item.Posts < 1 || item.PID < 0 {
+		return false
 	}
-	defer directory.Close()
-	return directory.Sync()
+	switch item.Status {
+	case "launching", "running", "succeeded", "locked", "release_failed_rolled_back", "rollback_failed", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func valid(input Request) bool {
