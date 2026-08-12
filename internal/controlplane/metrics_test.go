@@ -156,8 +156,11 @@ func TestSweepExpiredPrunesExpiredReconciliationRowsWhenWorkersAreIdle(t *testin
 		t.Fatalf("journal retention = expired %d retained %d; want 0, 1", expired, retained)
 	}
 	summary, err := store.Metrics(context.Background(), metricsWindow24Hours)
-	if err != nil || summary.CapacityReconciliations != 1 {
-		t.Fatalf("in-window reconciliation metrics = %d, %v; want 1", summary.CapacityReconciliations, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CapacityReconciliations != 1 || summary.GhostSlotsReleased != 0 {
+		t.Fatalf("idle sweep metrics = reconciliations %d, ghost slots %d; want 1, 0", summary.CapacityReconciliations, summary.GhostSlotsReleased)
 	}
 }
 
