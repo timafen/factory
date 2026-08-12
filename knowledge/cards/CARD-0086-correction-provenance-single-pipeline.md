@@ -2,17 +2,16 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge; Pilot remains operationally disabled.
-- Branch: `factory/d1212c45-6d0-3e6223b8-1f8`.
-- Implementation commit: b886a12937ad668cf769d061374f93099c37d9f4 — durable task provenance and correction-safe single-pipeline Pilot grouping.
-- What changed: migration 027 and the task API persist root/parent/correction
-  identity; every direct continuation path inherits the original `work_id`.
-- What changed: Pilot uses explicit provenance before legacy title fallback and
-  durably journals one `pilot_duplicate_root_prevented` event per correction.
-- Evidence: all 204 Pilot tests and the build pass; five post-rebase provenance
-  storm tests and five control-plane provenance/API/migration tests pass. The
-  full `just check` found one unrelated flaky worker timeout test (documented below).
-- Next action: human merges `factory/d1212c45-6d0-3e6223b8-1f8`.
+- Status: Implemented and tested on fresh `main`; ready for repeated Review.
+- Branch: `factory/edc1f5b1-410-a19e0c85-755`.
+- Implementation commit: a042e43239d4d5dcf787cdf11d3e80464065a1b7 — real-restart correction proof, migration dependency guard, and durable duplicate-root outbox.
+- What changed: migration 027 validates migration 026 and migration ledger
+  versions come from filenames; Review/Verify corrections survive recreated state.
+- What changed: prevented duplicate roots remain as stable-ID durable outbox
+  events across every tested crash boundary.
+- Evidence: focused Go migration test PASS; two restart/outbox tests PASS;
+  all 225 Pilot tests PASS; `go test -timeout 5m ./...` PASS; build PASS.
+- Next action: repeat Review against this branch and its exact published SHA.
 
 ## LOG
 
@@ -47,3 +46,11 @@ all 204 Pilot tests, and the Go build passed; Pilot enablement was not changed.
 | Adjacent legacy Pilot behavior | `python3 -m unittest -v pilot.test_pilot` | PASS (204 tests) |
 | Build and broad project checks | `FACTORY_BUILD_DIR=/tmp/card0086-build.hUIIBy just build`; `just check` | Build PASS; checks reached all Go tests, where unrelated `internal/worker/TestTimeoutStopsIgnoringProcessGroup` failed because the task timed out before process start |
 | Delivery hygiene | fixed-SHA diff, implementation ancestry, `git diff --check`, clean status | Implementation commit changes code outside the card; no whitespace/debug/stray-file findings |
+
+### 2026-08-12 — Implement
+
+Republished the strict restart proof on fresh `main` after migration 026 landed.
+The focused migration check passed, Review and Verify both completed one pipeline
+after persisted-state recreation, and crash-boundary outbox checks converged.
+The full 225-test Pilot suite, all Go tests, and `go build ./...` passed; the
+restart fixture was updated to complete through the current release broker path.
