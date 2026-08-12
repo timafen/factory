@@ -2,6 +2,13 @@
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 fail() { echo "FAIL: $*" >&2; exit 1; }
+helper_sha=$(/usr/bin/sha256sum -- "$SCRIPT_DIR/factory-gate-cgroup" | /usr/bin/awk '{print $1}')
+bootstrap_sha=$(sed -n 's/^EXPECTED=//p' "$SCRIPT_DIR/factory-cgroup-bootstrap.sh")
+installer_sha=$(sed -n 's/^GATE_HELPER_SHA256=//p' "$SCRIPT_DIR/install-factory-control.sh")
+release_sha=$(sed -n 's/^TRUSTED_GATE_CGROUP_SHA256=//p' "$SCRIPT_DIR/fx-factory-release")
+[ "$bootstrap_sha" = "$helper_sha" ] || fail 'bootstrap helper digest is stale'
+[ "$installer_sha" = "$helper_sha" ] || fail 'installer helper digest is stale'
+[ "$release_sha" = "$helper_sha" ] || fail 'release helper digest is stale'
 if [ "$(id -u)" != 0 ]; then
   echo 'SKIP: cgroup helper bootstrap requires a real root runner with writable cgroup v2'
   exit 0

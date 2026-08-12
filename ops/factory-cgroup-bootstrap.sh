@@ -9,7 +9,7 @@ INSTALLER=${FACTORY_CONTROL_INSTALLER:-/usr/local/libexec/factory-install-contro
 TARGET=${FACTORY_GATE_CGROUP_HELPER:-/usr/local/libexec/factory-gate-cgroup}
 BOOTSTRAP_TARGET=${FACTORY_CGROUP_BOOTSTRAP:-/usr/local/libexec/factory-cgroup-bootstrap}
 MARKER=${FACTORY_CGROUP_BOOTSTRAP_MARKER:-/var/lib/factory/cgroup-helper-bootstrap.done}
-EXPECTED=2d7f2b5fa4302bb3f0bb40c439421b1a444d6094d571a619bd0695f16b988da6
+EXPECTED=b241be54c609c4c172dab0796f4408081fa5e9d7f429eba694712ffd03f109ac
 
 fail() { echo "factory-cgroup-bootstrap: $*" >&2; exit 1; }
 [ "$(/usr/bin/id -u)" = 0 ] || fail 'root is required'
