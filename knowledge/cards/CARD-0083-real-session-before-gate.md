@@ -3,7 +3,7 @@
 ## HEAD
 
 Status: Implemented — awaiting review.
-Implementation commit: a818cec94e1f771ecf3a604635cf302694db53f5 — UI- и Go-gate входят через `/usr/bin/sudo -H -u factory` до `/usr/bin/setsid --wait`.
+Implementation commit: a51d2d7afb4737fa2ef765e41bbc276bdc02fb7e — UI- и Go-gate входят через `/usr/bin/sudo -H -u factory` до `/usr/bin/setsid --wait`.
 Branch: factory/e1d7b175-f3b-0400f866-21f.
 What changed: gate выполняются ограниченным пользователем `factory`; `$AS` больше не определяет их identity. Системный `setsid` остаётся закреплённым и передаёт код gate через kernel wait.
 Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; целевой fixture-suite проверяет `factory`, непустой `FACTORY_RELEASE_AS` и PATH-spoof `setsid`.
