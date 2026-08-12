@@ -1,14 +1,14 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: f451ee249b8d94593c1de8eb51195a373c34864c — rollback отменяет отложенный restart Пилота.
+Implementation commit: a1ce70b9add677c3430d2635e8f136f2a3079ac7 — сбой публикации ссылок возвращает выпуск и отменяет restart Пилота.
 
 ## HEAD
 
 - Status: Implemented — awaiting review.
 - Branch: `factory/1693d08b-4be-ca48b058-586`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: f451ee249b8d94593c1de8eb51195a373c34864c — rollback
-  отменяет созданный transient unit перезапуска Пилота.
+- Implementation commit: a1ce70b9add677c3430d2635e8f136f2a3079ac7 — сбой публикации
+  ссылок запускает rollback, который отменяет созданный transient unit.
 - What changed: имя unit сохраняется после успешного `systemd-run`; каждый путь
   rollback останавливает его перед восстановлением выпуска.
 - Evidence: `bash ops/test-fx-factory-release.sh` — PASS, включая сбой после
@@ -71,3 +71,10 @@ shell-тест проверил порядок, занятый и свободн
 роняет замену `previous` после `systemd-run`, подтверждает старые артефакты и
 моделирует момент срабатывания: восстановленный выпуск не получает restart.
 `bash ops/test-fx-factory-release.sh` и `git diff --check` прошли.
+
+### 2026-08-12 — Implement
+
+Ошибки публикации `previous` и `current` теперь явно вызывают rollback; это
+делает сценарий после успешного `systemd-run` достижимым и безопасным. Целевой
+тест прошёл: прежний выпуск восстанавливается, unit отменён и будущий restart
+не выполняется.
