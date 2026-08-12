@@ -2,17 +2,24 @@
 
 ## HEAD
 
-Status: Implemented — awaiting human merge.
-Branch: factory/6c7e734d-75e-4a53d483-d59.
-Implementation commit: d0ed8773a2376da50f9420f60ef559ef511584bb — Gate запускается из закрытой копии, извлечённой и проверенной по Git blob SHA.
-What changed: handshake/session cleanup перенесены на свежий `main`; `$AS` исключён из цепочки запуска и результата.
-What changed: gate-сценарий извлекается из commit object в каталог mode `0700`, сверяется через `git hash-object` и запускается оттуда.
-Threat model: замена рабочего `ops/test-fx-factory-release.sh` после checkout не может превратить настоящий отказ Gate в успех.
-Evidence: workspace gate заменён на `exit 0` → доверенная копия вернула release `5`, сборка/установка не начались; полный release shell-suite → PASS.
-Evidence: `go test -timeout 5m ./...`, `go build ./...`, UI build, `bash -n`, `git diff --check` → PASS; один UI timeout вне scope прошёл точечный retry (3/3).
-One next action: human merge into main.
+Status: Implemented — awaiting repeat review.
+Branch: factory/89714253-ca6-fca26d33-a87.
+Implementation commit: c35c4b1ab75bd4dd1b0874530c2a4dd0ed7115c3 — Gate извлекает и проверяет полный набор относительных зависимостей.
+What changed: защищённая копия содержит `ops/test-fx-factory-release.sh`, `fx-factory-release` и всё дерево `systemd/` из одного Git commit.
+What changed: каждый файл сверяется с Git blob SHA; каталог root-owned `0711`, поэтому Gate доступен для запуска, но не для изменения рабочим пользователем.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая запуск извлечённой копии после проверенного handshake.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и `git diff --check` → PASS.
+One next action: repeat human review of the trusted-copy Gate.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После замечания review защищённый каталог Gate дополнен соседним
+`fx-factory-release` и полным деревом `systemd/`, извлечёнными из тех же
+проверяемых Git blob. Новый интеграционный сценарий запускает именно извлечённый
+`ops/test-fx-factory-release.sh`, подтверждает наличие относительных ресурсов и
+отмечает выполнение только после handshake; shell-suite, Bash syntax и diff check прошли.
 
 ### 2026-08-11 — Implement
 
