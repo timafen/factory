@@ -64,8 +64,8 @@ FACTORY_JANITOR_LOG="$TMP/janitor.log" \
 FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
 FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
 FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
-FACTORY_JANITOR_ESCALATION_URL="mock://owner" \
-ESCALATION_TARGET="mock://owner" ESCALATION_LOG="$TMP/escalations.log" \
+ESCALATION_TARGET="https://ntfy.sh/timafen-a8523d037f21" \
+ESCALATION_LOG="$TMP/escalations.log" \
 bash "$ROOT/ops/factory-janitor.sh"
 
 python3 - "$TMP/request.json" <<'PY'
@@ -122,7 +122,8 @@ test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["hea
 for _ in 1 2; do
   PATH="$TMP/bin:$PATH" FACTORY_JANITOR_LOG="$TMP/janitor.log" \
   FACTORY_JANITOR_STATE="$TMP/state/heals.json" FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
-  FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" bash "$ROOT/ops/factory-janitor.sh"
+  FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
+  FACTORY_JANITOR_ESCALATION_URL= bash "$ROOT/ops/factory-janitor.sh"
 done
 test "$(grep -c 'Канал эскалации не настроен' "$TMP/janitor.log")" -eq 1
 test "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["healthy_retained_escalations"]))' "$TMP/state/heals.json")" -eq 3
@@ -152,6 +153,7 @@ grep -q 'не удалось подтвердить очистку retained work
 echo 'TestJanitorSelectsOfflineRetainedWorker: PASS'
 echo 'TestJanitorSkipsOnlineUnhealthyWorker: PASS'
 echo 'TestJanitorSkipsOnlineHealthyRetainedWorker: PASS'
+echo 'TestJanitorUsesDefaultEscalationChannel: PASS'
 echo 'TestJanitorEscalatesHealthyRetainedSnapshotOnce: PASS'
 echo 'TestJanitorRetriesFailedHealthyRetainedEscalation: PASS'
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
