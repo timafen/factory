@@ -4,15 +4,17 @@ Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-�
 
 ## HEAD
 
-- Status: Implemented — awaiting review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/99fcf773-995-eff220e2-9f2`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
 - Implementation commit: c695193793e93b9576602882918d0e206b859361 — restart
   Пилота в generation-модели защищён общим lock.
 - What changed: обновлённый brain планирует restart после публикации
   `release-info`; неизменённый brain его не ставит.
-- Evidence: `bash ops/test-fx-factory-release.sh` и `go test -p 1 ./... -count=1` — PASS.
-- Next action: review изменения и merge.
+- Evidence: `bash ops/test-fx-factory-release.sh` — PASS в чистом Git-клоне;
+  полный набор подтвердил целевые проверки, а смежные UI и worker-сценарии
+  исчерпали собственные таймауты вне области изменения.
+- Next action: человек проверяет риски смежных таймаутов и вливает изменения.
 
 ## LOG
 
@@ -62,3 +64,13 @@ Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-�
 shell-тест проверил порядок, занятый и свободный lock, отсутствие restart при
 неизменённом brain и rollback при ошибке `systemd-run`; последовательный
 `go test -p 1 ./... -count=1` также прошёл.
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Restart ставится только после публикации metadata | `bash ops/test-fx-factory-release.sh` | PASS: зафиксирован порядок `release-info ready` → `systemd-run`. |
+| Старый restart не прерывает новый выпуск | shell-фикстура с занятым и свободным общим lock | PASS: при занятом lock `systemctl` не вызван, после освобождения вызван ровно раз. |
+| Неизменённый brain не создаёт restart | тот же shell-сценарий | PASS: transient unit не поставлен. |
+| Ошибка постановки restart откатывает metadata | сценарий `systemd-run-fail` | PASS: прежний info восстановлен или новый удалён. |
+| Смежные проверки | полный локальный набор CI | `vet`, `govulncheck`, `staticcheck`, worker race — PASS; UI (8 тестов) и общий worker-набор исчерпали собственные таймауты вне diff. |
