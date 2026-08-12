@@ -2,8 +2,8 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/b77bd6b3-1cc-c549126f-cd6`.
+- Status: Verified PASS — implementation already absorbed into `main`.
+- Branch: `factory/690ca0f1-262-8d692b44-b7b`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
   migration 026 и гарантированная очистка reconciliation journal.
 - What changed: registration сохраняет старый `active_count` до server-time audit;
@@ -12,8 +12,8 @@
   две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
 - Evidence: `go test -timeout 20m ./... && go build ./...` → PASS (2:45.09);
   focused `go test -race -timeout 10m ... -count=1` → PASS (29.34s, 6 tests);
-  fresh `origin/main...HEAD` → ровно 11 файлов, clean tree перед verify update.
-- One next action: выполнить human merge в `main`.
+  `base...candidate` → diff пуст, реализация уже в `main`.
+- One next action: закрыть задачу без слияния устаревшей ветки.
 
 ## LOG
 
@@ -58,3 +58,9 @@ maintenance paths регистрации и `SweepExpired`; idle regression по
 что старое окно удаляется без lease, а актуальная метрика остаётся точной.
 Проверки: focused idle-retention, integration с `-timeout=90s`, `go test ./...`
 и `git diff --check` — PASS.
+
+### 2026-08-12 — Implement
+
+Проверено, что реализация гарантированной очистки reconciliation journal и чистой
+поставки слотов уже поглощена актуальным `main`; старую менее полную ветку не
+восстанавливаем. `go test ./...` и `go build ./...` прошли успешно.
