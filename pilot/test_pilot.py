@@ -1680,6 +1680,57 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         diagnose.assert_not_called()
 
+    def test_live_sweep_diagnoses_second_same_title_work_at_threshold(self):
+        first = dict(
+            self.task,
+            id="first-current",
+            work_id="first-work",
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        second = dict(
+            first,
+            id="second-current",
+            work_id="second-work",
+        )
+        second_history = [dict(
+            second,
+            id=f"second-round-{round_no}",
+            state="succeeded",
+        ) for round_no in range(1, 5)]
+        tasks = [first, second] + second_history
+        conf = dict(self.conf, deep_diag_rounds=5)
+        verdict = {"причина": "цикл", "решение": "починить",
+                   "нужен_владелец": False}
+
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0) as rescues, \
+                mock.patch.object(
+                    pilot, "deep_diagnose", return_value=verdict) as diagnose:
+            pilot.diag_sweep(conf, tasks)
+
+        diagnose.assert_called_once_with(
+            conf, "Починить отчёт", "Implement + Test", 5, tasks,
+            repair_task=second)
+        self.assertEqual(
+            [call.args[0] for call in rescues.call_args_list],
+            ["first-work", "second-work"])
+
+    def test_deep_diagnosis_marker_uses_modern_work_id(self):
+        running = dict(self.task, work_id="stable-work-id")
+        answer = '{"причина":"цикл","решение":"починить",' \
+                 '"нужен_владелец":false}'
+        with mock.patch.object(pilot, "cap_rescues", return_value=0) as rescues, \
+                mock.patch.object(pilot, "note_cap_rescue") as note, \
+                mock.patch.object(pilot, "brain", return_value=(answer, "brain")), \
+                mock.patch.object(pilot, "begin_diag_repair", return_value=True):
+            pilot.deep_diagnose(
+                self.conf, "Починить отчёт", "Implement + Test", 5,
+                [running], repair_task=running)
+
+        rescues.assert_called_once_with("stable-work-id", "DIAG")
+        note.assert_called_once_with("stable-work-id", "DIAG")
+
     def test_terminal_route_does_not_repeat_spent_diagnosis(self):
         self.repairs["Починить отчёт"] = {"status": "resumed"}
         with mock.patch.object(pilot, "cap_rescues", return_value=1), \

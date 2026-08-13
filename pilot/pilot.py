@@ -3551,7 +3551,8 @@ def recent_stage_text(tasks, base, limit=3):
 def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     """Зовём сильную модель разобраться и говорим владельцу по-человечески.
     Один разбор на работу — дальше конвейер действует по найденному решению."""
-    diag_already_counted = cap_rescues(base, "DIAG") >= 1
+    diag_key = task_work_id(repair_task) if repair_task is not None else base
+    diag_already_counted = cap_rescues(diag_key, "DIAG") >= 1
     # Repair tasks used to bypass this guard. As a result, every later stage
     # return paid for another senior diagnosis even though begin_diag_repair()
     # would refuse a second repair for the same work. The only safe exception
@@ -3563,7 +3564,7 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
         if repair_task is None or base in repairs:
             return None
     if not diag_already_counted:
-        note_cap_rescue(base, "DIAG")
+        note_cap_rescue(diag_key, "DIAG")
     tail = recent_stage_text(tasks, base)
     try:
         text, eng = brain(conf, DIAG_PROMPT.format(n=rounds, base=base, tail=tail),
@@ -3611,15 +3612,16 @@ def diag_sweep(conf, tasks):
         if not m:
             continue
         base = m.group(2).strip()
-        if base in seen:
+        work_key = task_work_id(t)
+        if work_key in seen:
             continue
-        seen.add(base)
+        seen.add(work_key)
         if is_stopped(conf, base):
             continue
         # The live sweep is an early warning, not a minute-by-minute brain
         # loop. A terminal stage can still invoke deep_diagnose later through
         # route_question, where a safe repair has enough evidence to start.
-        if cap_rescues(base, "DIAG") >= 1:
+        if cap_rescues(work_key, "DIAG") >= 1:
             continue
         # Pass the live task, not only its owner-facing title. New pipeline
         # rows have a durable work_id; comparing that ID with ``base`` made
