@@ -2,14 +2,28 @@
 
 ## HEAD
 
-Status: Implemented — ready for verification.
-Branch: `factory/6653f419-f12-0d9287e5-d98`.
+Status: Verified PASS — awaiting human merge.
+Branch: `factory/b6359207-b4b-ddf92d21-b58`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot удалены неподдерживаемые rollout-поля, не поддерживаемые схемой сервера.
 What changed: `pilot/config.example.json` больше не передаёт метаданные rollout Review/Verify как runtime-настройки Pilot.
-Evidence: `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` — PASS.
-Next action: проверить поставку относительно свежего `main`.
+Evidence: pinned `base_sha...candidate_sha` is non-empty and the full Go suite plus the targeted strict-schema test pass; `just check` reaches only an existing out-of-scope `SA4000`.
+Next action: human merge after reviewing the verification findings.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Авторитетная свежая база и кандидат | `git ls-remote --symref origin HEAD`; isolated bare fetch `refs/heads/main` и `factory/6653f419-f12-0d9287e5-d98`; pinned `base_sha...candidate_sha` | PASS: `base_sha=2cacc50ec06bacb069c53179f1cdb96871aed84b`, `candidate_sha=0c6db7e00a495177c23857fcf35dcaf417f1a92d`; поставка непустая и содержит только карточку относительно базы. |
+| Неподдерживаемые поля удалены из примера Pilot | JSON-проверка `pilot/config.example.json` | PASS: отсутствуют `rollout`, `review_revision`, `verify_revision`. |
+| Серверная строгая схема принимает конфигурацию | `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS. |
+| Полный Go-набор и соседние регрессии | `go test ./...` | PASS: все пакеты завершились успешно. |
+| Проектная проверка перед слиянием | `just check` | НАХОДКА: format, vet и govulncheck прошли; staticcheck остановился на существующем внеобластном `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
+| Web-проверки | `cd web && npm test -- --runInBand`; `npx tsc -p tsconfig.app.json --noEmit` | НАХОДКА: не выполнены из-за отсутствующих зависимостей (`vitest` и локальный TypeScript); web-файлы не входят в область изменения. |
+| Чистота дерева и валидность implementation commit | `git status --short`; предок `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` | PASS: дерево чистое до обновления карточки; implementation commit существует, является предком кандидата и меняет код вне `knowledge/cards/`. |
+
+Находка: live rollout не выполнялся — изменение касается примера конфигурации и не создаёт runtime-ревизии стенда. Риск слияния ограничен внеобластным staticcheck и отсутствующими web-зависимостями.
 
 ### 2026-08-12 — Implement: повторная поставка конфигурации Pilot
 
