@@ -1,12 +1,12 @@
 # CARD-0098: находки патрулей в Automations
 
-Implementation commit: 232c46a11d83b75512b70f9a69d3f923602b1267 — Tasks API сообщает устойчивый признак patrol, а Work фильтрует кешированную историю
+Implementation commit: b5dd4d62827995f2f65c6f544d569b4b28df99f0 — Tasks API сообщает устойчивый признак patrol, а Work фильтрует кешированную историю
 
 ## HEAD
 
 - Status: Implemented, awaiting Review
 - Branch: `factory/00762e4a-125-d3e36cea-038`
-- Implementation commit: `232c46a11d83b75512b70f9a69d3f923602b1267`
+- Implementation commit: `b5dd4d62827995f2f65c6f544d569b4b28df99f0`
 - What changed: Tasks API вычисляет `is_patrol` из durable schedule Automation; Work отбрасывает его из свежей и кешированной истории. DOM-типы e2e восстановили сборку.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit` → PASS; `npm run build` → PASS; целевой Playwright schedule Automation → 1/1 PASS.
 - Next action: провести Review поставки.
