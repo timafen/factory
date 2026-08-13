@@ -1,17 +1,19 @@
 # CARD-0097 — Патруль маршрутизируется на дешёвую модель
 
-Implementation commit: 2687f006d0ac8c6e6376c75afce4a1c4616a1283 — текущий кодовый слепок для Specification; продуктовая реализация запланирована следующим этапом.
+Implementation commit: 0d3eea298699db44178326a42d2df55f88010064 — patrol сохраняет и передаёт точный override `gpt-5.6-terra` в Codex.
 
 ## HEAD
 
-- Status: Specification — awaiting Implement + Test.
-- Branch: `factory/4d76c830-ed6-d9e0b4a3-596`.
-- Specification: `knowledge/specs/pipeline-patrol-cheap-model.md`.
-- Owner contract: hourly patrol uses `gpt-5.6-terra`; accept only with at
-  least 90% useful-finding retention and no more than 5 percentage points of
-  false-positive increase against `gpt-5.6-sol` over 24 hours.
-- Evidence basis: fresh remote `main` read and current Automation, scheduler,
-  protocol, worker supervisor and Pilot implementation inspected.
+- Status: Implemented — awaiting production 24-hour pair-run gate.
+- Branch: `factory/aa5fd162-32d-fa5313dc-d02`.
+- Implementation commit: `0d3eea298699db44178326a42d2df55f88010064`.
+- What changed: the provisioned hourly patrol snapshots `gpt-5.6-terra` into
+  its occurrence and task; the worker sends it as `codex exec -m`.
+- Safety: unknown overrides are rejected before execution; other tasks retain
+  no override.
+- Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol|Model)'`,
+  `go test ./internal/worker -run 'Test.*(Model|Prompt|Codex)'`, and `go test ./...` pass.
+- Next action: implement and run the 24-hour paired evaluator before enabling a production switch.
 
 ## LOG
 
@@ -28,3 +30,12 @@ same-input 24-hour terra/sol pair-run and fail-closed acceptance decision.
 Card number/path check: `CARD-0097-pipeline-patrol-cheap-model.md` is absent
 from fresh `origin/main`; the published refs were queried for the supplied
 previous branch and no matching branch was available.
+
+### 2026-08-12 — Implement
+
+The durable automation, occurrence and task snapshots now carry an allow-listed
+Codex model ID. Provisioning writes `gpt-5.6-terra` for the pipeline patrol;
+dispatch and the worker supervisor preserve it through to the Codex command.
+Schedule/patrol and worker target tests passed, followed by `go test ./...`.
+The specification's 24-hour evaluator and production acceptance decision remain
+the next stage; no model switch is claimed from simulated tests.
