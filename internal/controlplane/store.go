@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,7 +69,17 @@ type Store struct {
 	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
 	sweepEvery            time.Duration
+	hostMaxConcurrent     int
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
+}
+
+// hostSlotLimit keeps direct Store construction safe for migration and focused
+// tests, while Open records the same limit explicitly for production stores.
+func (s *Store) hostSlotLimit() int {
+	if s.hostMaxConcurrent > 0 {
+		return s.hostMaxConcurrent
+	}
+	return max(1, runtime.NumCPU())
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -127,7 +138,7 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	attachmentRoot := "/opt/factory-data/attachments"
-	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second}
+	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second, hostMaxConcurrent: runtime.NumCPU()}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create attachment directory: %w", err)

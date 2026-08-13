@@ -76,6 +76,8 @@ One worker is a pool for its configured runtime. Each slot runs an independent
 Codex or Claude Code session with its own worktree and process group. Preparing
 an attempt also consumes a slot. Choose a lower value when local CPU, memory, or
 provider limits require it.
+The control plane also limits all local workers together to the machine's
+logical CPU count, so increasing separate worker limits cannot overbook the host.
 
 Factory migrates existing SQLite databases to the expanded worker capacity
 range when the control plane starts.
