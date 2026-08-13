@@ -1,27 +1,32 @@
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
-Implementation commit: 73f4edce272cb113607540412425d842158e2b81 — в свежем `origin/main` продуктовая реализация CARD-0123 отсутствует; этот коммит является проверенной точкой аудита, а не подтверждением поставки.
+Implementation commit: b3bd0f556455f7e2559aede725787c0fdf703547 — экран Automation показывает единый снимок пользовательских и внутренних автоматик с понятным состоянием.
 
-## Статус
+## HEAD
 
-- Specification: подготовлена спецификация `knowledge/specs/automation-live-status.md`.
-- Review/Verify: BLOCKED — заявленные ветки реализации
-  `factory/b6b5d71f-34b5-5db9b6c5-9a2` и `factory/802b3747-f95-0a658566-120`
-  отсутствуют в `origin`, поэтому перенос и штатное squash-слияние проверить нельзя.
-- Проверено в свежем `origin/main`: `/api/v1/automations` и `AutomationsView`
-  покрывают пользовательские записи; внутренние pilot/brain/release/deploy/janitor
-  в единой выдаче не подтверждены. Текущие UI-статусы английские и не содержат
-  требуемой общей красной индикации просрочки.
+- Статус: Implemented — ожидает Review.
+- Ветка: `factory/688cc94b-302-69ba2e6e-507`.
+- Implementation commit: `b3bd0f556455f7e2559aede725787c0fdf703547` — отдельный
+  `/api/v1/automation-status` объединяет пользовательские Automation, pilot,
+  brain, release broker, deploy и janitor; UI опрашивает снимок каждые 5 секунд.
+- Evidence: `go test ./internal/controlplane -run 'TestAutomationStatusIncludesFactoryServicesAndUnavailableData|Test.*Automation'` — PASS;
+  `npm --prefix web run test -- --run App.test.tsx`, `typecheck` и `build` — PASS.
+- Следующее действие: Review проверить полноту источников и правила устаревания.
 
-## Решение для продолжения
+## LOG
 
-Использовать спецификацию как контракт следующей реализации. Перед Merge заново
-предоставить кандидатную ветку или полный implementation commit, затем проверить
-полноту пяти внутренних категорий, объяснение последнего результата, русские
-«живая / стоит / сломана», «нет данных» и красную просрочку целевыми тестами и
-живым экраном `/automations`.
+### 2026-08-13 — Specification
 
-## Card handoff
+Подготовлена спецификация `knowledge/specs/automation-live-status.md`. На свежем
+`origin/main` `/api/v1/automations` и `AutomationsView` покрывали только
+пользовательские записи; внутренние pilot/brain/release/deploy/janitor в единой
+выдаче отсутствовали, а статусы и общая индикация просрочки не соответствовали
+контракту.
 
-Файлы реализации перечислены в спецификации; эта карточка не утверждает PASS и не
-содержит продуктовых изменений.
+### 2026-08-13 — Implement
+
+Добавлен read-only снимок `GET /api/v1/automation-status`: он содержит
+пользовательские Automation и все пять внутренних категорий, не маскирует
+нехватку журналов и передаёт русские состояния, объяснение результата и stale.
+Экран `/automations` показывает снимок и опрашивает его без reload. Целевой Go
+тест, App-тест, typecheck и production build прошли.
