@@ -6,7 +6,7 @@ Implementation commit: 1e4f7316513c7c8b329dfe01c8c43a41e5ee38cc — явный C
 
 Status: Verified PASS — awaiting human merge.
 
-Branch: `factory/aaac33cd-686-712a01d8-21f`.
+Branch: `factory/5239408d-d0e-9c117ab4-e0d`.
 
 Implementation commit: `1e4f7316513c7c8b329dfe01c8c43a41e5ee38cc`.
 
@@ -17,7 +17,7 @@ What changed: `factory-server -database SOURCE -backup DEST` создаёт
 Evidence: полный `go test -count=1 ./...` — PASS; полный `go build ./...`
 — PASS; целевая subprocess-проверка четырёх форм CLI без домашней папки — PASS.
 
-One next action: влить ветку в `main`.
+One next action: провести Review опубликованной ветки.
 
 ## LOG
 
@@ -40,3 +40,9 @@ One next action: влить ветку в `main`.
 | Принимаются четыре формы флагов | Та же subprocess-проверка | PASS: `-database VALUE -backup VALUE`, `--database VALUE --backup VALUE`, а также обе формы с `=`. |
 | Снимок автономен, источник не меняется | Та же subprocess-проверка | PASS: для снимка есть оба регулярных файла без WAL/SHM; байты исходной базы и маркера неизменны. |
 | Нет регрессий проекта | `go test -count=1 ./...`; `go build ./...` | PASS: полный набор тестов и сборка завершились успешно. |
+
+### 2026-08-13 — Implement
+
+- Реализация и тесты перенесены в ветку поставки после подтверждения владельца.
+- Повторно пройдены целевые subprocess-проверки, полный `go test -count=1 ./...`
+  и `go build ./...`: PASS.
