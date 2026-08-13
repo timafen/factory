@@ -2,14 +2,25 @@
 
 ## HEAD
 
-Status: Review approved — awaiting squash merge and Verify.
+Status: Verified PASS — awaiting human merge.
 Branch: `factory/597fbc07-bb7-c72e1c7a-5db`.
 Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
-What changed: Review фиксирует свежие SHA remote default branch и кандидата; продвижение main отражается в контексте Review, а не как инфраструктурная блокировка.
-Evidence: Review ветки `factory/48f9f1f9-77a-927751d6-b57` на `d0317403ae3b5765b9c0c26ab1ad74dad2fec391` — APPROVE, замечаний нет; `python3 -m unittest pilot.test_pilot -q` — PASS, 235 tests OK (13 skipped).
-Next action: выполнить squash-merge в `main` и Verify.
+What changed: Review и Verify фиксируют свежие SHA remote default branch и кандидата; продвижение main не превращается в ложную инфраструктурную блокировку.
+Evidence: pinned isolated fetch дал `base_sha=b448350413748b951462b5db8e999b59d7f8e278` и `candidate_sha=2636552fa3ca57636a4d329b977b4d531a77327e`; `python3 -m unittest pilot.test_pilot -q` — 235 tests OK (13 skipped). Полный `just check` остановлен вне области на существующем `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`.
+Next action: выполнить human merge в `main`.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Авторитетная свежая база и кандидат | `git ls-remote --symref origin HEAD`; isolated bare fetch только `refs/heads/main` и `refs/heads/factory/597fbc07-bb7-c72e1c7a-5db` | PASS: `base_sha=b448350413748b951462b5db8e999b59d7f8e278`, `candidate_sha=2636552fa3ca57636a4d329b977b4d531a77327e`; pinned `base_sha...candidate_sha` содержит только эту карточку. |
+| Свежая проверка без ложной блокировки | `python3 -m unittest pilot.test_pilot -q` | PASS: 235 тестов, 13 пропущено; проверки pinned remote, продвижения базы и инфраструктурного `BLOCKED` прошли. |
+| Полный набор перед слиянием | `just check` из чистого дерева | НАХОДКА: `format-check`, `go vet` и `govulncheck` прошли; `staticcheck` остановил набор на существующем внеобластном `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
+| Валидность карточки и чистота | проверка предка `ff076ae565626fec8a3150414307e2c66d231b11`, `git diff --check`, `git status --short` | PASS: implementation commit существует, является предком кандидата и меняет код вне `knowledge/cards/`; пробельных ошибок и stray-файлов нет. |
+
+Находка: полный `just check` нельзя считать зелёным из-за внеобластного `SA4000`; целевая проверка Pilot полностью зелёная. Live rollout не выполнялся: изменение касается проверки и карточки, runtime-конфигурация и ревизии стенда не менялись.
 
 ### 2026-08-12 — Review
 
