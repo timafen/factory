@@ -19,8 +19,17 @@ WORKER_BIN="${FACTORY_WORKER_BIN:-/opt/factory-data/bin/factory-worker}"
 REL="${FACTORY_RELEASE_DIR:-/opt/factory-data/releases/factory}"
 TRUSTED_GATE_PARENT="${FACTORY_RELEASE_TRUSTED_GATE_DIR:-/run/factory-release-gate}"
 INFO="${FACTORY_RELEASE_INFO:-/opt/factory-data/releases/factory-current.json}"
-AS="${FACTORY_RELEASE_AS-sudo -H -u factory}"
 OWNER="${FACTORY_RELEASE_OWNER-factory:factory}"
+# Смена пользователя — без sudo: выпуск запускает root (в т.ч. из песочницы
+# посредника с NoNewPrivileges, где sudo невозможен), а root понижается
+# напрямую через setpriv. HOME рабочего пользователя задаётся явно.
+if [ "${FACTORY_RELEASE_AS+x}" = x ]; then
+  AS="$FACTORY_RELEASE_AS"
+else
+  release_user="${OWNER%%:*}"
+  release_home=$(getent passwd "$release_user" | cut -d: -f6)
+  AS="setpriv --reuid $release_user --regid $release_user --init-groups /usr/bin/env HOME=${release_home:-/tmp}"
+fi
 SERVER_SERVICE="${FACTORY_SERVER_SERVICE:-factory-server.service}"
 WORKER_SERVICE="${FACTORY_WORKER_SERVICE:-factory-worker.service}"
 WORKER_SERVICES="${FACTORY_WORKER_SERVICES:-$WORKER_SERVICE}"
