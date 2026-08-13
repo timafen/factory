@@ -4,13 +4,21 @@
 
 Status: READY FOR REVIEW: первая установка на чистом хосте оформлена как ручное действие root; Gate остаётся закрыт до живого bootstrap marker.
 Branch: factory/b7045add-70d-5f739684-e56.
-Implementation commit: 3d078dd0c8532940c40ab4d4581837cda24cc385 — описана безопасная первая установка и добавлена регрессия чистого root bootstrap без fx.
+Implementation commit: e5b9e546f004efdf852b06f60ca876d5df3c72ae — cgroup Gate сохранён при перебазировке на усиленный trusted handshake.
 What changed: `ops/README.md` требует root checkout, ручную сверку detached `origin/main` и запуск install-скрипта до первого `fx`.
 What changed: root-fixture installer-теста живёт в защищённом `/run`, начинает без helper и доказывает, что установка не запускает `fx`.
 Evidence: `bash -n ops/install-factory-control.sh ops/test-install-factory-control.sh` и `bash ops/test-install-factory-control.sh` → PASS.
 One next action: root на целевом хосте выполняет процедуру из `ops/README.md`, затем запускает живой `fx factory cgroup-helper-bootstrap` для marker.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После перебазировки на свежий `main` cgroup attach перенесён внутрь trusted
+handshake до ack, поэтому команда Gate не стартует до помещения в cgroup.
+Fixture передаёт helper всем launchers и проверяет его удаление после Gate.
+`bash ops/test-fx-factory-release.sh`, installer, helper и bootstrap shell-тесты
+прошли; root-only живой probe на worker недоступен и остаётся следующим действием.
 
 ### 2026-08-12 — Implement
 
