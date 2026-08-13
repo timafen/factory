@@ -4,15 +4,24 @@ Implementation commit: 15ec2bc41c3e02550e74278786932fe95c9df109 — регрес
 
 ## HEAD
 
-Status: Verified PASS — merged into main.
-Branch: main.
+Status: Verified PASS — автоматически передаётся в main и staging.
+Branch: factory/500d1efb-715-3f528c50-683.
 Implementation commit: 15ec2bc41c3e02550e74278786932fe95c9df109 — регрессионная проверка закрепляет автоматическое слияние после успешной Verify.
 What changed: проверка Gate за форкающим launcher уже включена в `main` коммитом `f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2`.
 What changed: регрессионный тест запрещает Verify снова сообщать владельцу об ожидании ручного merge.
-Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS.
-One next action: сохранять автоматическую передачу Verify в main и staging при изменениях pipeline.
+Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `just check` остановился только на известном `SA4000` в `internal/worker/attempt_lifecycle_test.go:31` вне области поставки.
+One next action: оркестратору автоматически передать успешно проверенную ветку в main и staging.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Verify не ждёт ручного merge | `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` | PASS: тест фиксирует автоматическое squash-слияние в `main`, deploy в staging и ручное решение только для production. |
+| Подсказка соответствует контракту | `grep` в `pilot/pilot.py` | PASS: текст направляет успешную Verify в `main` и staging автоматически. |
+| Полный набор проекта | `FACTORY_DATA_HOME=$(mktemp -d) just check` | НАХОДКА вне области: после PASS `go vet` и `govulncheck` остановлен `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`. |
+| Чистота поставки | `git diff --check <base>...<candidate>` | PASS: ошибок пробелов нет; затронуты только карточка и целевой тест. |
 
 ### 2026-08-13 — Implement
 
