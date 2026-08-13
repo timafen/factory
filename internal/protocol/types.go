@@ -648,9 +648,11 @@ type Automation struct {
 }
 
 type AutomationTaskSummary struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	State string `json:"state"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	State       string `json:"state"`
+	RetryCount  int    `json:"retry_count,omitempty"`
+	RetryStatus string `json:"retry_status,omitempty"`
 }
 
 type AutomationOccurrence struct {

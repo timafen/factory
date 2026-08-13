@@ -129,6 +129,92 @@ func createScheduleAutomationFixture(
 	return store, detail
 }
 
+type scheduleRetryIdentity struct {
+	automationID, occurrenceID, taskID, taskIDSnapshot, taskRequestKey, executionID string
+	occurrences, scheduleOccurrences, tasks, executions                             int
+}
+
+func captureScheduleRetryIdentity(t *testing.T, store *Store, automationID string) scheduleRetryIdentity {
+	t.Helper()
+	var value scheduleRetryIdentity
+	if err := store.db.QueryRow(`
+		SELECT occurrence.automation_id, occurrence.id, occurrence.task_id,
+		       occurrence.task_id_snapshot, task.request_key, execution.id
+		FROM automation_occurrences occurrence
+		JOIN tasks task ON task.id = occurrence.task_id
+		JOIN executions execution ON execution.task_id = task.id
+		WHERE occurrence.automation_id = ?
+	`, automationID).Scan(
+		&value.automationID, &value.occurrenceID, &value.taskID,
+		&value.taskIDSnapshot, &value.taskRequestKey, &value.executionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for table, destination := range map[string]*int{
+		"automation_occurrences":          &value.occurrences,
+		"automation_schedule_occurrences": &value.scheduleOccurrences,
+		"tasks":                           &value.tasks,
+		"executions":                      &value.executions,
+	} {
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(destination); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return value
+}
+
+func captureRetryState(t *testing.T, store *Store, executionID string) (state, diagnostic string, retries, attempts int) {
+	t.Helper()
+	if err := store.db.QueryRow(`
+		SELECT execution.state, occurrence.diagnostic, execution.retry_count,
+		       (SELECT COUNT(*) FROM attempts WHERE execution_id = execution.id)
+		FROM executions execution
+		JOIN automation_occurrences occurrence ON occurrence.task_id = execution.task_id
+		WHERE execution.id = ?
+	`, executionID).Scan(&state, &diagnostic, &retries, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	return state, diagnostic, retries, attempts
+}
+
+func claimScheduleOccurrence(
+	t *testing.T,
+	store *Store,
+	detail protocol.AutomationDetail,
+	now *time.Time,
+	kind string,
+	requestID string,
+	token int,
+) *protocol.Claim {
+	t.Helper()
+	enabled := enableAutomation(t, store, detail.Automation.ID)
+	if kind == "scheduled" {
+		*now = *enabled.Automation.NextDueAt
+		if _, err := store.RegisterWorker(context.Background(), "schedule-worker", protocol.WorkerRegistration{
+			Name: "schedule-worker", WorkerVersion: "test", RuntimeVersion: "test",
+			Capacity: 1, Health: "healthy", AcceptsManagedRepositories: true,
+			ManagedRepositoryIDs: []string{detail.Automation.RepositoryID},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.processDueSchedules(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if _, err := store.RunAutomationNow(context.Background(), detail.Automation.ID, protocol.RunAutomationRequest{RequestKey: requestID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: requestID, LeaseToken: fmt.Sprintf("%064x", token)})
+	if err != nil || claim == nil {
+		t.Fatalf("claim %s occurrence = %#v, error %v", kind, claim, err)
+	}
+	return claim
+}
+
 func TestSchedulePreviewEnableDueDispatchAndIdempotencyUseFakeClock(t *testing.T) {
 	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC) // 08:00 BST.
 	store, detail := createScheduleAutomationFixture(t, &now, true)
@@ -367,6 +453,366 @@ func TestScheduleRunNowConcurrentReplayDisableAndCursorIsolation(t *testing.T) {
 	if scheduledCursorCount != 1 || due.IsZero() {
 		t.Fatalf("Run now identity count = %d, original due = %s", scheduledCursorCount, due)
 	}
+}
+
+func TestScheduleAutomationFailedExecutionRetriesOnceAndIsIdempotent(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, true)
+	enableAutomation(t, store, detail.Automation.ID)
+	if _, err := store.RunAutomationNow(context.Background(), detail.Automation.ID, protocol.RunAutomationRequest{RequestKey: "retry-once"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || len(before.Occurrences) != 1 || before.Occurrences[0].Task == nil {
+		t.Fatalf("dispatched run = %#v, error %v", before.Occurrences, err)
+	}
+	taskID := before.Occurrences[0].Task.ID
+	claim, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "retry-first", LeaseToken: fmt.Sprintf("%064x", 1)})
+	if err != nil || claim == nil {
+		t.Fatalf("first claim = %#v, error %v", claim, err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 1), State: "failed", Error: "temporary"}); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var retries, attempts int
+	if err := store.db.QueryRow(`SELECT state, retry_count FROM executions WHERE id = ?`, claim.Execution.ID).Scan(&state, &retries); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE execution_id = ?`, claim.Execution.ID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" || retries != 1 || attempts != 1 {
+		t.Fatalf("first failure = state %q retries %d attempts %d", state, retries, attempts)
+	}
+	queued, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || queued.Occurrences[0].Task == nil || queued.Occurrences[0].Task.RetryStatus != "queued" {
+		t.Fatalf("queued retry projection = %#v, error %v", queued.Occurrences, err)
+	}
+	second, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "retry-second", LeaseToken: fmt.Sprintf("%064x", 2)})
+	if err != nil || second == nil || second.Execution.ID != claim.Execution.ID || second.Task.ID != taskID || second.Attempt.AttemptNumber != 2 {
+		t.Fatalf("second claim = %#v, error %v", second, err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), second.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 2), State: "failed", Error: "permanent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT state, retry_count FROM executions WHERE id = ?`, claim.Execution.ID).Scan(&state, &retries); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || retries != 1 {
+		t.Fatalf("second failure = state %q retries %d", state, retries)
+	}
+	final, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || final.Occurrences[0].Task == nil || final.Occurrences[0].Task.RetryStatus != "final_failed" {
+		t.Fatalf("final retry projection = %#v, error %v", final.Occurrences, err)
+	}
+}
+
+func TestScheduleAutomationRetryStaysWithOriginalWorker(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, true)
+	first := claimScheduleOccurrence(t, store, detail, &now, "run_now", "affinity-first", 401)
+	if _, err := store.RegisterWorker(context.Background(), "compatible-worker", protocol.WorkerRegistration{
+		Name: "compatible-worker", WorkerVersion: "test", RuntimeVersion: "test",
+		Capacity: 1, Health: "healthy", AcceptsManagedRepositories: true,
+		ManagedRepositoryIDs: []string{detail.Automation.RepositoryID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), first.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 401), State: "failed", Error: "temporary"}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.Claim(context.Background(), "compatible-worker", protocol.ClaimRequest{RequestID: "affinity-other", LeaseToken: fmt.Sprintf("%064x", 402)})
+	if err != nil || other != nil {
+		t.Fatalf("compatible worker claimed automatic retry = %#v, error %v", other, err)
+	}
+	retry, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "affinity-original", LeaseToken: fmt.Sprintf("%064x", 403)})
+	if err != nil || retry == nil || retry.Execution.ID != first.Execution.ID || retry.Execution.AssignedWorkerID != "schedule-worker" {
+		t.Fatalf("original worker retry claim = %#v, error %v", retry, err)
+	}
+}
+
+func TestAutomationRetryStatusRequiresAutomaticRetryDiagnostic(t *testing.T) {
+	t.Run("manual GitHub retry has no automatic retry status", func(t *testing.T) {
+		store, detail := createAutomationFixture(t, true)
+		enableAutomation(t, store, detail.Automation.ID)
+		evaluation := reserveAutomation(t, store)
+		if err := store.completeAutomationSuccess(context.Background(), evaluation, []protocol.GitHubIssueMatch{testIssue}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := store.Claim(context.Background(), "automation-worker", protocol.ClaimRequest{RequestID: "github-manual-retry", LeaseToken: fmt.Sprintf("%064x", 410)})
+		if err != nil || claim == nil {
+			t.Fatalf("GitHub claim = %#v, error %v", claim, err)
+		}
+		if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 410), State: "failed"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.RetryExecution(context.Background(), claim.Execution.ID); err != nil {
+			t.Fatal(err)
+		}
+		current, err := store.Automation(context.Background(), detail.Automation.ID)
+		if err != nil || current.Occurrences[0].Task == nil || current.Occurrences[0].Task.RetryCount != 1 || current.Occurrences[0].Task.RetryStatus != "" {
+			t.Fatalf("manual GitHub retry projection = %#v, error %v", current.Occurrences, err)
+		}
+	})
+
+	t.Run("cancelled automatic retry remains cancelled", func(t *testing.T) {
+		now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+		store, detail := createScheduleAutomationFixture(t, &now, true)
+		first := claimScheduleOccurrence(t, store, detail, &now, "run_now", "cancel-retry", 420)
+		if _, err := store.CompleteAttempt(context.Background(), first.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 420), State: "failed"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CancelTask(context.Background(), first.Task.ID); err != nil {
+			t.Fatal(err)
+		}
+		current, err := store.Automation(context.Background(), detail.Automation.ID)
+		if err != nil || current.Occurrences[0].Task == nil || current.Occurrences[0].Task.RetryStatus != "cancelled" {
+			t.Fatalf("cancelled automatic retry projection = %#v, error %v", current.Occurrences, err)
+		}
+	})
+}
+
+func TestScheduleAutomationRetryLifecycleIsExactlyOnce(t *testing.T) {
+	for _, test := range []struct {
+		name, kind, failure string
+	}{
+		{name: "scheduled completion", kind: "scheduled", failure: "completion"},
+		{name: "run now expired lease", kind: "run_now", failure: "sweep"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+			store, detail := createScheduleAutomationFixture(t, &now, true)
+			first := claimScheduleOccurrence(t, store, detail, &now, test.kind, "lifecycle-first", 101)
+			identity := captureScheduleRetryIdentity(t, store, detail.Automation.ID)
+
+			if test.failure == "completion" {
+				request := protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 101), State: "failed", Error: "temporary"}
+				if _, err := store.CompleteAttempt(context.Background(), first.Attempt.ID, request); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.CompleteAttempt(context.Background(), first.Attempt.ID, request); err != nil {
+					t.Fatalf("replayed terminal completion: %v", err)
+				}
+			} else {
+				now = now.Add(protocol.LeaseDuration + time.Millisecond)
+				if _, err := store.db.Exec(`UPDATE workers SET last_heartbeat = ? WHERE id = ?`, now.UnixMilli(), first.Execution.AssignedWorkerID); err != nil {
+					t.Fatal(err)
+				}
+				expired, err := store.SweepExpired(context.Background())
+				if err != nil || len(expired) != 1 || expired[0].AttemptID != first.Attempt.ID {
+					t.Fatalf("first sweep = %#v, error %v", expired, err)
+				}
+				expired, err = store.SweepExpired(context.Background())
+				if err != nil || len(expired) != 0 {
+					t.Fatalf("repeated sweep = %#v, error %v", expired, err)
+				}
+				_, err = store.CompleteAttempt(context.Background(), first.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 101), State: "failed"})
+				assertErrorCode(t, err, "lease_not_owner")
+			}
+
+			if got := captureScheduleRetryIdentity(t, store, detail.Automation.ID); got != identity {
+				t.Fatalf("identity changed after first failure:\n got %#v\nwant %#v", got, identity)
+			}
+			state, diagnostic, retries, attempts := captureRetryState(t, store, identity.executionID)
+			if state != "queued" || diagnostic != "retry_queued" || retries != 1 || attempts != 1 {
+				t.Fatalf("queued retry = state %q diagnostic %q retries %d attempts %d", state, diagnostic, retries, attempts)
+			}
+
+			if test.failure == "sweep" {
+				var path string
+				if err := store.db.QueryRow(`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&path); err != nil {
+					t.Fatal(err)
+				}
+				restarted, err := Open(context.Background(), path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				store = restarted
+				store.now = func() time.Time { return now }
+				t.Cleanup(func() { _ = restarted.Close() })
+				if got := captureScheduleRetryIdentity(t, store, detail.Automation.ID); got != identity {
+					t.Fatalf("identity changed across restart:\n got %#v\nwant %#v", got, identity)
+				}
+			}
+
+			second, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "lifecycle-second", LeaseToken: fmt.Sprintf("%064x", 102)})
+			if err != nil || second == nil || second.Execution.ID != identity.executionID || second.Task.ID != identity.taskID || second.Attempt.AttemptNumber != 2 {
+				t.Fatalf("second claim = %#v, error %v", second, err)
+			}
+			finalRequest := protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 102), State: "failed", Error: "permanent"}
+			if _, err := store.CompleteAttempt(context.Background(), second.Attempt.ID, finalRequest); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CompleteAttempt(context.Background(), second.Attempt.ID, finalRequest); err != nil {
+				t.Fatalf("replayed final completion: %v", err)
+			}
+			if expired, err := store.SweepExpired(context.Background()); err != nil || len(expired) != 0 {
+				t.Fatalf("cleanup after final failure = %#v, error %v", expired, err)
+			}
+			if got := captureScheduleRetryIdentity(t, store, detail.Automation.ID); got != identity {
+				t.Fatalf("identity changed after final failure:\n got %#v\nwant %#v", got, identity)
+			}
+			state, diagnostic, retries, attempts = captureRetryState(t, store, identity.executionID)
+			if state != "failed" || diagnostic != "retry_final_failed" || retries != 1 || attempts != 2 {
+				t.Fatalf("final retry = state %q diagnostic %q retries %d attempts %d", state, diagnostic, retries, attempts)
+			}
+		})
+	}
+}
+
+func TestScheduleAutomationRetryEligibilityGuardsAreExactlyOnce(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *Store, protocol.AutomationDetail, *protocol.Claim, time.Time)
+		status string
+	}{
+		{
+			name: "cancellation",
+			mutate: func(t *testing.T, store *Store, _ protocol.AutomationDetail, claim *protocol.Claim, _ time.Time) {
+				if _, err := store.CancelTask(context.Background(), claim.Task.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "retry_skipped_worker_unavailable",
+		},
+		{
+			name: "disabled Automation",
+			mutate: func(t *testing.T, store *Store, detail protocol.AutomationDetail, _ *protocol.Claim, _ time.Time) {
+				if _, err := store.SetAutomationEnabled(context.Background(), detail.Automation.ID, false, false); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "retry_skipped_disabled",
+		},
+		{
+			name: "offline worker",
+			mutate: func(t *testing.T, store *Store, _ protocol.AutomationDetail, claim *protocol.Claim, now time.Time) {
+				if _, err := store.db.Exec(`UPDATE workers SET last_heartbeat = ? WHERE id = ?`, now.Add(-protocol.WorkerOnlineWindow-time.Millisecond).UnixMilli(), claim.Execution.AssignedWorkerID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "retry_skipped_worker_unavailable",
+		},
+		{
+			name: "unhealthy worker",
+			mutate: func(t *testing.T, store *Store, _ protocol.AutomationDetail, claim *protocol.Claim, _ time.Time) {
+				if _, err := store.db.Exec(`UPDATE workers SET health = 'unhealthy' WHERE id = ?`, claim.Execution.AssignedWorkerID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "retry_skipped_worker_unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+			store, detail := createScheduleAutomationFixture(t, &now, true)
+			claim := claimScheduleOccurrence(t, store, detail, &now, "run_now", "guard-first", 201)
+			identity := captureScheduleRetryIdentity(t, store, detail.Automation.ID)
+			test.mutate(t, store, detail, claim, now)
+			request := protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 201), State: "failed", Error: "guarded"}
+			if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+				t.Fatal(err)
+			}
+			if got := captureScheduleRetryIdentity(t, store, detail.Automation.ID); got != identity {
+				t.Fatalf("guard changed identity:\n got %#v\nwant %#v", got, identity)
+			}
+			state, diagnostic, retries, attempts := captureRetryState(t, store, identity.executionID)
+			if state != "failed" || diagnostic != test.status || retries != 0 || attempts != 1 {
+				t.Fatalf("guard result = state %q diagnostic %q retries %d attempts %d", state, diagnostic, retries, attempts)
+			}
+		})
+	}
+}
+
+func TestScheduleAutomationRetryExcludesGitHubAndOrdinaryTasks(t *testing.T) {
+	t.Run("GitHub Automation", func(t *testing.T) {
+		store, detail := createAutomationFixture(t, true)
+		enableAutomation(t, store, detail.Automation.ID)
+		evaluation := reserveAutomation(t, store)
+		if err := store.completeAutomationSuccess(context.Background(), evaluation, []protocol.GitHubIssueMatch{testIssue}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := store.Claim(context.Background(), "automation-worker", protocol.ClaimRequest{RequestID: "github-failure", LeaseToken: fmt.Sprintf("%064x", 301)})
+		if err != nil || claim == nil {
+			t.Fatalf("GitHub claim = %#v, error %v", claim, err)
+		}
+		identity := captureScheduleRetryIdentity(t, store, detail.Automation.ID)
+		request := protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 301), State: "failed", Error: "GitHub failure"}
+		if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+			t.Fatal(err)
+		}
+		if got := captureScheduleRetryIdentity(t, store, detail.Automation.ID); got != identity {
+			t.Fatalf("GitHub failure changed identity:\n got %#v\nwant %#v", got, identity)
+		}
+		state, diagnostic, retries, attempts := captureRetryState(t, store, identity.executionID)
+		if state != "failed" || diagnostic != "" || retries != 0 || attempts != 1 {
+			t.Fatalf("GitHub failure = state %q diagnostic %q retries %d attempts %d", state, diagnostic, retries, attempts)
+		}
+	})
+
+	t.Run("ordinary task", func(t *testing.T) {
+		store := newTestStore(t)
+		worker := registerTestWorker(t, store, "ordinary-worker", 1, protocol.RepositoryRegistration{
+			Key: "factory", RemoteIdentity: "github.com/owainlewis/factory",
+		})
+		task := createTestTask(t, store, "ordinary-failure", worker.ID, worker.Repositories[0].ID)
+		claim, err := store.Claim(context.Background(), worker.ID, protocol.ClaimRequest{RequestID: "ordinary-failure", LeaseToken: fmt.Sprintf("%064x", 302)})
+		if err != nil || claim == nil {
+			t.Fatalf("ordinary claim = %#v, error %v", claim, err)
+		}
+		var beforeTasks, beforeExecutions int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&beforeTasks); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM executions`).Scan(&beforeExecutions); err != nil {
+			t.Fatal(err)
+		}
+		request := protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 302), State: "failed", Error: "ordinary failure"}
+		if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, request); err != nil {
+			t.Fatal(err)
+		}
+		var state, taskID, requestKey, executionID string
+		var retries, attempts, afterTasks, afterExecutions int
+		if err := store.db.QueryRow(`
+			SELECT task.id, task.request_key, execution.id, execution.state,
+			       execution.retry_count,
+			       (SELECT COUNT(*) FROM attempts WHERE execution_id = execution.id)
+			FROM tasks task JOIN executions execution ON execution.task_id = task.id
+			WHERE task.id = ?
+		`, task.Task.ID).Scan(&taskID, &requestKey, &executionID, &state, &retries, &attempts); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&afterTasks); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM executions`).Scan(&afterExecutions); err != nil {
+			t.Fatal(err)
+		}
+		if taskID != task.Task.ID || requestKey != "ordinary-failure" || executionID != claim.Execution.ID ||
+			state != "failed" || retries != 0 || attempts != 1 || afterTasks != beforeTasks || afterExecutions != beforeExecutions {
+			t.Fatalf("ordinary failure changed retry identity: task %q request %q execution %q state %q retries %d attempts %d counts %d/%d -> %d/%d",
+				taskID, requestKey, executionID, state, retries, attempts, beforeTasks, beforeExecutions, afterTasks, afterExecutions)
+		}
+	})
 }
 
 func TestInvalidStoredScheduleDegradesOnlyItsAutomation(t *testing.T) {
