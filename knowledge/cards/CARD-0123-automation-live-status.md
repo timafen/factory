@@ -4,7 +4,7 @@ Implementation commit: b793f4c4a2a7e9e2f11009ec445746d063233632 — единый
 
 ## HEAD
 
-Status: Implemented and tested — awaiting Review
+Status: Verified PASS — awaiting human merge
 
 Branch: `factory/b6b5d71f-34b-5db9b6c5-9a2`
 
@@ -12,11 +12,23 @@ Implementation commit: `b793f4c4a2a7e9e2f11009ec445746d063233632`
 
 What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Частичный отказ сохраняет строку с честным `no_data`, а действия остаются только у durable Automation.
 
-Evidence: целевой Go-тест → PASS; Python snapshot tests → 3 PASS; UI → 174 PASS; `npm run typecheck`, `npm run lint`, `npm run build` и `go build ./...` → PASS. Playwright не стартовал из-за `no_new_privileges` в контейнере.
+Evidence: focused Go, pilot and UI checks → PASS; Chromium confirmed the mobile `/automations` view shows live status and honest missing data. Full suites reached unrelated pre-existing failures in worker checks and Work-view UI tests.
 
-One next action: выполнить Review опубликованной ветки.
+One next action: выполнить human merge опубликованной ветки.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| API и нормализация статусов | `go test -timeout 5m ./...` | PASS для `internal/controlplane`; все категории и `no_data` покрыты, полный набор остановился на нестабильном `internal/worker` вне поставки |
+| Снимок host-автоматик | `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests` | PASS, 3/3 |
+| UI-строки и «нет данных» | `npm test -- --run src/App.test.tsx -t 'shows every Factory automation category and honest missing data'` | PASS, 1/1 |
+| Браузерная проверка | `npx playwright test -g 'keeps live Automation state and activity visible on a phone'` | PASS, 1/1 на реальном сервере |
+| Полный набор | `just check`, `npm run test:browser` | есть посторонние падения: SA4000 в `internal/worker/attempt_lifecycle_test.go`, worker timing, Work view e2e; целевой Chromium-сценарий прошёл |
+
+НАХОДКА: общий `npm test` также нестабилен вне экрана автоматик (13 из 158 тестов); целевой UI-тест и production build прошли.
 
 ### 2026-08-13 — Verify
 
