@@ -4,7 +4,7 @@
 
 - Status: Implemented; целевые проверки проходят, общий UI-gate содержит внешнюю находку.
 - Branch: `factory/6e733444-f48c-5bb32b39-e7c`.
-- Implementation commit: ffdfe8d2dce01e7f0b10de5706a9853231e590bb — раздельные группы влитого и провалов с человекочитаемыми датами.
+- Implementation commit: 0ec03a13e90f3e57ef46817d142c72135867f924 — раздельные группы влитого и провалов с человекочитаемыми датами.
 - What changed: delivery receipt подтверждает только влитое; `failed` и `cancelled` получают отдельные этап и причину, с независимыми лимитами и дедупликацией.
 - What changed: «Обзор» показывает две секции, локальные даты, «Влито в main» и честную подпись очереди.
 - Evidence: целевой Python-контракт — 1/1; `RecentDoneTest` — 6/6; `Overview.test.ts` — 22/22; lint и `py_compile` — PASS.
