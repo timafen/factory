@@ -2712,6 +2712,17 @@ def autostart_plan(conf, tasks, workflows, workers):
                 "workflow_revision_id": workflow["revision_id"],
             }, conf)
         except RuntimeError as error:
+            if "hourly_task_cap" in str(error):
+                # Keep the card planned: its stable request key makes the next
+                # attempt a replay-safe handoff after the shared window opens.
+                updates = {"state": "planned", "reason": "Жду освобождения почасового лимита автоматических задач."}
+                if not rec.get("hourly_cap_notified"):
+                    updates["hourly_cap_notified"] = True
+                    notify(conf, "Почасовой лимит задач исчерпан", rec["title"],
+                           body="Новый этап появится сам, когда освободится общее часовое окно.",
+                           tags="hourglass", click=UI_BASE + "/work")
+                set_idea(rec["id"], **updates)
+                return None
             if not is_plan_repository_error(error):
                 raise
             explain_bad_plan_repository(conf, rec, str(error))
