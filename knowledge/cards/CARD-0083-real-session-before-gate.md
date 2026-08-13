@@ -1,18 +1,25 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: 15ec2bc41c3e02550e74278786932fe95c9df109 — регрессионная проверка закрепляет автоматическое слияние после успешной Verify.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
-What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
-What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+Status: Verified PASS — merged into main.
+Branch: main.
+Implementation commit: 15ec2bc41c3e02550e74278786932fe95c9df109 — регрессионная проверка закрепляет автоматическое слияние после успешной Verify.
+What changed: проверка Gate за форкающим launcher уже включена в `main` коммитом `f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2`.
+What changed: регрессионный тест запрещает Verify снова сообщать владельцу об ожидании ручного merge.
+Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS.
+One next action: сохранять автоматическую передачу Verify в main и staging при изменениях pipeline.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+HEAD приведён к фактическому состоянию: проверка Gate уже включена в `main`, поэтому
+ручное слияние не ожидается. Добавлен регрессионный тест подсказки Verify: успешная
+автоматическая проверка передаёт ветку в `main` и staging, решение владельца остаётся
+только для production. Целевая Python-проверка и проверка пробелов прошли.
 
 ### 2026-08-12 — Verify
 
