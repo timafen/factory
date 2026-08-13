@@ -4,12 +4,12 @@ Implementation commit: 5273cd1b40fb95acf0a1ce23c48e76b6e774e400 — автопо
 
 ## HEAD
 
-- Status: PASS — реализация, целевые проверки и обязательный root/systemd cgroup fixture зелёные.
-- Branch: `factory/7de42753-ebc-8a46f79c-f3d`.
+- Status: Verified PASS — ожидает решения человека о слиянии.
+- Branch: `factory/80f20b0c-31b-83172dd9-4bb`.
 - Implementation commit: 5273cd1b40fb95acf0a1ce23c48e76b6e774e400 — broker запускает fixed driver напрямую, Pilot сохраняет owner-facing terminal failure, а cgroup fixture подтверждает безопасное восстановление.
 - What changed: broker больше не использует `sudo` и не останавливает собственный cgroup до terminal status; Pilot сохраняет отказ один раз и показывает владельцу названия работ без внутренних ID.
-- Evidence: Go broker, 16 Pilot, 29 Overview, installer и полный release shell fixture — PASS; web build/typecheck/lint — PASS; `bash ops/test-release-broker-cgroup.sh` на root/systemd боевом узле — PASS: broker и driver убиты, два restart сохранили один `failed`.
-- Next action: после слияния выполнить один реальный выпуск и проверить owner-facing уведомление об отказе.
+- Evidence: pinned `main` 1ff5d59db1c5dd0cb33a3db26255ee43c88e3517 и candidate bb3e64de5f7a2ab529104578613ec1cfe3446176; сборка, Go, 16 Pilot, 29 Overview, installer, release fixture, UI и воспроизводимые архивы — PASS. Текущий контейнер не даёт `sudo` из-за `NoNewPrivileges`, поэтому root/systemd fixture здесь SKIP; его сохранённый боевой результат — PASS.
+- Next action: человеку слить ветку и после выкладки проверить один реальный выпуск и owner-facing уведомление об отказе.
 
 ## LOG
 
@@ -50,3 +50,18 @@ cgroup, `KillMode=control-group` убивает оба, а два перезап
 собственного cgroup, а Pilot пишет одно owner-facing уведомление без внутренних
 идентификаторов. Целевые Go/Python/web и shell-проверки прошли; обязательный
 root/systemd cgroup fixture получил PASS: два restart сохранили один `failed`.
+
+### 2026-08-13 — Verify
+
+Сравнение выполнено только между immutable `main`
+`1ff5d59db1c5dd0cb33a3db26255ee43c88e3517` и candidate
+`bb3e64de5f7a2ab529104578613ec1cfe3446176` из изолированного bare-репозитория.
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Broker запускает Factory driver без `sudo` и сохраняет результат | `go test ./internal/releasebroker -run '^(TestFXExecutorMapsEveryAdapterToFixedArgv\|TestFXExecutorRecognizesFactoryAutomaticRollback\|TestBrokerDriverCompletesAfterStoppingAndUpdatingServices\|TestBrokerStatusDoesNotExposeExecutorOutput)$' -count=1` | PASS: fixed argv ведёт прямо в `/usr/local/lib/fx-factory-release`; остановка worker не обрывает terminal status. |
+| Pilot не теряет отказ и уведомляет владельца один раз без ID | `python3 -m unittest pilot.test_pilot.ReleaseTrainDashboardTests pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | PASS: 16/16, включая restart/recovery, отсутствие ложного `mark_final` и один owner event. |
+| Pilot имеет доступ к broker socket | `env -u FACTORY_BUILD_DIR -u FACTORY_V2_BUILD_DIR just test-tooling` | PASS: installer создаёт supplementary group для Pilot, удаляет legacy server drop-in и безопасно перезапускает службы. |
+| Отказ виден в интерфейсе человеческими названиями | `cd web && npx vitest run src/Overview.test.ts`; `just ui-build 0`; `git diff --exit-code -- web/dist` | PASS: 29/29, предыдущий failed-состав показывает пассажиров без SHA/PID/internal ID; dist актуален. |
+| Выпуск не убивает parent broker до durable terminal result | `bash ops/test-fx-factory-release.sh`; `bash ops/test-release-broker-cgroup.sh` | Release fixture PASS; cgroup fixture в текущем non-root контейнере SKIP. Ранее сохранённый root/systemd прогон PASS: broker и driver убиты, два restart сохранили один `failed` без повторного driver. |
+| Полный набор и смежные регрессии | `just check` по шагам; `just test-release`; `just test-worker-race`; прямой browser run | Go/UI/launcher/release/race PASS. Вне области остаются staticcheck SA4000, 2 старых Python failure и старый Work browser failure; sudo browser wrapper заблокирован `NoNewPrivileges`. |
