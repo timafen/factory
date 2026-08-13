@@ -1,15 +1,20 @@
 # CARD-0099 — Мозг сам разбирает находки в План
 
-Implementation commit: 856310dca1702c26f3a61895f183d685d00ac588 — автоматические отчёты с находками сохраняются в Плане.
+Implementation commit: 6ecf7f81bbf07111a46d244eafb5c97e065fb023 — находки из любого завершённого отчёта сохраняются в Плане, а сбой авторазбора остаётся техническим повтором.
 
 ## HEAD
 
-- Status: Specification — ready for implementation.
-- Branch: `factory/996ca9ca-68b-1394fd5e-00e`.
-- Specification: `knowledge/specs/brain-processes-findings-plan-owner-questions.md`.
-- Owner impact: технические находки попадают в План, а вопрос приходит только
-  когда действительно требуется решение владельца.
-- One next action: реализовать проверяемые границы разбора и маршрутизации.
+- Status: Implemented and tested.
+- Branch: `factory/5e7b009f-622-a8cc20c8-2f5`.
+- Implementation commit: `6ecf7f81bbf07111a46d244eafb5c97e065fb023`.
+- What changed: успешные и неуспешные terminal-result и Automation сохраняют
+  дедуплицированную находку с проектом и конкретной задачей-источником.
+- What changed: сбой или таймаут мозга сохраняется как технический повтор без
+  владельческого вопроса и уведомления.
+- Evidence: 26 целевых тестов Pilot — OK; `py_compile` — OK.
+- Evidence: полный Pilot — 242 passed, 13 skipped, 2 известных baseline failure;
+  те же 2 failure воспроизведены на чистом `origin/main`.
+- One next action: провести Review изменений `pilot/`.
 
 ## LOG
 
@@ -23,3 +28,12 @@ Implementation commit: 856310dca1702c26f3a61895f183d685d00ac588 — автома
 
 Реализация ограничена `pilot/pilot.py` и `pilot/test_pilot.py`; экран Plan,
 control-plane API и схема данных не требуют изменений.
+
+### 2026-08-12 — Implement
+
+Все завершённые pipeline и Automation отчёты теперь разбираются до перехода к
+повтору или вопросу; повторная доставка не дублирует карточку и уведомление.
+Ошибка классификатора сохраняет ограниченную техническую причину для повтора и
+не пишет вопрос владельцу. Целевые 26 тестов прошли; общий Pilot дал 242
+успешных, 13 пропущенных и 2 baseline failure, независимо воспроизведённых на
+чистом `origin/main`.
