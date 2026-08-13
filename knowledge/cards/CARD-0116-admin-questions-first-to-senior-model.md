@@ -1,20 +1,20 @@
-Implementation commit: 8021a8f668e758f58807c47eea9e29b16ba22f08 — разрешённые административные вопросы staging сначала выполняет оркестратор через фиксированный fx argv.
+Implementation commit: b1b0aa65003e6567e45c6884e151724b17b9121f — исчерпанный loop-cap также направляет admin-вопрос старшей модели через общий безопасный маршрут.
 
 # CARD-0116 — Административный вопрос сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Implemented.
-- Ветка: `factory/b046adc4-f5b-32cddb13-7b6`.
-- Implementation commit: `8021a8f668e758f58807c47eea9e29b16ba22f08` — маршрутизация admin-вопросов через безопасный staging fx.
+- Статус: Implemented; review-блокер loop-cap исправлен.
+- Ветка: `factory/fe904102-b96-0aa96257-8b7`.
+- Implementation commit: `b1b0aa65003e6567e45c6884e151724b17b9121f` — общий admin-маршрут работает и при исчерпанном loop-cap.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
 - Что изменено: Pilot принимает типизированное `admin_action`, пропускает только
   консервативный staging allowlist и запускает единственный фиксированный argv.
 - Что изменено: успешный результат возвращается модели для ответа; служебный
   admin-аудит не выдаётся API как вопрос владельцу.
-- Evidence: `python3 -m unittest pilot.test_pilot` → 253 tests OK;
-  `go test ./...` и `go build ./cmd/factory-server` → OK.
-- Следующее действие: Verify проверяет поставку и границы allowlist.
+- Evidence: `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 3 tests OK, включая `cap_rescues == max_loop_rescues`.
+- Evidence: общий Python-прогон → 251/254 OK; 3 несвязанные проверки restart/provenance нестабильны.
+- Следующее действие: Verify подтверждает loop-cap регрессию и поставку ветки.
 
 ## LOG
 
@@ -49,3 +49,11 @@ Pilot теперь сначала запрашивает у оркестрато
 Успешная диагностика возвращается модели без owner-вопроса; запрещённые действия
 и отказ fx сохраняют причину эскалации. Полные Python- и Go-проверки, включая
 сборку сервера, завершились успешно.
+
+### 2026-08-13 — Implement
+
+Устранён блокер review: даже при исчерпанном `max_loop_rescues` Pilot вызывает
+старшую модель и передаёт её `admin_action` в общий `resolve_admin_action()`.
+Регрессия с `cap_rescues == max_loop_rescues` подтверждает выполнение staging
+health и отсутствие преждевременного owner-вопроса. Три несвязанные проверки
+restart/provenance общего набора остались нестабильны; целевая область зелёная.
