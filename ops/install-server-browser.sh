@@ -77,6 +77,8 @@ FACTORY_HOME=$(getent passwd "$FACTORY_USER" | cut -d: -f6)
 
 [ -f "$PAYLOAD/web/package.json" ]
 [ -f "$PAYLOAD/web/package-lock.json" ]
+[ -f "$PAYLOAD/web/report/capture.mjs" ]
+[ -f "$PAYLOAD/web/report/render.mjs" ]
 [ -x "$PAYLOAD/ops/factory-browser-sandbox" ]
 [ -x "$PAYLOAD/ops/factory-browser-isolated" ]
 [ -x "$PAYLOAD/ops/test-browser-sandbox.sh" ]
