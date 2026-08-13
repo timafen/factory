@@ -2110,7 +2110,7 @@ func TestTaskProvenancePersistsAcrossReopenAndParentDelete(t *testing.T) {
 	}
 }
 
-func TestTaskProvenanceMigrationUpgradesLegacyDatabase(t *testing.T) {
+func TestTaskProvenanceMigration028RequiresPriorSchemasAndReopensSafely(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-025.sqlite3")
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -2163,12 +2163,79 @@ func TestTaskProvenanceMigrationUpgradesLegacyDatabase(t *testing.T) {
 	if err := createDatabaseMarker(path + ".v2-control-plane"); err != nil {
 		t.Fatal(err)
 	}
+	database, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration028, err := migrations.Files.ReadFile("028_task_provenance_schema_guard.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(string(migration028)); err == nil ||
+		!strings.Contains(err.Error(), "worker_capacity_reconciliations") {
+		t.Fatalf("apply 028 without 026 error = %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var maxVersion int
+	if err := database.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if maxVersion != 25 {
+		t.Fatalf("migration version advanced without 026: %d", maxVersion)
+	}
+	for _, column := range []string{"work_id", "parent_task_id", "correction_kind"} {
+		var count int
+		if err := database.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = ?`, column,
+		).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("provenance column %s after failed migration: count=%d err=%v", column, count, err)
+		}
+	}
+	// Recreate the schema contract owned by migration 026, then prove that the
+	// new guard also rejects a database where migration 027 is still missing.
+	if _, err := database.Exec(`
+		CREATE TABLE worker_capacity_reconciliations (
+			id INTEGER PRIMARY KEY,
+			worker_id TEXT NOT NULL REFERENCES workers(id),
+			reconciled_at INTEGER NOT NULL,
+			trigger TEXT NOT NULL,
+			previous_active_count INTEGER NOT NULL,
+			derived_active_count INTEGER NOT NULL,
+			ghost_slots_released INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO schema_migrations(version, applied_at) VALUES (26, 0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(string(migration028)); err == nil ||
+		!strings.Contains(err.Error(), "work_id") {
+		t.Fatalf("apply 028 without 027 error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
 	store, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	legacy, err := store.Task(context.Background(), "legacy-task")
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 28 {
+		t.Fatalf("combined migration version = %d, %v", maxVersion, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	legacy, err := reopened.Task(context.Background(), "legacy-task")
 	if err != nil || hasTaskProvenance(legacy.Task) {
 		t.Fatalf("migrated legacy task = %#v, %v", legacy.Task, err)
 	}

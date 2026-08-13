@@ -1623,16 +1623,215 @@ class DiagnosisRepairTests(unittest.TestCase):
 
 
 class CorrectionProvenanceStormTests(unittest.TestCase):
+    _SUBPROCESS_DRIVER = r"""
+import contextlib
+import json
+import os
+import time
+from unittest import mock
+
+from pilot import pilot
+
+request = json.loads(os.environ["PILOT_RESTART_REQUEST"])
+action = request["action"]
+task = request.get("task")
+pilot.WORKS_PATH = request["works_path"]
+pilot.DUPLICATE_ROOT_EVENTS_PATH = request["events_path"]
+pilot.QUESTION_DIR = request["questions_path"]
+pilot.STATE_PATH = request["state_path"]
+pilot.MERGES_PATH = request["merges_path"]
+pilot.VERDICT_DIR = request["verdicts_path"]
+os.makedirs(os.path.join(pilot.HOME, "pilot"), exist_ok=True)
+os.makedirs(pilot.QUESTION_DIR, exist_ok=True)
+os.makedirs(pilot.VERDICT_DIR, exist_ok=True)
+
+
+def load_fixture():
+    fixture = pilot.load(request["fixture_path"], None)
+    if not isinstance(fixture, dict):
+        raise AssertionError("missing durable API fixture")
+    return fixture
+
+
+def save_fixture(fixture):
+    pilot.save(request["fixture_path"], fixture)
+
+
+def set_succeeded(fixture, task_id, result):
+    task = next(item for item in fixture["tasks"] if item["id"] == task_id)
+    task["state"] = "succeeded"
+    fixture["details"][task_id]["task"] = task
+    fixture["details"][task_id]["attempts"] = [{"result": result}]
+    save_fixture(fixture)
+
+
+def latest_stage(fixture, stage):
+    return next(item for item in reversed(fixture["tasks"])
+                if fixture["details"].get(item["id"], {}).get(
+                    "workflow", {}).get("title") == stage)
+
+
+def run_full_cycle(fixture):
+    # Run one real cycle against a JSON-only control-plane fixture.
+    state = pilot.load(pilot.STATE_PATH, {"processed": []})
+    day_start = pilot.calendar.timegm(time.strptime(
+        time.strftime("%Y-%m-%d", time.gmtime()), "%Y-%m-%d"))
+
+    def fake_api(path, body=None):
+        if path == "/tasks?limit=100":
+            return {"tasks": list(fixture["tasks"])}
+        if path.startswith("/tasks/"):
+            return fixture["details"][path.rsplit("/", 1)[-1]]
+        if path == "/workers":
+            return {"workers": list(fixture["workers"].values())}
+        if path == "/repositories":
+            return {"repositories": [{"id": "repo-id",
+                                      "remote_identity": "github.com/timafen/factory"}]}
+        if path == "/workflows":
+            return {"workflows": [{"id": stage, "enabled": True,
+                "current_revision": {"id": data["revision_id"], "title": stage}}
+                for stage, data in fixture["workflows"].items()]}
+        raise AssertionError(path)
+
+    def create(body, _conf=None):
+        parent = next(item for item in fixture["tasks"]
+                      if item["id"] == body["parent_task_id"])
+        task_id = "created-%d" % (len(fixture["created"]) + 1)
+        task = {
+            "id": task_id, "work_id": parent["work_id"],
+            "parent_task_id": parent["id"],
+            "correction_kind": body.get("correction_kind", ""),
+            "title": body["title"], "state": "queued",
+            "created_at": "2026-08-11T20:%02d:00Z" % (len(fixture["created"]) + 2),
+            "repository_id": "repo-id",
+        }
+        stage = next(stage for stage in fixture["workflows"]
+                     if " " + stage + "]" in task["title"])
+        fixture["tasks"].append(task)
+        fixture["details"][task_id] = {
+            "task": task, "workflow": {"title": stage},
+            "context": body.get("context", ""), "attempts": [],
+        }
+        fixture["created"].append({"id": task_id, "body": dict(body)})
+        save_fixture(fixture)
+        return {"task": task}
+
+    noops = (
+        "collect_automation_findings", "cleanup_completed_plan_cards",
+        "write_dashboard", "provider_limits_tick", "detect_limits",
+        "budget_guard", "handle_epics", "reconcile_diag_repairs", "diag_sweep",
+        "rescue_queued", "supersede_stale_questions",
+        "cleanup_orphaned_paused_pipelines", "advance_epics", "pipeline_watch",
+        "cleanup_work_archive", "area_extend", "collect_ideas",
+        "record_implementation_artifact", "save_stage_verdict",
+        "retry_pending_factory_deploy", "autostart_plan",
+    )
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+        stack.enter_context(mock.patch.object(
+            pilot, "all_tasks", side_effect=lambda: list(fixture["tasks"])))
+        stack.enter_context(mock.patch.object(
+            pilot, "codex_usage_snapshot", return_value={day_start: {}}))
+        stack.enter_context(mock.patch.object(pilot, "day_budget_blocks", return_value=False))
+        stack.enter_context(mock.patch.object(pilot, "host_block", return_value={"state": "ok"}))
+        stack.enter_context(mock.patch.object(pilot, "work_lifecycle_block", return_value=""))
+        stack.enter_context(mock.patch.object(pilot, "stage_worker", return_value="worker"))
+        stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+        stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+            "action": "advance", "reason": "готово", "handoff": "",
+            "next_complexity": "medium"}))
+        stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
+        stack.enter_context(mock.patch.object(pilot, "review_gate", return_value={
+            "back": False, "branch": "factory/correction", "note": "ok"}))
+        stack.enter_context(mock.patch.object(
+            pilot, "selected_delivery", return_value=("factory/correction", "a" * 40)))
+        stack.enter_context(mock.patch.object(
+            pilot, "pushed_branch", return_value="factory/correction"))
+        stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
+        stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+        stack.enter_context(mock.patch.object(
+            pilot, "broker_operation", return_value={"status": "succeeded"}))
+        stack.enter_context(mock.patch.object(
+            pilot, "gh_merge", return_value=(True, "merged")))
+        stack.enter_context(mock.patch.object(pilot, "notify"))
+        for name in noops:
+            stack.enter_context(mock.patch.object(pilot, name))
+        pilot.cycle(fixture["conf"], state)
+    save_fixture(fixture)
+    pilot.save(pilot.STATE_PATH, state)
+
+
+if action == "discover":
+    pilot.record_new_works(request["conf"], request["tasks"],
+                           max_age_min=10_000_000)
+elif action == "crash":
+    boundary = request["boundary"]
+
+    def terminate_at_boundary(name):
+        if name == boundary:
+            os._exit(86)
+
+    pilot._duplicate_root_crash_boundary = terminate_at_boundary
+    pilot.note_duplicate_root_prevented(task)
+elif action == "recover":
+    pilot.note_duplicate_root_prevented(task)
+    pilot.note_duplicate_root_prevented(task)
+elif action == "full_cycle_before_restart":
+    fixture = load_fixture()
+    run_full_cycle(fixture)
+    correction = latest_stage(fixture, "Implement + Test")
+    if not correction.get("correction_kind"):
+        raise AssertionError("first process did not create correction")
+    correction["title"] = "[auto] [1/5 Triage] Изменённое человеком имя"
+    set_succeeded(fixture, correction["id"],
+                  "BRANCH: factory/correction\nHEAD: " + "a" * 40 + "\nCard: CARD-0086")
+    fixture["restart"] = {"first_pid": os.getpid(),
+                          "correction_id": correction["id"]}
+    save_fixture(fixture)
+elif action == "full_cycle_after_restart":
+    if any(key in request for key in ("tasks", "details", "state", "created")):
+        raise AssertionError("restart received in-memory pipeline objects")
+    fixture = load_fixture()
+    restart = fixture.get("restart") or {}
+    if not restart.get("first_pid") or restart["first_pid"] == os.getpid():
+        raise AssertionError("second process did not restore after a real restart")
+    if not pilot.load(pilot.STATE_PATH, None):
+        raise AssertionError("restart lost durable Pilot state")
+    run_full_cycle(fixture)
+    review = latest_stage(fixture, "Review")
+    set_succeeded(fixture, review["id"], "APPROVE")
+    run_full_cycle(fixture)
+    verify = latest_stage(fixture, "Verify")
+    set_succeeded(fixture, verify["id"], "PASS\nTRY: none")
+    run_full_cycle(fixture)
+    fixture["restart"].update({"second_pid": os.getpid(),
+                               "terminal_task_id": verify["id"]})
+    save_fixture(fixture)
+else:
+    raise AssertionError(action)
+"""
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.works_path = os.path.join(self.temporary.name, "works.json")
         self.events_path = os.path.join(
             self.temporary.name, "duplicate-root-prevented.json")
+        self.questions_path = os.path.join(self.temporary.name, "questions")
+        self.state_path = os.path.join(self.temporary.name, "state.json")
+        self.tasks_path = os.path.join(self.temporary.name, "tasks.json")
+        self.merges_path = os.path.join(self.temporary.name, "merges.jsonl")
+        self.fixture_path = os.path.join(self.temporary.name, "api-fixture.json")
+        self.verdicts_path = os.path.join(self.temporary.name, "verdicts")
+        os.makedirs(self.questions_path)
         self.patches = (
             mock.patch.object(pilot, "WORKS_PATH", self.works_path),
             mock.patch.object(
                 pilot, "DUPLICATE_ROOT_EVENTS_PATH", self.events_path),
+            mock.patch.object(pilot, "QUESTION_DIR", self.questions_path),
+            mock.patch.object(pilot, "STATE_PATH", self.state_path),
+            mock.patch.object(pilot, "MERGES_PATH", self.merges_path),
+            mock.patch.object(pilot, "VERDICT_DIR", self.verdicts_path),
         )
         for patcher in self.patches:
             patcher.start()
@@ -1657,36 +1856,153 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
             "state": "queued", "created_at": "2026-08-11T20:01:00Z",
         }
 
+    def run_pilot_process(self, request, expected_returncode=0):
+        request = dict(request, works_path=self.works_path,
+                       events_path=self.events_path,
+                       questions_path=self.questions_path,
+                       state_path=self.state_path,
+                       merges_path=self.merges_path,
+                       verdicts_path=self.verdicts_path,
+                       fixture_path=self.fixture_path)
+        env = os.environ.copy()
+        env["FACTORY_DATA_HOME"] = self.temporary.name
+        env["PILOT_RESTART_REQUEST"] = json.dumps(request)
+        result = subprocess.run(
+            [sys.executable, "-c", self._SUBPROCESS_DRIVER],
+            cwd=os.path.dirname(os.path.dirname(__file__)), env=env,
+            text=True, capture_output=True, timeout=30, check=False)
+        self.assertEqual(
+            result.returncode, expected_returncode,
+            "stdout=%r stderr=%r" % (result.stdout, result.stderr))
+
     def assert_storm_is_single_pipeline(self, kind):
         correction = self.correction(kind)
         tasks = [self.root, correction]
-        with mock.patch.object(pilot, "log") as journal:
-            pilot.record_new_works(self.conf, tasks, max_age_min=10_000_000)
-            # A new Pilot process reads the same durable files and sees the
-            # same API snapshot. Discovery must remain idempotent after restart.
-            pilot.record_new_works(self.conf, list(reversed(tasks)),
-                                   max_age_min=10_000_000)
+        self.run_pilot_process({
+            "action": "discover", "conf": self.conf, "tasks": [self.root],
+        })
+        # The first interpreter has exited. A newly imported Pilot process
+        # reads the durable files and rediscovers the correction snapshot.
+        self.run_pilot_process({
+            "action": "discover", "conf": self.conf,
+            "tasks": list(reversed(tasks)),
+        })
         works = pilot.load(self.works_path, {})
-        events = pilot.load(self.events_path, {})
+        outbox = pilot.load(self.events_path, {})
+        events = outbox["events"]
+        event_id = "pilot_duplicate_root_prevented:" + correction["id"]
         self.assertEqual(list(works), [self.root["id"]])
         self.assertEqual(len({pilot.task_work_id(task) for task in tasks}), 1)
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[correction["id"]], {
+        self.assertEqual(events[event_id]["payload"], {
             "task_id": correction["id"], "work_id": self.root["id"],
             "parent_task_id": correction["parent_task_id"],
             "correction_kind": kind,
         })
-        prevented = [call for call in journal.call_args_list
-                     if call.args and call.args[0] ==
-                     "pilot_duplicate_root_prevented"]
-        self.assertEqual(len(prevented), 1)
-        self.assertFalse(any("Triage" in str(call) for call in journal.call_args_list))
+        self.assertEqual(outbox["acknowledged"], {event_id: True})
 
-    def test_review_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("review_return")
+    def assert_full_cycle_survives_restart(self, kind):
+        for path in (self.works_path, self.events_path, self.state_path,
+                     self.tasks_path, self.merges_path, self.fixture_path):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        for directory in (self.questions_path, self.verdicts_path):
+            if os.path.isdir(directory):
+                for name in os.listdir(directory):
+                    os.unlink(os.path.join(directory, name))
 
-    def test_verify_correction_keeps_one_pipeline_before_and_after_restart(self):
-        self.assert_storm_is_single_pipeline("verify_return")
+        base = "Исправить корзину"
+        source_stage = "Review" if kind == "review_return" else "Verify"
+        root = dict(self.root, repository_id="repo-id")
+        source = {
+            "id": source_stage.lower() + "-failed", "work_id": root["id"],
+            "parent_task_id": "implement-original", "correction_kind": "",
+            "title": f"[auto] [{'4' if source_stage == 'Review' else '5'}/5 {source_stage}] {base}",
+            "state": "succeeded", "created_at": "2026-08-11T20:01:00Z",
+            "repository_id": "repo-id",
+        }
+        question = {
+            "id": "answer-" + kind, "status": "answered", "answer": "Исправь",
+            "title": base, "stage": source_stage,
+            "resume_stage": "Implement + Test", "task_id": source["id"],
+            "repository_id": "repo-id", "question": "Исправлять?",
+            "prior_result": "REQUEST CHANGES",
+        }
+        workflows = {stage: {"enabled": True, "revision_id": "rev-" + stage}
+                     for stage in ("Triage", "Specification", "Implement + Test",
+                                   "Review", "Verify")}
+        workers = {"worker": {"id": "worker-id", "name": "worker",
+                               "online": True, "health": "healthy",
+                               "capacity": 1, "active_count": 0}}
+        fixture = {
+            "conf": self.conf, "tasks": [root, source],
+            "details": {source["id"]: {
+                "task": source, "workflow": {"title": source_stage},
+                "attempts": [{"result": "REQUEST CHANGES"}],
+            }},
+            "workflows": workflows, "workers": workers, "created": [],
+        }
+        # The only hand-off between the two interpreters is these files.
+        pilot.save(self.fixture_path, fixture)
+        pilot.save(self.works_path, {root["id"]: {
+            "origin": pilot.ORIGIN_OWNER, "base_title": base,
+        }})
+        pilot.save(self.state_path, {"processed": [source["id"], root["id"]]})
+        pilot.save(os.path.join(self.questions_path, question["id"] + ".json"), question)
+
+        self.run_pilot_process({"action": "full_cycle_before_restart"})
+        # This request deliberately contains paths only, never task objects.
+        self.run_pilot_process({"action": "full_cycle_after_restart"})
+
+        fixture = pilot.load(self.fixture_path, {})
+        correction = next(task for task in fixture["tasks"]
+                          if task.get("correction_kind") == kind)
+        review = next(task for task in fixture["tasks"]
+                      if fixture["details"].get(task["id"], {}).get(
+                          "workflow", {}).get("title") == "Review"
+                      and task["id"] != source["id"])
+        verify = next(task for task in fixture["tasks"]
+                      if fixture["details"].get(task["id"], {}).get(
+                          "workflow", {}).get("title") == "Verify"
+                      and task["id"] != source["id"])
+        restart = fixture["restart"]
+        self.assertNotEqual(restart["first_pid"], restart["second_pid"])
+        self.assertEqual(restart["correction_id"], correction["id"])
+        self.assertEqual(restart["terminal_task_id"], verify["id"])
+        self.assertEqual(correction["title"],
+                         "[auto] [1/5 Triage] Изменённое человеком имя")
+        self.assertEqual(len([task for task in fixture["tasks"]
+                              if task["id"] == task["work_id"]]), 1)
+        self.assertEqual({task["work_id"] for task in fixture["tasks"]}, {root["id"]})
+        self.assertFalse(any(" Triage]" in item["body"]["title"]
+                             or " Specification]" in item["body"]["title"]
+                             for item in fixture["created"]))
+        self.assertEqual([item["body"].get("correction_kind", "")
+                          for item in fixture["created"]], [kind, "", ""])
+        self.assertEqual(pilot.load(self.works_path, {})[root["id"]]["base_title"], base)
+        self.assertTrue(pilot.load(
+            os.path.join(self.verdicts_path, verify["id"] + ".json"),
+            {}).get("final_pass"))
+        with open(self.merges_path, encoding="utf-8") as stream:
+            merged = [json.loads(line)["task_id"] for line in stream if line.strip()]
+        self.assertEqual(merged, [verify["id"]])
+
+    def test_review_and_verify_discovery_survives_real_process_restart(self):
+        for kind in ("review_return", "verify_return"):
+            with self.subTest(kind=kind):
+                for path in (self.works_path, self.events_path):
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
+                self.assert_storm_is_single_pipeline(kind)
+
+    def test_review_and_verify_corrections_complete_one_pipeline_after_restart(self):
+        for kind in ("review_return", "verify_return"):
+            with self.subTest(kind=kind):
+                self.assert_full_cycle_survives_restart(kind)
 
     def test_explicit_provenance_wins_over_auto_title(self):
         correction = self.correction("review_return")
@@ -1694,7 +2010,37 @@ class CorrectionProvenanceStormTests(unittest.TestCase):
         pilot.record_new_works(
             self.conf, [correction], max_age_min=10_000_000)
         self.assertEqual(pilot.load(self.works_path, {}), {})
-        self.assertEqual(len(pilot.load(self.events_path, {})), 1)
+        self.assertEqual(
+            len(pilot.load(self.events_path, {})["events"]), 1)
+
+    def test_duplicate_root_outbox_converges_at_every_crash_boundary(self):
+        correction = self.correction("review_return")
+        boundaries = (
+            "before_journal_append", "after_journal_append",
+            "before_acknowledgement", "after_acknowledgement",
+        )
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary):
+                try:
+                    os.unlink(self.events_path)
+                except FileNotFoundError:
+                    pass
+                self.run_pilot_process({
+                    "action": "crash", "boundary": boundary,
+                    "task": correction,
+                }, expected_returncode=86)
+                # The crashing interpreter is gone. A new Pilot process
+                # replays the idempotent event from the durable outbox.
+                self.run_pilot_process({
+                    "action": "recover", "task": correction,
+                })
+                outbox = pilot.load(self.events_path, {})
+                event_id = "pilot_duplicate_root_prevented:" + correction["id"]
+                self.assertEqual(list(outbox["events"]), [event_id])
+                self.assertEqual(list(outbox["acknowledged"]), [event_id])
+                self.assertEqual(
+                    outbox["events"][event_id]["event_type"],
+                    "pilot_duplicate_root_prevented")
 
     def test_child_builder_always_sends_parent_and_correction(self):
         sent = []
