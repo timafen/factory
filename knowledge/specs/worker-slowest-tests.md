@@ -116,7 +116,7 @@ Production-код, публичные API, схема БД, конфигурац
 
 ## Card
 
-`knowledge/cards/CARD-0055-worker-slowest-tests.md`
+`knowledge/cards/CARD-0134-worker-slowest-tests.md`
 
 Карточку создаёт стадия Implement после отдельного коммита реализации, чтобы её
 первая строка могла содержать существующий полный `Implementation commit`.

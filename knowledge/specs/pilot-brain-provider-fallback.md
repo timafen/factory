@@ -42,7 +42,7 @@
 - `pilot/pilot.py` — один вызов `note_limit()` в `brain()`.
 - `pilot/test_pilot.py` — регрессия rate-limit и повторного выбора живого
   провайдера.
-- `knowledge/cards/CARD-0034-pilot-brain-provider-fallback.md` — карточка
+- `knowledge/cards/CARD-0110-pilot-brain-provider-fallback.md` — карточка
   работы; её должен обновить Implement/Verify.
 
 ### Data and API changes
@@ -100,7 +100,7 @@
 
 ## Card
 
-`knowledge/cards/CARD-0034-pilot-brain-provider-fallback.md`
+`knowledge/cards/CARD-0110-pilot-brain-provider-fallback.md`
 
 ## Проверяемые обещания
 
