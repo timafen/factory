@@ -93,8 +93,15 @@
   передаётся модели, но второй action без нового route не выполняется.
 - В `internal/controlplane/questions_http_test.go` создать открытый owner-вопрос
   и admin-аудит; `GET /api/v1/questions` возвращает только owner-вопрос.
-- Обязательная проверка: `python3 -m unittest pilot.test_pilot` завершается
-  кодом 0. Дополнительно выполнить целевой Go HTTP-тест и `git diff --check`.
+- Новый тест
+  `AdminQuestionRoutingTests.test_allowed_staging_health_is_resolved_by_orchestrator_before_owner`
+  одним сценарием фиксирует главный контракт: старшая модель возвращает
+  `admin_action`, Pilot ровно один раз вызывает фиксированный argv
+  `sudo -n /usr/local/bin/fx staging health`, принимает итоговый ответ модели и
+  не создаёт owner-only вопрос. До реализации этот тест обязан быть красным,
+  после реализации указанная ниже обязательная команда завершается кодом 0.
+  Отрицательные случаи и HTTP-фильтр остаются отдельными целевыми тестами;
+  дополнительно выполнить их и `git diff --check`.
 
 ## Риски и решения
 
@@ -123,4 +130,4 @@
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл internal/controlplane/questions_http.go
 ГОТОВО-КОГДА: файл internal/controlplane/questions_http_test.go
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests.test_allowed_staging_health_is_resolved_by_orchestrator_before_owner
