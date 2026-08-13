@@ -402,6 +402,10 @@ func TestScheduleAutomationFailedExecutionRetriesOnceAndIsIdempotent(t *testing.
 	if state != "queued" || retries != 1 || attempts != 1 {
 		t.Fatalf("first failure = state %q retries %d attempts %d", state, retries, attempts)
 	}
+	queued, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || queued.Occurrences[0].Task == nil || queued.Occurrences[0].Task.RetryStatus != "queued" {
+		t.Fatalf("queued retry projection = %#v, error %v", queued.Occurrences, err)
+	}
 	second, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "retry-second", LeaseToken: fmt.Sprintf("%064x", 2)})
 	if err != nil || second == nil || second.Execution.ID != claim.Execution.ID || second.Task.ID != taskID || second.Attempt.AttemptNumber != 2 {
 		t.Fatalf("second claim = %#v, error %v", second, err)
@@ -414,6 +418,10 @@ func TestScheduleAutomationFailedExecutionRetriesOnceAndIsIdempotent(t *testing.
 	}
 	if state != "failed" || retries != 1 {
 		t.Fatalf("second failure = state %q retries %d", state, retries)
+	}
+	final, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || final.Occurrences[0].Task == nil || final.Occurrences[0].Task.RetryStatus != "final_failed" {
+		t.Fatalf("final retry projection = %#v, error %v", final.Occurrences, err)
 	}
 }
 

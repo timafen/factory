@@ -944,8 +944,25 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 // It deliberately keeps the frozen worker and repository reservation: a retry must not
 // silently change where an Automation runs.
 func retryFailedScheduleAutomation(ctx context.Context, tx *sql.Tx, executionID string, now int64) error {
+	// A second terminal failure is not eligible for another retry, but must remain
+	// visible as such instead of looking like an ordinary failed run.
+	result, err := tx.ExecContext(ctx, `
+		UPDATE automation_occurrences SET diagnostic = 'retry_final_failed', updated_at = ?
+		WHERE task_id = (SELECT task_id FROM executions WHERE id = ? AND retry_count > 0)
+		  AND EXISTS (
+			SELECT 1 FROM automation_schedule_occurrences schedule
+			WHERE schedule.occurrence_id = automation_occurrences.id
+			  AND schedule.kind IN ('scheduled', 'run_now')
+		  )
+	`, now, executionID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 1 {
+		return nil
+	}
 	var eligible int
-	err := tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM executions e
 		JOIN tasks t ON t.id = e.task_id
@@ -965,10 +982,23 @@ func retryFailedScheduleAutomation(ctx context.Context, tx *sql.Tx, executionID 
 		return err
 	}
 	if eligible == 0 {
-		_, err = tx.ExecContext(ctx, `UPDATE automation_occurrences SET diagnostic = 'retry_skipped', updated_at = ? WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)`, now, executionID)
+		_, err = tx.ExecContext(ctx, `
+			UPDATE automation_occurrences
+			SET diagnostic = CASE WHEN EXISTS (
+				SELECT 1 FROM executions e
+				JOIN tasks t ON t.id = e.task_id
+				JOIN automation_occurrences o ON o.task_id = t.id
+				JOIN automations a ON a.id = o.automation_id
+				JOIN workflows w ON w.id = a.workflow_id
+				JOIN repositories r ON r.id = a.repository_id
+				WHERE e.id = ? AND (a.enabled = 0 OR w.enabled = 0 OR r.enabled = 0)
+			) THEN 'retry_skipped_disabled' ELSE 'retry_skipped_worker_unavailable' END,
+			updated_at = ?
+			WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)
+		`, executionID, now, executionID)
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `
+	result, err = tx.ExecContext(ctx, `
 		UPDATE executions SET state = 'queued', retry_count = 1, cancellation_requested = 0, updated_at = ?
 		WHERE id = ? AND state = 'failed' AND retry_count = 0 AND cancellation_requested = 0
 	`, now, executionID)
