@@ -1,18 +1,22 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 6618cf9e2d61d6fa73870cb2b2b65c09df964990 — ежедневный PDF автоматически создаётся фоновой службой с защитой от дублей и повтором после сбоя
+Implementation commit: 68a49e40f0cf84993206d70ff94b3bfb973fed00 — ежедневный PDF содержит проверенные снимки и сравнение метрик, а конкурентная сборка защищена токенами
 
 ## HEAD
 
-- Status: Implemented and verified
-- Branch: `factory/3d6c7a12-111-8c916653-d4e`
-- Implementation commit: `6618cf9e2d61d6fa73870cb2b2b65c09df964990`
-- What changed: сервер сам создаёт PDF за прошедший день; дата и часовой пояс образуют долговечный ключ, поэтому параллельные проходы не дублируют отчёт.
-- What changed: ошибка renderer сохраняется и повторяется следующим проходом; зависший запуск получает повтор после истечения аренды.
-- Evidence: automatic start/retry/dedup test → PASS; `go test ./...` → PASS; web suite (174 tests) → PASS; Node PDF test, typecheck and production build → PASS.
-- One next action: после выпуска открыть `/reports` и скачать автоматически созданный отчёт за предыдущий день.
+- Status: Implemented and verified; ready for Review
+- Branch: `factory/82ef0eb7-b45-42d390c6-7be`
+- Implementation commit: `68a49e40f0cf84993206d70ff94b3bfb973fed00`
+- What changed: долговечная служба создаёт и повторяет снимки `before`/`after`; проверенные PNG встраиваются в PDF рядом с календарными метриками «до/после».
+- What changed: claim-токены, уникальные файлы, deadline, точный timezone и сверка SHA-256 закрывают гонки сборки и неоднозначное скачивание.
+- Evidence: `go test -timeout 5m ./...` → PASS; web lint/typecheck/build → PASS; web suite → 174 PASS; inline-image Chromium PDF test → PASS; binary build → PASS.
+- One next action: повторно передать реализацию на Review и после выпуска открыть `/reports`.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Исправлены находки Review F1–F5 и риск целостности: фоновой capture-worker переводит снимки через durable states и повторяет сбой, успешная заданная стадия ставит `after`, PDF встраивает проверенные PNG и календарное сравнение двух дней. Claim-токены и уникальные имена не дают просроченному renderer перезаписать новый отчёт; download требует точный timezone и пересчитывает SHA-256. Целевые тесты покрывают снимки, повтор, `after`, DST/часовые пояса, конкурентную сборку и повреждённый PDF. Полные Go- и UI-наборы, lint, typecheck, production build, сборка бинарников и Chromium PDF-тест прошли.
 
 ### 2026-08-13 — Implement
 
