@@ -8,7 +8,7 @@ Status: Verified PASS — awaiting human merge.
 Branch: factory/e35e268f-1d3-934fca68-3f2.
 Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — регрессия проверяет ошибку настоящего forked gate за launcher.
 What changed: fixture подделывает успешный файловый result, пока настоящий forked gate завершается ошибкой; добавлен отдельный bounded-запуск сценария.
-Evidence: `timeout 120s env FACTORY_TEST_ONLY=forged-gate-result FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS, exit 0; release вернул gate error 5 и не запускал сборку или установку.
+Evidence: pinned candidate `2be97a66737caee20ee1a7390d1ba68f38a9f606` прошёл целевой forged-gate сценарий: release сохранил ошибку настоящего gate и не запускал установку; полный `just check` остановился на существующем `SA4000` вне области.
 One next action: выполнить human merge ветки `factory/e35e268f-1d3-934fca68-3f2`.
 
 ## LOG
@@ -107,3 +107,12 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 Регрессия подделывает успешный result рядом с настоящим forked gate и требует вернуть
 исходную ошибку 5 без сборки и установки. Изолированный сценарий с внешним timeout,
 внутренним timeout и trap-очисткой завершился PASS с кодом 0; синтаксис и diff-check прошли.
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Ошибка настоящего forked gate не теряется за launcher | `timeout 180s env FACTORY_TEST_ONLY=forged-gate-result FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` | PASS: реальная ошибка gate победила поддельный успех, установка не запускалась, exit 0 у self-test. |
+| Смежное release-поведение | `bash -n` для обоих скриптов; pinned `git diff --check` | PASS: синтаксис и пробелы корректны. |
+| Полный набор проекта | `timeout 1200s just check` | НАХОДКА вне области: format, vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
+| Закреплённая область поставки | isolated bare fetch; `git diff --name-only c28b5bfc0c5bbb22c7d69d0749c316a2b340841e...2be97a66737caee20ee1a7390d1ba68f38a9f606` | PASS: изменены только карточка и `ops/test-fx-factory-release.sh`; implementation commit `13c8e8e0a04854c17c352eb8128eb85bb16fd04d` — предок кандидата и меняет код. |
