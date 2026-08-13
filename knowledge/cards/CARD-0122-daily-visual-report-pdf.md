@@ -1,18 +1,26 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: d7af2d63d66e6b2f52e6e8994467d6a45292751b — PDF-рендерер использует обязательный изолированный Chromium launcher
+Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт готовности обязательных снимков и автоматически собирается после рестарта
 
 ## HEAD
 
 - Status: IMPLEMENTED / VERIFY PASS
-- Branch: `factory/99462fd3-c5e-4eceb84d-531`
-- Implementation commit: `d7af2d63d66e6b2f52e6e8994467d6a45292751b`
-- What changed: production и web PDF-renderer требуют абсолютный `FACTORY_BROWSER_LAUNCHER`, передают его в `executablePath` и включают `chromiumSandbox`.
-- What changed: production renderer корректно читает stdin; поведенческие тесты проверяют отказ при отсутствии или недоступности изолированного launcher.
-- Evidence: `node --test web/report/report.test.mjs` 4/4, `go test ./internal/controlplane/...`, lint, typecheck, build и production smoke `%PDF-` → PASS.
-- One next action: провести Review поставки и слить ветку при PASS.
+- Branch: `factory/e8d83036-21a-49f5b4f9-956`
+- Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
+- What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
+- What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
+- Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
+- One next action: повторить Review поставки.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+После замечания Review ежедневный PDF больше не публикуется без обязательной пары
+снимков: незавершённые, отсутствующие или недоступные capture оставляют durable-задание
+в `pending`, поэтому новый процесс автоматически продолжает сборку. Интеграционный тест
+воспроизводит гонку запуска и рестарт, а затем находит обе PNG-вставки в единственном PDF;
+10 целевых повторов, полный Go-набор, 179 UI- и 4 Node-теста, lint, typecheck и обе сборки прошли.
 
 ### 2026-08-13 — Implement
 
