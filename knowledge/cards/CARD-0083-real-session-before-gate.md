@@ -1,16 +1,16 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
+Implementation commit: 2bad5a4e8bf9c35358a56c242602817d407a602b — cgroup helper ограничен и безопасно установлен до Gate поверх свежего main.
 
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: factory/f851f8f5-7e7-0715f029-f5f.
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
-What changed: crash recovery очищает hook перед повторным запуском; каждый release, signal и driver-сценарий имеет жёсткий timeout.
-What changed: разделены повторные PATH-fixture, добавлены trusted-gate env для фоновых и rollback runner; anti-spoof контракт сохранён.
-Evidence: pinned `e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3`; полный release shell-suite → PASS; shell syntax и pinned diff-check → PASS. Общий `just check` остановился на существующем SA4000 вне области поставки.
-One next action: выполнить human merge ветки `factory/f851f8f5-7e7-0715f029-f5f`.
+Branch: factory/6b7a29cf-7a0-04fb7336-ad4.
+Implementation commit: 2bad5a4e8bf9c35358a56c242602817d407a602b — cgroup helper ограничен и безопасно установлен до Gate поверх свежего main.
+What changed: bootstrap проверяет owner/mode/hash и цепочки каталогов, атомарно ставит control tools и создаёт marker только после cgroup v2 probe.
+What changed: release проверяет marker/helper до Gate, прикрепляет session к cgroup до первой команды и добивает отделившиеся процессы при cleanup.
+Evidence: pinned база `76d16c5191dcc8c44a001ffb71dbbaebf183f573`; целевые ops-тесты, Go tests/race, release/build и security checks → PASS; root-live → SKIP без sudo.
+One next action: выполнить root bootstrap и живой cgroup probe на целевом cgroup v2-хосте перед слиянием.
 
 ## LOG
 
@@ -102,3 +102,13 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | Полный набор проекта | `just check` | НАХОДКА вне области: vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
 | Закреплённая поставка | isolated bare fetch; `git diff --name-only e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3` | PASS: изменены только карточка и два release-скрипта; implementation commit `f97fe77d83f844426623f2a0e8a2a27ffb3cc603` валиден. |
 | Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; pinned `git diff --check` | PASS. |
+
+### 2026-08-12 — Verify: cgroup helper до Gate
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Helper не выходит из выделенного cgroup root | `bash ops/test-factory-gate-cgroup.sh` | PASS: traversal отвергнут до доступа к parent `cgroup.kill`. |
+| Control tools ставятся атомарно из доверенного bootstrap | `bash ops/test-install-factory-control.sh` | PASS: writable parent и altered helper отвергнуты, failpoint сохраняет прежнюю пару. |
+| Gate закрыт до проверки helper, attach происходит до первой команды | `bash ops/test-fx-factory-release.sh` | PASS до rebase: marker/owner/mode/hash, attach ordering, cleanup, recovery и rollback проверены; после rebase целевой повтор обязателен. |
+| Bootstrap проверяет цепочку, откат и one-shot marker | `bash ops/test-factory-cgroup-bootstrap.sh` | SKIP root-live при UID 994 без `sudo`; pinned SHA совпал, хост использует `cgroup2fs`. |
+| Полный набор незатронутой платформы | `just test`, `just test-worker-race`, build/release/launcher/vet/vuln/boundary | PASS; UI typecheck и staticcheck имеют два подтверждённых сбоя в неизменённых файлах. |
