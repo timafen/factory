@@ -1,19 +1,22 @@
 # CARD-0061 — Воркер не повторяет идущую команду
 
-Implementation commit: 33acf2aa01b07d54cdd6a6e36d7ed8f10e9d42e8 — общий запуск команд воркера отклоняет совпадающий параллельный запуск.
+Implementation commit: 8cacc2554dd63dbbcfb245ea9497560b81792cc1 — Claude-службы запускаются из общего каталога для единой области flock.
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/d45c60b2-03d-726534e8-c92`.
-- Implementation commit: 33acf2aa01b07d54cdd6a6e36d7ed8f10e9d42e8 — общий запуск команд воркера отклоняет совпадающий параллельный запуск.
-- What changed: `runCommand` берёт неблокирующий `flock` по точной argv-команде и каноническому рабочему каталогу.
-- What changed: разные команды не мешают друг другу; файл блокировки безопасен после сбоя, потому что ядро освобождает advisory lock при закрытии процесса.
-- Evidence: чистый `go test ./... -count=1` → PASS, 5 пакетов; `go vet ./...` и `git diff --check origin/main...HEAD` → PASS.
-- Evidence: тесты `TestRunCommand*` покрывают одновременный дубликат через символьную ссылку на каталог, повтор после успеха, разные команды параллельно и повтор после ошибки.
-- One next action: человек проверяет доказательства и принимает решение о слиянии.
+- Status: Implemented — ready for verification.
+- Branch: `factory/5dd7237e-363-723c1cf6-7d2`.
+- Implementation commit: 8cacc2554dd63dbbcfb245ea9497560b81792cc1 — Claude-службы запускаются из общего каталога для единой области flock.
+- What changed: общий `runCommand` сохраняет неблокирующий `flock` по argv и каноническому `cwd`.
+- What changed: все systemd-службы с Claude OAuth (`factory-pilot`, `factory-intake`) имеют `WorkingDirectory=/opt/factory`.
+- Evidence: `bash ops/test-claude-service-cwd.sh` → PASS, 2 службы; `go test ./internal/worker -run '^TestRunCommand' -count=1` → PASS.
+- One next action: выполнить общий набор проверок перед слиянием.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+`factory-pilot.service` и `factory-intake.service` теперь запускаются из `/opt/factory`: их общая Claude OAuth-среда получает одинаковый `cwd`, поэтому область неблокирующего `flock` в `runCommand` совпадает. Новый `ops/test-claude-service-cwd.sh` находит каждый unit с Claude OAuth и требует этот каталог. Целевой shell-тест и `TestRunCommand*` прошли.
 
 ### 2026-08-10 — Implement
 
