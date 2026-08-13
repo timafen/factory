@@ -1,14 +1,21 @@
 # CARD-0111: усилить legacy fallback и fixture stale-cache
 
+Implementation commit: e6c884a4387b92e3059d1385cc84a3bc22c95c3b — Review использует свежий pinned snapshot, блокирует невалидную repository identity и проверяет stale-cache; [фактическая поставка Review](https://github.com/timafen/factory/commit/e6c884a4387b92e3059d1385cc84a3bc22c95c3b) влита в `main` через PR #207.
+
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: `factory/d8a17c2c-94c-973bb42e-a68`
-Implementation commit: 1a40e53674cc211b4f274b92c6bac4aeca98311f — Review блокирует невалидную identity и проверяет stale-cache через pinned SHA.
-Evidence: пять целевых проверок Review/stale-cache → OK; `python3 -m unittest -q pilot.test_pilot` имеет 2 одинаковых с main сбоя в `CorrectionProvenanceStormTests`; `just check` останавливается на одинаковом с main SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
-One next action: human merge after accepting the documented pre-existing project-check failures.
+Status: Done — merged into `main` via PR #207 on 2026-08-13
+Evidence: фактический implementation commit входит в свежий `origin/main`; шесть целевых `FreshDefaultBranchSnapshotTests` → OK.
+One next action: none; повторную поставку закрыть как `CLOSE / DUPLICATE`.
 
 ## LOG
+
+### 2026-08-13 — Documentation cleanup
+
+После решения владельца карточка приведена к фактическому состоянию: защита уже
+влита в `main` через PR #207. Устаревшие предсливочный статус, ветка и ссылка на
+промежуточный SHA заменены ссылкой на merged implementation commit. Повторная
+разработка не требуется.
 
 ### 2026-08-12 — Implement
 
