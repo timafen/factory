@@ -1,23 +1,20 @@
 # CARD-0124 — Провалившийся запуск Automation повторяется один раз
 
-Implementation commit: ожидается на этапе Implement — Specification не меняет продуктовый код.
+Implementation commit: b413dd0c3ffa15fdde2c088a30a9204e1d567a2d — встроенный интерфейс Automation показывает автоматический повтор и окончательный сбой запуска.
 
 ## HEAD
 
-- Статус: Specified — ожидает Implement.
-- Ветка Specification: `factory/209b85f2-ed1-e28318b7-16e`.
-- Спецификация:
-  `knowledge/specs/automation-failure-visibility-and-single-retry.md`.
-- Влияние на владельца: scheduled и Run now запуск после первого failure один
-  раз автоматически повторяется; ход повтора и окончательный провал видны на
-  существующем экране Automation.
-- Граница: тот же execution/task/occurrence/request key и закреплённый worker;
-  cancellation, disablement, недоступный worker, второй failure и server restart
-  не создают следующий replay.
-- Зависимость: интегрировать owner-facing состояния с CARD-0123, не дублируя её
-  экран и модель истории запусков.
-- Следующее действие: Implement реализует атомарный retry и указанные Go/UI-
-  тесты, после чего заменяет верхнюю строку полным SHA кодового коммита.
+- Статус: Implemented.
+- Ветка: `factory/d1ee5c50-b00-7430415d-021`.
+- Implementation commit: `b413dd0c3ffa15fdde2c088a30a9204e1d567a2d` —
+  встроенный интерфейс Automation показывает автоматический повтор и
+  окончательный сбой запуска.
+- Что изменилось: первый failure scheduled или Run now запуска атомарно ставит
+  тот же execution в единственную повторную очередь; API и экран показывают ход
+  повтора, окончательный сбой и причины, по которым повтор невозможен.
+- Evidence: `go test ./...` → PASS; web 178/178 → PASS; lint и build → PASS.
+- Следующее действие: открыть Automation на стенде и визуально подтвердить
+  состояния реального повторного запуска.
 
 ## LOG
 
@@ -31,3 +28,10 @@ execution `failed`. Определён единый транзакционный
 `queued` и увеличивает `retry_count` до 1. Durable diagnostic и расширенная
 Automation projection различают идущий retry, final failure, disablement и
 недоступность worker; повтор completion/sweep и перезапуск сервера идемпотентны.
+
+### 2026-08-13 — Implement
+
+Коммит `b413dd0c3ffa15fdde2c088a30a9204e1d567a2d` завершил продуктовую поставку:
+Automation повторяет первый failed execution один раз, а встроенный интерфейс
+выводит понятные состояния повтора и окончательного сбоя. Целевой Go-тест и пять
+UI-сценариев прошли; полный Go/web-набор, lint и production build также зелёные.
