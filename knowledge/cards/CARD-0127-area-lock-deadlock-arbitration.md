@@ -4,11 +4,11 @@ Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — рабочи
 
 ## HEAD
 
-- Статус: Implemented — ready for Review.
+- Статус: Implemented — published, ready for Review.
 - Ветка: `factory/d599086f-8f3-f7155de3-9ab`.
 - Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — оба production-вызова передают UUID и полную текущую задачу в детерминированный арбитр областей.
-- Evidence: pinned base `73f4edce272cb113607540412425d842158e2b81`; целевые 6 тестов и `py_compile` — OK; `go build ./...` — OK; полный Python-набор — 260 тестов, 13 skipped и 2 падения, оба воспроизводятся на base; полный Go-набор имеет воспроизводимое падение в нетронутом `internal/worker`.
-- Следующее действие: Опубликовать ветку и повторить Review.
+- Evidence: pinned base `73f4edce272cb113607540412425d842158e2b81`; remote branch подтверждена `git ls-remote`; целевые 6 тестов и `py_compile` — OK; `go build ./...` — OK; полный Python-набор — 260 тестов, 13 skipped и 2 падения, оба воспроизводятся на base; полный Go-набор имеет воспроизводимое падение в нетронутом `internal/worker`.
+- Следующее действие: Повторить Review по опубликованной ветке.
 
 ## LOG
 
