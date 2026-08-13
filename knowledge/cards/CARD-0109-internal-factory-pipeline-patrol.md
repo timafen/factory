@@ -2,7 +2,7 @@
 
 ## HEAD
 
-- Implementation commit: eb0a854dbcb524ebf10aeb6e3653f0e995707b9a — одноразовая утилита и разведение исторических дублей номеров карточек.
+- Implementation commit: 345aface075ed562ee970b21544b4672869228d9 — одноразовая утилита и разведение исторических дублей номеров карточек.
 - Status: Implemented — awaiting review.
 - Branch: `factory/13285b85-081-0b0922cf-67c`.
 - Head commit: `61628e7` (проверенный снимок дополнительного сценария патруля).
