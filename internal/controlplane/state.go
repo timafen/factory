@@ -126,6 +126,14 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		  ON wr.worker_id = ? AND wr.repository_id = t.repository_id
 		WHERE e.required_runtime = ?
 		  AND e.state = 'queued'
+		  AND (
+		      NOT EXISTS (
+		          SELECT 1 FROM automation_occurrences retry_occurrence
+		          WHERE retry_occurrence.task_id = e.task_id
+		            AND retry_occurrence.diagnostic = 'retry_queued'
+		      )
+		      OR e.assigned_worker_id = ?
+		  )
 		  AND wr.advertised = 1
 		  AND wr.retained_count + (
 		      SELECT COUNT(*)
@@ -147,7 +155,7 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		  ) < ?
 		ORDER BY e.created_at, e.id
 		LIMIT 1
-	`, workerID, runtime, workerID, workerID, protocol.MaxRetainedPerRepo).Scan(&executionID, &assignedWorkerID)
+	`, workerID, runtime, workerID, workerID, workerID, protocol.MaxRetainedPerRepo).Scan(&executionID, &assignedWorkerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := insertEmptyClaim(ctx, tx, workerID, input.RequestID, digest, nowMillis); err != nil {
 			return nil, err
@@ -663,11 +671,20 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 	`, attemptState, nullString(input.Result), nullString(input.Error), now, attemptID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
-	if _, err := tx.ExecContext(ctx, `
+	executionResult, err := tx.ExecContext(ctx, `
 		UPDATE executions SET state = ?, retry_count = retry_count + ?, updated_at = ?
 		WHERE id = ? AND state IN ('preparing', 'running')
-	`, executionState, retryIncrement, now, lease.executionID); err != nil {
+	`, executionState, retryIncrement, now, lease.executionID)
+	if err != nil {
 		return protocol.Attempt{}, unavailable(err)
+	}
+	if input.State == "failed" {
+		changed, _ := executionResult.RowsAffected()
+		if changed == 1 {
+			if err := retryFailedScheduleAutomation(ctx, tx, lease.executionID, now); err != nil {
+				return protocol.Attempt{}, unavailable(err)
+			}
+		}
 	}
 	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now, "terminal"); err != nil {
 		return protocol.Attempt{}, unavailable(err)
@@ -859,27 +876,6 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 	if err := rows.Close(); err != nil {
 		return nil, unavailable(err)
 	}
-	ghostWorkers, err := tx.QueryContext(ctx, `SELECT DISTINCT worker_id FROM attempts WHERE state IN ('preparing', 'running') AND lease_expires_at <= ?`, now)
-	if err != nil {
-		return nil, unavailable(err)
-	}
-	var ghostWorkerIDs []string
-	for ghostWorkers.Next() {
-		var workerID string
-		if err := ghostWorkers.Scan(&workerID); err != nil {
-			ghostWorkers.Close()
-			return nil, unavailable(err)
-		}
-		ghostWorkerIDs = append(ghostWorkerIDs, workerID)
-	}
-	if err := ghostWorkers.Close(); err != nil {
-		return nil, unavailable(err)
-	}
-	for _, workerID := range ghostWorkerIDs {
-		if _, err := reconcileWorkerCapacity(ctx, tx, workerID, now, "sweep"); err != nil {
-			return nil, unavailable(err)
-		}
-	}
 	for _, value := range values {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE attempts SET state = 'lost', error = 'lease expired', completed_at = ?
@@ -890,11 +886,17 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 		}
 		changed, _ := result.RowsAffected()
 		if changed == 1 {
-			if _, err := tx.ExecContext(ctx, `
+			executionResult, err := tx.ExecContext(ctx, `
 				UPDATE executions SET state = 'failed', updated_at = ?
 				WHERE id = ? AND state IN ('preparing', 'running')
-				`, now, value.ExecutionID); err != nil {
+				`, now, value.ExecutionID)
+			if err != nil {
 				return nil, unavailable(err)
+			}
+			if changed, _ := executionResult.RowsAffected(); changed == 1 {
+				if err := retryFailedScheduleAutomation(ctx, tx, value.ExecutionID, now); err != nil {
+					return nil, unavailable(err)
+				}
 			}
 		}
 	}
@@ -923,4 +925,80 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 		return nil, unavailable(err)
 	}
 	return values, nil
+}
+
+// retryFailedScheduleAutomation gives an admitted schedule run exactly one durable retry.
+// It deliberately keeps the frozen worker and repository reservation: a retry must not
+// silently change where an Automation runs.
+func retryFailedScheduleAutomation(ctx context.Context, tx *sql.Tx, executionID string, now int64) error {
+	// A second terminal failure is not eligible for another retry, but must remain
+	// visible as such instead of looking like an ordinary failed run.
+	result, err := tx.ExecContext(ctx, `
+		UPDATE automation_occurrences SET diagnostic = 'retry_final_failed', updated_at = ?
+		WHERE task_id = (SELECT task_id FROM executions WHERE id = ? AND retry_count > 0)
+		  AND EXISTS (
+			SELECT 1 FROM automation_schedule_occurrences schedule
+			WHERE schedule.occurrence_id = automation_occurrences.id
+			  AND schedule.kind IN ('scheduled', 'run_now')
+		  )
+	`, now, executionID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 1 {
+		return nil
+	}
+	var eligible int
+	err = tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM executions e
+		JOIN tasks t ON t.id = e.task_id
+		JOIN automation_occurrences o ON o.task_id = t.id AND o.state = 'dispatched'
+		JOIN automation_schedule_occurrences so ON so.occurrence_id = o.id
+		JOIN automations a ON a.id = o.automation_id AND a.enabled = 1 AND a.trigger_type = 'schedule'
+		JOIN workflows w ON w.id = a.workflow_id AND w.enabled = 1
+		JOIN repositories r ON r.id = a.repository_id AND r.enabled = 1
+		JOIN workers worker ON worker.id = e.assigned_worker_id
+		JOIN worker_repositories wr ON wr.worker_id = worker.id AND wr.repository_id = t.repository_id AND wr.advertised = 1
+		WHERE e.id = ? AND e.state = 'failed' AND e.retry_count = 0
+		  AND e.cancellation_requested = 0 AND so.kind IN ('scheduled', 'run_now')
+		  AND worker.health = 'healthy' AND worker.last_heartbeat >= ?
+		  AND worker.runtime = e.required_runtime
+	`, executionID, now-protocol.WorkerOnlineWindow.Milliseconds()).Scan(&eligible)
+	if err != nil {
+		return err
+	}
+	if eligible == 0 {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE automation_occurrences
+			SET diagnostic = CASE WHEN EXISTS (
+				SELECT 1 FROM executions e
+				JOIN tasks t ON t.id = e.task_id
+				JOIN automation_occurrences o ON o.task_id = t.id
+				JOIN automations a ON a.id = o.automation_id
+				JOIN workflows w ON w.id = a.workflow_id
+				JOIN repositories r ON r.id = a.repository_id
+				WHERE e.id = ? AND (a.enabled = 0 OR w.enabled = 0 OR r.enabled = 0)
+			) THEN 'retry_skipped_disabled' ELSE 'retry_skipped_worker_unavailable' END,
+			updated_at = ?
+			WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)
+			  AND EXISTS (
+				SELECT 1 FROM automation_schedule_occurrences schedule
+				WHERE schedule.occurrence_id = automation_occurrences.id
+				  AND schedule.kind IN ('scheduled', 'run_now')
+			  )
+		`, executionID, now, executionID)
+		return err
+	}
+	result, err = tx.ExecContext(ctx, `
+		UPDATE executions SET state = 'queued', retry_count = 1, cancellation_requested = 0, updated_at = ?
+		WHERE id = ? AND state = 'failed' AND retry_count = 0 AND cancellation_requested = 0
+	`, now, executionID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 1 {
+		_, err = tx.ExecContext(ctx, `UPDATE automation_occurrences SET diagnostic = 'retry_queued', updated_at = ? WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)`, now, executionID)
+	}
+	return err
 }
