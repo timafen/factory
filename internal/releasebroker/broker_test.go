@@ -350,6 +350,123 @@ func TestDiskBrokerKeepsAcceptedTerminalStatusAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestDiskBrokerPreservesLegacyTerminalStatusesWithoutExecutor(t *testing.T) {
+	statuses := []string{"succeeded", "locked", "release_failed_rolled_back", "rollback_failed", "failed"}
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			operationID := "legacy-" + strings.ReplaceAll(status, "_", "-")
+			body := `{"request":{"operation_id":"` + operationID + `","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"},"status":"` + status + `","posts":1}`
+			if err := os.WriteFile(filepath.Join(dir, operationID+".json"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			executor := &recordingExecutor{}
+			broker, err := NewAt(dir, executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item, ok := operationSnapshot(broker, operationID); !ok || item.Status != status {
+				t.Fatalf("recovered legacy item=%+v, want status %q", item, status)
+			}
+			if calls := executor.callCount(); calls != 0 {
+				t.Fatalf("executor calls=%d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestDiskBrokerRefusesCorruptOperationRecord(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "damaged.json"), []byte(`{"request":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAt(dir, &recordingExecutor{}); err == nil {
+		t.Fatal("broker started with a corrupt durable operation record")
+	}
+}
+
+func TestPersistFailsClosedOnSynchronizationErrors(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		breakPersistence func(*Broker)
+	}{
+		{name: "temporary file fsync", breakPersistence: func(b *Broker) {
+			b.syncFile = func(*os.File) error { return errors.New("file fsync failed") }
+		}},
+		{name: "state directory fsync", breakPersistence: func(b *Broker) {
+			b.syncDir = func(string) error { return errors.New("directory fsync failed") }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			broker, err := NewAt(t.TempDir(), &recordingExecutor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.breakPersistence(broker)
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"sync-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusServiceUnavailable {
+				t.Fatalf("POST status=%d, want %d", got, http.StatusServiceUnavailable)
+			}
+			if _, ok := operationSnapshot(broker, "sync-failure"); ok {
+				t.Fatal("operation became visible after a synchronization error")
+			}
+		})
+	}
+}
+
+func TestTerminalSynchronizationErrorsNeverPublishSuccess(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		breakFourthSync func(*Broker)
+	}{
+		{name: "temporary file fsync", breakFourthSync: func(b *Broker) {
+			calls := 0
+			b.syncFile = func(file *os.File) error {
+				calls++
+				if calls == 4 {
+					return errors.New("terminal file fsync failed")
+				}
+				return file.Sync()
+			}
+		}},
+		{name: "state directory fsync", breakFourthSync: func(b *Broker) {
+			calls := 0
+			original := b.syncDir
+			b.syncDir = func(path string) error {
+				calls++
+				if calls == 4 {
+					return errors.New("terminal directory fsync failed")
+				}
+				return original(path)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &recordingExecutor{}
+			broker, err := NewAt(t.TempDir(), executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.breakFourthSync(broker)
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"terminal-sync-failure","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			waitForBrokerIdle(t, broker)
+			if got := operationStatus(t, server, "terminal-sync-failure").Status; got != "running" {
+				t.Fatalf("unpersisted terminal status became visible as %q", got)
+			}
+			if executor.callCount() != 1 {
+				t.Fatalf("physical executions=%d, want 1", executor.callCount())
+			}
+		})
+	}
+}
+
 func TestDiskBrokerFailsClosedOnInvalidOperationState(t *testing.T) {
 	tests := map[string]struct {
 		name string
@@ -401,6 +518,53 @@ func TestDiskBrokerFailsClosedOnJSONDirectory(t *testing.T) {
 	}
 	if calls := executor.callCount(); calls != 0 {
 		t.Fatalf("physical executions=%d, want 0", calls)
+	}
+}
+
+func TestDirectoryFsyncFailureAfterRenameFailsClosedOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	executor := &recordingExecutor{}
+	brokeTerminalSync := false
+	b, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSyncDir := b.syncDir
+	calls := 0
+	b.syncDir = func(path string) error {
+		calls++
+		// Initial record, PID, running, pending marker, then terminal rename.
+		if calls == 5 {
+			brokeTerminalSync = true
+			return errors.New("directory fsync failed after terminal rename")
+		}
+		return originalSyncDir(path)
+	}
+	server := httptest.NewServer(b.Handler())
+	defer server.Close()
+	body := `{"operation_id":"rename-sync-restart","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForBrokerIdle(t, b)
+	if !brokeTerminalSync {
+		t.Fatalf("terminal directory fsync was not forced; calls=%d", calls)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "rename-sync-restart.json")); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(data), `"status":"succeeded"`) {
+		t.Fatalf("test did not leave renamed terminal record: %s", data)
+	}
+
+	restarted, err := NewAt(dir, &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, ok := operationSnapshot(restarted, "rename-sync-restart"); !ok || item.Status != "failed" {
+		t.Fatalf("restart accepted unconfirmed terminal: %+v", item)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor calls=%d, want 1", executor.callCount())
 	}
 }
 

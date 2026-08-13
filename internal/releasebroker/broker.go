@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -121,8 +122,9 @@ func invocation(adapter, sha string) ([]string, bool) {
 }
 
 type operation struct {
-	Request Request `json:"request"`
-	Status  string  `json:"status"`
+	FormatVersion int     `json:"format_version,omitempty"`
+	Request       Request `json:"request"`
+	Status        string  `json:"status"`
 	// Posts is an audit counter at the real privileged boundary.  It lets
 	// recovery diagnostics distinguish one accepted operation from its safe,
 	// same-identity retry without trusting an in-process client counter.
@@ -130,11 +132,18 @@ type operation struct {
 	PID   int `json:"pid,omitempty"` // diagnostic only; never recovery input
 }
 
+type terminalMarker struct {
+	Status string `json:"status"`
+}
+
 type Broker struct {
 	executor Executor
 	stateDir string
 	// persistTerminal is a test seam for a failed final state write.
 	persistTerminal func(*operation) error
+	syncFile        func(*os.File) error
+	rename          func(string, string) error
+	syncDir         func(string) error
 	mu              sync.Mutex
 	active          string
 	items           map[string]*operation
@@ -163,6 +172,18 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
+	markers := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".commit" {
+			continue
+		}
+		var marker terminalMarker
+		data, err := os.ReadFile(filepath.Join(stateDir, entry.Name()))
+		if err != nil || json.Unmarshal(data, &marker) != nil || (marker.Status != "pending" && marker.Status != "committed") {
+			return nil, fmt.Errorf("invalid terminal marker %q", entry.Name())
+		}
+		markers[strings.TrimSuffix(entry.Name(), ".commit")] = marker.Status
+	}
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -179,6 +200,7 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			return nil, fmt.Errorf("decode operation state %q: %w", entry.Name(), err)
 		}
 		if !valid(item.Request) || entry.Name() != item.Request.OperationID+".json" ||
+			(item.FormatVersion != 0 && item.FormatVersion != 1) ||
 			!validPersistedStatus(item.Status) || item.Posts < 1 || item.PID < 0 {
 			// Losing an accepted operation can make a repeated POST execute the
 			// same physical release again.  Refuse to start instead of treating a
@@ -198,6 +220,12 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			}
 			item = updated
 		}
+		if item.FormatVersion == 1 && isTerminal(item.Status) && markers[item.Request.OperationID] != "committed" {
+			// A terminal record without a separately fsynced commit marker may
+			// have crossed rename but not the directory durability boundary.
+			// Keep recovery fail-closed even if the record says succeeded.
+			item.Status = "failed"
+		}
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
@@ -212,8 +240,70 @@ func validPersistedStatus(status string) bool {
 	}
 }
 
+func isTerminal(status string) bool {
+	return status == "succeeded" || status == "locked" || status == "release_failed_rolled_back" || status == "rollback_failed" || status == "failed"
+}
+
+func (b *Broker) writeTerminalMarker(operationID, status string, create bool) error {
+	if b.stateDir == "" {
+		return nil
+	}
+	data, err := json.Marshal(terminalMarker{Status: status})
+	if err != nil {
+		return err
+	}
+	markerPath := filepath.Join(b.stateDir, operationID+".commit")
+	if !create {
+		file, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err = file.Write(data); err == nil {
+			err = b.syncFile(file)
+		}
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		return err
+	}
+	temporary, err := os.CreateTemp(b.stateDir, ".commit-")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err = temporary.Write(data); err == nil {
+		err = temporary.Chmod(0o600)
+	}
+	if err == nil {
+		err = b.syncFile(temporary)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := b.rename(temporaryName, markerPath); err != nil {
+		return err
+	}
+	return b.syncDir(b.stateDir)
+}
+
 func newBroker(stateDir string, executor Executor) *Broker {
-	return &Broker{executor: executor, stateDir: stateDir, items: make(map[string]*operation)}
+	return &Broker{
+		executor: executor, stateDir: stateDir, items: make(map[string]*operation),
+		syncFile: func(file *os.File) error { return file.Sync() },
+		rename:   os.Rename,
+		syncDir: func(path string) error {
+			directory, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer directory.Close()
+			return directory.Sync()
+		},
+	}
 }
 
 func (b *Broker) Handler() http.Handler {
@@ -241,7 +331,7 @@ func (b *Broker) persist(item *operation) error {
 		err = temporary.Chmod(0o600)
 	}
 	if err == nil {
-		err = temporary.Sync()
+		err = b.syncFile(temporary)
 	}
 	if closeErr := temporary.Close(); err == nil {
 		err = closeErr
@@ -249,15 +339,10 @@ func (b *Broker) persist(item *operation) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json")); err != nil {
+	if err := b.rename(name, filepath.Join(b.stateDir, item.Request.OperationID+".json")); err != nil {
 		return err
 	}
-	directory, err := os.Open(b.stateDir)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return b.syncDir(b.stateDir)
 }
 
 func valid(input Request) bool {
@@ -317,6 +402,7 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 			// record.  A failed write leaves both the in-memory and durable
 			// identity unchanged for the next safe retry.
 			updated := *existing
+			updated.FormatVersion = 1
 			updated.Request = input
 			updated.Status = "launching"
 			updated.PID = 0
@@ -351,7 +437,7 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "another privileged operation is running", http.StatusConflict)
 		return
 	}
-	item := &operation{Request: input, Status: "launching", Posts: 1}
+	item := &operation{FormatVersion: 1, Request: input, Status: "launching", Posts: 1}
 	// The wrapper status is durable before any external executor can run.
 	if err := b.persist(item); err != nil {
 		b.mu.Unlock()
@@ -391,8 +477,10 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
-	if err := b.saveTerminal(&updated); err == nil {
-		*item = updated
+	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err == nil {
+		if err := b.saveTerminal(&updated); err == nil && b.writeTerminalMarker(item.Request.OperationID, "committed", false) == nil {
+			*item = updated
+		}
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
