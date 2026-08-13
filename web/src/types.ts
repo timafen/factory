@@ -153,6 +153,7 @@ export interface WorkerRepositoryOption {
 
 export interface Task {
   id: string;
+  work_id?: string;
   request_key: string;
   title: string;
   description?: string;

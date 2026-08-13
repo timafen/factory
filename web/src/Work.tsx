@@ -68,6 +68,7 @@ const LIVE = ["running", "queued", "preparing"];
 const OLDER_ENOUGH = 30;
 
 type Group = {
+  id: string;
   base: string;
   items: { task: Task; stage: string | null; verdict?: Verdict }[];
   latest: Task;
@@ -115,13 +116,14 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   for (const t of tasks) {
     const { base, stage } = parse(t.title);
     const v = verdicts[t.id];
-    const g = map.get(base) ?? {
-      base, items: [], latest: t,
+    const id = t.work_id?.trim() || base;
+    const g = map.get(id) ?? {
+      id, base, items: [], latest: t,
       status: neutralStatus(), currentStage: null, reached: {},
     };
     g.items.push({ task: t, stage: stage ?? v?.stage ?? null, verdict: v });
     if ((t.created_at ?? "") > (g.latest.created_at ?? "")) g.latest = t;
-    map.set(base, g);
+    map.set(id, g);
   }
 
   for (const g of map.values()) {
@@ -151,8 +153,8 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     }
     g.lap = lap;
 
-    g.meta = works[g.base];
-    g.promise = promises[g.base];
+    g.meta = works[g.id] ?? works[g.base];
+    g.promise = promises[g.id] ?? promises[g.base];
     const recorded = g.meta?.skipped;
     if (recorded && recorded.length) {
       // Записано при заведении работы — гадать не нужно.
@@ -210,7 +212,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       }
       if (live.task.state === "queued") {
         g.status = {
-          kind: "queued", label: "В очереди Factory", tone: "warn",
+          kind: "queued", label: "Ждёт исполнителя", tone: "warn",
           happened: rework
             ? "Проверка вернула работу на доработку, следующий этап поставлен в очередь."
             : "Текущий этап поставлен в очередь и ещё не выполняется.",
@@ -276,7 +278,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       const stageIndex = STAGE_ORDER.indexOf(latestItem?.stage ?? "");
       const nextStage = stageIndex >= 0 ? STAGE_ORDER[stageIndex + 1] : undefined;
       g.status = {
-        kind: "queued", label: "Ждёт следующий этап", tone: "warn",
+        kind: "queued", label: "Factory готовит следующий этап", tone: "warn",
         happened: latestItem?.stage
           ? `Этап «${STAGE_RU[latestItem.stage] ?? latestItem.stage}» успешно завершён.`
           : "Предыдущий этап успешно завершён.",
@@ -310,7 +312,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   // Правда о том, почему работа стоит. «Вернули на доработку, продолжаем»
   // — ложь, если конвейер по этой работе на паузе или встал совсем.
   for (const g of map.values()) {
-    const ws = statuses[g.base];
+    const ws = statuses[g.id] ?? statuses[g.base];
     if (!ws) continue;
     if (g.items.some((it) => LIVE.includes(it.task.state)) || g.status.kind === "decision") continue;
     if (ws.state === "stopped_owner") {
@@ -354,7 +356,7 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "paused", title: "Поставлено на паузу", hint: "Продолжение включается в настройках", accent: "#8a94a6" },
   { key: "repairing", title: "Исправляется автоматически", hint: "Factory уже выполняет повторную попытку", accent: "#8ec5ff" },
   { key: "active", title: "В работе прямо сейчас", hint: "Исполнитель уже выполняет этап", accent: "#8ec5ff" },
-  { key: "queued", title: "В очереди", hint: "Ждёт свободного подходящего исполнителя", accent: "#cf9b4e" },
+  { key: "queued", title: "Ожидают исполнителя", hint: "Текущий этап ещё не начат", accent: "#cf9b4e" },
   { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 
@@ -434,7 +436,7 @@ export function WorkView({
 
   return (
     <div className="page page-work">
-      <ViewHeader title="Работа агентов" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
+      <ViewHeader title="Работа" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
       {error && <StaleBanner error={error} />}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
@@ -473,11 +475,11 @@ export function WorkView({
                   <span style={{ fontSize: 12.5, color: muted }}>{sec.hint}</span>
                 </div>
                 {rows.map((g) => (
-                  <GroupRow key={g.base} g={g} workerMap={workerMap}
-                            expanded={open === g.base}
-                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                  <GroupRow key={g.id} g={g} workerMap={workerMap}
+                            expanded={open === g.id}
+                            onToggle={() => setOpen(open === g.id ? "" : g.id)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
-                            resuming={resuming === g.base} resumeError={resumeError}
+                            resuming={resuming === g.id} resumeError={resumeError}
                             onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
@@ -501,11 +503,11 @@ export function WorkView({
                   </span>
                 )}
                 {showArchive && old.map((g) => (
-                  <GroupRow key={g.base} g={g} workerMap={workerMap}
-                            expanded={open === g.base}
-                            onToggle={() => setOpen(open === g.base ? "" : g.base)}
+                  <GroupRow key={g.id} g={g} workerMap={workerMap}
+                            expanded={open === g.id}
+                            onToggle={() => setOpen(open === g.id ? "" : g.id)}
                             onTask={onTask} onAnswer={onAnswer} onResume={onResume}
-                            resuming={resuming === g.base} resumeError={resumeError}
+                            resuming={resuming === g.id} resumeError={resumeError}
                             onResumeError={setResumeError} onResuming={setResuming}
                             history={history}
                             project={projectName(g.latest.repository_id)} />
@@ -613,7 +615,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
             disabled={resuming}
             onClick={(e) => {
               e.stopPropagation();
-              onResumeError(""); onResuming(g.base);
+              onResumeError(""); onResuming(g.id);
               Promise.resolve(onResume(g.base)).catch((error: unknown) => {
                 // Внутренний API-текст может раскрыть детали control plane или прокси.
                 void error;
@@ -776,7 +778,7 @@ function StageBoard({ tasks, verdicts, workerMap, onTask }: {
   workerMap: Map<string, Worker>; onTask: (id: string) => void;
 }) {
   const COLUMNS: Record<string, { title: string; empty: string }> = {
-    queued:    { title: "В очереди",  empty: "Очередь пуста" },
+    queued:    { title: "Задачи: ожидают запуска", empty: "Таких задач нет" },
     running:   { title: "В работе",   empty: "Сейчас никто не работает" },
     succeeded: { title: "Отработали", empty: "Пока пусто" },
     failed:    { title: "Сорвались",  empty: "Срывов нет" },

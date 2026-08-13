@@ -6,9 +6,9 @@ import type { Task } from "./types";
 
 const now = new Date().toISOString();
 
-function task(id: string, title: string, state: Task["state"]): Task {
+function task(id: string, title: string, state: Task["state"], workID?: string): Task {
   return {
-    id, request_key: id, title, state, created_at: now,
+    id, work_id: workID, request_key: id, title, state, created_at: now,
     worker_id: "", repository_id: "", timeout_seconds: 60,
   };
 }
@@ -16,7 +16,7 @@ function task(id: string, title: string, state: Task["state"]): Task {
 function mockAPI(data: Record<string, unknown>) {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: [] });
+    if (path.startsWith("/api/v1/work-history?")) return Response.json({ history: data.history ?? [] });
     if (path === "/api/v1/verdicts") return Response.json(data.verdicts ?? { verdicts: {} });
     if (path === "/api/v1/questions") return Response.json(data.questions ?? { questions: [] });
     if (path === "/api/v1/works") return Response.json(data.works ?? {});
@@ -45,15 +45,45 @@ it("separates queued work from work running right now", async () => {
 
   const runningSection = (await screen.findByRole("heading", { name: "В работе прямо сейчас" }))
     .parentElement?.parentElement as HTMLElement;
-  const queuedSection = screen.getByRole("heading", { name: "В очереди" })
+  const queuedSection = screen.getByRole("heading", { name: "Ожидают исполнителя" })
     .parentElement?.parentElement as HTMLElement;
 
   expect(within(runningSection).getByText("Уже выполняется")).toBeVisible();
   expect(within(runningSection).queryByText("Ждёт исполнителя")).not.toBeInTheDocument();
-  expect(within(queuedSection).getByText("Ждёт исполнителя")).toBeVisible();
+  expect(within(queuedSection).getAllByText("Ждёт исполнителя")).toHaveLength(2);
   expect(within(queuedSection).queryByText("Уже выполняется")).not.toBeInTheDocument();
   expect(screen.getByText("Текущий этап поставлен в очередь и ещё не выполняется.")).toBeVisible();
   expect(screen.getByText("поставил помощник")).toBeVisible();
+  expect(screen.getAllByText("Ждёт исполнителя")).toHaveLength(2);
+  expect(screen.getByText("Текущий этап ещё не начат")).toBeVisible();
+});
+
+it("shows equal work names as independently expandable cards", async () => {
+  mockAPI({ history: [
+    { task_id: "first", text: "История первой работы" },
+    { task_id: "second", text: "История второй работы" },
+  ] });
+  view([
+    task("first", "[auto] [1/5 Triage] Одинаковое название", "running", "work-first"),
+    task("second", "[auto] [1/5 Triage] Одинаковое название", "running", "work-second"),
+  ]);
+
+  const cards = await screen.findAllByText("Одинаковое название");
+  expect(cards).toHaveLength(2);
+  expect(screen.queryByText("work-first")).not.toBeInTheDocument();
+  fireEvent.click(cards[0]);
+  expect(await screen.findByText("История первой работы")).toBeVisible();
+  expect(screen.queryByText("История второй работы")).not.toBeInTheDocument();
+});
+
+it("names the work screen and task queue by their meaning", async () => {
+  mockAPI({});
+  view([task("running", "[auto] [1/5 Triage] Запущенный этап", "running")]);
+
+  expect(await screen.findByRole("heading", { name: "Работа" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Показать по этапам" }));
+  expect(screen.getByRole("heading", { name: "Задачи: ожидают запуска" })).toBeVisible();
+  expect(screen.getAllByText("Таких задач нет").length).toBeGreaterThan(0);
 });
 
 it("separates owner decision, pause, dead end, automatic repair, and archive", async () => {
