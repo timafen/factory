@@ -854,16 +854,7 @@ def select_dead_end_snapshot_tasks(tasks):
     return selected
 
 
-def write_dead_end_snapshot(tasks, captured_at=None):
-    """Publish one reproducible, idempotent view of the archive decision.
-
-    The digest excludes capture time, so an unchanged task set keeps its
-    original immutable receipt across Pilot cycles.
-    """
-    tasks = list(tasks or [])
-    works = load(WORKS_PATH, {}) or {}
-    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
-    stopped = set((load(CONF_PATH, {}) or {}).get("stopped_pipelines") or [])
+def _dead_end_snapshot_entries(tasks, works, statuses, stopped):
     by_key = {}
     for task in tasks:
         key = str(task.get("work_id") or task.get("id") or "")
@@ -879,7 +870,21 @@ def write_dead_end_snapshot(tasks, captured_at=None):
         else:
             decision, reason = "included", "candidate_for_dead_end_review"
         by_key[key] = _snapshot_entry(task, decision, reason)
-    entries = sorted(by_key.values(), key=lambda item: (item["work_id"], item["task_id"]))
+    return sorted(by_key.values(), key=lambda item: (item["work_id"], item["task_id"]))
+
+
+def write_dead_end_snapshot(tasks, captured_at=None, entries=None):
+    """Publish one reproducible, idempotent view of the archive decision.
+
+    The digest excludes capture time, so an unchanged task set keeps its
+    original immutable receipt across Pilot cycles.
+    """
+    tasks = list(tasks or [])
+    if entries is None:
+        works = load(WORKS_PATH, {}) or {}
+        statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+        stopped = set((load(CONF_PATH, {}) or {}).get("stopped_pipelines") or [])
+        entries = _dead_end_snapshot_entries(tasks, works, statuses, stopped)
     body = {
         "version": DEAD_END_SNAPSHOT_VERSION,
         "captured_at": captured_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -898,7 +903,24 @@ def write_dead_end_snapshot(tasks, captured_at=None):
     if existing.get("digest") == digest and existing.get("entries") == entries:
         return existing
     body["digest"] = digest
-    save(DEAD_END_SNAPSHOT_PATH, body)
+    directory = os.path.dirname(DEAD_END_SNAPSHOT_PATH) or "."
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=directory,
+                prefix=".dead_end_snapshot.", suffix=".tmp", delete=False) as temporary:
+            temporary_path = temporary.name
+            json.dump(body, temporary, ensure_ascii=False, indent=1)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, DEAD_END_SNAPSHOT_PATH)
+    except Exception:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        raise
     return body
 
 
@@ -1088,6 +1110,8 @@ def cleanup_work_archive(conf, tasks):
     open_question_tasks = {q.get("task_id") for q in questions
                            if q.get("status") == "open"}
     stopped = set(conf.get("stopped_pipelines") or [])
+    snapshot_entries = (_dead_end_snapshot_entries(
+        snapshot_tasks, works, statuses, stopped) if snapshot_tasks is not None else None)
     merged = _merged_work()
     grouped = {}
     for task in tasks or []:
@@ -1203,7 +1227,7 @@ def cleanup_work_archive(conf, tasks):
         save(f"{HOME}/pilot/work_status.json", statuses)
     try:
         if snapshot_tasks is not None:
-            write_dead_end_snapshot(snapshot_tasks)
+            write_dead_end_snapshot(snapshot_tasks, entries=snapshot_entries)
     except Exception as e:
         log("dead_end_snapshot_error", repr(e))
 

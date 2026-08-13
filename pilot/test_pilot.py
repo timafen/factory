@@ -2950,6 +2950,28 @@ class DeadEndSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires_73_failed_works_got_74"):
             pilot.select_dead_end_snapshot_tasks(tasks)
 
+    def test_snapshot_keeps_pre_cleanup_decisions_and_replaces_atomically(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        snapshot_path = os.path.join(temporary.name, "dead_end_snapshot.json")
+        task = {"id": "task-1", "work_id": "work-1",
+                "title": "[auto] [1/1] Work 1", "state": "failed"}
+        pre_cleanup_entries = pilot._dead_end_snapshot_entries(
+            [task], {}, {}, set())
+        with mock.patch.object(pilot, "DEAD_END_SNAPSHOT_PATH", snapshot_path), \
+                mock.patch.object(pilot.os, "replace", wraps=os.replace) as replace:
+            pilot.save(snapshot_path, {"old": True})
+            replace.reset_mock()
+            pilot.write_dead_end_snapshot(
+                [task], captured_at="2026-08-12T00:00:00Z",
+                entries=pre_cleanup_entries)
+        snapshot = pilot.load(snapshot_path, {})
+        self.assertEqual(snapshot["entries"][0]["decision"], "included")
+        self.assertEqual(replace.call_count, 1)
+        self.assertEqual(
+            [name for name in os.listdir(temporary.name)
+             if name.startswith(".dead_end_snapshot.")], [])
+
 
 class WorkOriginAttributionTests(unittest.TestCase):
     def setUp(self):
