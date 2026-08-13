@@ -4,12 +4,11 @@ Implementation commit: 236a09119a85b2ae3d16b015ba412813e396d160 — арбитр
 
 ## HEAD
 
-- Статус: Implemented — awaiting pinned Review.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/27a9fc42-395-b7985c85-0dc`.
 - Implementation commit: 236a09119a85b2ae3d16b015ba412813e396d160 — арбитр допускает только одного владельца пересекающейся области и не даёт завершённой работе обойти живого владельца.
-- What changed: живые кандидаты сортируются детерминированно, получают только целые непересекающиеся области; `area_busy` и `review_gate` используют общий арбитраж.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` — 7 тестов OK; `python3 -m py_compile pilot/pilot.py` — OK; `go build ./...` — OK.
-- Следующее действие: Опубликовать ветку и повторить pinned Review.
+- Evidence: pinned base SHA `73f4edce272cb113607540412425d842158e2b81` и candidate SHA `dbaf38d590e8ca045324dac1662447e7613895cb`; 7 целевых тестов OK; Go build и полный Go-набор OK; Python-компиляция OK; два известных Python-падения повторены на базе.
+- Следующее действие: Человеку слить проверенную ветку.
 
 ## LOG
 
@@ -65,3 +64,13 @@ Implementation commit: 236a09119a85b2ae3d16b015ba412813e396d160 — арбитр
 `pilot/pilot.py` и `pilot/test_pilot.py`. Арбитр стабильно выбирает одного
 владельца полной области, а оба production-пути ждут его; 7 целевых тестов,
 `py_compile` и `go build ./...` прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Две живые работы над одним файлом получают одного владельца | `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` | 7/7 OK: `area_busy` пропускает одного владельца, `review_gate` ждёт его для второй работы; порядок ответа, tie-break, целостность области и границы repository/path проверены. |
+| Завершённый кандидат не обходит живого владельца | `AreaLockArbitrationTests.test_finished_candidate_does_not_bypass_live_owner` | OK: `succeeded`-кандидат отклонён, владельцем остаётся живая работа. |
+| Полный набор и соседняя сборка | `go build ./...`; `go test -timeout 5m ./...`; `python3 -m py_compile pilot/pilot.py`; `python3 -m unittest -v pilot.test_pilot` | Go build OK; все Go-пакеты OK; Python compile OK; полный Python-набор: 261 тест, 13 skipped, 2 известных падения. |
+| Известные падения не внесены кандидатом | Тот же `CorrectionProvenanceStormTests.test_review_and_verify_corrections_complete_one_pipeline_after_restart` на pinned base | На базе воспроизведены те же 2 падения; они вне изменённого арбитража. |
+| Кандидат и карточка закреплены | `git ls-remote --symref origin HEAD`; pinned bare fetch; `base_sha...candidate_sha`; проверка ancestry и diff путей | База и кандидат закреплены; implementation commit — предок кандидата и меняет код; diff содержит только карточку, `pilot/pilot.py`, `pilot/test_pilot.py`; временный снимок чистый. |
