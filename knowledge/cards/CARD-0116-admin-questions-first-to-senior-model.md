@@ -1,20 +1,22 @@
-Implementation commit: 8021a8f668e758f58807c47eea9e29b16ba22f08 — разрешённые административные вопросы staging сначала выполняет оркестратор через фиксированный fx argv.
+Implementation commit: 18c6ed5d9d2c5361f03c506a5bcc55ad465be636 — admin-вопросы обрабатываются общим безопасным маршрутом после каждого ответа оркестратора.
 
 # CARD-0116 — Административный вопрос сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Implemented.
-- Ветка: `factory/b046adc4-f5b-32cddb13-7b6`.
-- Implementation commit: `8021a8f668e758f58807c47eea9e29b16ba22f08` — маршрутизация admin-вопросов через безопасный staging fx.
+- Статус: Implemented; блокирующие замечания Review исправлены.
+- Ветка: `factory/d097fc95-85b-08c2bb64-389`.
+- Implementation commit: `18c6ed5d9d2c5361f03c506a5bcc55ad465be636` — единая маршрутизация admin-вопросов через безопасный staging fx.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
 - Что изменено: Pilot принимает типизированное `admin_action`, пропускает только
   консервативный staging allowlist и запускает единственный фиксированный argv.
-- Что изменено: успешный результат возвращается модели для ответа; служебный
-  admin-аудит не выдаётся API как вопрос владельцу.
-- Evidence: `python3 -m unittest pilot.test_pilot` → 253 tests OK;
-  `go test ./...` и `go build ./cmd/factory-server` → OK.
-- Следующее действие: Verify проверяет поставку и границы allowlist.
+- Что изменено: helper применяется в обычном пути, retry-cap и loop-cap;
+  `wait` после успешного fx ставит pipeline на паузу без owner-вопроса.
+- Evidence: `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` →
+  7 tests OK; `go test ./...` и `go build ./cmd/factory-server` → OK.
+- Риск: полный Python-набор имеет 2 воспроизводимых падения существующего
+  `CorrectionProvenanceStormTests`, не проходящего через admin-маршрут.
+- Следующее действие: повторный Review проверяет общий helper и новые регрессии.
 
 ## LOG
 
@@ -49,3 +51,11 @@ Pilot теперь сначала запрашивает у оркестрато
 Успешная диагностика возвращается модели без owner-вопроса; запрещённые действия
 и отказ fx сохраняют причину эскалации. Полные Python- и Go-проверки, включая
 сборку сервера, завершились успешно.
+
+### 2026-08-13 — Implement
+
+Блокирующие замечания Review устранены общим обработчиком `admin_action`: он
+работает также на retry-cap и loop-cap, а `wait` после успешного `fx` сохраняет
+аудит и ставит pipeline на паузу. Семь целевых регрессий, Go-тесты и сборка
+сервера прошли; полный Python-набор воспроизводимо падает в двух прежних
+процессных сценариях `CorrectionProvenanceStormTests` вне изменённого маршрута.
