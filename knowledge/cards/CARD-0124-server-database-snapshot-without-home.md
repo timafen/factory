@@ -2,19 +2,25 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
+Status: Implemented and tested — awaiting human merge.
 
-Branch: `factory/f11d2e97-9bc-4a16aef5-e39`.
+Branch: `factory/eac8c5c9-297-d0771bdc-319`.
 
 Implementation commit: 633abb73257d9315d1e8600eb4fea144a773daa8 — явный CLI backup обходит вычисление домашней папки и чтение bootstrap.
 
 What changed: `factory-server -database SOURCE -backup DEST` теперь сразу использует явно заданные пути. Обычный запуск, restore и backup без явной базы сохраняют прежнюю подготовку defaults.
 
-Evidence: после закрепления свежего remote `main` (`99701704b37e8740db3fdbe38c0193917570da5c`) и кандидата (`ba97a673ba75e18a65c05cf02dfe20b6cd78b52b`) полный `go test -count=1 -timeout 5m ./...`, `go build ./...` и целевой subprocess-тест завершились успешно. Четыре формы CLI без `HOME` создали автономный снимок и не изменили исходную базу.
+Evidence: целевой subprocess-тест, полный `go test -count=1 -timeout 5m ./...` и `go build ./...` завершились успешно. Кандидат `ba97a673ba75e18a65c05cf02dfe20b6cd78b52b` опубликован без изменений в утверждённой ветке review и подтверждён через `git ls-remote`.
 
 One next action: человеку выполнить merge этой ветки в `main`.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+- Повторно проверен неизменённый кодовый снимок: четыре формы CLI создали автономный backup без `HOME`, исходная база осталась неизменной.
+- Полный `go test -count=1 -timeout 5m ./...` и `go build ./...` завершились успешно.
+- Утверждённый кандидат `ba97a673ba75e18a65c05cf02dfe20b6cd78b52b` опубликован как `origin/factory/46202505-dee-409e1e03-150`; удалённый SHA совпал.
 
 ### 2026-08-13 — Verify
 
