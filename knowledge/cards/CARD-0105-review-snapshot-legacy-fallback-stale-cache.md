@@ -31,4 +31,4 @@ cached ref остаётся старым, а pinned fetch получает но�
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests
+ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests.test_stale_cached_main_never_defines_review_scope

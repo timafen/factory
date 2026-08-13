@@ -25,10 +25,12 @@ cached scope и точным scope по закреплённым SHA.
   завершать Review до `REQUEST CHANGES`, `cap_rescues`, проверки пустого
   diff и автоматического rebuild. Legacy-вызовы с identity `repo` перевести
   на валидный URL либо проверять как BLOCKED.
-- `pilot/test_pilot.py:479-535` — переставить fixture: сначала клонировать
-  `observer` после публикации candidate, затем продвинуть remote `main` и не
-  обновлять observer. Зафиксировать старый cached ref до вызова snapshot;
-  observer остаётся на своей рабочей ветке и не переключается/не сбрасывается.
+- `pilot/test_pilot.py:479-535` — переставить fixture в проверяемый порядок:
+  опубликовать исходный `main`, клонировать `observer` (тем самым закрепив
+  старый `refs/remotes/origin/main`), затем опубликовать candidate и
+  продвинуть remote `main`, не выполняя fetch в observer. До вызова snapshot
+  сохранить SHA cached ref; observer остаётся на своей рабочей ветке и не
+  переключается/не сбрасывается.
 - `pilot/test_pilot.py:330-468,650-735,930-980` — заменить искусственные
   legacy identity `repo` в тестах Review на валидную identity либо добавить
   отдельные проверки fail-closed. Не переписывать CARD-0087 и CARD-0090.
@@ -39,8 +41,9 @@ cached scope и точным scope по закреплённым SHA.
    удалить подстановку `branch_report` в authoritative snapshot.
 2. Проверить все legacy Gate/cap-rescue тестовые вызовы и мигрировать их на
    валидный `file://`/HTTPS identity или на ожидаемый `blocked` результат.
-3. Перестроить `FreshDefaultBranchSnapshotTests` в порядке clone observer →
-   publish candidate → advance remote main; сохранить cached main старым.
+3. Перестроить `FreshDefaultBranchSnapshotTests` в порядке publish initial
+   main → clone observer → publish candidate → advance remote main; сохранить
+   cached main старым и явно доказать, что он не равен pinned base.
 4. Добавить assertions на старый cached comparison scope и на точный pinned
    scope, SHA, `ahead_by`, `base_advanced` и неизменность observer HEAD.
 5. Запустить целевые и полный Pilot-набор, проверить пробелы, затем передать
@@ -64,8 +67,11 @@ cached scope и точным scope по закреплённым SHA.
 
 ## Тест-план
 
-- `python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests`
-  — stale-cache fixture, pinned scope, SHA и сохранение observer branch.
+- `python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests.test_stale_cached_main_never_defines_review_scope`
+  — новый целевой stale-cache тест: старый cached ref, pinned scope, SHA и
+  сохранение observer branch. До реализации тест отсутствует (и команда
+  завершается ненулевым кодом); после реализации она должна завершаться с
+  кодом 0.
 - Целевые тесты `review_gate`/legacy Gate/cap-rescue — BLOCKED без
   `REQUEST CHANGES`, без вызова `branch_report` как authoritative fallback.
 - `python3 -m unittest -q pilot.test_pilot` — регрессия всего Pilot-модуля.
@@ -93,4 +99,4 @@ cached scope и точным scope по закреплённым SHA.
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл knowledge/cards/CARD-0105-review-snapshot-legacy-fallback-stale-cache.md
-ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests
+ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.FreshDefaultBranchSnapshotTests.test_stale_cached_main_never_defines_review_scope
