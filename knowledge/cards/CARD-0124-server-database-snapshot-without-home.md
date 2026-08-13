@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Status: Implemented and tested — готово к повторному Review.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/f11d2e97-9bc-4a16aef5-e39`.
 
@@ -10,11 +10,21 @@ Implementation commit: 633abb73257d9315d1e8600eb4fea144a773daa8 — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` теперь сразу использует явно заданные пути. Обычный запуск, restore и backup без явной базы сохраняют прежнюю подготовку defaults.
 
-Evidence: целевые проверки, полный `go test -count=1 -timeout 5m ./...` и `go build ./...` завершились успешно. Subprocess-тест подтвердил четыре формы CLI без `HOME`, создание автономного снимка и неизменность исходной базы.
+Evidence: после закрепления свежего remote `main` (`99701704b37e8740db3fdbe38c0193917570da5c`) и кандидата (`ba97a673ba75e18a65c05cf02dfe20b6cd78b52b`) полный `go test -count=1 -timeout 5m ./...`, `go build ./...` и целевой subprocess-тест завершились успешно. Четыре формы CLI без `HOME` создали автономный снимок и не изменили исходную базу.
 
-One next action: повторить Review по зафиксированным SHA свежего remote `main` и этой ветки.
+One next action: человеку выполнить merge этой ветки в `main`.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Явные source и backup обходят домашнюю папку | `go test -count=1 -v ./cmd/factory-server -run '^TestBackupCLICreatesSnapshotWithoutHome$'` | PASS: `-flag value`, `--flag value`, `-flag=value`, `--flag=value` успешно создали снимок без `HOME` и bootstrap-конфигурации |
+| Снимок автономен, источник не изменён | тот же subprocess-тест | PASS: backup и marker — обычные файлы, у backup отсутствуют WAL/SHM; source и marker совпали побайтно с состоянием до backup |
+| Грамматика и смежные defaults сохранены | целевой набор `TestBackupWithExplicitDatabaseHonorsFlagGrammar`, `TestBackupModeRejectsMissingSourceWithoutCreatingState`, `TestDefaultDatabasePath…`, `TestServerBootstrapConfig…` | PASS: некорректные и позиционные флаги не обходят подготовку; отсутствие источника, defaults и bootstrap ведут себя как прежде |
+| Полный набор и сборка | `go test -count=1 -timeout 5m ./...`; `go build ./...` | PASS; PASS |
+| Граница поставки | изолированное сравнение `99701704b37e8740db3fdbe38c0193917570da5c...ba97a673ba75e18a65c05cf02dfe20b6cd78b52b` | Только `cmd/factory-server/main.go`, `cmd/factory-server/main_test.go`, эта карточка |
 
 ### 2026-08-13 — Implement
 
