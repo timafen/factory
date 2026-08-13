@@ -4,20 +4,29 @@ Implementation commit: d60b82f2a181bbb5c7d6e90c802f4422eedeef27 — gate при�
 
 ## HEAD
 
-Status: Implemented and tested — ready for review.
+Status: Verified PASS — awaiting human merge.
 Branch: factory/f8bde6d7-cff-7d818d98-75a.
 Implementation commit: d60b82f2a181bbb5c7d6e90c802f4422eedeef27 — gate принимает итог только из kernel wait защищённой launcher-цепочки.
-Pinned base: e43462307fcd7c25003eecfe693fd21a9dfe8ba7 (`origin/main`).
-Pinned implementation candidate: d60b82f2a181bbb5c7d6e90c802f4422eedeef27.
+Pinned base: 76d16c5191dcc8c44a001ffb71dbbaebf183f573.
+Pinned implementation candidate: ad923b64d33871fc1d5ad5648c67df05c5b46b6c.
 What changed: удалён подделываемый файловый result protocol; восстановлены root-owned waitable chain, проверенные абсолютные пути и nonce/ack handshake.
 What changed: adversarial-тест подсовывает `status=0`, пока настоящий gate падает, и подтверждает запрет установки.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая forged result, PATH shadow, forked `setsid`, signal cleanup и rollback.
+Evidence: `timeout 300 bash ops/test-fx-factory-release.sh` → PASS, включая ошибку forked launcher, forged result, PATH shadow, signal cleanup и rollback.
 Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check` → PASS.
-One next action: review pinned candidate and merge.
+One next action: выполнить human merge ветки factory/f8bde6d7-cff-7d818d98-75a.
 
 ## LOG
 
 ### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Ошибка gate не теряется при форкающем launcher | `timeout 300 bash ops/test-fx-factory-release.sh` | PASS: отказ forked gate возвращается наружу, успешный launcher не подменяет итог, установка и процессы отсутствуют. |
+| Полный набор проекта | `timeout 600 just check` | НАХОДКА вне области: `go vet` и `govulncheck` PASS; `staticcheck` остановлен на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
+| Закреплённая поставка | isolated bare fetch; pinned `base...candidate` | PASS: изменены только карточка и два release-скрипта; implementation commit является предком кандидата и меняет код. |
+| Чистота | `bash -n ...`; `git diff --check`; `git status --short` | PASS. |
+
+Live rollout не выполнялся: runtime-ревизии стенда не менялись.
 
 | Критерий | Команда / проверка | Результат |
 | --- | --- | --- |
