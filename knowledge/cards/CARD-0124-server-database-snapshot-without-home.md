@@ -12,7 +12,7 @@ Implementation commit: d23cf451eb19ede36c15da74f8f502a674e048b9 — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` обрабатывает снимок до поиска домашней папки. Обычный запуск и другие режимы по-прежнему загружают обычные defaults и bootstrap.
 
-Evidence: `go test -count=1 ./cmd/factory-server` — PASS; subprocess-проверка подтвердила четыре формы CLI без `HOME`, автономность снимка и неизменность источника. `go build ./...` — PASS.
+Evidence: `go test -count=1 ./...`, `go test -count=1 ./cmd/factory-server` и `go build ./...` — PASS; subprocess-проверка подтвердила четыре формы CLI без `HOME`, автономность снимка и неизменность источника.
 
 One next action: выполнить review кандидата.
 
@@ -23,6 +23,7 @@ One next action: выполнить review кандидата.
 - Чистая ветка от свежего `origin/main`; перенесены только сервер, его тесты и эта карточка.
 - Коммит реализации `d23cf451eb19ede36c15da74f8f502a674e048b9` выполняет явный backup до вычисления домашней папки.
 - Проверено: `go test -count=1 ./cmd/factory-server` и `go build ./...` — PASS; subprocess покрывает четыре формы флагов без `HOME`.
+- Полный `go test -count=1 ./...` — PASS.
 
 ### 2026-08-13 — Implement
 
