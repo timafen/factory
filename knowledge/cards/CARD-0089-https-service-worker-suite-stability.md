@@ -1,17 +1,16 @@
 # CARD-0089 — стабильный HTTPS-набор с реальным service worker
 
-Implementation commit: 78cf262f967a92adf0bbb1ac0d2a9efa9b0f6055 — worker timeout-тест получает запас на подготовку worktree и стабильно проверяет остановку process group.
+Implementation commit: 9bb77821f62f644c75b7b8c602b83949137343ea — worker timeout-тест получает запас на подготовку worktree и стабильно проверяет остановку process group.
 
 ## HEAD
 
-- Status: Verified PASS — полный HTTPS browser suite и полный check прошли.
-- Branch: `factory/29d8fbbb-45a-61b50a9f-f39`.
-- Implementation commit: `78cf262f967a92adf0bbb1ac0d2a9efa9b0f6055`.
+- Status: Implemented — утверждённая HTTPS-поставка перенесена на свежий `main`.
+- Branch: `factory/5be5c3c1-15d-5d14551f-d3c`.
+- Implementation commit: `9bb77821f62f644c75b7b8c602b83949137343ea`.
 - What changed: `TestTimeoutStopsIgnoringProcessGroup` получает 10 секунд на admission и проверяет реальный runtime timeout; односекундная граница подготовки остаётся в отдельном `TestTimeoutIncludesWorktreePreparation`.
-- Evidence: целевые timeout-тесты → 2/2 PASS на окончательном HEAD.
-- Evidence: `just check` → PASS: Go, vuln/staticcheck, UI 158 тестов, build/tooling/launcher.
-- Evidence: `FACTORY_BROWSER_LAUNCHER=/missing just test-browser` → 21/21 PASS за 4,7 минуты, включая HTTPS resume/Origin, scoped SPKI и реальный service worker.
-- Next action: слить ветку после подтверждённого push.
+- Evidence: целевые Go timeout-тесты → 2/2 PASS; UI-конфигурация Playwright → 12/12 PASS после переноса.
+- Evidence: утверждённая исходная поставка → HTTPS browser suite 21/21 PASS с реальным service worker.
+- Next action: выполнить финальную verification-проверку и слияние.
 
 ## LOG
 
@@ -25,3 +24,8 @@ Implementation commit: 78cf262f967a92adf0bbb1ac0d2a9efa9b0f6055 — worker timeo
 
 - Увеличен только admission-бюджет worker timeout-теста до 10 секунд; проверка runtime timeout, process group и отдельная односекундная pre-start проверка сохранены.
 - На окончательном HEAD целевые timeout-тесты прошли 2/2, полный `just check` прошёл, HTTPS browser suite прошёл 21/21 с реальным service worker.
+
+### 2026-08-12 — Implement
+
+- Утверждённая поставка перенесена на свежий `main` без изменения области: worker timeout, HTTPS browser interception, Playwright-конфигурация и эта карточка.
+- На перенесённой ветке целевые Go timeout-тесты прошли 2/2, а `web/src/playwrightConfig.test.ts` прошёл 12/12.
