@@ -1,18 +1,18 @@
 # CARD-0097 — Патруль маршрутизируется на дешёвую модель
 
-Implementation commit: 618bb6b9bf6a9a41d02d0d46d5d34dae923219b7 — evaluator фиксирует 24-часовой pair-run и fail-closed выбор модели патруля.
+Implementation commit: 8f46c560336cdbceca28215b09e4dd34331aa31f — дорогая модель назначена эталоном теневого 24-часового pair-run.
 
 ## HEAD
 
-- Status: Implemented — live 24-hour pair-run gate remains pending.
-- Branch: `factory/80d265cf-895-2613b138-272`.
-- Implementation commit: `618bb6b9bf6a9a41d02d0d46d5d34dae923219b7`.
-- What changed: evaluator records a canonical input hash, normalised findings
-  with explicit verdicts, 24-hour window, metrics and an immutable audit decision.
+- Status: Implemented — live 24-hour shadow window remains pending.
+- Branch: `factory/9bab6779-999-91d2b471-522`.
+- Implementation commit: `8f46c560336cdbceca28215b09e4dd34331aa31f`.
+- What changed: evaluator uses `gpt-5.6-sol` findings as the approved reference,
+  labels the same-input terra result and records the verdict source in audit.
 - Safety: until the full window and both thresholds pass, effective model is
   `gpt-5.6-sol`; malformed/missing audit data never enables terra.
-- Evidence: `python3 -m unittest pilot.test_pilot.PatrolModelEvaluationTests` → 5 pass.
-- Next action: start a live same-input terra/sol run, collect human/reference verdicts for 24 hours, then record its audit metrics here.
+- Evidence: `python3 -m unittest pilot.test_pilot.PatrolModelEvaluationTests` → 6 pass.
+- Next action: run the approved live same-input shadow window for 24 hours and attach its retention and false-positive delta.
 
 ## LOG
 
@@ -48,3 +48,12 @@ decision; incomplete, mismatched, or unreviewed data keeps the effective model
 on sol. `python3 -m unittest pilot.test_pilot.PatrolModelEvaluationTests` passed
 (5 tests). A live 24-hour run has not yet completed, so no production switch or
 acceptance metrics are recorded.
+
+### 2026-08-12 — Implement
+
+The owner approved `gpt-5.6-sol` as the reference for a same-input shadow run.
+The evaluator now labels matching terra findings as useful and terra-only
+findings as false positives, while recording sol as the verdict source and
+leaving the effective model unchanged. The six evaluator tests pass. No live
+24-hour metrics are claimed: the deployed main service cannot dispatch a model
+override yet, and repository work must not mutate Factory state.
