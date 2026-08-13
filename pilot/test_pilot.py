@@ -280,9 +280,19 @@ class ReleaseTrainDashboardTests(unittest.TestCase):
                               "finished_at": "1970-01-01T00:01:50Z", "waits": {"work": {}}}
                 train = self.block(self.target(generation), [{"id": "work", "title": "Оплата"}])["trains"][0]
                 self.assertEqual(train["state"], state)
-                self.assertEqual(train["previous"], {"state": state,
-                    "finished_at": "1970-01-01T00:01:50Z",
-                    "passengers": [{"title": "Оплата"}]})
+                self.assertNotIn("previous", train)
+
+    def test_last_failed_train_is_previous_after_successor_arrives(self):
+        failed = {"id": "failed-private", "sequence": 1, "phase": "failed",
+                  "finished_at": "1970-01-01T00:01:50Z", "waits": {"old": {}}}
+        current = {"id": "current-private", "sequence": 2, "phase": "reserved",
+                   "reserved_at": "1970-01-01T00:02:00Z", "waits": {"new": {}}}
+        target = self.target(current)
+        target["generations"][failed["id"]] = failed
+        train = self.block(target, [{"id": "old", "title": "Оплата"}])["trains"][0]
+        self.assertEqual(train["previous"], {"state": "failed",
+            "finished_at": "1970-01-01T00:01:50Z", "passengers": [{"title": "Оплата"}]})
+        self.assertNotIn("private", str(train))
 
     def test_new_delivery_transitions_record_projection_timestamps(self):
         state = {}
@@ -5915,7 +5925,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
             with open(lock_once, "w", encoding="utf-8") as stream:
                 stream.write("locked once\n")
         broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
-                                   "-state-dir", state_dir, "-fx-executable", fx],
+                                   "-state-dir", state_dir, "-factory-release-executable", fx],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[socket_path] = broker
         self.addCleanup(self._stop_process, broker)
@@ -5934,7 +5944,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         """Replace a stopped broker while retaining its durable state and FX."""
         process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
                                     "-state-dir", paths["broker_state"],
-                                    "-fx-executable", paths["fx"]],
+                                    "-factory-release-executable", paths["fx"]],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[paths["socket"]] = process
         self.addCleanup(self._stop_process, process)
@@ -6112,9 +6122,10 @@ pilot.save(pilot.STATE_PATH, state)
         self.assertEqual(broker_state["status"], "rollback_failed")
         self.assertEqual(generation["phase"], "failed")
         self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
+        with open(paths["outbox"], encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+        self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
     def test_terminal_write_failure_survives_real_broker_restart_without_false_done(self):
         paths = self._process_paths(self._start_process_broker())
@@ -6173,9 +6184,10 @@ pilot.save(pilot.STATE_PATH, state)
         self.assertEqual(attempts, [generation["id"]])
         self.assertEqual(successful, [generation["id"]])
         self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
+        with open(paths["outbox"], encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+        self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
     def test_failed_broker_terminal_never_completes_waits(self):
         state = {}
@@ -6188,13 +6200,18 @@ pilot.save(pilot.STATE_PATH, state)
                 mock.patch.object(pilot, "notify") as owner_done:
             pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
             pilot.poll_delivery_state({}, state)
+            pilot.poll_delivery_state({}, pilot.load(self.state_path, {}))
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         generation = target["generations"][target["current_generation"]]
         self.assertEqual(generation["phase"], "failed")
         self.assertFalse(os.path.exists(self.receipts))
-        self.assertFalse(os.path.exists(self.outbox))
+        with open(self.outbox, encoding="utf-8") as stream:
+            journal = [json.loads(line) for line in stream]
+        self.assertEqual(len(journal), 1)
+        self.assertEqual(journal[0]["category"], "failed")
+        self.assertNotIn(self.sha, str(journal[0]))
         mark_final.assert_not_called()
-        owner_done.assert_not_called()
+        owner_done.assert_called_once()
 
     def test_lock_join_and_successor_are_distinct(self):
         state = {}
@@ -6251,7 +6268,7 @@ pilot.save(pilot.STATE_PATH, state)
         subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
                        check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
         process = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
-                                    "-fx-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    "-factory-release-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: (process.terminate() if process.poll() is None else None, process.wait(timeout=2) if process.poll() is None else None))
         for _ in range(100):
             if os.path.exists(socket_path):
@@ -6287,7 +6304,7 @@ pilot.save(pilot.STATE_PATH, state)
         with open(calls, encoding="utf-8") as stream:
             physical = stream.readlines()
         self.assertEqual(len(physical), 1)
-        self.assertIn("factory release " + self.sha, physical[0])
+        self.assertIn(self.sha, physical[0])
         owner_done.assert_called_once_with("verify-1", "Verify", True)
 
     def test_recovery_journals_before_wait_without_second_merge(self):

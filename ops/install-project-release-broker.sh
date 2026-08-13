@@ -5,7 +5,8 @@ SOURCE_BINARY=${1:?путь к собранному factory-release-broker}
 SOURCE_UNIT=${2:?путь к factory-release-broker.service}
 BINARY_TARGET=${FACTORY_RELEASE_BROKER_BIN:-/opt/factory-data/bin/factory-release-broker}
 UNIT_TARGET=${FACTORY_RELEASE_BROKER_UNIT:-/etc/systemd/system/factory-release-broker.service}
-SERVER_DROPIN_TARGET=${FACTORY_RELEASE_BROKER_SERVER_DROPIN:-/etc/systemd/system/factory-server.service.d/50-project-release-broker.conf}
+PILOT_DROPIN_TARGET=${FACTORY_RELEASE_BROKER_PILOT_DROPIN:-/etc/systemd/system/factory-pilot.service.d/50-project-release-broker.conf}
+LEGACY_SERVER_DROPIN=${FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN:-/etc/systemd/system/factory-server.service.d/50-project-release-broker.conf}
 OWNER=${FACTORY_RELEASE_BROKER_OWNER-root:root}
 SYSTEMCTL=${FACTORY_RELEASE_BROKER_SYSTEMCTL:-systemctl}
 GETENT=${FACTORY_RELEASE_BROKER_GETENT:-getent}
@@ -24,10 +25,10 @@ if ! "$GETENT" group "$BROKER_GROUP" >/dev/null 2>&1; then
   "$GROUPADD" --system "$BROKER_GROUP"
 fi
 
-mkdir -p "$(dirname "$BINARY_TARGET")" "$(dirname "$UNIT_TARGET")" "$(dirname "$SERVER_DROPIN_TARGET")"
+mkdir -p "$(dirname "$BINARY_TARGET")" "$(dirname "$UNIT_TARGET")" "$(dirname "$PILOT_DROPIN_TARGET")"
 binary_tmp=$(mktemp "$(dirname "$BINARY_TARGET")/.factory-release-broker.XXXXXX")
 unit_tmp=$(mktemp "$(dirname "$UNIT_TARGET")/.factory-release-broker-service.XXXXXX")
-dropin_tmp=$(mktemp "$(dirname "$SERVER_DROPIN_TARGET")/.factory-release-broker-dropin.XXXXXX")
+dropin_tmp=$(mktemp "$(dirname "$PILOT_DROPIN_TARGET")/.factory-release-broker-dropin.XXXXXX")
 cleanup() { rm -f -- "$binary_tmp" "$unit_tmp" "$dropin_tmp"; }
 trap cleanup EXIT HUP INT TERM
 
@@ -44,7 +45,12 @@ fi
 chmod 644 "$dropin_tmp"
 mv -f -- "$binary_tmp" "$BINARY_TARGET"
 mv -f -- "$unit_tmp" "$UNIT_TARGET"
-mv -f -- "$dropin_tmp" "$SERVER_DROPIN_TARGET"
+mv -f -- "$dropin_tmp" "$PILOT_DROPIN_TARGET"
+# The real socket consumer is now safely configured; only then remove the old,
+# ineffective server override left by previous installations.
+if [ "$LEGACY_SERVER_DROPIN" != "$PILOT_DROPIN_TARGET" ]; then
+  rm -f -- "$LEGACY_SERVER_DROPIN"
+fi
 
 "$SYSTEMCTL" daemon-reload
 if "$SYSTEMCTL" is-active --quiet factory-release-broker.service; then
@@ -52,5 +58,6 @@ if "$SYSTEMCTL" is-active --quiet factory-release-broker.service; then
 else
   "$SYSTEMCTL" enable --now factory-release-broker.service
 fi
+"$SYSTEMCTL" restart factory-pilot.service
 
 printf 'Privileged project release broker installed\n'
