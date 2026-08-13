@@ -82,7 +82,7 @@
   окна, а после освобождения продолжает один раз.
 - Обязательная целевая проверка implementation: `go test ./internal/controlplane
   -run 'TestCreateTaskHourlyTaskCap|TestCreateTaskHourlyTaskCapConcurrent|TestCreateTaskHourlyTaskCapReplay' -count=1
-  && python3 -m unittest pilot.test_pilot.HourlyTaskCapTests`. Эти новые
+  && python3 -m unittest pilot.test_pilot.PlanAutostartTest`. Эти новые
   регрессии должны выражать лимит, гонку и replay, а команда после реализации
   обязана завершаться с кодом 0 (полный набор на этапе Specification не нужен).
 
@@ -110,4 +110,4 @@
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/controlplane/http_test.go
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap|TestCreateTaskHourlyTaskCapConcurrent|TestCreateTaskHourlyTaskCapReplay' -count=1 && python3 -m unittest pilot.test_pilot.HourlyTaskCapTests
+ГОТОВО-КОГДА: команда go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap|TestCreateTaskHourlyTaskCapConcurrent|TestCreateTaskHourlyTaskCapReplay' -count=1 && python3 -m unittest pilot.test_pilot.PlanAutostartTest
