@@ -19,14 +19,51 @@ import (
 )
 
 func TestWorkerTestInterruptionCleanup(t *testing.T) {
+	if os.Getenv(interruptedTestHelperEnv) == "1" {
+		fixture := newManagedAcquisitionFixture(t, "block-all")
+		firstDone := acquireManagedAsync(fixture.manager, fixture.first)
+		waitFor(t, 5*time.Second, func() bool {
+			_, err := os.Stat(filepath.Join(fixture.syncDir, "first.started"))
+			return err == nil
+		})
+		pid, err := os.ReadFile(filepath.Join(fixture.syncDir, "first.pid"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := os.Getenv("FACTORY_WORKER_INTERRUPTION_ROOT")
+		if err := os.WriteFile(filepath.Join(root, "pgid"), pid, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "ready"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		<-interruptedTestLifecycle.signal
+		if err := <-firstDone; err == nil {
+			t.Fatal("managed clone unexpectedly succeeded after interruption")
+		}
+		return
+	}
 	for _, signal := range []os.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
 		t.Run(signal.String(), func(t *testing.T) {
-			root := t.TempDir()
+			root, err := os.MkdirTemp("", "factory-worker-interrupted-")
+			if err != nil {
+				t.Fatal(err)
+			}
 			cmd := exec.Command(os.Args[0], "-test.run=^TestWorkerTestInterruptionCleanup$")
 			cmd.Env = append(os.Environ(), interruptedTestHelperEnv+"=1", "FACTORY_WORKER_INTERRUPTION_ROOT="+root)
+			configureNewProcessGroup(cmd)
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
+			waited := false
+			t.Cleanup(func() {
+				if waited {
+					return
+				}
+				_ = forceStopStartedProcessGroup(cmd.Process.Pid)
+				_ = cmd.Wait()
+				_ = os.RemoveAll(root)
+			})
 			waitFor(t, 5*time.Second, func() bool { _, err := os.Stat(filepath.Join(root, "ready")); return err == nil })
 			pgidBytes, err := os.ReadFile(filepath.Join(root, "pgid"))
 			if err != nil {
@@ -39,7 +76,9 @@ func TestWorkerTestInterruptionCleanup(t *testing.T) {
 			if err := cmd.Process.Signal(signal); err != nil {
 				t.Fatal(err)
 			}
-			if err := cmd.Wait(); err != nil {
+			err = cmd.Wait()
+			waited = true
+			if err != nil {
 				t.Fatalf("helper exited after %s: %v", signal, err)
 			}
 			if processGroupAlive(pgid) {
@@ -72,6 +111,9 @@ func newManagedAcquisitionFixture(t *testing.T, mode string) managedAcquisitionF
 	if err := os.Mkdir(syncDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv(interruptedTestHelperEnv) == "1" {
+		registerInterruptibleSyncDir(syncDirectory)
+	}
 	t.Setenv("FACTORY_TEST_REAL_GIT", realGit)
 	t.Setenv("FACTORY_TEST_FIRST_ORIGIN", firstOrigin.origin)
 	t.Setenv("FACTORY_TEST_SECOND_ORIGIN", secondOrigin.origin)
@@ -90,6 +132,7 @@ case "$slug" in
   *) exit 91 ;;
 esac
 printf '%s\n' "$slug" >> "$FACTORY_TEST_CLONE_SYNC/calls"
+printf '%s\n' "$$" > "$FACTORY_TEST_CLONE_SYNC/$name.pid"
 touch "$FACTORY_TEST_CLONE_SYNC/$name.started"
 case "$FACTORY_TEST_CLONE_MODE:$name" in
   overlap:*)
