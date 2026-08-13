@@ -1,15 +1,15 @@
 # CARD-0106 — Безопасная ежедневная уборка диска Factory
 
-Implementation commit: 714c2d868694b12f7b276e516e3f268178bfeace — реализована двухфазная уборка кэшей, карантина и старых успешных выпусков.
+Implementation commit: eec4fafe35dc2050e713792f71cea76a8409e58a — активные прогоны защищены путём из worker TOML, а janitor получил необходимые ограниченные права.
 
 ## HEAD
 
 - Status: Implemented and tested
-- Branch: `factory/e4c77f90-3c2-ba720dfe-780`
-- Implementation commit: `714c2d868694b12f7b276e516e3f268178bfeace`
-- What changed: janitor ежедневно журналирует кандидатов и удаляет только неизменившийся набор на следующем запуске; активные пути, свежие данные, неуспешные и две последние успешные версии защищены.
-- Evidence: `bash ops/test-factory-janitor.sh` → 6 сценариев PASS; `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh` → PASS; `git diff --check` → PASS.
-- Next action: установить и включить `factory-janitor.timer` на целевом хосте после проверки путей в service unit.
+- Branch: `factory/cdf7dad9-562-a3089326-7c9`
+- Implementation commit: `eec4fafe35dc2050e713792f71cea76a8409e58a`
+- What changed: активная рабочая область определяется по `data_directory` из worker TOML; при неизвестном пути ежедневная очистка безопасно останавливается. Service запускает janitor с root и ограниченной записью в нужные каталоги.
+- Evidence: `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh && bash ops/test-factory-janitor.sh` → 8 сценариев PASS; `git diff --check` → PASS.
+- Next action: установить и включить `factory-janitor.timer` на целевом хосте после проверки оператором.
 
 ## LOG
 
@@ -24,3 +24,10 @@ Implementation commit: 714c2d868694b12f7b276e516e3f268178bfeace — реализ
 
 После финальной проверки убрана лишняя пустая строка из systemd service;
 целевой тест, shell syntax и `git diff --check` повторно завершились успешно.
+
+### 2026-08-12 — Implement
+
+Исправлена защита активных прогонов: API `/workers` используется только для
+статуса занятости, а путь берётся из сопоставленного worker TOML; неизвестный
+активный worker прекращает очистку до отбора кандидатов. Service теперь имеет
+необходимые root-права при ограниченной записи. Целевой тест подтвердил 8 PASS.
