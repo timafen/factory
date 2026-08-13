@@ -1,16 +1,15 @@
+Implementation commit: 58d937492487b9e92c06155ec28d6151214a5f65 — строгая проверка дат, лимит пяти деталей на группу и честный значок провалов.
+
 # CARD-0101 — «Сделано недавно»: влитое отдельно и даты по-человечески
 
 ## HEAD
 
-- Status: Implemented; целевые проверки проходят, общий UI-gate содержит внешнюю находку.
-- Branch: `factory/6e733444-f48c-5bb32b39-e7c`.
-- Implementation commit: 0ec03a13e90f3e57ef46817d142c72135867f924 — раздельные группы влитого и провалов с человекочитаемыми датами.
-- What changed: delivery receipt подтверждает только влитое; `failed` и `cancelled` получают отдельные этап и причину, с независимыми лимитами и дедупликацией.
-- What changed: «Обзор» показывает две секции, локальные даты, «Влито в main» и честную подпись очереди.
-- Evidence: целевой Python-контракт — 1/1; `RecentDoneTest` — 6/6; `Overview.test.ts` — 22/22; lint и `py_compile` — PASS.
-- Evidence: `typecheck` и `build` остановлены на существующей ошибке `web/e2e/control-plane.spec.ts:655` вне области этой работы.
-- Evidence: единичный `just check` прошёл `vet` и `govulncheck`, но остановлен прежним `SA4000` в `internal/worker/attempt_lifecycle_test.go:31` вне области.
-- One next action: после общего gate открыть `/` и проверить блок «Сделано недавно» на стенде.
+- Status: Implemented; целевые проверки проходят.
+- Branch: `factory/12a59214-a3f-78a46903-864`.
+- What changed: даты с невозможным календарным днём теперь показываются как «дата неизвестна»; детали запрашиваются только после отбора пяти записей каждой группы.
+- What changed: карточка с одними провалами показывает предупреждение вместо зелёного знака готовности.
+- Evidence: `RecentDoneTest` — 7/7; `Overview.test.ts` — 23/23; `npx tsc -p tsconfig.app.json --noEmit`, `py_compile`, `git diff --check` — PASS.
+- One next action: после публикации открыть `/` и проверить блок «Сделано недавно» на стенде.
 
 ## LOG
 
@@ -50,3 +49,12 @@ Dashboard теперь возвращает независимые группы 
 22/22, lint и `py_compile` прошли; общий typecheck/build зафиксирован как
 НАХОДКА в существующем `web/e2e/control-plane.spec.ts:655`, а `just check` —
 на существующем `internal/worker/attempt_lifecycle_test.go:31`; оба вне области.
+
+### 2026-08-12 — Implement
+
+Исправлены четыре замечания повторной проверки: строгая календарная валидация,
+отбор максимум пяти записей каждой группы до API деталей, предупреждающий значок
+при одних провалах и стабильная строка `Implementation commit` в начале карточки.
+
+Проверки: `RecentDoneTest` 7/7, `Overview.test.ts` 23/23, `npx tsc -p
+tsconfig.app.json --noEmit`, `py_compile` и `git diff --check` — PASS.
