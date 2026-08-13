@@ -6,10 +6,23 @@ Status: Verified PASS — awaiting human merge.
 Branch: `factory/330508c4-433-38ec8c9d-4b2`.
 Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера конфигурации Pilot удалены неподдерживаемые rollout-поля.
 What changed: строгая серверная схема принимает пример Pilot без служебных rollout-метаданных Review и Verify.
-Evidence: отдельный повтор нестабильного worker-теста — PASS; после `npm ci` полный `just check` — PASS, включая 159 web-тестов и сборку.
+Evidence: на закреплённой remote-базе целевой schema test и полный `GOMAXPROCS=2 just check` — PASS; пример содержит валидный JSON без rollout-ключей.
 Next action: human merges the verified Pilot configuration cleanup.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Свежая remote-база и кандидат | `git ls-remote --symref origin HEAD`; isolated bare fetch `main` и `factory/330508c4-433-38ec8c9d-4b2` | PASS: `base_sha=48983479beb82b80a75a3e98a658a0b3b1b337e9`, `candidate_sha=85cf497ddd1f699bb1171c41a96573d89136bd79`. |
+| Подтверждение кодовой реализации | `git show` и проверка предка для `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` | PASS: коммит является предком кандидата и меняет `pilot/config.example.json`; относительно свежего `main` код уже присутствует, в кандидате изменяется только карточка. |
+| Строгая схема сервера | `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` | PASS. |
+| Полный набор | `GOMAXPROCS=2 just check` в чистом клоне | PASS: format-check, vet, vuln, staticcheck, boundary, Go tests, UI checks и tooling checks завершились успешно. |
+| Отсутствие неподдерживаемых полей | JSON parse и поиск `rollout`, `review_revision`, `verify_revision` в `pilot/config.example.json` | PASS: JSON валиден; ключи отсутствуют. |
+| Чистота поставки | `git diff --check base_sha...candidate_sha`; `git status --short` | PASS: нет ошибок пробелов и незакоммиченных файлов. |
+
+Находка: предыдущие исторические записи Verify содержат SHA и ветки прежних итераций; актуальное состояние закреплено этой записью и разделом HEAD.
 
 ### 2026-08-12 — Implement
 
