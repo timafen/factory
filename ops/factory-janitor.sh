@@ -138,24 +138,32 @@ PY
 # совпал с записанным манифестом.
 active_file=$(mktemp)
 trap 'rm -f "$active_file"' EXIT
-if ! python3 - "$API" >"$active_file" <<'PY'
+if ! active_workers=$(python3 - "$API" <<'PY'
 import json, sys, urllib.request
 try:
     data = json.loads(urllib.request.urlopen(sys.argv[1] + "/workers", timeout=20).read())
     for worker in data.get("workers", []):
         if worker.get("active_count"):
-            for key in ("path", "worktree_path", "data_directory"):
-                if worker.get(key): print(worker[key])
-            for item in worker.get("retained_worktrees") or []:
-                if item.get("path"): print(item["path"])
+            print(worker["name"])
 except Exception as exc:
     print(f"не удалось определить активные прогоны: {exc}", file=sys.stderr)
     raise SystemExit(1)
 PY
-then
+); then
   say "ежедневная уборка пропущена: API активных прогонов недоступен"
   exit 1
 fi
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  entry="${UNIT[$name]:-}"
+  if [ -z "$entry" ]; then
+    say "ежедневная уборка пропущена: путь активного прогона $name неизвестен"
+    exit 1
+  fi
+  # /workers не передаёт путь worktree. Берём рабочую область из worker TOML,
+  # сопоставленного с systemd unit выше, и защищаем её целиком.
+  printf '%s\n' "${entry##*|}" >>"$active_file"
+done <<<"$active_workers"
 
 if ! python3 - "$LOG" "$MANIFEST" "$CACHE_ROOT" "$BROWSER_ROOT" "$QUAR" \
   "$RELEASES_ROOT" "$active_file" "${FACTORY_JANITOR_CACHE_DAYS:-3}" \

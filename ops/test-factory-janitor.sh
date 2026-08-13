@@ -14,11 +14,13 @@ mkdir -p "$TMP/bin" \
   "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/unmoved" "$TMP/worker/repositories/repo" \
   "$TMP/unhealthy/worktrees/current" "$TMP/unhealthy/repositories/repo" \
   "$TMP/healthy/worktrees/retained" "$TMP/healthy/repositories/repo" \
-  "$TMP/quarantine" "$TMP/cache/ms-playwright" "$TMP/releases" "$TMP/cache/active"
+  "$TMP/active/worktrees/current" "$TMP/active/repositories/repo" \
+  "$TMP/quarantine" "$TMP/cache/ms-playwright" "$TMP/releases"
 printf 'name = "claude-haiku"\ndata_directory = "%s/worker"\n' "$TMP" >"$TMP/worker.toml"
 printf 'name = "online-unhealthy"\ndata_directory = "%s/unhealthy"\n' "$TMP" >"$TMP/unhealthy.toml"
 printf 'name = "online-healthy"\ndata_directory = "%s/healthy"\n' "$TMP" >"$TMP/healthy.toml"
-printf '#!/usr/bin/env bash\ncase "$1" in\n  list-units)\n    echo "factory-claude.service loaded active running"\n    echo "factory-unhealthy.service loaded active running"\n    echo "factory-healthy.service loaded active running"\n    ;;\n  cat)\n    case "$2" in\n      factory-claude.service) config=worker.toml ;;\n      factory-unhealthy.service) config=unhealthy.toml ;;\n      factory-healthy.service) config=healthy.toml ;;\n    esac\n    echo "ExecStart=/bin/factory-worker --config %s/$config"\n    ;;\nesac\n' "$TMP" >"$TMP/bin/systemctl"
+printf 'name = "active-run"\ndata_directory = "%s/active"\n' "$TMP" >"$TMP/active.toml"
+printf '#!/usr/bin/env bash\ncase "$1" in\n  list-units)\n    echo "factory-claude.service loaded active running"\n    echo "factory-unhealthy.service loaded active running"\n    echo "factory-healthy.service loaded active running"\n    echo "factory-active.service loaded active running"\n    ;;\n  cat)\n    case "$2" in\n      factory-claude.service) config=worker.toml ;;\n      factory-unhealthy.service) config=unhealthy.toml ;;\n      factory-healthy.service) config=healthy.toml ;;\n      factory-active.service) config=active.toml ;;\n    esac\n    echo "ExecStart=/bin/factory-worker --config %s/$config"\n    ;;\nesac\n' "$TMP" >"$TMP/bin/systemctl"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/sleep"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/bin/su"
 printf '#!/usr/bin/env bash\nif [ "$1" = "%s/worker/worktrees/unmoved" ]; then exit 1; fi\nexec /bin/mv "$@"\n' "$TMP" >"$TMP/bin/mv"
@@ -35,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
             {"id": "worker-1", "name": "claude-haiku", "online": False, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]},
             {"id": "worker-2", "name": "online-unhealthy", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": []},
             {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": "done", "cleanup_command": "keep"}]},
-            {"id": "worker-4", "name": "active-run", "online": True, "active_count": 1, "retained_worktrees": [{"path": sys.argv[7]}]}
+            {"id": "worker-4", "name": "active-run", "online": True, "active_count": 1, "health": "healthy", "capacity": 1, "retained_worktrees": []}
         ]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
@@ -48,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" "$TMP/cache/active" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -113,7 +115,7 @@ grep -q 'не удалось подтвердить очистку retained work
 # журнал, а на неизменившемся втором снимке удаляются. Свежие, активные,
 # неуспешные и две последние успешные версии сохраняются.
 mkdir -p "$TMP/cache/old" "$TMP/cache/fresh" "$TMP/cache/ms-playwright/old-browser" \
-  "$TMP/cache/active" "$TMP/quarantine/old-quarantine" "$TMP/quarantine/fresh-quarantine" \
+  "$TMP/quarantine/old-quarantine" "$TMP/quarantine/fresh-quarantine" \
   "$TMP/releases/release-1" "$TMP/releases/release-2" "$TMP/releases/release-3" \
   "$TMP/releases/release-4" "$TMP/releases/failed"
 touch "$TMP/releases/release-1/.successful" "$TMP/releases/release-2/.successful" \
@@ -121,7 +123,7 @@ touch "$TMP/releases/release-1/.successful" "$TMP/releases/release-2/.successful
 ln -s release-4 "$TMP/releases/current"
 ln -s release-3 "$TMP/releases/previous"
 touch -d '8 days ago' "$TMP/cache/old" "$TMP/cache/ms-playwright/old-browser" \
-  "$TMP/cache/active" "$TMP/quarantine/old-quarantine" "$TMP/releases/release-1" "$TMP/releases/release-2"
+  "$TMP/active" "$TMP/quarantine/old-quarantine" "$TMP/releases/release-1" "$TMP/releases/release-2"
 run_daily() {
   PATH="$TMP/bin:$PATH" \
   FACTORY_JANITOR_LOG="$TMP/janitor.log" FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
@@ -139,7 +141,7 @@ grep -q 'DRY-RUN категория=release' "$TMP/janitor.log"
 run_daily
 test ! -e "$TMP/cache/old" && test ! -e "$TMP/cache/ms-playwright/old-browser"
 test ! -e "$TMP/quarantine/old-quarantine"
-test -e "$TMP/cache/fresh" && test -e "$TMP/cache/active"
+test -e "$TMP/cache/fresh" && test -e "$TMP/active/worktrees/current"
 test -e "$TMP/quarantine/fresh-quarantine"
 test ! -e "$TMP/releases/release-1" && test ! -e "$TMP/releases/release-2"
 test -e "$TMP/releases/release-3" && test -e "$TMP/releases/release-4"
@@ -152,6 +154,21 @@ flock -n 8
 run_daily
 grep -q 'другой janitor уже работает' "$TMP/janitor.log"
 flock -u 8
+
+# Фактический ответ /workers не содержит пути active run. Если конфигурация
+# worker не найдена, уборка должна остановиться до удаления кандидатов.
+sed -i '/factory-active.service) config=active.toml/d' "$TMP/bin/systemctl"
+mkdir -p "$TMP/cache/unknown-active"
+touch -d '8 days ago' "$TMP/cache/unknown-active"
+if run_daily; then
+  echo 'janitor unexpectedly cleaned with an unknown active worker path' >&2
+  exit 1
+fi
+test -e "$TMP/cache/unknown-active"
+grep -q 'путь активного прогона active-run неизвестен' "$TMP/janitor.log"
+
+# Вернуть конфигурацию в тестовую заглушку для проверки отказа API ниже.
+sed -i '/factory-healthy.service) config=healthy.toml ;;/a\\      factory-active.service) config=active.toml ;;' "$TMP/bin/systemctl"
 mkdir -p "$TMP/cache/api-failure-candidate"
 touch -d '8 days ago' "$TMP/cache/api-failure-candidate"
 kill "$SERVER_PID"
@@ -164,9 +181,14 @@ fi
 test -e "$TMP/cache/api-failure-candidate"
 grep -q 'API активных прогонов недоступен' "$TMP/janitor.log"
 
+grep -q '^User=root$' "$ROOT/ops/systemd/factory-janitor.service"
+grep -q '^ReadWritePaths=/opt/factory-data /var/lib/factory-janitor /var/log/factory-janitor.log /run/factory-janitor.lock$' "$ROOT/ops/systemd/factory-janitor.service"
+
 echo 'TestJanitorSelectsOfflineRetainedWorker: PASS'
 echo 'TestJanitorSkipsOnlineUnhealthyWorker: PASS'
 echo 'TestJanitorSkipsOnlineHealthyRetainedWorker: PASS'
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
 echo 'TestJanitorDryRunThenCleansSafeDailyCandidates: PASS'
 echo 'TestJanitorLockAndApiFailureAreFailClosed: PASS'
+echo 'TestJanitorUnknownActiveWorkerFailsClosed: PASS'
+echo 'TestJanitorServiceHasRequiredRestrictedPrivileges: PASS'
