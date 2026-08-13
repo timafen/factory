@@ -3515,6 +3515,115 @@ class PlanCardCleanupTest(unittest.TestCase):
         verdict.assert_not_called()
 
 
+class LegacyPlanCardCleanupTest(unittest.TestCase):
+    cutoff = "2026-08-10T12:00:00Z"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = os.path.join(self.temporary.name, "ideas.json")
+        self.idea = {"id": "idea-1", "title": "Старая работа", "state": "in_work",
+                     "task_id": "root", "reason": "", "kept": 7}
+        pilot.save(self.path, [dict(self.idea)])
+
+    def task(self, task_id="root", state="succeeded", created="2026-08-10T09:00:00Z",
+             stage="5/5 Verify", work_id="work-1", title="Старая работа"):
+        return {"id": task_id, "title": f"[auto] [{stage}] {title}", "state": state,
+                "created_at": created, "repository_id": "repo-1", "work_id": work_id}
+
+    def bytes_on_disk(self):
+        with open(self.path, "rb") as stream:
+            return stream.read()
+
+    def run_cleanup(self, tasks, apply=False, detail_time="2026-08-10T11:00:00Z",
+                    api_error=None):
+        def fake_api(path, _body=None):
+            if api_error:
+                raise api_error
+            return {"execution": {"updated_at": detail_time}}
+        with mock.patch.object(pilot, "IDEAS_PATH", self.path), \
+                mock.patch.object(pilot, "all_tasks", return_value=tasks), \
+                mock.patch.object(pilot, "api", side_effect=fake_api), \
+                mock.patch.object(pilot, "final_ok", return_value=True), \
+                mock.patch.object(pilot, "log"):
+            return pilot.cleanup_legacy_plan_cards(
+                self.cutoff, apply=apply,
+                now_fn=lambda: datetime.datetime(2026, 8, 12, tzinfo=datetime.timezone.utc))
+
+    def test_dry_run_finds_old_final_failure_and_missing_link_without_writing(self):
+        cases = (
+            ([self.task()], "root"),
+            ([self.task(state="failed", stage="3/5 Implement + Test")], "root"),
+            ([], "deleted"),
+        )
+        for tasks, task_id in cases:
+            with self.subTest(task_id=task_id, state=tasks[0]["state"] if tasks else "missing"):
+                data = dict(self.idea, task_id=task_id)
+                pilot.save(self.path, [data])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks), 1)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_apply_preserves_record_and_marks_exact_reason_idempotently(self):
+        self.assertEqual(self.run_cleanup([self.task()], apply=True), 1)
+        record = pilot.load(self.path, [])[0]
+        self.assertEqual(record["state"], "done")
+        self.assertEqual(record["reason"], "закрыто уборкой")
+        self.assertEqual(record["cleanup_reason"], "terminal_before_cutoff")
+        self.assertEqual(record["cleanup_at"], "2026-08-12T00:00:00Z")
+        self.assertEqual((record["task_id"], record["kept"]), ("root", 7))
+        after = self.bytes_on_disk()
+        self.assertEqual(self.run_cleanup([self.task()], apply=True), 0)
+        self.assertEqual(self.bytes_on_disk(), after)
+
+        pilot.save(self.path, [dict(self.idea, task_id="deleted")])
+        self.assertEqual(self.run_cleanup([], apply=True), 1)
+        missing = pilot.load(self.path, [])[0]
+        self.assertEqual(missing["cleanup_reason"], "linked_task_missing")
+        self.assertEqual(missing["task_id"], "deleted")
+
+    def test_protective_cases_stay_byte_identical(self):
+        cases = (
+            ([self.task(state="running")], {}, "active"),
+            ([self.task(state="cancelled")], {}, "cancelled"),
+            ([self.task(stage="3/5 Implement + Test")], {}, "intermediate"),
+            ([self.task()], {"detail_time": self.cutoff}, "at_cutoff"),
+            ([self.task(), self.task("new", "running", "2026-08-10T10:00:00Z")], {}, "new_active"),
+        )
+        for tasks, kwargs, label in cases:
+            with self.subTest(label=label):
+                pilot.save(self.path, [dict(self.idea)])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks, apply=True, **kwargs), 0)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_empty_link_closed_states_and_ambiguous_legacy_stay_open(self):
+        for state, task_id, tasks in (
+                ("in_work", "", []), ("new", "root", []), ("done", "root", []),
+                ("rejected", "root", []),
+                ("in_work", "root", [self.task(work_id="") | {"repository_id": ""}])):
+            with self.subTest(state=state, task_id=task_id):
+                pilot.save(self.path, [dict(self.idea, state=state, task_id=task_id)])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks, apply=True), 0)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_invalid_cutoff_or_detail_error_never_writes(self):
+        before = self.bytes_on_disk()
+        with mock.patch.object(pilot, "IDEAS_PATH", self.path):
+            with self.assertRaises(ValueError):
+                pilot.cleanup_legacy_plan_cards("not-a-date", apply=True)
+        self.assertEqual(self.bytes_on_disk(), before)
+        with self.assertRaises(RuntimeError):
+            self.run_cleanup([self.task()], apply=True, api_error=RuntimeError("detail failed"))
+        self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_all_tasks_rejects_unfinished_pagination(self):
+        with mock.patch.object(pilot, "api", return_value={"tasks": [], "next_cursor": "more"}):
+            with self.assertRaises(RuntimeError):
+                pilot.all_tasks()
+
+
 class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
