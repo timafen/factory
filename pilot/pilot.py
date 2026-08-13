@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile, hashlib
 
 API = "http://127.0.0.1:7337/api/v1"
 # Production keeps the fixed data root.  Tests and isolated tools may opt into
@@ -36,6 +36,9 @@ EPIC_DIR = f"{HOME}/pilot/epics"
 QUESTION_DIR = f"{HOME}/pilot/questions"
 CONTEXT_PATH = f"{HOME}/pilot/context.md"
 VERDICT_DIR = f"{HOME}/pilot/verdicts"
+PATROL_MODEL_EVALUATION_SECONDS = 24 * 60 * 60
+PATROL_MODEL_TERRA = "gpt-5.6-terra"
+PATROL_MODEL_SOL = "gpt-5.6-sol"
 PREFIX = "[auto]"
 STAGE_TITLE_RE = re.compile(r"^\[auto\]\s*\[\d+/\d+\s+([^\]]+)\]\s*(.*)$")
 EPIC_PLAN_WF = "Epic Planning"       # workflow title that produces a plan
@@ -60,6 +63,131 @@ MERGE_CONFLICT_RE = re.compile(
 
 class ParallelWorkLimit(RuntimeError):
     """A pipeline handoff must wait until another work slot is free."""
+
+
+def patrol_input_hash(value):
+    """Return a reproducible hash for a pair-run input bundle."""
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def patrol_finding_key(finding):
+    """Normalise a finding to the stable identity used in human review."""
+    if not isinstance(finding, dict):
+        return str(finding).strip()
+    if str(finding.get("key") or "").strip():
+        return str(finding["key"]).strip()
+    identity = {field: finding.get(field) for field in
+                ("rule", "path", "line", "title", "message") if finding.get(field) is not None}
+    return patrol_input_hash(identity)
+
+
+def start_patrol_model_pair_run(input_bundle, started_at=None):
+    """Create an auditable, fail-closed 24-hour terra/sol comparison."""
+    started_at = float(time.time() if started_at is None else started_at)
+    return {
+        "version": 1,
+        "started_at": started_at,
+        "ends_at": started_at + PATROL_MODEL_EVALUATION_SECONDS,
+        "input_hash": patrol_input_hash(input_bundle),
+        "observations": [],
+        "effective_model": PATROL_MODEL_SOL,
+        "decision": "pending",
+    }
+
+
+def add_patrol_model_observation(audit, input_bundle, terra_findings, sol_findings):
+    """Record one same-input pair; verdict must be useful or false_positive."""
+    observation = {
+        "input_hash": patrol_input_hash(input_bundle),
+        "models": {
+            PATROL_MODEL_TERRA: list(terra_findings),
+            PATROL_MODEL_SOL: list(sol_findings),
+        },
+    }
+    audit.setdefault("observations", []).append(observation)
+    return observation
+
+
+def save_patrol_model_pair_run(path, audit):
+    """Persist the standalone audit JSON without replacing a final decision."""
+    existing = load(path, None)
+    if existing and existing.get("decision") in ("approved", "rejected") and existing != audit:
+        raise ValueError("a completed patrol model audit is immutable")
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    save(path, audit)
+
+
+def evaluate_patrol_model_pair_run(audit, now=None):
+    """Calculate the gate decision; every malformed or incomplete run fails closed."""
+    if audit.get("decision") in ("approved", "rejected"):
+        return dict(audit)  # A finished audit is immutable: no second decision.
+    now = float(time.time() if now is None else now)
+    result = dict(audit)
+    observations = audit.get("observations") or []
+    reasons = []
+    completed = now >= float(audit.get("ends_at") or float("inf"))
+    if not completed:
+        reasons.append("24-hour window has not completed")
+    if not observations:
+        reasons.append("no same-input observations")
+
+    expected_hash = audit.get("input_hash")
+    reviewed = {PATROL_MODEL_TERRA: [], PATROL_MODEL_SOL: []}
+    for observation in observations:
+        if observation.get("input_hash") != expected_hash:
+            reasons.append("input hash mismatch")
+            continue
+        models = observation.get("models") or {}
+        for model in reviewed:
+            findings = models.get(model)
+            if not isinstance(findings, list):
+                reasons.append(f"missing findings for {model}")
+                continue
+            for finding in findings:
+                if not isinstance(finding, dict) or finding.get("verdict") not in (
+                        "useful", "false_positive"):
+                    reasons.append("missing human or reference verdict")
+                    continue
+                reviewed[model].append({"key": patrol_finding_key(finding),
+                                        "verdict": finding["verdict"]})
+
+    metrics = {}
+    for model, findings in reviewed.items():
+        useful = sum(item["verdict"] == "useful" for item in findings)
+        false_positive = sum(item["verdict"] == "false_positive" for item in findings)
+        total = len(findings)
+        metrics[model] = {"useful": useful, "false_positive": false_positive,
+                          "reviewed": total,
+                          "false_positive_rate": false_positive / total if total else None}
+    sol_useful = metrics[PATROL_MODEL_SOL]["useful"]
+    if not sol_useful:
+        reasons.append("no confirmed useful sol findings")
+    if any(metrics[model]["reviewed"] == 0 for model in reviewed):
+        reasons.append("no reviewed findings for one model")
+
+    retention = (metrics[PATROL_MODEL_TERRA]["useful"] / sol_useful
+                 if sol_useful else None)
+    terra_fp = metrics[PATROL_MODEL_TERRA]["false_positive_rate"]
+    sol_fp = metrics[PATROL_MODEL_SOL]["false_positive_rate"]
+    delta_pp = ((terra_fp - sol_fp) * 100
+                if terra_fp is not None and sol_fp is not None else None)
+    passes = completed and not reasons and retention >= 0.90 and delta_pp <= 5.0
+    if not reasons and retention < 0.90:
+        reasons.append("useful retention below 0.90")
+    if not reasons and delta_pp > 5.0:
+        reasons.append("false-positive delta exceeds 5.0 percentage points")
+    result.update({"metrics": {"useful_retention": retention,
+                                "false_positive_delta_pp": delta_pp,
+                                "by_model": metrics},
+                   "evaluated_at": now,
+                   "decision": "approved" if passes else ("rejected" if completed else "pending"),
+                   "effective_model": PATROL_MODEL_TERRA if passes else PATROL_MODEL_SOL,
+                   "reasons": reasons})
+    return result
 
 
 def api(path, body=None):
