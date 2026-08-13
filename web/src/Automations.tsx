@@ -467,7 +467,7 @@ export function AutomationDetail({
                   <span className={`status-badge status-${state.style}`}><span className="status-dot" />{state.label}</span>
                   <span className="occurrence-identity">
                     <strong>{occurrenceIdentity(occurrence)}</strong>
-                    <small>{formatTimestamp(occurrence.created_at)}{occurrence.task ? ` · ${occurrence.task.title}` : ""}{occurrence.diagnostic ? ` · ${occurrence.diagnostic}` : ""}</small>
+                    <small>{formatTimestamp(occurrence.created_at)}{occurrence.task ? ` · ${occurrence.task.title}` : ""}{occurrence.diagnostic ? ` · Finding: ${occurrence.diagnostic}` : ""}</small>
                   </span>
                   <span className="occurrence-actions">
                     {sourceURL && (

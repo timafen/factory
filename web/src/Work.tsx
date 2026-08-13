@@ -115,8 +115,11 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   const map = new Map<string, Group>();
   for (const t of tasks) {
     const { base, stage } = parse(t.title);
-    const v = verdicts[t.id];
     const id = t.work_id?.trim() || base;
+    // The API excludes Patrol occurrences. Keep this durable work metadata
+    // guard so a stale/cached task page cannot put them back into any section.
+    if ((works[id] ?? works[base])?.origin === "patrol") continue;
+    const v = verdicts[t.id];
     const g = map.get(id) ?? {
       id, base, items: [], latest: t,
       status: neutralStatus(), currentStage: null, reached: {},

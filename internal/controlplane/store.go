@@ -2543,10 +2543,19 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM automation_occurrences occurrence
+			JOIN automations automation ON automation.id = occurrence.automation_id
+			WHERE occurrence.task_id = t.id
+			  AND automation.trigger_type = 'schedule'
+			  AND lower(automation.title || ' ' || automation.context)
+			      LIKE '%factory pipeline patrol%'
+		)
 	`
 	args := make([]any, 0, 3)
 	if request.Cursor != nil {
-		query += ` WHERE (t.created_at < ? OR (t.created_at = ? AND t.id < ?))`
+		query += ` AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))`
 		args = append(args, request.Cursor.CreatedAtMillis, request.Cursor.CreatedAtMillis, request.Cursor.ID)
 	}
 	query += ` ORDER BY t.created_at DESC, t.id DESC LIMIT ?`
