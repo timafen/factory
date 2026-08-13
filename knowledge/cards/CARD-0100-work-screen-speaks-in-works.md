@@ -4,7 +4,7 @@ Implementation commit: 044330df62abf376ab12a1f63ac023cc1d15b4d0 — карточ
 
 ## HEAD
 
-- Status: Implement + Test complete — ready for Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/6516dc47-1b1-9ee020a6-f94`.
 - Specification: `knowledge/specs/work-screen-speaks-in-works.md`.
 - What changed: этапы объединяются по `work_id`, одноимённые работы имеют
@@ -12,9 +12,11 @@ Implementation commit: 044330df62abf376ab12a1f63ac023cc1d15b4d0 — карточ
   названию. Экран, навигация и ожидания получили смысловые русские подписи.
 - Scope: только уже существующие задачи и их `work_id`; pre-task реестр не
   создаётся.
-- Evidence: целевые web-тесты — 84/84; `typecheck` и `lint` — без ошибок;
-  production-сборка — успешна (1738 модулей).
-- One next action: на Review визуально проверить `/` в доступном окружении.
+- Evidence: в чистой копии кандидата целевые web-тесты — 84/84;
+  `lint`, `typecheck` и production-сборка — без ошибок. `just check`
+  остановился на прежнем SA4000 в `internal/worker/attempt_lifecycle_test.go`,
+  вне области поставки.
+- One next action: человеку проверить экран «Работа» на стенде перед merge.
 
 ## LOG
 
@@ -49,3 +51,17 @@ Web-контракт `Task` дополнен `work_id`; группировка, 
 задачи; основной экран называется «Работа», служебная навигация —
 «Исполнители». Доказательства: 84/84 целевых теста, успешные `typecheck`,
 `lint`, production-сборка и `git diff --check`.
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Одна работа с общим `work_id` | `Work.test.ts` | Группировка устойчива к разным заголовкам этапов. |
+| Одинаковые названия остаются разными работами | `WorkView.test.tsx` | Две карточки раскрываются независимо; history не смешивается. |
+| Legacy без `work_id` и metadata fallback | `Work.test.ts` | Сохранена группировка по названию и fallback lookup. |
+| Смыслы ожидания различимы | `Work.test.ts`, `WorkView.test.tsx` | Подписи ожидания исполнителя, подготовки Factory и запуска задачи различны. |
+| Русские названия без технического id | `App.test.tsx`, `WorkView.test.tsx` | «Работа», «Исполнители»; `work_id` не отображается. |
+
+В чистой копии кандидата `npm --prefix web test -- --run src/Work.test.ts src/WorkView.test.tsx src/App.test.tsx` прошло: 3 файла, 84 теста.
+`lint`, `typecheck` и build прошли; `git diff --check` чист. `just check`
+останавливается на известном SA4000 в `internal/worker/attempt_lifecycle_test.go`, не изменённом поставкой.
