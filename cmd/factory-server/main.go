@@ -98,6 +98,14 @@ func run() (returnErr error) {
 	if err := os.MkdirAll(reportRoot, 0o700); err != nil {
 		return fmt.Errorf("prepare report storage: %w", err)
 	}
+	reportTimezone := os.Getenv("FACTORY_REPORT_TIMEZONE")
+	if reportTimezone == "" {
+		reportTimezone = "UTC"
+	}
+	reportRenderer := os.Getenv("FACTORY_REPORT_RENDERER")
+	if reportRenderer == "" {
+		reportRenderer = "web/report/render.mjs"
+	}
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	handled, err := runRecoveryMode(rootContext, *database, *backup, *restore, os.Stdout)
@@ -185,6 +193,17 @@ func run() (returnErr error) {
 		<-capacityDone
 	}()
 	automationService := controlplane.NewAutomationService(store, logger)
+	reportService, err := controlplane.NewDailyReportService(store, logger, reportRoot, reportRenderer, reportTimezone)
+	if err != nil {
+		return err
+	}
+	reportContext, cancelReports := context.WithCancel(rootContext)
+	reportsDone := make(chan struct{})
+	go func() {
+		defer close(reportsDone)
+		reportService.Run(reportContext)
+	}()
+	defer func() { cancelReports(); <-reportsDone }()
 	automationContext, cancelAutomations := context.WithCancel(rootContext)
 	automationsDone := make(chan struct{})
 	go func() {
