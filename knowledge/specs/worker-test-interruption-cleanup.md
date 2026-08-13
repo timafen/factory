@@ -22,18 +22,18 @@ production-семантика `gh`/clone и release-тесты не меняют
 запускает такую команду в отдельной группе, поэтому прекращение только
 родительского test-процесса не очищает группу при внешнем прерывании теста.
 
-В `internal/worker/worker_integration_test.go` уже расположен `TestMain` и
-общая test-инфраструктура. Реализация добавит туда (либо в новый
-`internal/worker/test_interruption_unix_test.go`, если это сделает
-platform-specific код чище) test-only helper: он создаёт изолированный
-`MkdirTemp`-корень, регистрирует каждый PID/process group fake `gh`, ловит
+В `internal/worker/worker_integration_test.go` расположен `TestMain`, а
+`internal/worker/test_interruption_unix_test.go` содержит test-only lifecycle:
+он создаёт изолированный `MkdirTemp`-корень, регистрирует каждый PID/process
+group существующего blocking fake `gh`, ловит
 `TERM`, `INT`, `HUP`, посылает группе `TERM` с ограниченным ожиданием и затем
 `KILL` при необходимости, ожидает дочерние процессы и вызывает `RemoveAll`.
 Сигналы и проверка group будут использовать имеющиеся unix-помощники
 `internal/worker/platform_unix.go`; Windows в scope не входит.
 
 Регрессия из `internal/worker/repository_coordination_test.go` стартует
-отдельный контролируемый `go test` helper, дождётся файла `first.started` и
+отдельный контролируемый `go test` с реальным managed-clone сценарием
+`block-all`, дождётся файла `first.started` и
 записанных PID/PGID, пошлёт ему каждый из `TERM`, `INT`, `HUP`, дождётся выхода
 и проверит отсутствующие PID/process group и корень. Она не будет полагаться на
 таймаут тестового раннера или на release-файл. Существующие сценарии managed
