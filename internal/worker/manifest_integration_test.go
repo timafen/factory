@@ -255,7 +255,6 @@ func TestManifestWritesAreAtomicAndDurable(t *testing.T) {
 }
 
 func TestStartupReconciliationClassifiesManifestAndFilesystemState(t *testing.T) {
-	fixture := newServerFixture(t, nil)
 	repository := createRepository(t, "reconcile")
 	repositoryBase := runGitTest(t, repository.path, "rev-parse", "HEAD")
 	cases := []struct {
@@ -301,6 +300,7 @@ func TestStartupReconciliationClassifiesManifestAndFilesystemState(t *testing.T)
 		},
 		{name: "partial", initial: manifestWorktreeCreated, createPartial: true, want: manifestInconsistent, wantError: true},
 	}
+	fixture := newServerFixtureWithHostLimit(t, nil, len(cases))
 	for index, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			dataDirectory := filepath.Join(t.TempDir(), "worker")

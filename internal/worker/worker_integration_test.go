@@ -237,6 +237,10 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 func newServerFixture(t *testing.T, wrap func(http.Handler) http.Handler) *serverFixture {
+	return newServerFixtureWithHostLimit(t, wrap, 0)
+}
+
+func newServerFixtureWithHostLimit(t *testing.T, wrap func(http.Handler) http.Handler, hostLimit int) *serverFixture {
 	t.Helper()
 	dataRoot := t.TempDir()
 	t.Setenv("FACTORY_DATA_HOME", dataRoot)
@@ -249,7 +253,12 @@ func newServerFixture(t *testing.T, wrap func(http.Handler) http.Handler) *serve
 		t.Fatal(err)
 	}
 	databasePath := filepath.Join(t.TempDir(), "factory.sqlite3")
-	store, err := controlplane.Open(context.Background(), databasePath)
+	var store *controlplane.Store
+	if hostLimit > 0 {
+		store, err = controlplane.OpenForTest(context.Background(), databasePath, hostLimit)
+	} else {
+		store, err = controlplane.Open(context.Background(), databasePath)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1608,7 +1617,7 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	var claimTimes []time.Time
 	var heartbeatMutex sync.Mutex
 	heartbeats := make(map[string]int)
-	fixture := newServerFixture(t, func(next http.Handler) http.Handler {
+	fixture := newServerFixtureWithHostLimit(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			if strings.HasSuffix(request.URL.Path, "/claims") {
 				claimMutex.Lock()
@@ -1624,7 +1633,7 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 			}
 			next.ServeHTTP(writer, request)
 		})
-	})
+	}, 10)
 	repositories := make(map[string]repositoryFixture, 11)
 	for index := range 11 {
 		key := fmt.Sprintf("pool-%02d", index)

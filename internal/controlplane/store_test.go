@@ -43,6 +43,36 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenForTest(ctx, filepath.Join(t.TempDir(), "testing.sqlite3"), 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.hostSlotLimit(); got != 17 {
+		t.Fatalf("test host slot limit = %d; want 17", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, limit := range []int{0, -1} {
+		if store, err := OpenForTest(ctx, filepath.Join(t.TempDir(), "invalid.sqlite3"), limit); err == nil {
+			store.Close()
+			t.Fatalf("OpenForTest limit %d succeeded; want error", limit)
+		}
+	}
+
+	production, err := Open(ctx, filepath.Join(t.TempDir(), "production.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = production.Close() })
+	if got, want := production.hostSlotLimit(), max(1, runtime.NumCPU()); got != want {
+		t.Fatalf("production host slot limit = %d; want %d", got, want)
+	}
+}
+
 func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	store := newTestStore(t)
 	repository := protocol.RepositoryRegistration{
