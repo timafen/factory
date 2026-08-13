@@ -2957,6 +2957,51 @@ func TestTasksPagesEqualTimestampsByIDWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestTasksPagesExcludePatrolWithoutConsumingCursorSlots(t *testing.T) {
+	now := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
+	store, automation := createScheduleAutomationFixture(t, &now, false)
+	registerTestWorker(t, store, "schedule-worker", 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/owainlewis/factory",
+	})
+	if _, err := store.db.Exec(`UPDATE automations SET title = 'Factory Pipeline Patrol' WHERE id = ?`, automation.Automation.ID); err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := automation.Automation.RepositoryID
+	older := createTestTask(t, store, "ordinary-older", "schedule-worker", repositoryID)
+	now = now.Add(time.Minute)
+	patrol := createTestTask(t, store, "patrol-task", "schedule-worker", repositoryID)
+	now = now.Add(time.Minute)
+	newer := createTestTask(t, store, "ordinary-newer", "schedule-worker", repositoryID)
+	if _, err := store.db.Exec(`
+		INSERT INTO automation_occurrences(
+			id, automation_id, automation_version, automation_title, workflow_revision_id,
+			repository_id, repository_identity, context, timeout_seconds, state,
+			resolved_prompt, task_request_key, task_id, task_id_snapshot, created_at, updated_at
+		) VALUES ('patrol-occurrence', ?, 1, 'Factory Pipeline Patrol',
+			(SELECT current_revision_id FROM workflows WHERE id = ?), ?,
+			'github.com/owainlewis/factory', '', 3600, 'dispatched', 'Patrol',
+			'patrol-occurrence-request', ?, ?, ?, ?)
+	`, automation.Automation.ID, automation.Automation.WorkflowID, repositoryID,
+		patrol.Task.ID, patrol.Task.ID, now.UnixMilli(), now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Tasks) != 1 || first.Tasks[0].ID != newer.Task.ID || first.NextCursor == nil {
+		t.Fatalf("first page = %#v; want newer ordinary task and cursor", first)
+	}
+	second, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 1, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Tasks) != 1 || second.Tasks[0].ID != older.Task.ID || second.NextCursor != nil {
+		t.Fatalf("second page = %#v; want older ordinary task without patrol", second)
+	}
+}
+
 func TestDatabaseUsesWALAndRefusesAnUnmarkedExistingDatabase(t *testing.T) {
 	root := t.TempDir()
 	path := root + "/restart.sqlite3"

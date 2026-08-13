@@ -373,6 +373,28 @@ describe("App", () => {
     expect(row).not.toHaveTextContent("Older dispatched task");
   });
 
+  it("keeps a failed Run without a task and shows its finding", async () => {
+    window.history.replaceState({}, "", "/automations/automation-ready");
+    mockControlPlane({ automationRunWithoutTaskState: "failed" });
+    renderApp();
+
+    const identity = await screen.findByText("#185 Newest run without task", { selector: ".occurrence-identity strong" });
+    const row = identity.closest(".occurrence-row") as HTMLElement;
+    expect(within(row).getByText("Failed", { selector: ".status-badge" })).toBeVisible();
+    expect(row).toHaveTextContent("Finding: No eligible worker.");
+    expect(within(row).queryByRole("button", { name: "Open task" })).not.toBeInTheDocument();
+  });
+
+  it("shows an explicit tombstone for a deleted Run task", async () => {
+    window.history.replaceState({}, "", "/automations/automation-ready");
+    mockControlPlane({ automationRunWithoutTaskState: "task_deleted" });
+    renderApp();
+
+    const identity = await screen.findByText("#185 Newest run without task", { selector: ".occurrence-identity strong" });
+    const row = identity.closest(".occurrence-row") as HTMLElement;
+    expect(within(row).getAllByText("Task deleted")).toHaveLength(2);
+  });
+
   it.each([
     ["queued", "Queued"],
     ["running", "Running"],
@@ -392,6 +414,7 @@ describe("App", () => {
       "href",
       "https://github.com/example/factory/issues/184",
     );
+    expect(within(row as HTMLElement).getByRole("button", { name: "Open task" })).toBeVisible();
     expect(await screen.findByText("Implement the change and run the required checks.", { selector: ".runbook-copy" })).toBeVisible();
   });
 

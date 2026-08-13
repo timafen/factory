@@ -192,6 +192,20 @@ describe("build", () => {
     expect(sectionOf(waiting)).not.toBe("done");
   });
 
+  it("excludes patrol work from every section while retaining other service work", () => {
+    const patrol = task("patrol", "Verify", "succeeded", 1);
+    const service = { ...task("service", "Verify", "succeeded", 2), title: "[service] Refresh indexes" };
+    const product = { ...task("product", "Verify", "succeeded", 3), title: "Owner product task" };
+    const groups = build([patrol, service, product], {}, [], {
+      "Экран Работа": { origin: "patrol" },
+    });
+
+    expect(groups.map((group) => group.latest.id)).toEqual(["product", "service"]);
+    expect(groups.flatMap((group) => [group.status.happened, group.status.next])).not.toContain(
+      "Проверка приняла результат.",
+    );
+  });
+
   it("keeps a successful intermediate pipeline stage out of Done", () => {
     const triage = build([task("triage", "Triage", "succeeded", 1)], {}, [])[0];
     const specification = build([
