@@ -1,12 +1,17 @@
 package controlplane
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func (api *API) listDailyReports(w http.ResponseWriter, r *http.Request) {
@@ -21,9 +26,14 @@ func (api *API) listDailyReports(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) downloadDailyReport(w http.ResponseWriter, r *http.Request) {
 	date := r.PathValue("date")
+	timezone := r.URL.Query().Get("timezone")
+	if timezone == "" {
+		http.Error(w, "timezone is required", http.StatusBadRequest)
+		return
+	}
 	var status, path, hash string
 	var size int64
-	err := api.store.db.QueryRowContext(r.Context(), `SELECT status,pdf_path,pdf_sha256,pdf_size FROM daily_reports WHERE report_date=? ORDER BY timezone LIMIT 1`, date).Scan(&status, &path, &hash, &size)
+	err := api.store.db.QueryRowContext(r.Context(), `SELECT status,pdf_path,pdf_sha256,pdf_size FROM daily_reports WHERE report_date=? AND timezone=?`, date, timezone).Scan(&status, &path, &hash, &size)
 	if errors.Is(err, sql.ErrNoRows) || status != "ready" {
 		http.NotFound(w, r)
 		return
@@ -32,22 +42,17 @@ func (api *API) downloadDailyReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "report unavailable", http.StatusConflict)
 		return
 	}
-	root := os.Getenv("FACTORY_REPORT_ROOT")
-	if root == "" {
-		root = "/opt/factory-data/reports"
-	}
-	file, err := os.Open(filepath.Join(root, path))
+	content, err := os.ReadFile(filepath.Join(api.store.reportRoot, path))
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || info.Size() != size || hash == "" {
+	actualHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	if int64(len(content)) != size || hash == "" || subtle.ConstantTimeCompare([]byte(actualHash), []byte(hash)) != 1 {
 		http.Error(w, "report incomplete", http.StatusConflict)
 		return
 	}
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", `attachment; filename="daily-report-`+date+`.pdf"`)
-	http.ServeContent(w, r, path, info.ModTime(), file)
+	http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 }

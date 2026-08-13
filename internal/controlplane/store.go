@@ -65,6 +65,7 @@ type Store struct {
 	db                    *sql.DB
 	attachmentRoot        string
 	projectSecretRoot     string
+	reportRoot            string
 	projectSecretOwnerUID uint32
 	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
@@ -2506,7 +2507,7 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		_, err = tx.ExecContext(ctx, `INSERT INTO task_visual_targets(work_id,url,state_text,viewport_width,viewport_height,after_workflow_title,created_at) VALUES(?,?,?,?,?,?,?)`,
 			workID, input.VisualTarget.URL, input.VisualTarget.StateText, input.VisualTarget.ViewportWidth, input.VisualTarget.ViewportHeight, input.VisualTarget.AfterWorkflowTitle, now)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT INTO visual_captures(work_id,phase,status) VALUES(?,'before','pending')`, workID)
+			_, err = tx.ExecContext(ctx, `INSERT INTO visual_captures(work_id,phase,status,updated_at) VALUES(?,'before','pending',?)`, workID, time.UnixMilli(now).UTC().Format(time.RFC3339Nano))
 		}
 	}
 	if err == nil && len(input.AttachmentIDs) > 0 {

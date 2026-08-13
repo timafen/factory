@@ -11,7 +11,7 @@ export function Reports() {
     {(reports.data ?? []).map(report => <article className="report-card" key={`${report.report_date}-${report.timezone}`}>
       <h2>{report.report_date}</h2><p>{report.timezone} · {statusLabel[report.status]}</p>
       {report.error && <p className="report-error">Причина: {report.error}</p>}
-      {report.status === "ready" && <a className="button button-primary" href={`/api/v1/reports/daily/${report.report_date}/pdf`}>Скачать PDF</a>}
+      {report.status === "ready" && <a className="button button-primary" href={`/api/v1/reports/daily/${report.report_date}/pdf?timezone=${encodeURIComponent(report.timezone)}`}>Скачать PDF</a>}
     </article>)}
     {(reports.data ?? []).length === 0 && <p>Отчётов пока нет.</p>}
   </div>;

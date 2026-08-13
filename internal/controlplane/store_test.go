@@ -2371,7 +2371,7 @@ func TestTaskProvenanceMigration028RequiresPriorSchemasAndReopensSafely(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 29 {
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 30 {
 		t.Fatalf("combined migration version = %d, %v", maxVersion, err)
 	}
 	if err := store.Close(); err != nil {

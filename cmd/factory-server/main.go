@@ -93,7 +93,7 @@ func run() (returnErr error) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	reportRoot := os.Getenv("FACTORY_REPORT_ROOT")
 	if reportRoot == "" {
-		reportRoot = "/opt/factory-data/reports"
+		reportRoot = filepath.Join(dataRoot, "reports")
 	}
 	if err := os.MkdirAll(reportRoot, 0o700); err != nil {
 		return fmt.Errorf("prepare report storage: %w", err)
@@ -103,8 +103,18 @@ func run() (returnErr error) {
 		reportTimezone = "UTC"
 	}
 	reportRenderer := os.Getenv("FACTORY_REPORT_RENDERER")
-	if reportRenderer == "" {
-		reportRenderer = "web/report/render.mjs"
+	captureScript := os.Getenv("FACTORY_CAPTURE_SCRIPT")
+	if reportRenderer == "" || captureScript == "" {
+		embeddedCapture, embeddedRenderer, err := controlplane.MaterializeReportScripts(reportRoot)
+		if err != nil {
+			return fmt.Errorf("prepare report runtime: %w", err)
+		}
+		if captureScript == "" {
+			captureScript = embeddedCapture
+		}
+		if reportRenderer == "" {
+			reportRenderer = embeddedRenderer
+		}
 	}
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -204,6 +214,14 @@ func run() (returnErr error) {
 		reportService.Run(reportContext)
 	}()
 	defer func() { cancelReports(); <-reportsDone }()
+	captureService := controlplane.NewVisualCaptureService(store, logger, reportRoot, captureScript)
+	captureContext, cancelCaptures := context.WithCancel(rootContext)
+	capturesDone := make(chan struct{})
+	go func() {
+		defer close(capturesDone)
+		captureService.Run(captureContext)
+	}()
+	defer func() { cancelCaptures(); <-capturesDone }()
 	automationContext, cancelAutomations := context.WithCancel(rootContext)
 	automationsDone := make(chan struct{})
 	go func() {

@@ -10,6 +10,6 @@ test("ready report has a download while failed report explains why", async () =>
     { report_date: "2026-08-11", timezone: "America/Chicago", status: "error", error: "Chromium недоступен" },
   ]);
   render(<QueryClientProvider client={new QueryClient()}><Reports /></QueryClientProvider>);
-  expect(await screen.findByRole("link", { name: "Скачать PDF" })).toHaveAttribute("href", "/api/v1/reports/daily/2026-08-12/pdf");
+  expect(await screen.findByRole("link", { name: "Скачать PDF" })).toHaveAttribute("href", "/api/v1/reports/daily/2026-08-12/pdf?timezone=America%2FChicago");
   expect(screen.getByText(/Chromium недоступен/)).toBeInTheDocument();
 });

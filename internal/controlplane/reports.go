@@ -3,7 +3,9 @@ package controlplane
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -37,12 +39,13 @@ func (r commandDailyReportRenderer) Render(ctx context.Context, document, output
 // automation runtime. The database row is both the job ledger and the lock:
 // its primary key prevents duplicate daily PDFs across concurrent servers.
 type DailyReportService struct {
-	store      *Store
-	logger     *slog.Logger
-	renderer   dailyReportRenderer
-	root       string
-	location   *time.Location
-	checkEvery time.Duration
+	store         *Store
+	logger        *slog.Logger
+	renderer      dailyReportRenderer
+	root          string
+	location      *time.Location
+	checkEvery    time.Duration
+	renderTimeout time.Duration
 }
 
 func NewDailyReportService(store *Store, logger *slog.Logger, root, rendererScript, timezone string) (*DailyReportService, error) {
@@ -50,7 +53,8 @@ func NewDailyReportService(store *Store, logger *slog.Logger, root, rendererScri
 	if err != nil {
 		return nil, fmt.Errorf("load report timezone: %w", err)
 	}
-	return &DailyReportService{store: store, logger: logger, renderer: commandDailyReportRenderer{script: rendererScript}, root: root, location: location, checkEvery: time.Minute}, nil
+	store.reportRoot = root
+	return &DailyReportService{store: store, logger: logger, renderer: commandDailyReportRenderer{script: rendererScript}, root: root, location: location, checkEvery: time.Minute, renderTimeout: 10 * time.Minute}, nil
 }
 
 func (service *DailyReportService) Run(ctx context.Context) {
@@ -76,20 +80,33 @@ func (service *DailyReportService) runOnce(ctx context.Context) {
 func (service *DailyReportService) createPreviousDay(ctx context.Context) error {
 	now := service.store.now().In(service.location)
 	date := now.AddDate(0, 0, -1).Format(time.DateOnly)
-	claimed, err := service.store.claimDailyReport(ctx, date, service.location.String())
-	if err != nil || !claimed {
+	token, err := service.store.claimDailyReport(ctx, date, service.location.String())
+	if err != nil || token == "" {
 		return err
 	}
 	report, works, err := service.store.dailyReportData(ctx, date, service.location)
 	if err != nil {
-		service.store.failDailyReport(ctx, date, service.location.String(), err)
+		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
 		return err
 	}
-	filename := "daily-report-" + date + ".pdf"
+	service.loadCaptureImages(works)
+	metricsJSON, err := json.Marshal(report.Metrics)
+	if err != nil {
+		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
+		return err
+	}
+	zoneDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(service.location.String())))[:12]
+	filename := fmt.Sprintf("daily-report-%s-%s-%s.pdf", date, zoneDigest, token)
 	temporary := filepath.Join(service.root, "."+filename+".tmp")
-	_ = os.Remove(temporary)
-	if err := service.renderer.Render(ctx, buildDailyReportDocument(report, works), temporary); err != nil {
-		service.store.failDailyReport(ctx, date, service.location.String(), err)
+	renderTimeout := service.renderTimeout
+	if renderTimeout == 0 {
+		renderTimeout = 10 * time.Minute
+	}
+	renderContext, cancel := context.WithTimeout(ctx, renderTimeout)
+	defer cancel()
+	if err := service.renderer.Render(renderContext, buildDailyReportDocument(report, works), temporary); err != nil {
+		_ = os.Remove(temporary)
+		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
 		return err
 	}
 	content, err := os.ReadFile(temporary)
@@ -98,36 +115,55 @@ func (service *DailyReportService) createPreviousDay(ctx context.Context) error 
 			err = fmt.Errorf("renderer output is not a PDF")
 		}
 		_ = os.Remove(temporary)
-		service.store.failDailyReport(ctx, date, service.location.String(), err)
+		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
 		return err
 	}
 	final := filepath.Join(service.root, filename)
 	if err := os.Rename(temporary, final); err != nil {
-		service.store.failDailyReport(ctx, date, service.location.String(), err)
+		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
 		return err
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
-	_, err = service.store.db.ExecContext(ctx, `UPDATE daily_reports SET status='ready',pdf_path=?,pdf_sha256=?,pdf_size=?,error='',updated_at=? WHERE report_date=? AND timezone=? AND status='running'`, filename, hash, len(content), service.store.now().UTC().Format(time.RFC3339Nano), date, service.location.String())
-	return err
-}
-
-func (s *Store) claimDailyReport(ctx context.Context, date, timezone string) (bool, error) {
-	instant := s.now().UTC()
-	now := instant.Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO daily_reports(report_date,timezone,status,created_at,updated_at) VALUES(?,?,'pending',?,?) ON CONFLICT(report_date,timezone) DO NOTHING`, date, timezone, now, now)
+	result, err := service.store.db.ExecContext(ctx, `UPDATE daily_reports SET status='ready',metrics_json=?,pdf_path=?,pdf_sha256=?,pdf_size=?,error='',updated_at=? WHERE report_date=? AND timezone=? AND status='running' AND claim_token=?`, string(metricsJSON), filename, hash, len(content), service.store.now().UTC().Format(time.RFC3339Nano), date, service.location.String(), token)
 	if err != nil {
-		return false, unavailable(err)
-	}
-	result, err := s.db.ExecContext(ctx, `UPDATE daily_reports SET status='running',error='',updated_at=? WHERE report_date=? AND timezone=? AND (status IN ('pending','error') OR (status='running' AND updated_at<?))`, now, date, timezone, instant.Add(-time.Hour).Format(time.RFC3339Nano))
-	if err != nil {
-		return false, unavailable(err)
+		_ = os.Remove(final)
+		return err
 	}
 	changed, err := result.RowsAffected()
-	return changed == 1, err
+	if err != nil || changed != 1 {
+		_ = os.Remove(final)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("daily report claim expired")
+	}
+	return nil
 }
 
-func (s *Store) failDailyReport(ctx context.Context, date, timezone string, cause error) {
-	_, _ = s.db.ExecContext(ctx, `UPDATE daily_reports SET status='error',error=?,updated_at=? WHERE report_date=? AND timezone=? AND status='running'`, cause.Error(), s.now().UTC().Format(time.RFC3339Nano), date, timezone)
+func (s *Store) claimDailyReport(ctx context.Context, date, timezone string) (string, error) {
+	instant := s.now().UTC()
+	now := instant.Format(time.RFC3339Nano)
+	token, err := newID()
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO daily_reports(report_date,timezone,status,created_at,updated_at) VALUES(?,?,'pending',?,?) ON CONFLICT(report_date,timezone) DO NOTHING`, date, timezone, now, now)
+	if err != nil {
+		return "", unavailable(err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE daily_reports SET status='running',claim_token=?,error='',updated_at=? WHERE report_date=? AND timezone=? AND (status IN ('pending','error') OR (status='running' AND updated_at<?))`, token, now, date, timezone, instant.Add(-time.Hour).Format(time.RFC3339Nano))
+	if err != nil {
+		return "", unavailable(err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Store) failDailyReport(ctx context.Context, date, timezone, token string, cause error) {
+	_, _ = s.db.ExecContext(ctx, `UPDATE daily_reports SET status='error',error=?,updated_at=? WHERE report_date=? AND timezone=? AND status='running' AND claim_token=?`, cause.Error(), s.now().UTC().Format(time.RFC3339Nano), date, timezone, token)
 }
 
 func (s *Store) dailyReportData(ctx context.Context, date string, location *time.Location) (protocol.DailyReport, []reportVisualWork, error) {
@@ -135,13 +171,15 @@ func (s *Store) dailyReportData(ctx context.Context, date string, location *time
 	if err != nil {
 		return protocol.DailyReport{}, nil, err
 	}
-	metrics, err := s.Metrics(ctx, metricsWindow24Hours)
+	beforeMetrics, err := s.dailyReportMetrics(ctx, start.AddDate(0, 0, -1), start)
 	if err != nil {
 		return protocol.DailyReport{}, nil, err
 	}
-	rawMetrics, _ := json.Marshal(metrics)
-	var metricMap map[string]any
-	_ = json.Unmarshal(rawMetrics, &metricMap)
+	afterMetrics, err := s.dailyReportMetrics(ctx, start, start.AddDate(0, 0, 1))
+	if err != nil {
+		return protocol.DailyReport{}, nil, err
+	}
+	metricMap := map[string]any{"before": beforeMetrics, "after": afterMetrics}
 	report := protocol.DailyReport{ReportDate: date, Timezone: location.String(), Status: "running", Metrics: metricMap}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT target.work_id, task.title, target.url, target.state_text, target.viewport_width, target.viewport_height,
@@ -189,10 +227,56 @@ func (s *Store) dailyReportData(ctx context.Context, date string, location *time
 }
 
 type reportVisualWork struct {
-	Title  string
-	Target protocol.VisualTarget
-	Before protocol.VisualCapture
-	After  protocol.VisualCapture
+	Title       string
+	Target      protocol.VisualTarget
+	Before      protocol.VisualCapture
+	After       protocol.VisualCapture
+	BeforeImage string
+	AfterImage  string
+}
+
+func (s *Store) dailyReportMetrics(ctx context.Context, start, end time.Time) (map[string]any, error) {
+	metric := map[string]any{"period": start.Format(time.DateOnly)}
+	for name, query := range map[string]string{
+		"created":   `SELECT COUNT(*) FROM executions WHERE created_at>=? AND created_at<?`,
+		"completed": `SELECT COUNT(*) FROM executions WHERE state IN ('succeeded','failed','cancelled') AND updated_at>=? AND updated_at<?`,
+		"succeeded": `SELECT COUNT(*) FROM executions WHERE state='succeeded' AND updated_at>=? AND updated_at<?`,
+		"failed":    `SELECT COUNT(*) FROM executions WHERE state='failed' AND updated_at>=? AND updated_at<?`,
+	} {
+		var value int64
+		if err := s.db.QueryRowContext(ctx, query, start.UTC().UnixMilli(), end.UTC().UnixMilli()).Scan(&value); err != nil {
+			return nil, unavailable(err)
+		}
+		metric[name] = value
+	}
+	return metric, nil
+}
+
+func (service *DailyReportService) loadCaptureImages(works []reportVisualWork) {
+	for index := range works {
+		works[index].BeforeImage = service.captureDataURL(works[index].Before)
+		works[index].AfterImage = service.captureDataURL(works[index].After)
+	}
+}
+
+func (service *DailyReportService) captureDataURL(capture protocol.VisualCapture) string {
+	if capture.Status != "ready" || capture.Path == "" || capture.SHA256 == "" {
+		return ""
+	}
+	path := filepath.Join(service.root, filepath.Clean(capture.Path))
+	relative, err := filepath.Rel(service.root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(content))
+	if subtle.ConstantTimeCompare([]byte(actual), []byte(capture.SHA256)) != 1 {
+		return ""
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(content)
 }
 
 // buildDailyReportDocument deliberately renders missing captures as facts. It
@@ -200,16 +284,27 @@ type reportVisualWork struct {
 func buildDailyReportDocument(report protocol.DailyReport, works []reportVisualWork) string {
 	var body strings.Builder
 	fmt.Fprintf(&body, "<!doctype html><meta charset=utf-8><title>Ежедневный отчёт</title><style>body{font:16px system-ui;color:#18202a}section{border:1px solid #ccd5df;border-radius:12px;padding:18px;margin:14px 0}.missing{background:#fff4e5;padding:12px}svg{max-width:100%%}</style><h1>Ежедневный отчёт за %s</h1><p>Часовой пояс: %s</p>", html.EscapeString(report.ReportDate), html.EscapeString(report.Timezone))
-	metrics, _ := json.Marshal(report.Metrics)
-	fmt.Fprintf(&body, "<h2>Метрики конвейера: предыдущий день → отчётный день</h2><svg viewBox='0 0 600 50' role='img' aria-label='Инфографика метрик'><rect width='600' height='50' fill='#e8f0fe'/><text x='15' y='31'>%s</text></svg>", html.EscapeString(string(metrics)))
+	before, _ := report.Metrics["before"].(map[string]any)
+	after, _ := report.Metrics["after"].(map[string]any)
+	fmt.Fprintf(&body, "<h2>Метрики конвейера: до → после</h2><svg viewBox='0 0 680 150' role='img' aria-label='Сравнение метрик до и после'><rect width='330' height='150' rx='12' fill='#eef3f8'/><rect x='350' width='330' height='150' rx='12' fill='#e6f4ea'/><text x='20' y='30' font-weight='bold'>До · %s</text><text x='370' y='30' font-weight='bold'>После · %s</text>", html.EscapeString(fmt.Sprint(before["period"])), html.EscapeString(fmt.Sprint(after["period"])))
+	for index, metric := range []string{"created", "completed", "succeeded", "failed"} {
+		y := 58 + index*24
+		fmt.Fprintf(&body, "<text x='20' y='%d'>%s: %v</text><text x='370' y='%d'>%s: %v</text>", y, metric, before[metric], y, metric, after[metric])
+	}
+	body.WriteString("</svg>")
 	for _, work := range works {
 		fmt.Fprintf(&body, "<section><h2>%s</h2><p>%s · %s · %d×%d</p>", html.EscapeString(work.Title), html.EscapeString(work.Target.URL), html.EscapeString(work.Target.StateText), work.Target.ViewportWidth, work.Target.ViewportHeight)
-		for _, capture := range []protocol.VisualCapture{work.Before, work.After} {
+		for index, capture := range []protocol.VisualCapture{work.Before, work.After} {
 			label := map[string]string{"before": "до", "after": "после"}[capture.Phase]
-			if capture.Status != "ready" {
-				fmt.Fprintf(&body, "<div class=missing>Снимок %s отсутствует: %s</div>", label, html.EscapeString(capture.Error))
+			image := []string{work.BeforeImage, work.AfterImage}[index]
+			if capture.Status != "ready" || image == "" {
+				reason := capture.Error
+				if reason == "" {
+					reason = "файл снимка недоступен или не прошёл проверку целостности"
+				}
+				fmt.Fprintf(&body, "<div class=missing>Снимок %s отсутствует: %s</div>", label, html.EscapeString(reason))
 			} else {
-				fmt.Fprintf(&body, "<p>Снимок %s сохранён</p>", label)
+				fmt.Fprintf(&body, "<figure><figcaption>Снимок %s</figcaption><img alt='Снимок %s' src='%s' style='max-width:100%%;height:auto'></figure>", label, label, image)
 			}
 		}
 		body.WriteString("</section>")
