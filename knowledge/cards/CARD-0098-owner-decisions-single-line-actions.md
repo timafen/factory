@@ -27,3 +27,7 @@ Specification готова к этапу Implement.
 ## Следующее действие
 
 Реализовать UI и целевой Vitest-тест согласно спецификации.
+
+Проверка результата: реализация должна изменить только `web/src/Answer.tsx`,
+добавить `web/src/Answer.test.tsx`, а команда `cd web && npx vitest run
+src/Answer.test.tsx` обязана завершиться с кодом 0.
