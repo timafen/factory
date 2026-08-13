@@ -82,12 +82,16 @@ nullable и не публикуется в UI/API в этой работе: эт
 merge; смоделировать `_verified_merge_result=True` до `gh_merge` и проверить
 `owner`; повторить recovery после успешного внешнего эффекта и доказать одну
 строку с прежней атрибуцией и кругами. Отдельно проверить, что receipt delivery
-не теряет добавленные поля.
+не теряет добавленные поля. Эти сценарии закрепить отдельными тестами
+`test_merge_journal_records_rounds_and_automatic_actor`,
+`test_owner_merge_records_owner_and_preserves_rounds` и
+`test_merge_recovery_preserves_actor_and_rounds`.
 
 В `internal/controlplane/efficiency_test.go` подать рядом новую строку с явно
 заданными кругами и legacy-строку. Первая обязана определять распределение по
 журналу вопреки истории задач, вторая — сохранить прежний fallback. Также
-проверить безопасный разбор отсутствующих/невалидных необязательных полей.
+проверить безопасный разбор отсутствующих/невалидных необязательных полей в
+`TestEfficiencyUsesPersistedMergeRoundsAndLegacyFallback`.
 
 ## Риски и решения
 
@@ -110,4 +114,4 @@ merge; смоделировать `_verified_merge_result=True` до `gh_merge` 
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл internal/controlplane/efficiency.go
 ГОТОВО-КОГДА: файл internal/controlplane/efficiency_test.go
-ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.PipelineWatchMergeTests && go test ./internal/controlplane -run 'TestEfficiencyUsesMergedProductWorkAndHonestDenominators' -count=1
+ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.PipelineWatchMergeTests.test_merge_journal_records_rounds_and_automatic_actor pilot.test_pilot.PipelineWatchMergeTests.test_owner_merge_records_owner_and_preserves_rounds pilot.test_pilot.PipelineWatchMergeTests.test_merge_recovery_preserves_actor_and_rounds && go test ./internal/controlplane -run '^TestEfficiencyUsesPersistedMergeRoundsAndLegacyFallback$' -count=1
