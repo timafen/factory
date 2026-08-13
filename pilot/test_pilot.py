@@ -380,8 +380,8 @@ class DeliveryAreaTests(unittest.TestCase):
 
     def test_browser_wait_holds_real_live_overlap(self):
         known = {
-            "Браузер после ожидания": ["repo::web/src/Browser.tsx"],
-            "Соседняя подзадача эпика": ["repo::web/src/Browser.tsx"],
+            "Браузер после ожидания": ["file:///tmp/repo::web/src/Browser.tsx"],
+            "Соседняя подзадача эпика": ["file:///tmp/repo::web/src/Browser.tsx"],
         }
         live = [{"state": "running",
                  "title": "[auto] [2/5 Implement + Test] Соседняя подзадача эпика"}]
