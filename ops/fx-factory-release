@@ -305,10 +305,14 @@ flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 umask 077
 mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
   || { fail "не смог подготовить папку релизов"; exit 4; }
+# 711, а не 700: gate script исполняет рабочий пользователь (as_user), ему нужен
+# проход по каталогу. Листинг чужим закрыт, файлы внутри root-owned и неизменяемые,
+# подлинность каждого дополнительно сверяется git hash-object.
 "$TRUSTED_MKDIR" -p -- "$TRUSTED_GATE_PARENT" \
-  && "$TRUSTED_CHMOD" 700 -- "$TRUSTED_GATE_PARENT" \
+  && "$TRUSTED_CHMOD" 711 -- "$TRUSTED_GATE_PARENT" \
   && [ "$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_PARENT")" = "$TRUSTED_OWNER_UID" ] \
-  || { fail "не смог подготовить закрытый root-owned каталог gate"; exit 4; }
+  && [ "$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_GATE_PARENT")" = 711 ] \
+  || { fail "не смог подготовить root-owned каталог gate (711: проход без листинга)"; exit 4; }
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 
