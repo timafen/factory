@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { cpuLoadExplanation, fetchAllTasks, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
+import { cpuLoadExplanation, fetchAllTasks, formatRecentDate, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
 import { stageHandoffTargetStatus } from "./efficiency";
 
 describe("cpuLoadExplanation", () => {
@@ -135,23 +135,34 @@ describe("Overview release train", () => {
 });
 
 describe("Overview recent work", () => {
-  it("shows human pipeline titles, proof and an honest failed result without IDs", async () => {
+  it("shows separate human-facing merged and failed work without ISO fragments", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      const body = path === "/api/v1/dashboard" ? { recent_done: [
-        { title: "Витрина товаров", detail: "Влито в main. Проверено: сценарий прошёл.", at: "2026-08-10T12:00:00Z", status: "merged" },
-        { title: "Оплата картой", detail: "Этап «Review» не прошёл; в main не влито.", at: "2026-08-10T11:00:00Z", status: "failed" },
-      ] } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      const body = path === "/api/v1/dashboard" ? { recent_done: { merged: [
+        { title: "Витрина товаров", at: "2026-08-10T12:00:00Z" },
+      ], failed: [
+        { title: "Оплата картой", stage: "Review", reason: "проверка не прошла", at: "2026-08-10T11:00:00Z" },
+      ] } } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
       return { ok: true, json: async () => body } as Response;
     }));
 
     render(createElement(Overview, {}));
     const section = await screen.findByRole("region", { name: "Сделано недавно" });
     expect(within(section).getByText("Витрина товаров")).toBeVisible();
-    expect(within(section).getByText(/Влито в main. Проверено: сценарий прошёл/)).toBeVisible();
+    expect(within(section).getByText("Влито")).toBeVisible();
+    expect(within(section).getByText("Влито в main")).toBeVisible();
     expect(within(section).getByText("Оплата картой")).toBeVisible();
-    expect(within(section).getByText(/в main не влито/)).toBeVisible();
-    expect(within(section).queryByText(/merged|failed/)).not.toBeInTheDocument();
+    expect(within(section).getByText(/Этап: Review.*проверка не прошла/)).toBeVisible();
+    expect(section).not.toHaveTextContent(/08-10T12:|merged|failed/);
+  });
+
+  it("formats today, yesterday, old, invalid and empty dates for people", () => {
+    const now = new Date(2026, 7, 12, 15, 30);
+    expect(formatRecentDate("2026-08-12T10:05:00", now)).toBe("сегодня 10:05");
+    expect(formatRecentDate("2026-08-11T10:05:00", now)).toBe("вчера 10:05");
+    expect(formatRecentDate("2026-08-10T10:05:00", now)).toBe("10.08.2026 10:05");
+    expect(formatRecentDate("bad date", now)).toBe("дата неизвестна");
+    expect(formatRecentDate("", now)).toBe("дата неизвестна");
   });
 });
 
