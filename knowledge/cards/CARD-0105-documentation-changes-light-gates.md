@@ -1,4 +1,4 @@
-Implementation commit: 32f901785a5c70f3a448292b6bd96423f1da35aa — Markdown-only кандидаты после доверенного checkout проходят `git diff --check`, а все сомнительные изменения сохраняют полный Gate.
+Implementation commit: ba3c396f0d9c7d0f3b9bc7c378a2e83ec8e936b2 — Markdown-only кандидаты после доверенного checkout проходят `git diff --check`, а все сомнительные изменения сохраняют полный Gate.
 
 # CARD-0105 — Документные изменения проходят лёгкие ворота
 
@@ -6,7 +6,7 @@ Implementation commit: 32f901785a5c70f3a448292b6bd96423f1da35aa — Markdown-onl
 
 - Status: Implemented — ready for verification.
 - Branch: `factory/6cde39c6-851-9e21a67b-306`.
-- Implementation commit: `32f901785a5c70f3a448292b6bd96423f1da35aa`.
+- Implementation commit: `ba3c396f0d9c7d0f3b9bc7c378a2e83ec8e936b2`.
 - What changed: raw NUL-delimited diff допускает только непустые обычные `.md`
   и запускает `git diff --check`; mode, symlink, rename, смешанные и кодовые
   изменения продолжают идти через полный UI+Go+release Gate.
