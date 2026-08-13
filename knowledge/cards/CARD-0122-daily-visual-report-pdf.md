@@ -4,15 +4,24 @@ Implementation commit: 270854f9d720299b94411f78f6fb310cabf48d17 — снимки
 
 ## HEAD
 
-- Status: Implemented and verified; ready for Review
+- Status: BLOCKED: новый тест ошибки БД детерминированно падает при повторном закрытии хранилища
 - Branch: `factory/28591ece-f5d-5baef51e-932`
 - Implementation commit: `270854f9d720299b94411f78f6fb310cabf48d17`
 - What changed: ежедневный PDF сохраняет проверенные снимки и метрики «до/после»; Chromium запускается только через изолирующий launcher с sandbox и allowlist.
 - What changed: malformed URL отклоняется без panic, recovery mode не создаёт report storage, ошибка чтения БД возвращает 5xx.
-- Evidence: `go test ./internal/controlplane ./cmd/factory-server` → PASS; TypeScript/build/lint/UI/Node/browser installer → PASS.
-- One next action: передать исправленную реализацию на Review и после выпуска открыть `/reports`.
+- Evidence: web test/lint/typecheck/build и Node PDF → PASS; `go test ./internal/controlplane -run '^TestDailyReportDownloadReturnsServerErrorWhenDatabaseFails$' -count=5` → FAIL 5/5 в `t.Cleanup` (`sql: database is closed`).
+- One next action: сделать cleanup идемпотентным в тесте ошибки БД и вернуть ветку на Verify.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Ежедневный PDF со снимком и метриками | `npm test`; `node report/report.test.mjs` | PASS: UI-набор зелёный, renderer создал `%PDF-` со встроенным PNG без внешних запросов. |
+| Защищённый capture и целостность скачивания | Node allowlist/sandbox-тест; Go-тесты report API | BLOCKED: Node-защита PASS, но новый Go-тест закрытой БД падает 5/5 при повторном `Store.Close` из cleanup. |
+| Сборка и регрессии | `go test -timeout 5m ./...`; `npm run lint`; `npm run typecheck`; `npm run build` | Web PASS; полный Go-набор также поймал внешний flaky `internal/worker` по разбросу lease renewal. |
+| Живая проверка `/reports` | Проверка системного browser launcher | Не выполнена: Chromium и `/usr/local/bin/factory-browser-launcher` на стенде отсутствуют. |
 
 ### 2026-08-13 — Implement
 
