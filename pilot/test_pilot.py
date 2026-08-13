@@ -4981,6 +4981,21 @@ class PlanAutostartTest(unittest.TestCase):
                 pilot.autostart_plan(self.conf, [], self.workflows, self.workers)
         set_idea.assert_not_called()
 
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "load_questions", return_value=[])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_hourly_task_cap_defers_without_requeuing(self, _limits, _questions,
+                                                      ideas, set_idea, notify):
+        ideas.return_value = self.cards
+        with mock.patch.object(pilot, "create_task", side_effect=RuntimeError("hourly_task_cap")):
+            self.assertIsNone(pilot.autostart_plan(self.conf, [], self.workflows, self.workers))
+        self.assertIn(mock.call("top", state="planned",
+                                reason="Жду освобождения почасового лимита автоматических задач.",
+                                hourly_cap_notified=True), set_idea.call_args_list)
+        notify.assert_called_once()
+
     @mock.patch.object(pilot, "set_idea")
     @mock.patch.object(pilot, "create_task", return_value={"task": {}})
     @mock.patch.object(pilot, "ideas_all")
