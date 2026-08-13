@@ -1,12 +1,12 @@
 # CARD-0094 — Каталог выпусков очищает только оставленные штатные сборки
 
-Implementation commit: 55cf1ee276e9cf5ea306403e48708c1c61a94be2 — обычный выпуск удаляет только безопасно распознанные остатки штатной сборки старше суток.
+Implementation commit: 29267eddcb8d498f4625e587b1a0e7ee5af87462 — обычный выпуск удаляет только безопасно распознанные остатки штатной сборки старше суток.
 
 ## HEAD
 
 - Status: Implemented and tested.
 - Branch: `factory/c239085c-d19-29cc11c6-64b`.
-- Implementation commit: `55cf1ee276e9cf5ea306403e48708c1c61a94be2`.
+- Implementation commit: `29267eddcb8d498f4625e587b1a0e7ee5af87462`.
 - What changed: обычный выпуск до recovery удаляет только непосредственные
   реальные `build-*` старше 24 часов после fail-closed проверки указателей,
   transaction и путей живых процессов; служебные режимы ничего не чистят.
