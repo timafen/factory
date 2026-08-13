@@ -4,16 +4,16 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
 
 ## HEAD
 
-- Status: Implement — complete, ready for Verify.
-- Branch: `factory/e1ab0b86-481-3009ed90-928`.
+- Status: Implement — complete, проверено, готово к вливанию.
+- Branch: `factory/db86ddee-ec7-d45dcede-582`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
-- Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `bash -n` — PASS;
+- Evidence: `bash -n` и `bash ops/test-fx-factory-release.sh` — PASS;
   `FACTORY_BUILD_DIR=/tmp/card-0097-build just build` — PASS.
-- Known baseline: `just check` останавливается на существующем SA4000 в
-  `internal/worker/attempt_lifecycle_test.go:31`, вне области этой работы.
-- One next action: Verify проверяет diff и целевой fixture перед вливанием.
+- Known baseline: на свежем `origin/main` `just check` воспроизводит SA4000 в
+  `internal/worker/attempt_lifecycle_test.go:31`; это вне области работы.
+- One next action: влить проверенное изменение в main.
 
 ## LOG
 
@@ -35,3 +35,11 @@ release-каталога пропускаются. Fixture подтвержда�
 сборки, сохранность чужой папки, symlink и внешнего target, а также успешную
 публикацию поколения. `bash -n` и целевой release fixture прошли; сборка трёх
 бинарников прошла. Общий `just check` выявил прежний SA4000 вне области задачи.
+
+### 2026-08-12 — Verify
+
+Проверен diff от свежего `origin/main`: изменения ограничены release-очисткой,
+её fixture и документацией. `bash -n`, полный целевой fixture и сборка трёх
+бинарников прошли. В отдельной свежей копии `origin/main` `just check`
+воспроизводит SA4000 в `internal/worker/attempt_lifecycle_test.go:31`, поэтому
+это подтверждённый базовый долг вне CARD-0097.
