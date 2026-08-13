@@ -51,4 +51,4 @@ Implementation commit: 18ea0ebdd883c4f2d19ab7393db35c93fecd66bf — HTTPS-наб
 | Pinned diff | `base_sha=4dfd93f66ea9b197f879a2b9d62d09c997820f41`, `candidate_sha=0b4cb66062418c97243ea6682c9fc10c9a1c2686`; ровно 3 заявленных файла |
 | TypeScript | `npx tsc -p tsconfig.app.json --noEmit` — PASS |
 | Unit/config guard | `npx vitest run src/playwrightConfig.test.ts` — 12/12 PASS; full `npm test` — 14 files, 159/159 PASS |
-| HTTPS e2e | Реальный HTTPS fixture стартует; service-worker assertion выполняется. Набор остановлен существующим pause/resume failure: 6 passed, 1 failed, 14 did not run; pinned base воспроизводит тот же failure |
+| HTTPS e2e | Реальный HTTPS fixture стартует; `npx playwright test e2e/control-plane.spec.ts -g 'shows project readiness card'` — 1/1 PASS с активным `/sw.js`. Полный набор остановлен существующим pause/resume failure: 6 passed, 1 failed, 14 did not run; pinned base воспроизводит тот же failure |
