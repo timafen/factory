@@ -63,6 +63,15 @@ TRUSTED_MKDIR=/usr/bin/mkdir
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
+as_user_private() {
+  # Как as_user, но под umask 077: дерево принадлежит рабочему пользователю
+  # и закрыто для посторонних.
+  if [ -n "$AS" ]; then
+    $AS "$TRUSTED_BASH" -c 'umask 077; exec "$@"' factory-release-private "$@"
+  else
+    ( umask 077; "$@" )
+  fi
+}
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
@@ -739,10 +748,14 @@ run_parallel_test_gates() {
 }
 
 step "беру исходники: $ref"
-"$TRUSTED_GIT" clone --quiet "$REPO" "$work/src" \
+# Клонирует рабочий пользователь: сборка, npm и ворота идут от его имени и
+# обязаны читать дерево. Приватность сохраняет umask 077 внутри as_user_private:
+# посторонним (агентам) дерево по-прежнему закрыто. Клон под root ломал
+# выпуск на первом же npm ci: рабочий пользователь не мог войти в src/web.
+as_user_private "$TRUSTED_GIT" clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
-"$TRUSTED_GIT" -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || "$TRUSTED_GIT" -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+as_user_private "$TRUSTED_GIT" -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user_private "$TRUSTED_GIT" -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
 sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD) \
   || { fail "не смог определить commit кандидата"; cleanup; exit 4; }
