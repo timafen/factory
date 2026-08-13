@@ -4,12 +4,12 @@ Implementation commit: 81b2c18ed4249cff16dcf3b61d1dd264e98fa4c6 — арбитр
 
 ## HEAD
 
-- Статус: Implemented — целевые проверки прошли, ожидает Review.
-- Ветка: `factory/b6fe87b3-74c-7e479794-72e`.
+- Статус: Implemented — целевые проверки прошли, кандидат опубликован, ожидает Review.
+- Ветка: `factory/f4927dc7-ec9-a77db670-f70`.
 - Implementation commit: 81b2c18ed4249cff16dcf3b61d1dd264e98fa4c6 — арбитр выбирает одного устойчивого владельца полной пересекающейся области и разводит оба production-пути.
 - What changed: общий арбитр сортирует живые работы по стабильному приоритету, учитывает repository/path и выдаёт одному владельцу всю область; `area_busy` и `review_gate` используют это решение.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` — 7/7 OK; `python3 -m py_compile pilot/pilot.py` — OK.
-- Следующее действие: Опубликовать кандидат и передать его в Review.
+- Evidence: 7/7 целевых тестов, `py_compile` и `go build ./...` OK; pinned remote diff содержит ровно 3 ожидаемых файла, удалённый SHA совпадает.
+- Следующее действие: Передать опубликованный кандидат в Review.
 
 ## LOG
 
