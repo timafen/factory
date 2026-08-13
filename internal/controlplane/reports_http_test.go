@@ -44,3 +44,17 @@ func TestDailyReportDownloadSelectsTimezoneAndVerifiesSHA256(t *testing.T) {
 		t.Fatalf("tampered status=%d", response.Code)
 	}
 }
+
+func TestDailyReportDownloadReturnsServerErrorWhenDatabaseFails(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/reports/daily/2026-08-12/pdf?timezone=UTC", nil)
+	request.SetPathValue("date", "2026-08-12")
+	response := httptest.NewRecorder()
+	(&API{store: store}).downloadDailyReport(response, request)
+	if response.Code < 500 {
+		t.Fatalf("database failure status=%d, want 5xx", response.Code)
+	}
+}

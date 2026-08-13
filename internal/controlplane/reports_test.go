@@ -86,7 +86,7 @@ func TestDailyReportServiceAutomaticallyRetriesWithoutDuplicates(t *testing.T) {
 }
 
 func TestVisualTargetValidation(t *testing.T) {
-	valid := protocol.VisualTarget{URL: "https://example.test/listings", StateText: "Готово", ViewportWidth: 1280, ViewportHeight: 720}
+	valid := protocol.VisualTarget{URL: "https://factory.timafen.com/listings", StateText: "Готово", ViewportWidth: 1280, ViewportHeight: 720}
 	if err := validateVisualTarget(&valid); err != nil {
 		t.Fatalf("valid target: %v", err)
 	}
@@ -94,6 +94,8 @@ func TestVisualTargetValidation(t *testing.T) {
 		"insecure remote URL": {URL: "http://example.test", StateText: "ok", ViewportWidth: 800, ViewportHeight: 600},
 		"missing marker":      {URL: "https://example.test", ViewportWidth: 800, ViewportHeight: 600},
 		"small viewport":      {URL: "https://example.test", StateText: "ok", ViewportWidth: 319, ViewportHeight: 600},
+		"malformed URL":       {URL: "http://[::1", StateText: "ok", ViewportWidth: 800, ViewportHeight: 600},
+		"unlisted HTTPS host": {URL: "https://example.test", StateText: "ok", ViewportWidth: 800, ViewportHeight: 600},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if validateVisualTarget(&target) == nil {

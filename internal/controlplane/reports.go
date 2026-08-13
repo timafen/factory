@@ -317,8 +317,13 @@ func validateVisualTarget(target *protocol.VisualTarget) error {
 		return nil
 	}
 	parsed, err := url.Parse(strings.TrimSpace(target.URL))
-	loopback := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback)) {
+	if err != nil || parsed == nil || parsed.Host == "" {
+		return invalid("invalid_visual_target", "visual target URL must be absolute HTTPS (HTTP is allowed for loopback)")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	allowedHost := loopback || host == "factory.timafen.com" || host == "staging-automation.tarser.net"
+	if !allowedHost || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback)) {
 		return invalid("invalid_visual_target", "visual target URL must be absolute HTTPS (HTTP is allowed for loopback)")
 	}
 	if strings.TrimSpace(target.StateText) == "" {

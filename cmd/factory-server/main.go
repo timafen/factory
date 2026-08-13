@@ -91,6 +91,15 @@ func run() (returnErr error) {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	handled, err := runRecoveryMode(rootContext, *database, *backup, *restore, os.Stdout)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
+	}
 	reportRoot := os.Getenv("FACTORY_REPORT_ROOT")
 	if reportRoot == "" {
 		reportRoot = filepath.Join(dataRoot, "reports")
@@ -115,15 +124,6 @@ func run() (returnErr error) {
 		if reportRenderer == "" {
 			reportRenderer = embeddedRenderer
 		}
-	}
-	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	handled, err := runRecoveryMode(rootContext, *database, *backup, *restore, os.Stdout)
-	if err != nil {
-		return err
-	}
-	if handled {
-		return nil
 	}
 	listenAddress, err := controlplane.ResolveListenAddress(*listen)
 	if err != nil {
