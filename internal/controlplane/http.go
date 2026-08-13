@@ -165,6 +165,8 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/metrics/summary", api.getMetrics)
 	mux.HandleFunc("GET /api/v1/metrics/efficiency", api.getEfficiency)
 	mux.HandleFunc("GET /api/v1/metrics/product-capacity", api.getProductCapacity)
+	mux.HandleFunc("GET /api/v1/reports/daily", api.listDailyReports)
+	mux.HandleFunc("GET /api/v1/reports/daily/{date}/pdf", api.downloadDailyReport)
 	mux.HandleFunc("GET /api/v1/settings/pilot", api.getPilotSettings)
 	mux.HandleFunc("PUT /api/v1/settings/pilot", api.updatePilotSettings)
 	mux.HandleFunc("POST /api/v1/dialog/messages", api.postDialogMessage)

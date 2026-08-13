@@ -2,6 +2,7 @@ import type {
   APIErrorBody,
   AttemptEventPage,
   CreateTaskInput,
+	DailyReport,
   MetricsSummary,
   MetricsWindow,
   ManagedRepository,
@@ -317,6 +318,7 @@ export const api = {
     request<PipelineConfig>("/api/v1/pipeline", { method: "PUT", body: JSON.stringify(config) }),
   createTask: (input: CreateTaskInput) =>
     request<TaskDetail>("/api/v1/tasks", { method: "POST", body: JSON.stringify(input) }),
+	dailyReports: () => request<DailyReport[]>("/api/v1/reports/daily"),
 	uploadTaskAttachment: (requestKey: string, file: File) => {
 		const form = new FormData(); form.append("request_key", requestKey); form.append("file", file);
 		return request<TaskAttachment>("/api/v1/task-attachments", { method: "POST", body: form });

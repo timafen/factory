@@ -483,7 +483,11 @@ interface CreateTaskBaseInput {
   };
   timeout_seconds: number;
 	attachment_ids?: string[];
+	visual_target?: VisualTarget;
 }
+
+export interface VisualTarget { url: string; state_text: string; viewport_width: number; viewport_height: number; after_workflow_title?: string }
+export interface DailyReport { report_date: string; timezone: string; status: "pending" | "running" | "ready" | "error"; metrics?: Record<string, unknown>; pdf_sha256?: string; pdf_size?: number; error?: string }
 
 export interface TaskAttachment { id: string; name: string; content_type: string; size: number; sha256: string }
 

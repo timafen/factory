@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/owainlewis/factory/internal/controlplane"
 )
 
 func TestBackupModeRejectsMissingSourceWithoutCreatingState(t *testing.T) {
@@ -73,6 +75,22 @@ func TestDefaultDatabasePathHonorsPreviewAlias(t *testing.T) {
 	}
 	if want := filepath.Join(root, "server", "factory.sqlite3"); database != want {
 		t.Fatalf("database = %q, want %q", database, want)
+	}
+}
+
+func TestDefaultReportRuntimeLivesUnderFactoryDataRoot(t *testing.T) {
+	root := t.TempDir()
+	capture, renderer, err := controlplane.MaterializeReportScripts(filepath.Join(root, "reports"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, script := range []string{capture, renderer} {
+		if !filepath.IsAbs(script) || !strings.HasPrefix(script, filepath.Join(root, "reports")+string(filepath.Separator)) {
+			t.Fatalf("embedded report script=%q", script)
+		}
+		if info, err := os.Stat(script); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("script info=%v err=%v", info, err)
+		}
 	}
 }
 
