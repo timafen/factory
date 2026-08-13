@@ -21,6 +21,7 @@ func TestListQuestionsHidesPythonMockRepresentations(t *testing.T) {
 		"resolved.json": `{"id":"resolved","status":"resolved","title":"[auto] Исправить корзину","situation":"<MagicMock name='deep_diagnose().get()' id='140123456789'>","question":"<Mock name='deep_diagnose().get()' id='140123456790'>","options":["<MagicMock name='option' id='1'>"]}`,
 		"open.json":     `{"id":"open","status":"open","title":"Проверить доставку","situation":"Заказ задерживается","question":"Продолжить проверку?","options":["Да","Нет"]}`,
 		"topic.json":    `{"id":"topic","status":"open","title":"Обсудить MagicMock","situation":"Текст о MagicMock в тестах","question":"Почему MagicMock попал в тест?"}`,
+		"admin.json":    `{"id":"admin","status":"answered","authority":"admin","admin_result":"executed","title":"Проверить стенд"}`,
 	}
 	for name, content := range fixtures {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o644); err != nil {
@@ -52,6 +53,9 @@ func TestListQuestionsHidesPythonMockRepresentations(t *testing.T) {
 	for _, question := range result.Questions {
 		if question["id"] == "resolved" {
 			t.Fatalf("resolved MagicMock question was returned: %#v", question)
+		}
+		if question["id"] == "admin" {
+			t.Fatalf("admin audit was returned as an owner question: %#v", question)
 		}
 	}
 	data, err = os.ReadFile(filepath.Join(directory, "resolved.json"))

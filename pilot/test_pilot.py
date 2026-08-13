@@ -1650,7 +1650,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             pause_pipeline.assert_not_called()
             answer.assert_not_called()
 
-    def test_loop_rescue_does_not_grant_another_full_round_allowance(self):
+    def test_exhausted_loop_rescue_still_asks_orchestrator(self):
         rescues = {"LOOP": 0}
 
         def cap_rescues(_base, stage):
@@ -1679,11 +1679,10 @@ class DiagnosisRepairTests(unittest.TestCase):
                 [], "", attempts_so_far=9)
 
         self.assertFalse(first)
-        self.assertTrue(second)
-        pause.assert_called_once_with(conf, "Починить отчёт")
-        # Отсчёт обновляется только при настоящей остановке. Автоматическое
-        # решение не должно незаметно выдавать ещё восемь кругов.
-        set_baseline.assert_called_once_with("Починить отчёт", 9)
+        self.assertFalse(second)
+        self.assertEqual(rescues["LOOP"], 2)
+        pause.assert_not_called()
+        set_baseline.assert_not_called()
 
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
@@ -4721,6 +4720,7 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(verdict["decision"], "wait")
         self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
 
+
     def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
         self.conf["stages"] = [
             {"workflow": "Triage", "worker": "worker"},
@@ -4796,6 +4796,145 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(
             pilot.load(self.conf_path, {})["stopped_pipelines"], ["Новая работа"])
         self.assertEqual(pilot.load(stall_path, {})["Новая работа"]["why"], "owner")
+
+
+class AdminQuestionRoutingTests(unittest.TestCase):
+    def test_stage_cap_resolves_admin_action_in_both_cap_branches(self):
+        for used in (0, 2):
+            with self.subTest(cap_rescues=used), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                    mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                    mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                    mock.patch.object(pilot, "cap_rescues", return_value=used), \
+                    mock.patch.object(pilot, "notify") as notify, \
+                    mock.patch.object(pilot, "_fixed_command", return_value=(True, "HTTP 200")) as command, \
+                    mock.patch.object(pilot, "orchestrator_answer", side_effect=[
+                        {"decision": "admin_action", "action": {
+                            "scope": "staging", "verb": "health", "args": []}},
+                        {"decision": "answer", "answer": "Стенд отвечает; продолжай работу."},
+                    ]):
+                escalated = pilot.route_question(
+                    {"max_stage_attempts": 3, "max_work_rounds": 8,
+                     "max_cap_rescues": 2},
+                    f"stage-cap-admin-{used}", "Implement + Test", "Implement + Test",
+                    "Проверить стенд", "repo-id", "Нужна проверка health",
+                    "Стенд жив?", [], "", attempts_so_far=3)
+                record = pilot.load(
+                    os.path.join(temporary, f"stage-cap-admin-{used}.json"), {})
+
+            self.assertFalse(escalated)
+            command.assert_called_once_with(
+                ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
+            self.assertEqual(record["admin_result"], "executed")
+            self.assertEqual(record["answered_by"], "orchestrator")
+            self.assertFalse(record.get("owner_only", False))
+            self.assertFalse(any(
+                "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
+
+    def test_wait_after_successful_admin_action_pauses_without_owner_escalation(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
+                mock.patch.object(pilot, "notify") as notify, \
+                mock.patch.object(pilot, "_fixed_command", return_value=(True, "HTTP 200")), \
+                mock.patch.object(pilot, "orchestrator_answer", side_effect=[
+                    {"decision": "admin_action", "action": {
+                        "scope": "staging", "verb": "health", "args": []}},
+                    {"decision": "wait", "reason": "Ждём восстановления зависимого сервиса."},
+                ]):
+            escalated = pilot.route_question(
+                {"max_stage_attempts": 3, "max_work_rounds": 8}, "admin-wait",
+                "Implement + Test", "Implement + Test", "Проверить стенд", "repo-id",
+                "Нужна проверка health", "Стенд жив?", [], "")
+            record = pilot.load(os.path.join(temporary, "admin-wait.json"), {})
+
+        self.assertFalse(escalated)
+        pause.assert_called_once()
+        self.assertEqual(record["status"], "resolved")
+        self.assertEqual(record["machine_action"], "wait")
+        self.assertEqual(record["answered_by"], "orchestrator")
+        self.assertFalse(record.get("owner_only", False))
+        self.assertFalse(any(
+            "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
+
+    def test_exhausted_loop_rescues_still_resolve_admin_action_before_owner(self):
+        answers = [
+            {"decision": "admin_action", "action": {
+                "scope": "staging", "verb": "health", "args": []}},
+            {"decision": "answer", "answer": "Стенд отвечает; продолжай работу."},
+        ]
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                mock.patch.object(pilot, "cap_rescues", return_value=2), \
+                mock.patch.object(pilot, "notify") as notify, \
+                mock.patch.object(pilot, "_fixed_command", return_value=(True, "HTTP 200")) as command, \
+                mock.patch.object(pilot, "orchestrator_answer", side_effect=answers) as orchestrator:
+            escalated = pilot.route_question(
+                {"max_stage_attempts": 3, "max_work_rounds": 8,
+                 "max_loop_rescues": 2},
+                "loop-admin-question", "Implement + Test", "Implement + Test",
+                "Проверить стенд", "repo-id", "Нужна проверка health",
+                "Стенд жив?", [], "", attempts_so_far=8)
+            record = pilot.load(
+                os.path.join(temporary, "loop-admin-question.json"), {})
+
+        self.assertFalse(escalated)
+        self.assertEqual(orchestrator.call_count, 2)
+        command.assert_called_once_with(
+            ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
+        self.assertEqual(record["admin_result"], "executed")
+        self.assertEqual(record["answered_by"], "orchestrator")
+        self.assertFalse(record.get("owner_only", False))
+        self.assertFalse(any(
+            "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
+
+    def test_allowed_staging_health_is_resolved_by_orchestrator_before_owner(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "notify") as notify, \
+                mock.patch.object(pilot, "_fixed_command", return_value=(True, "HTTP 200")) as command, \
+                mock.patch.object(pilot, "orchestrator_answer", side_effect=[
+                    {"decision": "admin_action", "action": {
+                        "scope": "staging", "verb": "health", "args": []}},
+                    {"decision": "answer", "answer": "Стенд отвечает; продолжай работу."},
+                ]):
+            escalated = pilot.route_question(
+                {"max_stage_attempts": 3, "max_work_rounds": 8}, "admin-question",
+                "Implement + Test", "Implement + Test", "Проверить стенд", "repo-id",
+                "Нужна проверка health", "Стенд жив?", [], "")
+            record = pilot.load(os.path.join(temporary, "admin-question.json"), {})
+
+        self.assertFalse(escalated)
+        command.assert_called_once_with(
+            ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
+        self.assertEqual(record["authority"], "admin")
+        self.assertEqual(record["admin_result"], "executed")
+        self.assertEqual(record["answered_by"], "orchestrator")
+        self.assertFalse(record.get("owner_only", False))
+        self.assertFalse(any("Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
+
+    def test_forbidden_admin_action_is_not_executed_and_escalates(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "_fixed_command") as command, \
+                mock.patch.object(pilot, "orchestrator_answer", return_value={
+                    "decision": "admin_action", "action": {
+                        "scope": "prod", "verb": "health", "args": []}}):
+            self.assertTrue(pilot.route_question(
+                {"max_stage_attempts": 3, "max_work_rounds": 8}, "forbidden-admin",
+                "Implement + Test", "Implement + Test", "Проверить прод", "repo-id",
+                "Нужна проверка", "Прод жив?", [], ""))
+            record = pilot.load(os.path.join(temporary, "forbidden-admin.json"), {})
+
+        command.assert_not_called()
+        self.assertTrue(record["owner_only"])
+        self.assertEqual(record["admin_result"], "denied")
 
 
 class AdaptivePollingTests(unittest.TestCase):
