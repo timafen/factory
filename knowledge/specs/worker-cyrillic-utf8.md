@@ -82,9 +82,9 @@ subject коммита и сравнивает их побайтно с исхо
 
 ## Карточка
 
-`knowledge/cards/CARD-0047-worker-utf8-runtime.md`
+`knowledge/cards/CARD-0129-worker-utf8-runtime.md`
 
-ГОТОВО-КОГДА: файл knowledge/cards/CARD-0047-worker-utf8-runtime.md
+ГОТОВО-КОГДА: файл knowledge/cards/CARD-0129-worker-utf8-runtime.md
 ГОТОВО-КОГДА: файл knowledge/specs/worker-cyrillic-utf8.md
 ГОТОВО-КОГДА: файл internal/worker/supervisor.go
 ГОТОВО-КОГДА: файл internal/worker/worker_integration_test.go

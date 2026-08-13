@@ -97,7 +97,7 @@ shell-тест `ops/test-factory-janitor.sh`.
 
 ## Карточка
 
-`knowledge/cards/CARD-0048-offline-claude-haiku-retained-worktree.md`
+`knowledge/cards/CARD-0130-offline-claude-haiku-retained-worktree.md`
 
 ГОТОВО-КОГДА: файл internal/controlplane/store.go
 ГОТОВО-КОГДА: файл internal/controlplane/http.go

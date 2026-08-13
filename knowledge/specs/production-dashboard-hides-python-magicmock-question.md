@@ -102,7 +102,7 @@ production-данные не входят в реализацию.
 
 ## Карточка работы
 
-`knowledge/cards/CARD-0108-production-dashboard-magicmock-question.md`
+`knowledge/cards/CARD-0152-production-dashboard-magicmock-question.md`
 
 ГОТОВО-КОГДА: файл internal/controlplane/questions_http.go
 ГОТОВО-КОГДА: файл internal/controlplane/questions_http_test.go

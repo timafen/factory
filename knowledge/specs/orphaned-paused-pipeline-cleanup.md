@@ -73,7 +73,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0048-orphaned-paused-pipeline-cleanup.md`
+`knowledge/cards/CARD-0131-orphaned-paused-pipeline-cleanup.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py

@@ -65,7 +65,7 @@
 | Полный набор и смежный Go-код | `python3 -m unittest pilot.test_pilot`; `go test ./...` | 32 tests, OK; exit 0 |
 
 Дифф после перебазирования на свежий `origin/main` содержит только
-`knowledge/cards/CARD-0037-server-load-admission.md`,
+`knowledge/cards/CARD-0117-server-load-admission.md`,
 `knowledge/specs/server-load-admission.md`, `pilot/pilot.py` и
 `pilot/test_pilot.py`; `git diff --check origin/main...HEAD` завершился без
 замечаний.

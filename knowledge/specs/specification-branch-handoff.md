@@ -91,7 +91,7 @@ revision и контекст созданной задачи, а также по
 
 ## Карточка
 
-`knowledge/cards/CARD-0069-specification-branch-handoff.md`
+`knowledge/cards/CARD-0148-specification-branch-handoff.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
