@@ -1,20 +1,29 @@
 # CARD-0102 — Карточки Плана получают оценку сложности при автозапуске
 
-Implementation commit: e43462307fcd7c25003eecfe693fd21a9dfe8ba7 — существующий автозапуск Плана служит базовой реализацией; оценка сложности ещё не реализована и определена этой спецификацией.
+Implementation commit: 1002212fce5ab5c70eea18980a64154ba12117dd — автозапуск оценивает карточку, сохраняет основание и выбирает исполнителя по сложности.
 
 ## HEAD
 
-- Status: Specification complete — ожидает Implement + Test.
-- Branch: `factory/1e90aded-177-04960ada-3fa`.
+- Status: Implement + Test complete — ожидает Review.
+- Branch: `factory/2dc6ccd1-c61-d942b065-571`.
+- Implementation commit: `1002212fce5ab5c70eea18980a64154ba12117dd`.
 - Specification: `knowledge/specs/plan-autostart-complexity-assessment.md`.
-- Owner impact: автозапуск будет выбирать исполнителя по оценённой сложности и
-  показывать владельцу саму оценку с понятным основанием.
-- Scope: `pilot/pilot.py`, `pilot/test_pilot.py`, `intake/plan.py`.
-- Evidence target: `python3 -m unittest pilot.test_pilot.PlanAutostartTest`.
-- Next action: реализовать сохранение, маршрутизацию, отказоустойчивость и
-  отображение оценки по спецификации.
+- What changed: автозапуск строго получает и сохраняет `low|medium|high` с
+  русским основанием, маршрутизирует первый этап по оценке и не запускает
+  карточку при ошибке; План показывает оценку владельцу.
+- Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest
+  pilot.test_pilot.PlanManualTaskTest` → 21 test, OK; `git diff --check` → OK.
+- Next action: проверить diff и защитные сценарии на этапе Review.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Добавлена строгая оценка сложности до создания задачи, её сохранение и повторное
+использование, маршрутизация Triage по оценке и отказ от запуска при невалидном
+ответе модели. Экран Плана показывает русскую сложность и экранированное
+основание, а старые карточки помечает как ещё не оценённые. Целевые 21 тест
+автозапуска и экрана Плана прошли успешно; `git diff --check` не нашёл ошибок.
 
 ### 2026-08-12 — Specification
 
