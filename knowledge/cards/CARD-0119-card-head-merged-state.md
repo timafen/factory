@@ -4,13 +4,13 @@ Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — закреп
 
 ## HEAD
 
-Status: Implemented + Tested — передано в автоматический Review.
-Branch: factory/6f8299e5-32b-01aad148-721.
+Status: Verified PASS — awaiting human merge.
+Branch: factory/5fcd7977-c0e-12a77652-26d.
 Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — регрессионный тест маршрутизации Verify.
 What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
 What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
-Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS.
-One next action: автоматическому Review проверить опубликованный candidate; после APPROVE Verify сама передаст его в `main` и staging.
+Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS. Полный `just check` остановлен внешним SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
+One next action: человеку принять решение о слиянии проверенной ветки.
 
 ## LOG
 
@@ -37,3 +37,12 @@ Pinned verify: base `cd5c93b488fe6f7694f59d1e6b8d5e5abd58af91`, candidate
 
 Обновлён HEAD CARD-0083: устаревшие ветка и ожидание ручного merge заменены
 фактическим состоянием `main`; добавлена проверяемая запись о результате.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Успешная Verify описана как автоматическое слияние и staging-деплой | `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` | PASS: тест проверяет тексты `squash-merged into main AUTOMATICALLY`, `deployed to staging` и ручное решение только для production. |
+| Поставка содержит только заявленные файлы | pinned `git diff --name-only d98c9b10…...864a85d6…` | PASS: CARD-0083, CARD-0119, `pilot/test_pilot.py`. |
+| Полный набор проекта | `timeout 1800s just check` | НАХОДКА вне области: `go vet` и `govulncheck` PASS; staticcheck остановлен известным SA4000 в `internal/worker/attempt_lifecycle_test.go:31`. |
+| Смежная Python-регрессия | `python3 -m unittest pilot.test_pilot -v` | НАХОДКА вне области: 252 проверки PASS, 13 skipped, 2 restart-проверки в `CorrectionProvenanceStormTests` FAIL. |
