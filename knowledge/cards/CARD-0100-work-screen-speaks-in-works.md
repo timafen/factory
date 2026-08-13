@@ -66,3 +66,5 @@ Web-контракт `Task` дополнен `work_id`; группировка, 
 build прошли; `git diff --check` чист. Полный `just test` остановился только в
 неизменённом `internal/worker`: флейки-тест lease renewal измерил spread 3.02 ms;
 `just check` ранее также остановился на SA4000 в том же внешнем пакете.
+Browser-набор не стартовал: неизменённый `e2e/control-plane.spec.ts` не проходит
+TypeScript-проверку из-за отсутствующего `Navigator.serviceWorker`.
