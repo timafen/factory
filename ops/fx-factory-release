@@ -92,6 +92,7 @@ TRUSTED_PYTHON=/usr/bin/python3
 TRUSTED_GIT=/usr/bin/git
 TRUSTED_CHMOD=/usr/bin/chmod
 TRUSTED_MKDIR=/usr/bin/mkdir
+TRUSTED_READLINK=/usr/bin/readlink
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -331,7 +332,7 @@ for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" "$TRUSTED_NODE" \
   "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD" \
-  "$TRUSTED_MKDIR"; do
+  "$TRUSTED_MKDIR" "$TRUSTED_READLINK"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
@@ -576,6 +577,30 @@ mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "
 mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
   || { fail "не смог подготовить release-info"; exit 4; }
 
+cleanup_orphaned_builds() {
+  local release_path candidate candidate_path candidate_parent
+  release_path=$("$TRUSTED_READLINK" -f -- "$REL") \
+    || { fail "не смог проверить каталог релизов перед очисткой"; return 1; }
+  for candidate in "$REL"/build-*; do
+    [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+    if [ -L "$candidate" ] || [ ! -d "$candidate" ]; then
+      fail "пропускаю небезопасный остаток сборки: $candidate"
+      continue
+    fi
+    candidate_path=$("$TRUSTED_READLINK" -f -- "$candidate") \
+      || { fail "пропускаю непроверяемый остаток сборки: $candidate"; continue; }
+    candidate_parent=${candidate_path%/*}
+    if [ "$candidate_parent" != "$release_path" ]; then
+      fail "пропускаю остаток сборки за пределами каталога релизов: $candidate"
+      continue
+    fi
+    step "удаляю остаток прерванной сборки: $(basename "$candidate")"
+    "$TRUSTED_RM" -rf -- "$candidate" \
+      || { fail "не смог удалить остаток сборки: $candidate"; return 1; }
+  done
+}
+
+cleanup_orphaned_builds || exit 4
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_pids=()
