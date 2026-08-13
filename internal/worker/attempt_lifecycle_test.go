@@ -28,7 +28,9 @@ func TestLeaseRenewalScheduleDispersesAttempts(t *testing.T) {
 	if len(seen) < 3 {
 		t.Fatalf("renewals occupied %d time buckets; want at least 3", len(seen))
 	}
-	if leaseRenewalDelay("stable-attempt", interval, 0) != leaseRenewalDelay("stable-attempt", interval, 0) {
+	wantStableDelay := leaseRenewalDelay("stable-attempt", interval, 0)
+	gotStableDelay := leaseRenewalDelay("stable-attempt", interval, 0)
+	if gotStableDelay != wantStableDelay {
 		t.Fatal("renewal phase is not stable")
 	}
 }
