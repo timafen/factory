@@ -63,7 +63,11 @@ type ReleaseTrainSnapshot = {
 вычисляется от durable `started_at`/`reserved_at`; если старое поколение не
 имеет timestamp, поле опускается и UI показывает «длительность неизвестна».
 Реализация должна записывать эти timestamps только для новых переходов, не
-меняя transition semantics.
+меняя transition semantics. Projection-тест обязан передавать в builder явный
+фиксированный `now`; он не должен зависеть от часов машины и не должен вызывать
+`pilot.time.time()`. Для этого тест временно заменяет `pilot.time.time` на
+ошибку, вызывает builder с `now=120` и проверяет одновременно фиксированный
+`updated_at` и `elapsed_seconds` относительно durable `reserved_at`/`started_at`.
 
 `web/src/Overview.tsx` расширяет тип `Dash` и добавляет единый section с
 aria-label «Поезд выпуска» после верхнего статуса и до «Сейчас в работе».
@@ -104,9 +108,10 @@ aria-label «Поезд выпуска» после верхнего стату�
 ## Тест-план
 
 - `pilot/test_pilot.py`: table-driven `release_train_block` для unavailable, idle, reserved с/без retry, launching, running, completed, failed и `next_requested`; проверка task-title fallback, elapsed и публичного JSON без секретных/внутренних полей.
+- `pilot/test_pilot.py::ReleaseTrainDashboardTests.test_projection_uses_explicit_now_without_machine_clock`: замокать `pilot.time.time` исключением, вызвать projection с фиксированным `now` и подтвердить, что `updated_at` и `elapsed_seconds` вычислены только из него и durable timestamp.
 - `web/src/Overview.test.ts`: mock `/api/v1/dashboard`; проверить доступный section, состояния свободен/ожидает/выполняется/успешно/ошибка, gate, длительность, пассажиров и N+1; отдельный test доказывает отсутствие даты при неизвестном retry.
 - `internal/controlplane/dashboard_http_test.go` (если fixture покрывает handler): записать dashboard JSON и проверить точный passthrough `release_train`.
-- Целевой запуск: `python3 -m unittest pilot.test_pilot.ReleaseTrainDashboardTests`, затем `npm --prefix web test -- --run src/Overview.test.ts`, `npm --prefix web run typecheck` и `npm --prefix web run lint`.
+- Целевой запуск: `python3 -m unittest pilot.test_pilot.ReleaseTrainDashboardTests.test_projection_uses_explicit_now_without_machine_clock`, затем `python3 -m unittest pilot.test_pilot.ReleaseTrainDashboardTests`, `npm --prefix web test -- --run src/Overview.test.ts`, `npm --prefix web run typecheck` и `npm --prefix web run lint`.
 
 ## Риски и решения
 
