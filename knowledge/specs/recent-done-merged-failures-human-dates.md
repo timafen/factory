@@ -23,7 +23,9 @@ fallback старых уведомлений только как аудит, н�
 В `pilot/test_pilot.py` добавить целевой контрактный тест раздельных групп и
 лимитов: четыре недавних слияния должны остаться при пяти более свежих провалах;
 проверить этап, причину, `cancelled`, дедупликацию и отсутствие receipt у
-неподтверждённого успеха.
+неподтверждённого успеха. Тест назвать
+`RecentDoneTest.test_separates_merged_and_failed_with_independent_limits`, чтобы
+обязательная команда проверяла именно новый контракт, а не весь старый класс.
 
 В `web/src/Overview.tsx` расширить тип снимка до групп `merged`/`failed`, вынести
 экспортируемый помощник `formatRecentDate(value, now)` с локальным временем:
@@ -70,8 +72,10 @@ fallback старых уведомлений только как аудит, н�
 
 ## Тест-план
 
-- `python3 -m unittest -v pilot.test_pilot.RecentDoneTest` — receipt, группы,
-  независимые лимиты, провалы и причины.
+- `python3 -m unittest -v pilot.test_pilot.RecentDoneTest.test_separates_merged_and_failed_with_independent_limits`
+  — новый контрактный тест на receipt, раздельные группы, независимые лимиты,
+  провалы и причины; до реализации этого метода ещё нет, после реализации
+  команда обязана завершаться с кодом 0.
 - `npm --prefix web test -- --run src/Overview.test.ts` — группы, лимиты,
   этап/причина, пять вариантов даты, новая подпись и отсутствие ISO/`p90`.
 - `npm --prefix web run typecheck` и `npm --prefix web run lint` — типы и стиль.
@@ -97,4 +101,4 @@ fallback старых уведомлений только как аудит, н�
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл web/src/Overview.tsx
 ГОТОВО-КОГДА: файл web/src/Overview.test.ts
-ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.RecentDoneTest
+ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.RecentDoneTest.test_separates_merged_and_failed_with_independent_limits
