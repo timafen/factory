@@ -6358,6 +6358,38 @@ class RecentDoneTest(unittest.TestCase):
         self.assertEqual(recent, {"merged": [], "failed": []})
         api.assert_not_called()
 
+    def test_fetches_details_only_after_each_group_is_limited(self):
+        tasks = [
+            {"id": f"merged-{i}", "title": f"[auto] [5/5 Verify] Влитая {i}",
+             "state": "succeeded", "updated_at": f"2026-08-12T10:{i:02d}:00Z"}
+            for i in range(7)
+        ] + [
+            {"id": f"failed-{i}", "title": f"[auto] [4/5 Review] Провал {i}",
+             "state": "failed", "updated_at": f"2026-08-12T11:{i:02d}:00Z"}
+            for i in range(7)
+        ]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
+            for task in tasks[:7]:
+                stream.write(json.dumps({"task_id": task["id"]}) + "\n")
+
+        def detail(path, body=None):
+            return {"attempts": [{"result": path.rsplit("/", 1)[-1]}]}
+
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
+                mock.patch.object(pilot, "api", side_effect=detail) as api:
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual(len(recent["merged"]), 5)
+        self.assertEqual(len(recent["failed"]), 5)
+        self.assertEqual(len(api.call_args_list), 10)
+        self.assertEqual(
+            {call.args[0].rsplit("/", 1)[-1] for call in api.call_args_list},
+            {f"merged-{i}" for i in range(2, 7)} | {f"failed-{i}" for i in range(2, 7)},
+        )
+
     def test_excludes_successful_progress_and_unmerged_verify(self):
         tasks = [
             {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",

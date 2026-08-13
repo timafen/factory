@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, CheckCircle2, Coins, HeartPulse,
+  Activity, AlertTriangle, BarChart3, CheckCircle2, Coins, HeartPulse,
   KeyRound, Loader2, MessageCircleQuestion, RefreshCw, Server, Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -294,6 +294,14 @@ function formatSeconds(seconds: number) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function formatRecentDate(value: string | undefined, now = new Date()) {
+  const calendarDate = value?.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T|\s)/);
+  if (!calendarDate) return "дата неизвестна";
+  const year = Number(calendarDate[1]);
+  const month = Number(calendarDate[2]);
+  const day = Number(calendarDate[3]);
+  if (month < 1 || month > 12 || day < 1 || day > new Date(year, month, 0).getDate()) {
+    return "дата неизвестна";
+  }
   const date = value ? new Date(value) : null;
   const reference = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   if (!date || Number.isNaN(date.getTime())) return "дата неизвестна";
@@ -602,7 +610,10 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         return (
         <section style={card} aria-label="Сделано недавно">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <CheckCircle2 size={16} color="#7ee2a8" /><strong>Сделано недавно</strong>
+            {merged.length > 0
+              ? <CheckCircle2 size={16} color="#7ee2a8" />
+              : <AlertTriangle size={16} color="#ff9d9d" />}
+            <strong>Сделано недавно</strong>
           </div>
           {merged.length > 0 && <section aria-label="Влито в main" style={{ marginBottom: failed.length ? 12 : 0 }}>
             <strong>Влито в main</strong>

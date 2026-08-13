@@ -129,6 +129,8 @@ describe("Overview recent work", () => {
     expect(formatRecentDate("2026-08-11T18:30:00", now)).toBe("вчера 18:30");
     expect(formatRecentDate("2026-08-01T12:00:00", now)).toBe("01.08.2026 12:00");
     expect(formatRecentDate("not-a-date", now)).toBe("дата неизвестна");
+    expect(formatRecentDate("2026-02-30T12:00:00", now)).toBe("дата неизвестна");
+    expect(formatRecentDate("2025-02-29T12:00:00", now)).toBe("дата неизвестна");
     expect(formatRecentDate("", now)).toBe("дата неизвестна");
   });
 
@@ -159,8 +161,23 @@ describe("Overview recent work", () => {
     expect(failed).toHaveTextContent("Причина: лимит провайдера");
     expect(failed).toHaveTextContent("Причина: причина не указана");
     expect(within(failed).getByText("дата неизвестна")).toBeVisible();
+    expect(section.querySelector("svg")?.getAttribute("class")).toContain("lucide-circle-check");
     expect(section).not.toHaveTextContent(/2026-08-\d\dT/);
     expect(section).not.toHaveTextContent(/merged|failed|cancelled/);
+  });
+
+  it("uses a warning icon when the recent group contains only failures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard" ? { recent_done: {
+        merged: [], failed: [{ title: "Остановленная работа", stage: "Review", reason: "ошибка" }],
+      } } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Сделано недавно" });
+    expect(section.querySelector("svg")?.getAttribute("class")).toContain("lucide-triangle-alert");
   });
 });
 

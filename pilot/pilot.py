@@ -6217,24 +6217,29 @@ def recent_done_block(tasks, n=5):
             if not receipt:
                 continue
             at = receipt.get("at") or task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
-            report = _recent_done_attempt_text(task)
-            proof = proof_of(report)
             merged.append({"title": title[:120],
-                           "detail": ("Проверено: " + proof if proof
-                                      else "Выпуск принят и проверен."),
+                           "task_id": task.get("id"),
                            "at": at, "status": "merged",
                            "_sort_at": at})
             continue
 
         at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
-        report = _recent_done_attempt_text(task)
-        failed.append({"title": title[:120], "stage": stage[:80],
-                       "reason": cut(report, 180) if report else "причина не указана",
+        failed.append({"title": title[:120], "task_id": task.get("id"), "stage": stage[:80],
                        "at": at, "status": state, "_sort_at": at})
 
+    merged = _recent_done_pick_latest(merged, n)
+    failed = _recent_done_pick_latest(failed, n)
+    for item in merged:
+        report = _recent_done_attempt_text({"id": item.pop("task_id", None)})
+        proof = proof_of(report)
+        item["detail"] = ("Проверено: " + proof if proof
+                           else "Выпуск принят и проверен.")
+    for item in failed:
+        report = _recent_done_attempt_text({"id": item.pop("task_id", None)})
+        item["reason"] = cut(report, 180) if report else "причина не указана"
     result = {
-        "merged": _recent_done_pick_latest(merged, n),
-        "failed": _recent_done_pick_latest(failed, n),
+        "merged": merged,
+        "failed": failed,
     }
     if not result["merged"] and not result["failed"]:
         audit = _recent_done_legacy_audit(set(), n)
