@@ -2870,15 +2870,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 expected_card=""):
     """Create Review context only from a freshly fetched, pinned snapshot."""
     snapshot = fresh_branch_snapshot(repo_identity, branch)
-    # Test-only/legacy callers without a remote identity retain the small
-    # branch_report seam. Every real repository enters the pinned path above.
-    if not _remote_url(repo_identity):
-        state_, files = branch_report(repo_identity, branch)
-        snapshot = {"state": "ok", "default_branch": "unavailable",
-                    "base_sha": "unavailable", "candidate_sha": "unavailable",
-                    "merge_base_sha": "unavailable", "base_advanced": False,
-                    "base_ahead_by": "unavailable", "ahead_by": "unavailable", "files": files}
-    elif snapshot.get("state") == "blocked":
+    if snapshot.get("state") == "blocked":
         reason = snapshot.get("reason") or "unknown review infrastructure failure"
         log("REVIEW BLOCKED " + repr(reason))
         return {"blocked": True, "note": (
@@ -3038,9 +3030,9 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 "head": snapshot["candidate_sha"],
                 "note": (f"Машинная проверка: ветка {branch} в хранилище ЕСТЬ. "
                          "Проверяется свежая remote-основа "
-                         f"{snapshot['default_branch']} (base_sha={snapshot['base_sha']}, "
+                         f"{snapshot.get('default_branch', 'unknown')} (base_sha={snapshot['base_sha']}, "
                          f"candidate_sha={snapshot['candidate_sha']}, "
-                         f"merge_base_sha={snapshot['merge_base_sha']}, ahead_by={snapshot['ahead_by']}). "
+                         f"merge_base_sha={snapshot.get('merge_base_sha', 'unknown')}, ahead_by={snapshot.get('ahead_by', 'unknown')}). "
                          + base_status
                          + f"Файлы в поставке по pinned SHA ({len(files)}):\n{listing}"
                          + prom_note + "\n"
