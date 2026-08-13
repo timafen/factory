@@ -6834,48 +6834,65 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
 
 
-class AreaLockArbitrationTests(unittest.TestCase):
-    """Замок областей решает споры детерминированно, а не взаимным ожиданием."""
+class AutomationStatusSnapshotTests(unittest.TestCase):
+    def test_allowlist_and_partial_failure_remain_visible(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
 
-    AREAS = {
-        "Старшая работа": ["repo::pilot/pilot.py"],
-        "Младшая работа": ["repo::pilot/pilot.py"],
-    }
+        def fake_run(argv, **_kwargs):
+            if "factory-pilot.service" in argv:
+                return types.SimpleNamespace(returncode=0, stdout=(
+                    "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 UTC\n"))
+            return types.SimpleNamespace(returncode=1, stdout="")
 
-    def _loader(self, path, default=None):
-        return dict(self.AREAS) if path == pilot.AREAS_PATH else (default or {})
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"))
+            with open(target, encoding="utf-8") as handle:
+                rows = json.load(handle)["automations"]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual(["factory-pilot", "factory-release-broker", "factory-intake", "factory-janitor"],
+                         [row["id"] for row in rows])
+        self.assertEqual("ok", rows[0]["data_status"])
+        self.assertTrue(all(row["data_status"] == "no_data" for row in rows[1:]))
 
-    def _busy(self, tasks, base):
-        with mock.patch.object(pilot, "load", side_effect=self._loader), \
-                mock.patch.object(pilot, "area_of",
-                                  return_value={"repo::pilot/pilot.py"}):
-            return pilot.area_busy(tasks, base)
+    def test_snapshot_uses_completed_pilot_cycle_and_converts_local_systemd_time(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
 
-    def test_running_holder_still_blocks_unconditionally(self):
-        tasks = [{"state": "running", "created_at": "2026-08-13T10:00:00Z",
-                  "title": "[auto] [2/5 Implement + Test] Младшая работа"}]
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "Младшая работа")
+        def fake_run(_argv, **_kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=(
+                "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 CDT\n"))
 
-    def test_mutual_queued_contention_has_exactly_one_winner(self):
-        tasks = [
-            {"state": "queued", "created_at": "2026-08-13T10:00:00Z",
-             "title": "[auto] [4/5 Review] Старшая работа"},
-            {"state": "queued", "created_at": "2026-08-13T09:00:00Z",
-             "title": "[auto] [2/5 Specification] Младшая работа"},
-        ]
-        # Дальше прошедшая по конвейеру работа проходит, младшая ждёт её.
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
-        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"),
+                                          "2026-08-13T16:00:00Z")
+            with open(target, encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertIn("observed_at", snapshot)
+        self.assertEqual("2026-08-13T16:00:00Z", snapshot["automations"][0]["last_activity_at"])
+        self.assertEqual("2026-08-13T15:00:00Z", snapshot["automations"][1]["last_activity_at"])
 
-    def test_equal_stage_earlier_start_wins(self):
-        tasks = [
-            {"state": "queued", "created_at": "2026-08-13T08:00:00Z",
-             "title": "[auto] [3/5 Implement + Test] Старшая работа"},
-            {"state": "queued", "created_at": "2026-08-13T11:00:00Z",
-             "title": "[auto] [3/5 Implement + Test] Младшая работа"},
-        ]
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
-        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+    def test_invalid_janitor_calendar_date_remains_no_data(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        log_path = os.path.join(_TEST_DATA_HOME.name, "janitor-invalid-date.log")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write("completed at 2026-99-99T10:00:00Z\\n")
+
+        try:
+            pilot.write_automation_status(lambda *_args, **_kwargs: types.SimpleNamespace(returncode=1, stdout=""), log_path)
+            with open(target, encoding="utf-8") as handle:
+                janitor = json.load(handle)["automations"][-1]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual("no_data", janitor["data_status"])
+        self.assertNotIn("last_activity_at", janitor)
 
 
 if __name__ == "__main__":

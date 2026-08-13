@@ -280,6 +280,18 @@ export interface AutomationHealth {
 	message?: string;
 }
 
+export interface AutomationStatus {
+	source: "control_plane" | "host";
+	id: string;
+	category: "automation" | "pilot" | "release_broker" | "release" | "janitor";
+	title: string;
+	purpose: string;
+	status: string;
+	data_status: "ok" | "no_data";
+	last_activity_at?: string;
+	diagnostic?: string;
+}
+
 export interface Automation {
 	id: string;
 	title: string;

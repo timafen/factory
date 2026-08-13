@@ -20,6 +20,7 @@ import type {
   AutomationOccurrence,
   AutomationOccurrencePage,
   AutomationPage,
+	AutomationStatus,
   CreateAutomationInput,
   UpdateAutomationInput,
   TestAutomationResult,
@@ -207,6 +208,10 @@ export const api = {
     }>(`/api/v1/automations?${query}`);
     return { automations: page.automations ?? [], next_cursor: page.next_cursor };
   },
+	automationStatuses: async () => {
+		const page = await request<{ automations: AutomationStatus[] | null }>("/api/v1/automations/status");
+		return page.automations ?? [];
+	},
   automation: (id: string) =>
     request<AutomationDetail>(`/api/v1/automations/${encodeURIComponent(id)}`),
   automationOccurrences: async (id: string, cursor = "") => {
