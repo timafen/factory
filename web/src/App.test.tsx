@@ -75,8 +75,8 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const work = await screen.findByRole("button", { name: /^Work$/ });
-    const workers = screen.getByRole("button", { name: /^Workers$/ });
+    const work = await screen.findByRole("button", { name: /^Работа$/ });
+    const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(screen.getByRole("button", { name: /^Обзор$/ })).not.toHaveAttribute("aria-current");
     expect(work).toHaveAttribute("aria-current", "page");
     expect(workers).not.toHaveAttribute("aria-current");
@@ -87,28 +87,28 @@ describe("App", () => {
     expect(workers).toHaveAttribute("aria-current", "page");
   });
 
-  it("highlights the Work section without marking task detail as current", async () => {
+  it("highlights the work section without marking task detail as current", async () => {
     window.history.replaceState({}, "", "/tasks/task-running");
     mockControlPlane();
     renderApp();
 
     await screen.findByRole("heading", { name: "running task" });
-    const work = screen.getByRole("button", { name: /^Work$/ });
+    const work = screen.getByRole("button", { name: /^Работа$/ });
     expect(work).toHaveClass("active");
     expect(work).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /^Workers$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Исполнители$/ })).not.toHaveAttribute("aria-current");
   });
 
-  it("highlights the Workers section without marking worker detail as current", async () => {
+  it("highlights the workers section without marking worker detail as current", async () => {
     window.history.replaceState({}, "", "/workers/worker-online");
     mockControlPlane();
     renderApp();
 
     await screen.findByRole("heading", { name: "Build Mac" });
-    const workers = screen.getByRole("button", { name: /^Workers$/ });
+    const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(workers).toHaveClass("active");
     expect(workers).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /^Work$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Работа$/ })).not.toHaveAttribute("aria-current");
   });
 
   it("lists managed repositories and shows current acquisition readiness", async () => {
@@ -778,7 +778,7 @@ describe("App", () => {
 
     await user.click(await screen.findByRole("button", { name: "Показать по этапам" }));
     for (const [heading, title] of [
-      ["В очереди", "queued task"],
+      ["Задачи: ожидают запуска", "queued task"],
       ["В работе", "running task"],
       ["Отработали", "succeeded task"],
       ["Сорвались", "failed task"],
@@ -795,7 +795,7 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("button", { name: /^Workers$/ }));
+    await user.click(await screen.findByRole("button", { name: /^Исполнители$/ }));
     const summary = screen.getByLabelText("Fleet summary");
     expect(within(summary).getByText("Available slots").closest("div")).toHaveTextContent("4");
     expect(screen.getByLabelText("6 of 10 slots active")).toBeVisible();

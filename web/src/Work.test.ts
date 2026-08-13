@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { build, sectionOf } from "./Work";
 import type { Task } from "./types";
 
-function task(id: string, stage: string, state: Task["state"], minute: number): Task {
+function task(id: string, stage: string, state: Task["state"], minute: number, workID?: string): Task {
   return {
     id,
+    work_id: workID,
     title: `[auto] [3/5 ${stage}] Экран Работа`,
     state,
     created_at: `2026-08-08T10:${String(minute).padStart(2, "0")}:00Z`,
@@ -12,6 +13,44 @@ function task(id: string, stage: string, state: Task["state"], minute: number): 
 }
 
 describe("build", () => {
+  it("groups stage titles by work identity and keeps equal names separate", () => {
+    const sharedWork = build([
+      task("triage", "Triage", "succeeded", 1, "work-shared"),
+      { ...task("specification", "Specification", "running", 2, "work-shared"),
+        title: "[auto] [2/5 Specification] Уточнённое название" },
+    ], {}, []);
+    const equalNames = build([
+      task("first", "Triage", "running", 1, "work-first"),
+      task("second", "Triage", "running", 2, "work-second"),
+    ], {}, []);
+    const legacy = build([
+      task("legacy-triage", "Triage", "succeeded", 1),
+      task("legacy-specification", "Specification", "running", 2),
+    ], {}, []);
+
+    expect(sharedWork).toHaveLength(1);
+    expect(sharedWork[0]).toMatchObject({ id: "work-shared", base: "Экран Работа" });
+    expect(sharedWork[0].items).toHaveLength(2);
+    expect(equalNames.map((group) => group.id)).toEqual(["work-second", "work-first"]);
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]).toMatchObject({ id: "Экран Работа", base: "Экран Работа" });
+  });
+
+  it("looks up work metadata by identity before the legacy title fallback", () => {
+    const [group] = build([task("paused", "Review", "failed", 1, "work-paused")], {}, [], {
+      "work-paused": { origin: "owner" },
+      "Экран Работа": { origin: "assistant" },
+    }, {
+      "work-paused": { state: "stopped_owner", text: "пауза по идентификатору работы" },
+    }, {
+      "work-paused": { files: ["web/src/Work.tsx"] },
+    });
+
+    expect(group.meta?.origin).toBe("owner");
+    expect(group.promise?.files).toEqual(["web/src/Work.tsx"]);
+    expect(group.status).toMatchObject({ kind: "paused", happened: "пауза по идентификатору работы" });
+  });
+
   it("marks the live repeated stage as again and retains later stage history", () => {
     const group = build([
       task("implement-1", "Implement + Test", "succeeded", 1),
@@ -162,12 +201,12 @@ describe("build", () => {
 
     expect(triage.status).toMatchObject({
       kind: "queued",
-      label: "Ждёт следующий этап",
+      label: "Factory готовит следующий этап",
       next: "Следующий этап — «Спецификация». Factory запустит его, когда освободится исполнитель.",
     });
     expect(specification.status).toMatchObject({
       kind: "queued",
-      label: "Ждёт следующий этап",
+      label: "Factory готовит следующий этап",
       next: "Следующий этап — «Разработка». Factory запустит его, когда освободится исполнитель.",
     });
     expect(sectionOf(triage)).not.toBe("done");

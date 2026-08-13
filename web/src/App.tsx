@@ -266,7 +266,7 @@ export function App() {
             aria-current={route.page === "work" ? "page" : undefined}
             onClick={() => navigate({ page: "work" })}
           >
-            <ListChecks size={17} /> Work
+            <ListChecks size={17} /> Работа
           </button>
           <button
             className={`nav-item ${route.page === "workflows" || route.page === "workflow" ? "active" : ""}`}
@@ -301,7 +301,7 @@ export function App() {
             aria-current={route.page === "workers" ? "page" : undefined}
             onClick={() => navigate({ page: "workers" })}
           >
-            <Bot size={17} /> Workers
+            <Bot size={17} /> Исполнители
           </button>
           <button
             className={`nav-item ${route.page === "repositories" || route.page === "repository" ? "active" : ""}`}
@@ -353,8 +353,8 @@ export function App() {
             {route.page === "say" && "Say"}
             {route.page === "epics" && "Epics"}
             {route.page === "answer" && "Нужен ответ"}
-            {route.page === "work" && "Work"}
-            {route.page === "workers" && "Workers"}
+            {route.page === "work" && "Работа"}
+            {route.page === "workers" && "Исполнители"}
             {route.page === "task" && "Task detail"}
             {route.page === "worker" && "Worker detail"}
             {route.page === "repositories" && "Repositories"}
