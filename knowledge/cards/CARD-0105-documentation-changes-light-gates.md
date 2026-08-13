@@ -1,18 +1,16 @@
-Implementation commit: 947e0c782d225e478b48d51fdd64e1873f125239 — все шесть неоднозначных Git-сценариев подтверждают fail-closed переход к полному Gate.
+Implementation commit: d4075ad5fc96ab614e8d06294303aa8d32fc8415 — переименования, копии и пути с управляющими символами переводят документный выпуск на полный Gate.
 
 # CARD-0105 — Документные изменения проходят лёгкие ворота
 
 ## HEAD
 
 - Status: Implemented — ready for review.
-- Branch: `factory/671ab15f-e72-da47c992-9c0d-4a26-8762-e874f7a0f097`.
-- Implementation commit: `947e0c782d225e478b48d51fdd64e1873f125239`.
-- What changed: добавлены fail-closed испытания merge-коммита, коммита без
-  родителя, пустого коммита, submodule, ошибки `git diff-tree` и имени файла
-  с переводом строки; каждое подтверждает полный UI+Go+release Gate.
-- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` →
-  PASS; `bash ops/test-fx-factory-release.sh`, `cd web && npm test`,
-  `cd web && npm run build`, `go test ./...` → PASS.
+- Branch: `factory/4a7494a6-9bb-2d050abd-5b7`.
+- Implementation commit: `d4075ad5fc96ab614e8d06294303aa8d32fc8415`.
+- What changed: `diff-tree` распознаёт rename/copy; статусы `R`/`C` и пути с
+  управляющими символами fail-closed запускают полный UI+Go+release Gate.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
+  `bash ops/test-fx-factory-release.sh` → PASS.
 - Next action: выполнить независимый review перед слиянием.
 
 ## Контракт реализации
@@ -52,4 +50,12 @@ checkout. Markdown-only fixture подтверждает лёгкие ворот
 Добавлены шесть обязательных fail-closed fixtures: merge, root, empty,
 submodule, ошибка `git diff-tree` и имя с переводом строки. Каждая fixture
 подтверждает запуск полного UI+Go+release Gate; `bash -n` и
+`bash ops/test-fx-factory-release.sh` — PASS.
+
+### 2026-08-12 — Implement
+
+Включены `-M -C --find-copies-harder` в raw diff; rename и copy распознаются и
+не могут пройти лёгкие ворота. Пути с управляющими символами также отклоняются;
+добавлена copy fixture, а rename и newline fixture подтверждают полный Gate.
+`bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
 `bash ops/test-fx-factory-release.sh` — PASS.
