@@ -1,4 +1,4 @@
-Implementation commit: 54b9a2fa31b097579bee1dfb49d5eb3e4c2a2a4e — единый живой статус control-plane и host-автоматик на экране «Автоматизация»
+Implementation commit: 9069ceea24a6a2ff49e19ad8f52d37ced07fd048 — достоверный живой статус автоматик с TTL snapshot и временем завершённого цикла
 
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
@@ -6,15 +6,15 @@ Implementation commit: 54b9a2fa31b097579bee1dfb49d5eb3e4c2a2a4e — единый
 
 Status: Implemented
 
-Branch: `factory/a80d06c8-2f1-584ce472-4a9`
+Branch: `factory/432f3286-d0e-16b8bc6e-399`
 
-Implementation commit: `54b9a2fa31b097579bee1dfb49d5eb3e4c2a2a4e`
+Implementation commit: `9069ceea24a6a2ff49e19ad8f52d37ced07fd048`
 
-What changed: pilot атомарно сохраняет минимальный allowlist-снимок host-служб. Новый read-only endpoint объединяет его с durable Automation, а `/automations` показывает назначение, состояние и последнюю активность каждой строки, сохраняя `no_data` при отказах.
+What changed: snapshot host-служб содержит `observed_at` и становится `no_data` через пять минут. Endpoint и pilot используют единый `FACTORY_DATA_HOME` с fallback `/opt/factory-data`; pilot записывает реальное окончание цикла, а systemd-время переводит в UTC.
 
-Evidence: `go test ./...` → PASS; Python snapshot → 1 PASS; Vitest → 15 files / 174 tests PASS; typecheck, lint и production build → PASS.
+Evidence: `go test ./internal/controlplane -run 'TestAutomationStatus'` → PASS; `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests` → 2 PASS; `go test ./...`, `npm run typecheck`, `npm run build` → PASS.
 
-One next action: проверить `/automations` на стенде после доставки snapshot обновлённым pilot.
+One next action: выполнить Review и Verify, включая визуальную проверку `/automations` на стенде.
 
 ## LOG
 
@@ -23,3 +23,9 @@ One next action: проверить `/automations` на стенде после 
 Добавлены нормализованная модель и endpoint статусов, безопасная host-инвентаризация pilot и единый экран с видимыми состояниями control plane, pilot, release broker, release-службы и janitor. Частичный отказ проверен как сохранённая строка `no_data`; существующий detail доступен только durable Automation.
 
 Полная проверка после интеграции: все Go-пакеты и 174 UI-теста прошли; production build собран.
+
+### 2026-08-13 — Implement
+
+Исправлена достоверность live-статусов после замечаний Review: просроченный или лишённый `observed_at` snapshot больше не выглядит работающим; data root control plane совпадает с pilot. Для pilot сохраняется время успешно завершённого цикла, а systemd timestamp с локальной зоной переводится в UTC.
+
+Проверено: `go test ./internal/controlplane -run 'TestAutomationStatus'`, `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests`, `go test ./...`, `npm run typecheck` и `npm run build` прошли.
