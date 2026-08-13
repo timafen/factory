@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Review
+Status: Verified PASS — awaiting human merge
 Branch: factory/2b530665-c45-529c1cd2-8f6
 Implementation commit: 4707a6de747a52c01e5db914f905b4378b3159fe — исправлена проверка стабильной задержки lifecycle-теста
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: реализация закреплена коммитом `4707a6de747a52c01e5db914f905b4378b3159fe`; прежний Verify относился к старому HEAD и не засчитывается.
-One next action: провести Review текущего HEAD, затем Verify ровно проверенного SHA.
+Evidence: Review PASS и Verify выполнены для `d2eaa3696cb140e68d8889bce64f9286ee29314c`: целевой тест, `just staticcheck`, `just test` и `just build` прошли. Browser suite не засчитан: сборка UI остановилась до Playwright из-за отсутствующего `tsc` (exit 127); известная политика контейнера также не позволяет считать браузер проверенным.
+One next action: человек подтверждает merge; browser suite повторить в среде с UI-зависимостями и разрешённым browser sandbox.
 
 ## LOG
 
@@ -27,3 +27,23 @@ One next action: провести Review текущего HEAD, затем Verif
 | Нет изменения product code или UI | pinned diff `99701704b37e8740db3fdbe38c0193917570da5c...48be829a203d721145513ffe376accc60afd8c28` | Из реализации изменён только `internal/worker/attempt_lifecycle_test.go`; также добавлены спецификация и карточка. |
 | Полный Go-набор и сборка | `just test`; `just build` | PASS; собраны `factory-server`, `factory-worker`, `factory-release-broker`. |
 | Browser suite не выдан за успешный | `just test-browser` | Не засчитан: в чистом контейнере отсутствует `tsc`; запуск Chromium остаётся невозможным по известной политике sandbox. |
+
+### 2026-08-13 — Implement
+
+Карточка возвращена в статус Implemented: прежний Verify относился к старому HEAD и не мог подтверждать текущую поставку.
+
+### 2026-08-13 — Review
+
+Review диапазона `99701704b37e8740db3fdbe38c0193917570da5c...d2eaa3696cb140e68d8889bce64f9286ee29314c` завершён с PASS: исправление сохраняет проверку детерминированности, product code не изменён.
+
+### 2026-08-13 — Verify
+
+Verify выполнен именно для проверенного SHA `d2eaa3696cb140e68d8889bce64f9286ee29314c`.
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Нет SA4000 в lifecycle-тесте | `just staticcheck` | PASS. |
+| Lifecycle сохраняет инварианты | `go test ./internal/worker -run '^TestLeaseRenewal'` | PASS. |
+| Полный Go-набор | `just test` | PASS. |
+| Operator-бинарники собираются | `just build` | PASS. |
+| Browser suite не выдан за успешный | `just test-browser` | Не засчитан: `tsc` отсутствует, команда завершилась с exit 127 до Playwright; известная политика контейнера остаётся отдельной блокировкой запуска браузера. |
