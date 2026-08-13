@@ -34,6 +34,7 @@ type supervisorInit struct {
 	Worktree          string `json:"worktree"`
 	ResultPath        string `json:"result_path"`
 	Prompt            string `json:"prompt"`
+	ModelID           string `json:"model_id,omitempty"`
 	TimeoutSeconds    int    `json:"timeout_seconds"`
 }
 
@@ -94,6 +95,9 @@ func RunSupervisor(control *os.File, input io.Reader, output, errorOutput io.Wri
 	}
 	if init.TimeoutSeconds > int(protocol.MaxTimeout/time.Second) {
 		return errors.New("supervisor timeout exceeds eight hours")
+	}
+	if init.ModelID != "" && (!protocol.SupportedCodexModel(init.ModelID) || init.Runtime != protocol.RuntimeCodex) {
+		return errors.New("supervisor model override is not supported")
 	}
 
 	anchorToken, err := newUUID(nil)
@@ -208,6 +212,9 @@ func superviseRuntime(
 	switch init.Runtime {
 	case protocol.RuntimeCodex:
 		arguments = []string{"exec", "--json", "--color", "never", "--output-last-message", init.ResultPath, "-"}
+		if init.ModelID != "" {
+			arguments = append(arguments[:1], append([]string{"-m", init.ModelID}, arguments[1:]...)...)
+		}
 	case protocol.RuntimeClaudeCode:
 		arguments = []string{
 			"--print",

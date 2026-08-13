@@ -51,6 +51,11 @@ func SupportedRuntime(value string) bool {
 	return value == RuntimeCodex || value == RuntimeClaudeCode
 }
 
+// SupportedCodexModel deliberately lists only models Factory can route per task.
+func SupportedCodexModel(value string) bool {
+	return value == "gpt-5.6-sol" || value == "gpt-5.6-terra"
+}
+
 type RepositoryRegistration struct {
 	Key            string `json:"key"`
 	RemoteIdentity string `json:"remote_identity"`
@@ -306,6 +311,7 @@ type CreateTaskRequest struct {
 	AttachmentIDs              []string   `json:"attachment_ids,omitempty"`
 	ParentTaskID               string     `json:"parent_task_id,omitempty"`
 	CorrectionKind             string     `json:"correction_kind,omitempty"`
+	ModelID                    string     `json:"model_id,omitempty"`
 	DescriptionProvided        bool       `json:"-"`
 	ContextProvided            bool       `json:"-"`
 	WorkflowRevisionIDProvided bool       `json:"-"`
@@ -362,6 +368,7 @@ type Task struct {
 	WorkID         string    `json:"work_id,omitempty"`
 	ParentTaskID   string    `json:"parent_task_id,omitempty"`
 	CorrectionKind string    `json:"correction_kind,omitempty"`
+	ModelID        string    `json:"model_id,omitempty"`
 }
 
 type TaskCursor struct {

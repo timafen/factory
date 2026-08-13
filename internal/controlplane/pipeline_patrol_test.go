@@ -73,6 +73,13 @@ func TestPipelinePatrolProvisionUsesExistingScheduleAndPreservesRuns(t *testing.
 	if len(current.Occurrences) != 1 || current.Occurrences[0].Task == nil {
 		t.Fatalf("durable patrol runs = %#v", current.Occurrences)
 	}
+	var modelID string
+	if err := store.db.QueryRow(`SELECT model_id FROM tasks WHERE id = ?`, current.Occurrences[0].Task.ID).Scan(&modelID); err != nil {
+		t.Fatal(err)
+	}
+	if modelID != PipelinePatrolModelID {
+		t.Fatalf("patrol task model = %q, want %q", modelID, PipelinePatrolModelID)
+	}
 }
 
 func TestPipelinePatrolProvisionDoesNotInventSchedule(t *testing.T) {

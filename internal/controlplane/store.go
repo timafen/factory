@@ -2242,6 +2242,10 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	if input.TimeoutSeconds < 1 || input.TimeoutSeconds > int(protocol.MaxTimeout/time.Second) {
 		return protocol.TaskDetail{}, false, invalid("invalid_timeout", "timeout_seconds must be between 1 and 28800")
 	}
+	input.ModelID = strings.TrimSpace(input.ModelID)
+	if input.ModelID != "" && !protocol.SupportedCodexModel(input.ModelID) {
+		return protocol.TaskDetail{}, false, invalid("invalid_model_id", "model_id is not a supported Codex model")
+	}
 	if input.Route == nil {
 		if input.WorkerID == "" || input.RepositoryID == "" {
 			return protocol.TaskDetail{}, false, invalid(
@@ -2391,6 +2395,9 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	if err != nil {
 		return protocol.TaskDetail{}, false, unavailable(err)
 	}
+	if input.ModelID != "" && runtime != protocol.RuntimeCodex {
+		return protocol.TaskDetail{}, false, invalid("model_runtime_mismatch", "model_id requires a Codex worker")
+	}
 	if !protocol.AgentPromptFits(input.Title, repositoryRemoteIdentity, resolvedPrompt) {
 		return protocol.TaskDetail{}, false, invalid("agent_prompt_too_large", "the complete agent prompt exceeds 72 KiB")
 	}
@@ -2461,13 +2468,13 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO tasks(
-			id, request_key, title, description, repository_id, timeout_seconds, created_at,
+			id, request_key, title, description, repository_id, model_id, timeout_seconds, created_at,
 			workflow_id, workflow_revision_id, workflow_title, workflow_revision_number,
 			context, read_only, work_id, parent_task_id, correction_kind
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, input.RequestKey, input.Title, resolvedPrompt, input.RepositoryID,
-		input.TimeoutSeconds, now, nullableString(workflowID), nullableString(input.WorkflowRevisionID),
+		input.ModelID, input.TimeoutSeconds, now, nullableString(workflowID), nullableString(input.WorkflowRevisionID),
 		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext, readOnly,
 		workID, nullableString(input.ParentTaskID), nullableString(input.CorrectionKind))
 	if err == nil {
@@ -2539,7 +2546,7 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 		return protocol.TaskPage{}, invalid("invalid_limit", "limit must be between 1 and 200")
 	}
 	query := `
-		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
+		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds, t.model_id,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id
@@ -2586,11 +2593,11 @@ func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var err error
 	if detail {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.Description, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&task.TimeoutSeconds, &task.ModelID, &task.WorkerID, &task.State, &task.ReadOnly, &created,
 			&workID, &parentTaskID, &correctionKind)
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
-			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&task.TimeoutSeconds, &task.ModelID, &task.WorkerID, &task.State, &task.ReadOnly, &created,
 			&workID, &parentTaskID, &correctionKind)
 	}
 	task.WorkID = workID.String
@@ -2630,7 +2637,7 @@ func nullableInt(value int) any {
 func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error) {
 	var detail protocol.TaskDetail
 	row := s.db.QueryRowContext(ctx, `
-		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
+		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds, t.model_id,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?

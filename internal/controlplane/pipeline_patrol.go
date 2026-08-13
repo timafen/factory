@@ -15,6 +15,8 @@ const PipelinePatrolInstruction = `Factory pipeline patrol. Inspect only canonic
 
 const legacyPipelinePatrolInstruction = `Factory pipeline patrol. Inspect only canonical [auto] [N/M Stage] pipeline tasks. Do not touch an owner-paused pipeline or a final stage. If a succeeded stage has no live successor, wait 600 seconds before continuing it, preserve its repository, workflow revision and worker route, and make at most two continuation attempts. Escalate the stalled work once after those attempts. Record the outcome and diagnostic in this Automation run.`
 
+const PipelinePatrolModelID = "gpt-5.6-terra"
+
 // ProvisionPipelinePatrol turns an already configured schedule Automation into
 // the single durable runner for the pipeline patrol.  The caller supplies the
 // existing Automation ID: cron and timezone are never invented by Factory.
@@ -77,15 +79,15 @@ func (s *Store) ProvisionPipelinePatrol(ctx context.Context, automationID string
 		nextDue = sql.NullInt64{Int64: next.UnixMilli(), Valid: true}
 	}
 	versionIncrement := 0
-	if instructionChanged {
+	if instructionChanged || snapshot.modelID != PipelinePatrolModelID {
 		versionIncrement = 1
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE automations
-		SET context = ?, version = version + ?, enabled = 1, health_status = 'healthy', health_code = '',
+		SET context = ?, model_id = ?, version = version + ?, enabled = 1, health_status = 'healthy', health_code = '',
 		    health_message = 'Pipeline patrol provisioned from the existing schedule.', updated_at = ?
 		WHERE id = ? AND version = ?
-	`, contextValue, versionIncrement, now.UnixMilli(), automationID, snapshot.automationVersion)
+	`, contextValue, PipelinePatrolModelID, versionIncrement, now.UnixMilli(), automationID, snapshot.automationVersion)
 	if err != nil {
 		return protocol.AutomationDetail{}, unavailable(err)
 	}
