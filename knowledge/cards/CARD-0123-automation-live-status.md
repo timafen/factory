@@ -4,19 +4,31 @@ Implementation commit: f8b5c4dc4c06349fde33468197f77c322c3cc6a6 — единый
 
 ## HEAD
 
-Status: Implemented — awaiting Review
+Status: Verified PASS — awaiting human merge
 
 Branch: `factory/0a889f49-635-e5804601-452`
 
-Implementation commit: `f8b5c4dc4c06349fde33468197f77c322c3cc6a6a`
+Implementation commit: `f8b5c4dc4c06349fde33468197f77c322c3cc6a6`
 
 What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Частичный отказ сохраняет строку с честным `no_data`, а действия остаются только у durable Automation.
 
 Evidence: целевой Go-тест → PASS; Python snapshot tests → 3 PASS; UI → 64 PASS; `npm run typecheck`, `npm run lint`, `npm run build` и `go build ./...` → PASS.
 
-One next action: повторно выполнить Review опубликованной чистой ветки.
+One next action: выполнить human merge этой проверенной ветки.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Полный Go-набор | `go test ./...` | PASS, все пакеты |
+| Live-status snapshot | `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests` | PASS, 3/3 |
+| Web UI | `cd web && npm test -- --run` | PASS, 174/174 теста |
+| Типы, lint, production build | `cd web && npm run typecheck && npm run lint && npm run build` | PASS |
+| Pinned поставка | `git diff 99701704b37e8740db3fdbe38c0193917570da5c...e84e8fc7d0a20d0b5d7833c67acf9bd5e23ebdc3` | 19 task-only файлов, посторонних изменений нет |
+
+Экран показывает durable Automation, pilot, release broker, release-службы и janitor с живым статусом и последней активностью; частичный отказ источника сохраняет строку как `no_data`, а действия остаются только у durable Automation.
 
 ### 2026-08-13 — Implement
 

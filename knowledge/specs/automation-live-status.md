@@ -124,7 +124,7 @@
 
 ## Карточка работы
 
-Карточка: `knowledge/cards/CARD-0119-automation-live-status.md`.
+Карточка: `knowledge/cards/CARD-0123-automation-live-status.md`.
 
 Статус: Specification. Реализация должна сделать единственный нормализованный
 read-only список со снимком host-источников и без ложного здоровья при
