@@ -4,14 +4,12 @@ Implementation commit: 2be3e72518fcec25b023612fb7615c53406e8ce6 — регрес
 
 ## HEAD
 
-Status: BLOCKED: verification infrastructure — the target suite again receives SIGKILL in fixture subprocesses; the isolated cleanup mode passes.
-Branch: factory/aec7127a-f21-48dd382c-728.
-Implementation commit: 2be3e72518fcec25b023612fb7615c53406e8ce6 — регрессия подтверждает ошибку настоящего gate за форкающим launcher даже при подделанном успехе.
-What changed: работа перенесена на свежий `origin/main`; дублирующий production patch не нужен, поскольку безопасная launcher-цепочка уже в main.
-What changed: adversarial-сценарий пишет поддельный `status=0`, затем роняет настоящий forked Go gate и требует build error без установки и утечки процессов.
-Evidence: `FACTORY_TEST_ONLY=crash-cleanup FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS; full suite снова blocked by SIGKILL; `bash -n` и `git diff --check` → PASS.
-Evidence: `FACTORY_BUILD_DIR=<tmp> just build` → PASS, три бинарника; `just check` остановлен существующим `SA4000` в `internal/worker/attempt_lifecycle_test.go:31` вне области.
-One next action: Повторить целевой suite на runner-е без SIGKILL перед merge.
+Status: BLOCKED: verification infrastructure — fixture subprocess receives SIGKILL before assertions complete.
+Branch: factory/5280450e-6d0-132ddce3-33a.
+Implementation commit: 6ebba19e54d7cdbc48cddd789f5cae024df25a52 — регрессия проверяет ошибку настоящего forked gate за launcher.
+What changed: на свежем `origin/main` сохранён только adversarial-тест, который требует передать ошибку настоящего gate и запретить установку.
+Evidence: `bash -n ops/test-fx-factory-release.sh` и `git diff --check` → PASS; целевой `crash-cleanup` → SIGKILL внутри fixture subprocess, не assertion и не штатный timeout.
+One next action: повторить группы fixture на runner-е без внешнего SIGKILL.
 
 ### 2026-08-12 — Implement + Verify
 
@@ -28,6 +26,12 @@ One next action: Повторить целевой suite на runner-е без S
 | Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; `git diff --check` | PASS. |
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Работа собрана от свежего `origin/main`; в области остались только release-тест и эта карточка.
+Регрессия фиксирует, что ошибка настоящего forked gate не теряется за launcher и установка не начинается.
+`bash -n` и `git diff --check` прошли; `crash-cleanup` на текущем runner-е получил внешний SIGKILL в fixture subprocess до assertions.
 
 ### 2026-08-12 — Implement
 
