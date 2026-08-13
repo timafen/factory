@@ -31,3 +31,4 @@ Implementation commit: 8dfe8b32f453d2e94e385cb59d812e04ddd8a0ad — регрес
 | Офлайн-worker с retained worktree по-прежнему обрабатывается | тот же сценарий | очистка, карантин и подтверждение API проходят; все 4 сценария PASS. |
 | Сборка и выпуск не регрессировали | `just build`; `just test-release` | PASS; release-артефакты воспроизводимы. |
 | Полный обычный набор | `npm --prefix web ci`; `just check` | UI-зависимости PASS; `just check` остановился на прежнем `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`, вне изменённых файлов. |
+| Браузерный набор | `just test-browser` | 5 PASS, 1 FAIL в несвязанном `web/e2e/control-plane.spec.ts:833` (`renders grouped work and saves the desktop Work view`); 15 тестов после него не запущены. |
