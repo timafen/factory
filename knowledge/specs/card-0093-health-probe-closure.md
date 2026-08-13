@@ -78,7 +78,6 @@ online/unhealthy worker; его scope не расширяется.
 Она уже содержит Implementation commit и ожидает отдельного Verify. В рамках
 этой спецификации карточки не изменяются и новая карточка не создаётся.
 
-ГОТОВО-КОГДА: файл internal/worker/health.go
-ГОТОВО-КОГДА: файл internal/worker/health_test.go
-ГОТОВО-КОГДА: файл knowledge/cards/CARD-0098-concurrent-claude-health-probes.md
-ГОТОВО-КОГДА: команда go test ./internal/worker -count=1 -run '^(TestConcurrentClaudeHealthChecksWaitForIdenticalProbe|TestClaudeHealthCheckPreservesCommandFailure|TestClaudeHealthCheckLockWaitHonorsTimeout|TestRunCommandSkipsConcurrentDuplicate)$'
+ГОТОВО-КОГДА: файл ops/factory-janitor.sh
+ГОТОВО-КОГДА: файл ops/test-factory-janitor.sh
+ГОТОВО-КОГДА: команда bash ops/test-factory-janitor.sh
