@@ -4,80 +4,69 @@ package worker
 
 import (
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
+	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 const interruptedTestHelperEnv = "FACTORY_WORKER_INTERRUPTION_HELPER"
 
-// runInterruptedTestHelper is deliberately test-only. It models the process
-// which owns fake tools during a test run, including cleanup after interruption.
-func runInterruptedTestHelper() {
-	root := os.Getenv("FACTORY_WORKER_INTERRUPTION_ROOT")
-	var err error
-	if root == "" {
-		root, err = os.MkdirTemp("", "factory-worker-interrupted-")
-	}
-	if err != nil {
-		os.Exit(2)
-	}
-	defer os.RemoveAll(root)
-	started := filepath.Join(root, "first.started")
-	pidFile := filepath.Join(root, "pid")
-	pgidFile := filepath.Join(root, "pgid")
-	tool := filepath.Join(root, "gh")
-	script := "#!/bin/sh\nset -eu\necho $$ > \"$1\"\ntouch \"$2\"\ntrap '' TERM INT HUP\nwhile :; do sleep 1; done\n"
-	if err := os.WriteFile(tool, []byte(script), 0700); err != nil {
-		os.Exit(2)
-	}
-	command := exec.Command(tool, pidFile, started)
-	configureNewProcessGroup(command)
-	if err := command.Start(); err != nil {
-		os.Exit(2)
-	}
-	pgid := command.Process.Pid
-	done := waitCommand(command)
-	_ = os.WriteFile(pgidFile, []byte(strconv.Itoa(pgid)), 0600)
-	_ = os.WriteFile(filepath.Join(root, "root"), []byte(root), 0600)
-	_ = os.WriteFile(filepath.Join(root, "ready"), nil, 0600)
-	cleanup := func(sig unix.Signal) {
-		_ = signalProcessGroup(pgid, sig)
-		deadline := time.Now().Add(time.Second)
-		for time.Now().Before(deadline) && processGroupAlive(pgid) {
-			time.Sleep(20 * time.Millisecond)
-		}
-		if processGroupAlive(pgid) {
-			_ = forceStopStartedProcessGroup(pgid)
-		}
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			_ = command.Process.Kill()
-			select {
-			case <-done:
-			case <-time.After(time.Second):
+var interruptedTestLifecycle = struct {
+	sync.Mutex
+	syncDirs []string
+	signal   chan os.Signal
+}{signal: make(chan os.Signal, 1)}
+
+// runInterruptedTestHelper wraps the real test lifecycle. Signal notification is
+// installed before main.Run can publish a readiness marker from a blocking fake gh.
+func runInterruptedTestHelper(main *testing.M) int {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	go func() {
+		sig := <-signals
+		cleanupInterruptedTestGroups()
+		interruptedTestLifecycle.signal <- sig
+	}()
+	code := main.Run()
+	_ = os.RemoveAll(os.Getenv("FACTORY_WORKER_INTERRUPTION_ROOT"))
+	return code
+}
+
+func registerInterruptibleSyncDir(path string) {
+	interruptedTestLifecycle.Lock()
+	defer interruptedTestLifecycle.Unlock()
+	interruptedTestLifecycle.syncDirs = append(interruptedTestLifecycle.syncDirs, path)
+}
+
+func cleanupInterruptedTestGroups() {
+	interruptedTestLifecycle.Lock()
+	dirs := append([]string(nil), interruptedTestLifecycle.syncDirs...)
+	interruptedTestLifecycle.Unlock()
+	for _, dir := range dirs {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.pid"))
+		for _, path := range matches {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			pgid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			if err != nil {
+				continue
+			}
+			_ = signalProcessGroup(pgid, syscall.SIGTERM)
+			deadline := time.Now().Add(time.Second)
+			for processGroupAlive(pgid) && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if processGroupAlive(pgid) {
+				_ = forceStopStartedProcessGroup(pgid)
 			}
 		}
 	}
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	select {
-	case sig := <-signals:
-		cleanup(signalToUnix(sig))
-	case <-done:
-	}
-}
-
-func signalToUnix(signal os.Signal) unix.Signal { return unix.Signal(signal.(syscall.Signal)) }
-
-func waitCommand(command *exec.Cmd) <-chan struct{} {
-	done := make(chan struct{})
-	go func() { _ = command.Wait(); close(done) }()
-	return done
 }
