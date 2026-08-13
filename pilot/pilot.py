@@ -21,6 +21,7 @@ Planner layer (epics):
 import base64
 import calendar
 import datetime
+import hashlib
 import io
 import glob
 import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
@@ -149,6 +150,53 @@ def same_task_work(task, reference):
         return (task or {}).get("work_id") == reference
     return base_title((task or {}).get("title") or "").strip() == str(
         reference or "").strip()
+
+
+def pipeline_handoff_request_key(source, next_stage):
+    """Return one idempotency key for this exact pipeline handoff."""
+    work_id = str((source or {}).get("work_id") or "").strip()
+    identity = work_id or base_title((source or {}).get("title") or "")
+    raw = "\0".join((identity, str((source or {}).get("id") or ""),
+                      str(next_stage or "")))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return "pipeline-handoff:" + digest
+
+
+def pipeline_successor(tasks, source, next_stage):
+    """Find the already-created successor for one source/stage handoff.
+
+    Provenance is authoritative for current control-plane rows.  Title and
+    time are retained only for legacy rows that have no provenance at all.
+    """
+    if not source or not next_stage:
+        return None
+    request_key = pipeline_handoff_request_key(source, next_stage)
+    source_work_id = str(source.get("work_id") or "").strip()
+    source_id = source.get("id") or ""
+    source_title = base_title(source.get("title") or "")
+    source_created = source.get("created_at") or ""
+    for task in tasks or []:
+        match = STAGE_TITLE_RE.match(task.get("title", "") or "")
+        if not match or match.group(1).strip() != next_stage:
+            continue
+        if task.get("request_key") == request_key:
+            return task
+
+        task_work_id_value = str(task.get("work_id") or "").strip()
+        if source_work_id or task_work_id_value:
+            if not source_work_id or task_work_id_value != source_work_id:
+                continue
+            parent_id = task.get("parent_task_id") or ""
+            if parent_id and source_id and parent_id != source_id:
+                continue
+            return task
+
+        if (base_title(task.get("title") or "") != source_title
+                or (source_created and
+                    (task.get("created_at") or "") <= source_created)):
+            continue
+        return task
+    return None
 
 
 def is_service_work(title):
@@ -883,6 +931,12 @@ def work_lifecycle_block(base, task=None, tasks=None):
         if task and task.get("id") == linked_id:
             return ""
         linked = next((item for item in (tasks or []) if item.get("id") == linked_id), None)
+        task_work_id_value = str((task or {}).get("work_id") or "").strip()
+        linked_work_id = str((linked or {}).get("work_id") or "").strip()
+        if task_work_id_value or linked_work_id:
+            if task_work_id_value and task_work_id_value == linked_work_id:
+                return ""
+            return "задача относится к поколению до явного повторного запуска"
         boundary = (linked or {}).get("created_at") or ""
         if task and boundary and (task.get("created_at") or "") >= boundary:
             return ""
@@ -907,7 +961,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
         created = task.get("created_at") or ""
         newer = [item for item in (tasks or [])
                  if item.get("id") != task.get("id")
-                 and _same_work(item.get("title"), base)
+                 and same_task_work(item, task)
                  and (item.get("created_at") or "") > created
                  and stage_no_of(item.get("title")) <= number]
         if number and created and newer:
@@ -2451,6 +2505,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
         src = next((t for st, t in lst if st == stages[far]), None)
+        if not src:
+            continue
         rid = (src or {}).get("repository_id") or ""
         wname = stage_worker(
             conf, nxt, "medium", workers, repository_id=rid)
@@ -2458,10 +2514,17 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if not nw or not nw.get("enabled") or not worker:
             continue
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
+        request_key = pipeline_handoff_request_key(src, nxt)
+        existing = pipeline_successor(tasks, src, nxt)
+        if existing:
+            mem.pop(work_key, None)
+            log("WATCH нашёл уже созданный следующий этап " + repr(base[:60]) +
+                ": " + stages[far] + " -> " + nxt)
+            continue
         fallback_branch = branch_from_history(tasks, base)
         identity_lines = implementation_context_lines(base, fallback_branch)
         try:
-            created = create_child_task({"request_key": str(uuid.uuid4()), "title": title,
+            created = create_child_task({"request_key": request_key, "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
                                      "а следующий никто не создал. Продолжай с того "
                                      "же места, на той же ветке, ничего не начиная "
@@ -2473,13 +2536,19 @@ def pipeline_watch(conf, tasks, workflows, workers):
                          "workflow_revision_id": nw["revision_id"]}, src, conf)
             created_task = created.get("task") if isinstance(created, dict) else None
             created_task = dict(created_task) if isinstance(created_task, dict) else {}
+            if not created_task.get("id"):
+                raise RuntimeError("create_child_task returned no task.id")
             created_task.setdefault("title", title)
             created_task.setdefault("repository_id", rid)
             created_task.setdefault("state", "created")
+            created_task.setdefault("request_key", request_key)
+            if src.get("work_id"):
+                created_task.setdefault("work_id", src["work_id"])
+            if src.get("id"):
+                created_task.setdefault("parent_task_id", src["id"])
             created_task.setdefault(
                 "created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-            if created_task.get("id"):
-                tasks.append(created_task)
+            tasks.append(created_task)
             rec["nudges"] = int(rec["nudges"]) + 1
             rec["since"] = now
             rec["why"] = "nudged"
@@ -7323,6 +7392,27 @@ def cycle(conf, state):
             log(f"stage_ended task={tid} — не продолжаю: {closed_reason}")
             continue
 
+        base = base_title(title)
+        if is_stopped(conf, base):
+            # A money/owner pause is a deferred handoff, not a consumed
+            # terminal event.  Leave it out of processed so the normal path
+            # can continue it immediately after the pause is removed.
+            log(f"stage_ended task={tid} — работа остановлена владельцем, "
+                "переход отложен")
+            continue
+
+        if tstate == "succeeded":
+            match = STAGE_TITLE_RE.match(title)
+            stage = match.group(1).strip() if match else ""
+            if stage in stages:
+                stage_index = stages.index(stage)
+                next_stage = (stages[stage_index + 1]
+                              if stage_index + 1 < len(stages) else None)
+                if next_stage and pipeline_successor(tasks, t, next_stage):
+                    state["processed"].append(tid)
+                    log(f"stage_ended task={tid} — следующий этап уже создан")
+                    continue
+
         if terminal_examined >= terminal_limit:
             activity["terminal_backlog"] = True
             break
@@ -7339,7 +7429,6 @@ def cycle(conf, state):
             attempts = detail.get("attempts") or []
             err = next((a.get("error") for a in reversed(attempts) if a.get("error")), "") or ""
             res = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
-            base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             # Отменённая/упавшая задача, которую уже перекрыла другая по той же
             # работе, вопросов не порождает — иначе эпик встанет на пустом месте.
@@ -7568,6 +7657,7 @@ def cycle(conf, state):
                 f"({dup['id'][:8]} {dup.get('state')})")
             continue
 
+        request_key = pipeline_handoff_request_key(t, next_stage)
         handoff = verdict.get("handoff", "")
         branch = extract_branch(result, detail.get("context", ""))
         if wf == "Specification" or next_stage in ("Review", "Verify"):
@@ -7801,7 +7891,7 @@ def cycle(conf, state):
                    f"Отчёт предыдущей стадии (сокращён):\n{squeeze(result)}"
                    + gate_note)[:20000]
         body = {
-            "request_key": str(uuid.uuid4()),
+            "request_key": request_key,
             "title": next_title,
             "context": context,
             "worker_id": worker["id"],
@@ -7822,10 +7912,21 @@ def cycle(conf, state):
         # current so another completed attempt for this same work sees the
         # newly created next stage through live_or_done_at() below.
         created_task = created.get("task") if isinstance(created, dict) else None
-        if (isinstance(created_task, dict)
-                and not any(item.get("id") == created_task.get("id")
-                            for item in tasks)):
-            tasks.append(created_task)
+        if isinstance(created_task, dict):
+            created_task = dict(created_task)
+            created_task.setdefault("request_key", request_key)
+            created_task.setdefault("parent_task_id", t.get("id"))
+            if t.get("work_id"):
+                created_task.setdefault("work_id", t["work_id"])
+            created_task.setdefault("title", next_title)
+            created_task.setdefault("repository_id", rid)
+            created_task.setdefault("state", "created")
+            created_task.setdefault(
+                "created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            if (created_task.get("id")
+                    and not any(item.get("id") == created_task.get("id")
+                                for item in tasks)):
+                tasks.append(created_task)
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")

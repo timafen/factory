@@ -2314,6 +2314,10 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.created[0]["repository_id"], "repo-id")
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-impl")
         self.assertEqual(self.created[0]["worker_id"], "worker-id")
+        self.assertEqual(self.created[0]["request_key"],
+                         pilot.pipeline_handoff_request_key(
+                             self.task(), "Implement"))
+        self.assertEqual(self.created[0]["parent_task_id"], "source-task")
         self.assertIn("[2/3 Implement]", self.created[0]["title"])
 
         self.watch()
@@ -2362,6 +2366,140 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.created, [])
         self.assertEqual(self.memory["Встроенный патруль"]["why"], "owner")
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stopped_owner")
+
+    def test_resumes_paused_terminal_success_without_new_generation(self):
+        base = "Встроенный патруль"
+        work_id = "generation-1"
+        source = {
+            "id": "source-task", "work_id": work_id,
+            "title": f"[auto] [1/2 Review] {base}",
+            "state": "succeeded", "repository_id": "repo-id",
+        }
+        tasks = [source]
+        detail = {
+            "task": source,
+            "workflow": {"title": "Review"},
+            "attempts": [{"result": "PASS"}],
+        }
+        state = {"processed": []}
+        created = []
+        card = {"id": "plan-card", "title": base, "state": "in_work",
+                "task_id": source["id"], "run_generation": work_id}
+        self.works[base] = {"run_generation": work_id}
+        self.conf["stages"] = [{"workflow": "Review"}, {"workflow": "Verify"}]
+        self.conf["stopped_pipelines"] = [base]
+
+        def fake_api(path, body=None):
+            if path in ("/tasks?limit=100", "/tasks?limit=200"):
+                return {"tasks": list(tasks)}
+            if path == "/tasks/source-task":
+                return detail
+            if path == "/workers":
+                return {"workers": [{"id": "worker-id", "name": "worker",
+                                     "online": True, "health": "healthy"}]}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": [
+                    {"id": stage, "enabled": True,
+                     "current_revision": {"id": f"rev-{stage}", "title": stage}}
+                    for stage in ("Review", "Verify")
+                ]}
+            raise AssertionError(path)
+
+        def create_task(body, conf):
+            self.assertEqual(body["parent_task_id"], source["id"])
+            child = {
+                "id": "review-task", "work_id": work_id,
+                "parent_task_id": source["id"],
+                "request_key": body["request_key"],
+                "title": body["title"], "state": "queued",
+                "repository_id": source["repository_id"],
+            }
+            created.append(body)
+            tasks.append(child)
+            return {"task": child}
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "recover_merge_intents",
+            "poll_delivery_state", "resume_merge_conflicts", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "cleanup_work_archive",
+            "autostart_plan",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "best_workers",
+                                                  return_value=self.workers))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "record_implementation_artifact", return_value={}))
+            stack.enter_context(mock.patch.object(pilot, "create_task",
+                                                  side_effect=create_task))
+            stack.enter_context(mock.patch.object(pilot, "ideas_all",
+                                                  return_value=[card]))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(self.conf, state)
+            self.assertEqual(created, [])
+            self.assertNotIn(source["id"], state["processed"])
+
+            self.conf["stopped_pipelines"] = []
+            pilot.cycle(self.conf, state)
+            self.assertEqual(len(created), 1)
+            self.assertEqual(created[0]["request_key"],
+                             pilot.pipeline_handoff_request_key(source, "Verify"))
+            self.assertEqual(created[0]["parent_task_id"], source["id"])
+            self.assertEqual(tasks[-1]["work_id"], work_id)
+            self.assertIn(source["id"], state["processed"])
+            self.assertEqual(pilot.work_lifecycle_block(base, tasks[-1], tasks), "")
+            old_generation = dict(source, id="old-task", work_id="generation-old")
+            self.assertTrue(pilot.work_lifecycle_block(
+                base, old_generation, [old_generation, source, tasks[-1]]))
+            self.assertEqual(self.works[base]["run_generation"], work_id)
+
+            pilot.cycle(self.conf, state)
+
+        self.assertEqual(len(created), 1)
+
+    def test_watch_reuses_handoff_after_lost_create_response(self):
+        work_id = "generation-1"
+        source = dict(self.task(), id="source-task", work_id=work_id)
+        tasks = [source]
+        calls = []
+
+        def create_task(body, _conf):
+            calls.append(body)
+            tasks.append({
+                "id": "successor-task", "work_id": work_id,
+                "parent_task_id": source["id"],
+                "request_key": body["request_key"],
+                "title": body["title"], "state": "failed",
+                "repository_id": source["repository_id"],
+            })
+            raise TimeoutError("response lost after create")
+
+        self.memory = {
+            work_id: {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        with mock.patch.object(pilot, "create_task", side_effect=create_task):
+            self.watch(tasks)
+            self.assertEqual(len(calls), 1)
+            self.now += pilot.STALL_WAIT
+            self.watch(tasks)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["request_key"],
+                         pilot.pipeline_handoff_request_key(source, "Implement"))
+        self.assertEqual(tasks[-1]["work_id"], work_id)
+        self.assertEqual(tasks[-1]["parent_task_id"], source["id"])
 
     def test_completed_pipeline_is_not_resumed(self):
         self.memory = {"Встроенный патруль": {"since": 1, "nudges": 1}}
