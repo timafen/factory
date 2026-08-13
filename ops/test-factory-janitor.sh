@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         body = {"workers": [
             {"id": "worker-1", "name": "claude-haiku", "online": False, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]},
-            {"id": "worker-2", "name": "online-unhealthy", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": []},
+            {"id": "worker-2", "name": "online-unhealthy", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": [{"attempt_id": "attempt-unhealthy", "repository_id": "repo-1", "path": sys.argv[7], "reason": "failed", "cleanup_command": "keep"}]},
             {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": "done", "cleanup_command": "keep"}]}
         ]}
         encoded = json.dumps(body).encode()
@@ -47,7 +47,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" "$TMP/unhealthy/worktrees/current" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
