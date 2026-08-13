@@ -6569,7 +6569,7 @@ DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "f
 DELIVERY_TARGET_TITLES = {"factory": "Factory", "tarser-staging": "Tarser staging"}
 
 
-def release_train_block(state, tasks, now=None):
+def release_train_block(state, tasks, now):
     """Build the public, read-only release view from durable V2 state."""
     durable = state.get(DELIVERY_STATE_KEY) if isinstance(state, dict) else None
     targets = durable.get("targets") if isinstance(durable, dict) and durable.get("version") == 2 else None
@@ -6592,7 +6592,7 @@ def release_train_block(state, tasks, now=None):
     def public_time(value):
         return value if isinstance(value, str) and receipt_epoch(value) is not None else None
 
-    current_time = time.time() if now is None else now
+    current_time = now
     trains = []
     for target_key, target in targets.items():
         if target_key not in DELIVERY_TARGET_TITLES or not isinstance(target, dict):
