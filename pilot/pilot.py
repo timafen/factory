@@ -24,6 +24,7 @@ import datetime
 import io
 import glob
 import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import hashlib
 
 API = "http://127.0.0.1:7337/api/v1"
 # Production keeps the fixed data root.  Tests and isolated tools may opt into
@@ -71,11 +72,15 @@ def api(path, body=None):
         return json.loads(r.read())
 
 
-def all_tasks():
+def all_tasks(page_limit=200):
     """Read every task page so old real work is not displaced by service runs."""
     tasks, cursor = [], ""
+    seen_cursors = set()
     for _ in range(500):
-        path = "/tasks?limit=200" + ("&cursor=" + urllib.parse.quote(cursor) if cursor else "")
+        if cursor in seen_cursors:
+            break
+        seen_cursors.add(cursor)
+        path = f"/tasks?limit={int(page_limit)}" + ("&cursor=" + urllib.parse.quote(cursor) if cursor else "")
         page = api(path)
         tasks.extend(page.get("tasks") or [])
         cursor = page.get("next_cursor") or ""
@@ -701,6 +706,10 @@ def first_stage(conf):
 
 
 WORKS_PATH = f"{HOME}/pilot/works.json"
+DEAD_END_SNAPSHOT_PATH = f"{HOME}/pilot/dead_end_snapshot.json"
+DEAD_END_SNAPSHOT_VERSION = 1
+DEAD_END_BASELINE = 73
+DEAD_END_REPORTED_COUNT = 74
 DUPLICATE_ROOT_EVENTS_PATH = f"{HOME}/pilot/duplicate_root_prevented.json"
 WORK_ARCHIVE_DAYS = 90
 WORK_TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
@@ -806,6 +815,66 @@ def _archive_dates(now=None):
         time.strftime("%Y-%m-%dT%H:%M:%SZ",
                       time.gmtime(now + WORK_ARCHIVE_DAYS * 86400)),
     )
+
+
+def _snapshot_entry(task, decision, reason):
+    task = task or {}
+    task_id = str(task.get("id") or "")
+    work_id = str(task.get("work_id") or task_id)
+    return {
+        "task_id": task_id,
+        "work_id": work_id,
+        "state": task.get("state") or "",
+        "decision": decision,
+        "reason": reason,
+        "source": "pilot.cleanup_work_archive",
+    }
+
+
+def write_dead_end_snapshot(tasks):
+    """Publish one reproducible, idempotent view of the archive decision.
+
+    The digest excludes capture time, so an unchanged task set keeps its
+    original immutable receipt across Pilot cycles.
+    """
+    tasks = list(tasks or [])
+    works = load(WORKS_PATH, {}) or {}
+    statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
+    stopped = set((load(CONF_PATH, {}) or {}).get("stopped_pipelines") or [])
+    by_key = {}
+    for task in tasks:
+        key = str(task.get("work_id") or task.get("id") or "")
+        if not key or key in by_key:
+            continue
+        base = base_title(str(task.get("title") or ""))
+        meta = works.get(key) or works.get(base) or {}
+        status = statuses.get(base) or {}
+        if meta.get("closed") or status.get("state") == "archived":
+            decision, reason = "archived", meta.get("closed_reason") or status.get("text") or "архивировано"
+        elif base in stopped or status.get("state") in ("stopped_owner", "stuck"):
+            decision, reason = "excluded", "owner_stop_or_stuck_remains_visible"
+        else:
+            decision, reason = "included", "candidate_for_dead_end_review"
+        by_key[key] = _snapshot_entry(task, decision, reason)
+    entries = sorted(by_key.values(), key=lambda item: (item["work_id"], item["task_id"]))
+    body = {
+        "version": DEAD_END_SNAPSHOT_VERSION,
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "query": {"path": "/tasks", "limit": 100, "paginated": True},
+        "count": len(entries),
+        "baseline_count": DEAD_END_BASELINE,
+        "reported_count": DEAD_END_REPORTED_COUNT,
+        "missing": [{"status": "unknown", "reason": "missing_immutable_snapshot"}],
+        "entries": entries,
+    }
+    digest_body = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(digest_body).hexdigest()
+    existing = load(DEAD_END_SNAPSHOT_PATH, {}) or {}
+    if existing.get("digest") == digest and existing.get("entries") == entries:
+        return existing
+    body["digest"] = digest
+    save(DEAD_END_SNAPSHOT_PATH, body)
+    return body
 
 
 def _same_work(left, right):
@@ -1101,6 +1170,10 @@ def cleanup_work_archive(conf, tasks):
         save(WORKS_PATH, works)
     if statuses_changed:
         save(f"{HOME}/pilot/work_status.json", statuses)
+    try:
+        write_dead_end_snapshot(tasks)
+    except Exception as e:
+        log("dead_end_snapshot_error", repr(e))
 
 
 def launch_subtask(conf, epic, index, workflows, workers):

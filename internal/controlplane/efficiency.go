@@ -49,22 +49,32 @@ type EfficiencyTarget struct {
 }
 
 type EfficiencyPeriod struct {
-	StartedAt             time.Time                   `json:"started_at"`
-	EndedAt               time.Time                   `json:"ended_at"`
-	CompletedWorks        int                         `json:"completed_works"`
-	ProductStageTasks     int                         `json:"product_stage_tasks"`
-	LeadTimeSeconds       EfficiencyDistribution      `json:"lead_time_seconds"`
-	TimeShares            []EfficiencyTimeShare       `json:"time_shares"`
-	UnclassifiedTooHigh   bool                        `json:"unclassified_too_high"`
-	UnclassifiedThreshold float64                     `json:"unclassified_threshold"`
-	ReviewFirstPass       EfficiencyRate              `json:"review_first_pass"`
-	VerifyFirstPass       EfficiencyRate              `json:"verify_first_pass"`
-	Rounds                EfficiencyDistribution      `json:"rounds"`
-	FinalDeadEnds         EfficiencyRate              `json:"final_dead_ends"`
-	AutomaticRecoveries   int                         `json:"automatic_recoveries"`
-	ReleaseFailures       int                         `json:"release_failures"`
-	Rollbacks             int                         `json:"rollbacks"`
-	Excluded              EfficiencyExcludedBreakdown `json:"excluded"`
+	StartedAt                   time.Time                   `json:"started_at"`
+	EndedAt                     time.Time                   `json:"ended_at"`
+	CompletedWorks              int                         `json:"completed_works"`
+	ProductStageTasks           int                         `json:"product_stage_tasks"`
+	LeadTimeSeconds             EfficiencyDistribution      `json:"lead_time_seconds"`
+	TimeShares                  []EfficiencyTimeShare       `json:"time_shares"`
+	UnclassifiedTooHigh         bool                        `json:"unclassified_too_high"`
+	UnclassifiedThreshold       float64                     `json:"unclassified_threshold"`
+	ReviewFirstPass             EfficiencyRate              `json:"review_first_pass"`
+	VerifyFirstPass             EfficiencyRate              `json:"verify_first_pass"`
+	Rounds                      EfficiencyDistribution      `json:"rounds"`
+	FinalDeadEnds               EfficiencyRate              `json:"final_dead_ends"`
+	FinalDeadEndsSnapshotDigest string                      `json:"final_dead_ends_snapshot_digest,omitempty"`
+	FinalDeadEndsEvidence       string                      `json:"final_dead_ends_evidence,omitempty"`
+	AutomaticRecoveries         int                         `json:"automatic_recoveries"`
+	ReleaseFailures             int                         `json:"release_failures"`
+	Rollbacks                   int                         `json:"rollbacks"`
+	Excluded                    EfficiencyExcludedBreakdown `json:"excluded"`
+}
+
+type efficiencyDeadEndSnapshot struct {
+	Digest  string `json:"digest"`
+	Entries []struct {
+		TaskID   string `json:"task_id"`
+		Decision string `json:"decision"`
+	} `json:"entries"`
 }
 
 type EfficiencyDistribution struct {
@@ -192,6 +202,10 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	if err != nil {
 		return EfficiencySummary{}, unavailable(err)
 	}
+	snapshot, snapshotErr := loadEfficiencyDeadEndSnapshot()
+	if snapshotErr != nil {
+		return EfficiencySummary{}, unavailable(snapshotErr)
+	}
 	works, tails := buildEfficiencyWorks(tasks, merges)
 	periods := make(map[string]EfficiencyPeriodComparison, 2)
 	for key, duration := range map[string]time.Duration{
@@ -200,8 +214,8 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 	} {
 		start := now.Add(-duration)
 		previousStart := start.Add(-duration)
-		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions)
-		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions)
+		current := summarizeEfficiencyPeriod(start, now, tasks, works, tails, releases, questions, snapshot)
+		previous := summarizeEfficiencyPeriod(previousStart, start, tasks, works, tails, releases, questions, snapshot)
 		periods[key] = EfficiencyPeriodComparison{
 			Assessment:             compareEfficiencyPeriods(current, previous),
 			StageHandoffWaitTarget: efficiencyStageHandoffWaitTarget(current, previous),
@@ -212,6 +226,28 @@ func (s *Store) Efficiency(ctx context.Context) (EfficiencySummary, error) {
 		GeneratedAt: now, MinimumSample: efficiencyMinimumSample,
 		ReleaseObservationStartedAt: releaseObservationStartedAt, Periods: periods,
 	}, nil
+}
+
+func loadEfficiencyDeadEndSnapshot() (*efficiencyDeadEndSnapshot, error) {
+	home := os.Getenv("FACTORY_DATA_HOME")
+	if home == "" {
+		home = "/opt/factory-data"
+	}
+	data, err := os.ReadFile(filepath.Join(home, "pilot", "dead_end_snapshot.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var snapshot efficiencyDeadEndSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	if snapshot.Digest == "" {
+		return nil, errors.New("dead-end snapshot has no digest")
+	}
+	return &snapshot, nil
 }
 
 func efficiencyStageHandoffWaitTarget(current, previous EfficiencyPeriod) EfficiencyTarget {
@@ -512,7 +548,7 @@ func buildEfficiencyWorks(tasks []*efficiencyTask, merges []efficiencyMerge) ([]
 	return works, tails
 }
 
-func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent, questions []efficiencyQuestion) EfficiencyPeriod {
+func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask, works []efficiencyWork, tails map[string][]*efficiencyTask, releases []efficiencyReleaseEvent, questions []efficiencyQuestion, snapshot *efficiencyDeadEndSnapshot) EfficiencyPeriod {
 	period := EfficiencyPeriod{
 		StartedAt: start, EndedAt: end,
 		UnclassifiedThreshold: efficiencyUnclassifiedThreshold,
@@ -586,6 +622,18 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 	}
 
 	deadEnds := 0
+	provenDeadEnds := map[string]bool{}
+	if snapshot != nil {
+		period.FinalDeadEndsSnapshotDigest = snapshot.Digest
+		period.FinalDeadEndsEvidence = "immutable_snapshot"
+		for _, entry := range snapshot.Entries {
+			if entry.Decision == "included" {
+				provenDeadEnds[entry.TaskID] = true
+			}
+		}
+	} else {
+		period.FinalDeadEndsEvidence = "missing_immutable_snapshot"
+	}
 	for _, tail := range tails {
 		if len(tail) == 0 || hasLiveEfficiencyTask(tail) {
 			continue
@@ -598,7 +646,7 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 		}
 		if inEfficiencyWindow(latest.updatedAt, start, end) &&
 			!latest.updatedAt.After(end.Add(-efficiencyDeadEndGrace)) &&
-			isTerminalEfficiencyState(latest.state) {
+			isTerminalEfficiencyState(latest.state) && provenDeadEnds[latest.id] {
 			deadEnds++
 		}
 	}
