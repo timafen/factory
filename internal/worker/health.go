@@ -13,7 +13,10 @@ import (
 	"github.com/owainlewis/factory/internal/protocol"
 )
 
-const healthCheckTimeout = 10 * time.Second
+const (
+	healthCheckTimeout      = 10 * time.Second
+	healthCommandRetryDelay = 25 * time.Millisecond
+)
 
 type health struct {
 	State          string
@@ -34,7 +37,7 @@ func checkHealth(
 ) health {
 	result := health{State: "unhealthy"}
 	gitContext, cancel := context.WithTimeout(ctx, healthCheckTimeout)
-	stdout, _, err := runCommand(gitContext, gitExecutable, "", 64<<10, "--version")
+	stdout, _, err := runHealthCommand(gitContext, gitExecutable, 64<<10, "--version")
 	cancel()
 	if err != nil {
 		result.Error = errors.New("Git health check failed; install Git and make it available on PATH")
@@ -47,7 +50,7 @@ func checkHealth(
 	}
 
 	runtimeContext, cancel := context.WithTimeout(ctx, healthCheckTimeout)
-	stdout, _, err = runCommand(runtimeContext, runtimeExecutable, "", 64<<10, "--version")
+	stdout, _, err = runHealthCommand(runtimeContext, runtimeExecutable, 64<<10, "--version")
 	cancel()
 	if err != nil {
 		result.Error = fmt.Errorf("%s version check failed; install it and make it available on PATH", runtimeDisplayName(runtime))
@@ -66,7 +69,7 @@ func checkHealth(
 	} else {
 		authArguments = []string{"login", "status"}
 	}
-	stdout, stderr, err := runCommand(authContext, runtimeExecutable, "", 64<<10, authArguments...)
+	stdout, stderr, err := runHealthCommand(authContext, runtimeExecutable, 64<<10, authArguments...)
 	cancel()
 	if err != nil {
 		result.Error = fmt.Errorf("%s authentication check failed; authenticate the configured runtime", runtimeDisplayName(runtime))
@@ -85,8 +88,8 @@ func checkHealth(
 		return result
 	}
 	githubContext, githubCancel := context.WithTimeout(ctx, healthCheckTimeout)
-	_, _, githubErr := runCommand(
-		githubContext, githubExecutable, "", 64<<10,
+	_, _, githubErr := runHealthCommand(
+		githubContext, githubExecutable, 64<<10,
 		"auth", "status", "--hostname", "github.com",
 	)
 	githubCancel()
@@ -102,6 +105,30 @@ func checkHealth(
 	}
 	result.State = "healthy"
 	return result
+}
+
+// runHealthCommand waits for an identical health probe without weakening the
+// non-blocking contract of runCommand for task and supervisor commands. Lock
+// wait and process execution share the caller's existing probe deadline.
+func runHealthCommand(ctx context.Context, executable string, outputLimit int, arguments ...string) ([]byte, []byte, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		stdout, stderr, err := runCommand(ctx, executable, "", outputLimit, arguments...)
+		if !errors.Is(err, ErrCommandAlreadyRunning) {
+			return stdout, stderr, err
+		}
+		timer := time.NewTimer(healthCommandRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 type codexRateLimitWindow struct {
