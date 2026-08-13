@@ -776,6 +776,23 @@ type AutomationPage struct {
 	NextCursor  *AutomationCursor `json:"-"`
 }
 
+// AutomationStatus is the owner-facing, read-only health projection for both
+// configured Automations and Factory's own background services.
+type AutomationStatus struct {
+	Key        string     `json:"key"`
+	Name       string     `json:"name"`
+	Source     string     `json:"source"`
+	Status     string     `json:"status"`
+	LastResult string     `json:"last_result"`
+	LastSeen   *time.Time `json:"last_seen,omitempty"`
+	Stale      bool       `json:"stale"`
+}
+
+type AutomationStatusPage struct {
+	Automations []AutomationStatus `json:"automations"`
+	SnapshotAt  time.Time          `json:"snapshot_at"`
+}
+
 type AutomationCursor struct {
 	UpdatedAtMillis int64
 	ID              string

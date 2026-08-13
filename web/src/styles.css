@@ -320,6 +320,15 @@ button { color: inherit; }
 .automation-list-health small, .automation-list-copy strong, .automation-list-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .automation-list-health small, .automation-list-copy small { margin-top: 4px; color: var(--fg-3); font-size: 11px; }
 .automation-list-copy strong { color: var(--fg-2); font-size: 12px; font-weight: 500; }
+.automation-statuses { margin: 18px 0; }
+.automation-statuses > p { color: var(--fg-3); font-size: 12px; }
+.automation-status-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.automation-status-card { border: 1px solid var(--line-2); border-radius: 8px; padding: 12px; background: var(--panel); }
+.automation-status-card strong, .automation-status-card span, .automation-status-card b, .automation-status-card small { display: block; }
+.automation-status-card span, .automation-status-card small { color: var(--fg-3); font-size: 12px; margin-top: 4px; }
+.automation-status-card b { color: var(--succeeded); margin-top: 8px; }
+.automation-status-stale { border-color: var(--failed); }
+.automation-status-stale b { color: var(--failed); }
 
 .automation-confirm { margin-bottom: 16px; }
 .automation-confirm > div { flex: 1 1 420px; }

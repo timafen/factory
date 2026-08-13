@@ -73,6 +73,34 @@ type blockingGitHubIssueLister struct {
 	release <-chan struct{}
 }
 
+func TestAutomationStatusIncludesFactoryServicesAndUnavailableData(t *testing.T) {
+	store, detail := createAutomationFixture(t, false)
+	server := httptest.NewServer(NewHandlerWithAutomation(store, slog.Default(), newAutomationService(store, slog.Default(), fakeGitHubIssueLister{})))
+	defer server.Close()
+
+	response, err := server.Client().Get(server.URL + "/api/v1/automation-status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, response, http.StatusOK)
+	page := decodeResponse[protocol.AutomationStatusPage](t, response)
+	if page.SnapshotAt.IsZero() || len(page.Automations) != 6 {
+		t.Fatalf("status page = %#v", page)
+	}
+	seen := map[string]protocol.AutomationStatus{}
+	for _, status := range page.Automations {
+		seen[status.Key] = status
+	}
+	if status := seen["automation:"+detail.Automation.ID]; status.Status != "стоит" {
+		t.Fatalf("user automation = %#v", status)
+	}
+	for _, key := range []string{"factory:pilot", "factory:brain", "factory:release-broker", "factory:deploy", "factory:janitor"} {
+		if status, ok := seen[key]; !ok || status.Status != "нет данных" || status.LastResult == "" {
+			t.Fatalf("%s = %#v", key, status)
+		}
+	}
+}
+
 type fakeGitHubAutomationLister struct {
 	fakeGitHubIssueLister
 	pullRequests []protocol.GitHubPullRequestMatch

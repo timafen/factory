@@ -494,6 +494,15 @@ export function mockControlPlane(
       workflowDetail = { workflow: { ...workflowDetail.workflow, enabled: body.enabled }, revisions: workflowDetail.revisions };
       return Response.json(workflowDetail);
     }
+    if (path === "/api/v1/automation-status") {
+      return json({
+        snapshot_at: "2026-08-13T12:00:00Z",
+        automations: [
+          { key: "factory:pilot", name: "Конвейер Factory", source: "pilot", status: "живая", last_result: "Pilot включён и принимает новые работы.", last_seen: "2026-08-13T12:00:00Z", stale: false },
+          { key: "factory:janitor", name: "Уборщик рабочих каталогов", source: "janitor", status: "нет данных", last_result: "Журнал janitor пока не ведётся.", stale: false },
+        ],
+      });
+    }
     if (path === "/api/v1/automations?limit=200") {
       const docsAutomation = {
         ...automationDetail.automation,

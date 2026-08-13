@@ -56,6 +56,11 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
     queryFn: () => api.automations(),
     refetchInterval: interval,
   });
+  const statusQuery = useQuery({
+    queryKey: ["automation-status"],
+    queryFn: api.automationStatus,
+    refetchInterval: interval,
+  });
   const loadMore = useMutation({
     mutationFn: ({ cursor }: { cursor: string; headCursor: string | null }) => api.automations(cursor),
     onSuccess: (page, request) => {
@@ -93,6 +98,24 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
         onRefresh={() => void query.refetch()}
       />
       {query.error && <StaleBanner error={query.error} />}
+      {statusQuery.data && (
+        <section className="automation-statuses" aria-label="Живой статус автоматик">
+          <PanelHeading title="Живой статус автоматик" />
+          <p>Снимок обновлён {formatTimestamp(statusQuery.data.snapshot_at)}.</p>
+          <div className="automation-status-grid">
+            {statusQuery.data.automations.map((automation) => (
+              <article className={`automation-status-card ${automation.stale ? "automation-status-stale" : ""}`} key={automation.key}>
+                <strong>{automation.name}</strong>
+                <span>{automation.source}</span>
+                <b>{automation.status}</b>
+                <small>{automation.last_result}</small>
+                <small>{automation.last_seen ? `Обновлено ${formatTimestamp(automation.last_seen)}` : "Данных о последнем обновлении нет."}</small>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+      {statusQuery.error && <StaleBanner error={statusQuery.error} />}
       <div className="view-toolbar">
         <p>Run coding agents from a saved Markdown runbook, GitHub state, or a schedule.</p>
         <div className="detail-actions">

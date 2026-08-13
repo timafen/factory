@@ -398,6 +398,21 @@ export interface AutomationPage {
 	next_cursor: string | null;
 }
 
+export interface AutomationStatus {
+	key: string;
+	name: string;
+	source: string;
+	status: "живая" | "стоит" | "сломана" | "нет данных";
+	last_result: string;
+	last_seen?: string;
+	stale: boolean;
+}
+
+export interface AutomationStatusPage {
+	automations: AutomationStatus[];
+	snapshot_at: string;
+}
+
 export interface AutomationOccurrencePage {
 	occurrences: AutomationOccurrence[];
 	next_cursor: string | null;

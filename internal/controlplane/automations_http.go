@@ -1,15 +1,96 @@
 package controlplane
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+func (a *API) listAutomationStatus(w http.ResponseWriter, r *http.Request) {
+	page, err := a.store.AutomationsPage(r.Context(), protocol.MaxAutomationPageSize, nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	now := time.Now().UTC()
+	statuses := make([]protocol.AutomationStatus, 0, len(page.Automations)+5)
+	for _, automation := range page.Automations {
+		status := "нет данных"
+		result := automation.Health.Message
+		if result == "" {
+			result = "Проверка ещё не вернула результат."
+		}
+		switch automation.Health.Status {
+		case "healthy", "checking":
+			status = "живая"
+		case "disabled", "blocked":
+			status = "стоит"
+		case "error":
+			status = "сломана"
+		}
+		lastSeen := automation.LastCheckedAt
+		stale := lastSeen != nil && now.Sub(*lastSeen) > 5*time.Minute
+		if stale {
+			status = "сломана"
+			result = "Данные устарели: последняя проверка старше пяти минут. " + result
+		}
+		statuses = append(statuses, protocol.AutomationStatus{Key: "automation:" + automation.ID, Name: automation.Title, Source: "пользовательская автоматика", Status: status, LastResult: result, LastSeen: lastSeen, Stale: stale})
+	}
+	statuses = append(statuses, a.internalAutomationStatuses(r, now)...)
+	writeJSON(w, http.StatusOK, protocol.AutomationStatusPage{Automations: statuses, SnapshotAt: now})
+}
+
+func (a *API) internalAutomationStatuses(r *http.Request, now time.Time) []protocol.AutomationStatus {
+	missing := func(key, name, source, message string) protocol.AutomationStatus {
+		return protocol.AutomationStatus{Key: key, Name: name, Source: source, Status: "нет данных", LastResult: message}
+	}
+	pilot := missing("factory:pilot", "Конвейер Factory", "pilot", "Настройки pilot недоступны.")
+	brain := missing("factory:brain", "Мозг Factory", "brain chain", "Цепочка моделей не настроена или недоступна.")
+	if a.pilotConfig != nil {
+		if settings, err := a.pilotConfig.Read(); err == nil {
+			if settings.Settings.Enabled {
+				pilot.Status, pilot.LastResult = "живая", "Pilot включён и принимает новые работы."
+			} else {
+				pilot.Status, pilot.LastResult = "стоит", "Pilot отключён в настройках."
+			}
+			if len(settings.Settings.BrainChain) > 0 {
+				brain.Status, brain.LastResult = "живая", "Настроена цепочка моделей для обработки работ."
+			}
+		} else {
+			pilot.LastResult = "Настройки pilot недоступны: " + err.Error()
+		}
+	}
+	release := missing("factory:release-broker", "Посредник выпуска", "release broker", "Нет записей о последней операции выпуска.")
+	deploy := missing("factory:deploy", "Службы выката", "deploy services", "Нет записей о последнем выкате.")
+	var updated int64
+	var state, message string
+	err := a.store.db.QueryRowContext(r.Context(), `SELECT updated_at,status,message FROM project_operations ORDER BY updated_at DESC LIMIT 1`).Scan(&updated, &state, &message)
+	if err == nil {
+		seen := time.UnixMilli(updated).UTC()
+		status := "живая"
+		if state != "succeeded" {
+			status = "сломана"
+		}
+		release = protocol.AutomationStatus{Key: release.Key, Name: release.Name, Source: release.Source, Status: status, LastResult: message, LastSeen: &seen, Stale: now.Sub(seen) > 24*time.Hour}
+		deploy = protocol.AutomationStatus{Key: deploy.Key, Name: deploy.Name, Source: deploy.Source, Status: status, LastResult: message, LastSeen: &seen, Stale: now.Sub(seen) > 24*time.Hour}
+		if release.Stale {
+			release.Status = "сломана"
+			deploy.Status = "сломана"
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		release.LastResult = "Журнал выпуска недоступен."
+		deploy.LastResult = "Журнал выката недоступен."
+	}
+	janitor := missing("factory:janitor", "Уборщик рабочих каталогов", "janitor", "Журнал janitor пока не ведётся.")
+	return []protocol.AutomationStatus{pilot, brain, release, deploy, janitor}
+}
 
 func (a *API) listAutomations(w http.ResponseWriter, r *http.Request) {
 	limit, err := pageLimit(r, protocol.DefaultAutomationPageSize, protocol.MaxAutomationPageSize)

@@ -60,6 +60,18 @@ describe("App", () => {
     expect(fetch).toHaveBeenCalledWith("/api/v1/dashboard");
   });
 
+  it("shows Factory automation statuses alongside user Automations", async () => {
+    window.history.replaceState({}, "", "/automations");
+    mockControlPlane();
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Живой статус автоматик" })).toBeVisible();
+    expect(screen.getByText("Конвейер Factory")).toBeVisible();
+    expect(screen.getByText("живая")).toBeVisible();
+    expect(screen.getByText("Уборщик рабочих каталогов")).toBeVisible();
+    expect(screen.getByText("нет данных")).toBeVisible();
+  });
+
   it("opens sandbox keys directly and marks its navigation item", () => {
     window.history.replaceState({}, "", "/sandbox-keys");
     mockControlPlane();

@@ -146,6 +146,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("POST /api/v1/workflows/{workflow_id}/revisions", api.createWorkflowRevision)
 	mux.HandleFunc("PUT /api/v1/workflows/{workflow_id}/enabled", api.setWorkflowEnabled)
 	mux.HandleFunc("GET /api/v1/automations", api.listAutomations)
+	mux.HandleFunc("GET /api/v1/automation-status", api.listAutomationStatus)
 	mux.HandleFunc("POST /api/v1/automations", api.createAutomation)
 	mux.HandleFunc("GET /api/v1/automations/{automation_id}", api.getAutomation)
 	mux.HandleFunc("PUT /api/v1/automations/{automation_id}", api.updateAutomation)
