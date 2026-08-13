@@ -2368,10 +2368,15 @@ func TestTimeoutStopsIgnoringProcessGroup(t *testing.T) {
 		map[string]repositoryFixture{"timeout": repository}, 1)
 	startManager(t, manager)
 	worker := waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool { return worker.Health == "healthy" })
-	// Leave enough time for repository preparation even when the complete suite
-	// runs under load. This test exercises runtime process-group termination;
-	// TestTimeoutIncludesWorktreePreparation covers the pre-start boundary.
-	task := createTask(t, fixture.store, worker, "timeout", "fork", 5)
+	// The timeout budget covers claim, worktree preparation and runtime start.
+	// Five seconds proved flaky on a production box running the full release
+	// gate in parallel: claiming alone can eat the budget, the timeout fires
+	// before the attempt starts, and the release is refused for no real
+	// reason. Thirty seconds keeps the semantics (the ignoring child must
+	// still be killed) while leaving honest headroom under load; the
+	// terminal-state wait below allows 75 seconds. The pre-start boundary is
+	// covered by TestTimeoutIncludesWorktreePreparation.
+	task := createTask(t, fixture.store, worker, "timeout", "fork", 30)
 	running := waitForTaskState(t, fixture.store, task.Task.ID, "running")
 	childPath := filepath.Join(os.Getenv("FACTORY_TEST_CODEX_LOG"), running.Attempts[0].ID+".child")
 	waitFor(t, 5*time.Second, func() bool {
