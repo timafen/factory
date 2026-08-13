@@ -1,18 +1,18 @@
 # CARD-0097 — Неизменяемый снимок состава тупиков и причины архивирования
 
-Implementation commit: c991e232cc627be8844ef3760d81494b47189f2d — снимок фиксирует ровно 73 аварийные работы до cleanup, а digest не зависит от времени.
+Implementation commit: c88e0d446784e70db5a527ec7b8d1651d35bb0f9 — решения снимка фиксируются до cleanup, публикация атомарна.
 
 ## HEAD
 
-- Status: Implemented — целевые проверки PASS.
-- Branch: `factory/dfe0c8b5-52a-2645e5ec-f6b`.
+- Status: Implemented — замечания Review исправлены, целевые проверки PASS.
+- Branch: `factory/b2406582-9b2-6474aafb-b35`.
 - Specification: `knowledge/specs/dead-end-work-snapshot-and-archive-reasons.md`.
 - Owner decision: обязательный текущий контур — 73 работы; 74 — первоначальная
   скользящая метрика, пропавшая работа неидентифицируема.
 - Scope: snapshot полного состава, digest, пагинация свыше 100, reason-коды
   архивирования и связь с efficiency; UI и продуктовые правила не меняются.
-- What changed: Pilot отбирает и проверяет ровно 73 failed-работы до cleanup; время захвата исключено из канонического digest.
-- Evidence: `python3 -m unittest pilot.test_pilot.DeadEndSnapshotTests pilot.test_pilot.WorkArchiveCleanupTests` → 11 OK; `go test ./internal/controlplane -run TestEfficiency -count=1` → PASS; `py_compile`/`git diff --check` → PASS.
+- What changed: Pilot сохраняет pre-cleanup решения отдельно от изменяемых архивов; снимок публикуется через временный файл, flush/fsync и os.replace.
+- Evidence: `python3 -m unittest pilot.test_pilot.DeadEndSnapshotTests pilot.test_pilot.WorkArchiveCleanupTests` → 12 OK; `py_compile`/`git diff --check` → PASS.
 - One next action: выполнить Verify и влить ветку.
 
 ## LOG
@@ -45,3 +45,11 @@ efficiency Go-тесты, синтаксис и `git diff --check` прошли;
 digest больше не включает `captured_at`: отдельный тест создаёт одинаковый
 состав в разное время и подтверждает один digest. Целевые Python-тесты (11),
 Go efficiency-проверка, синтаксис и `git diff --check` прошли.
+
+### 2026-08-12 — Implement
+
+По замечаниям Review решения снимка вычисляются до изменения `works.json` и
+`work_status.json`, а writer получает этот неизменяемый контекст. Публикация
+выполняется через временный файл в том же каталоге с `flush`/`fsync` и `os.replace`;
+регрессия проверяет сохранение `included` после cleanup и отсутствие временного файла.
+Целевые Python-тесты (12), `py_compile` и `git diff --check` прошли.
