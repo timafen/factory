@@ -2,14 +2,18 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/2b530665-c45-529c1cd2-8f6
+Status: Implemented — awaiting independent Review and Verify
+Branch: factory/b407ea36-0eb-f7cb5256-f32
 Implementation commit: 4707a6de747a52c01e5db914f905b4378b3159fe — исправлена проверка стабильной задержки lifecycle-теста
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: Review PASS и Verify выполнены для `d2eaa3696cb140e68d8889bce64f9286ee29314c`: целевой тест, `just staticcheck`, `just test` и `just build` прошли. Browser suite не засчитан: сборка UI остановилась до Playwright из-за отсутствующего `tsc` (exit 127); известная политика контейнера также не позволяет считать браузер проверенным.
-One next action: человек подтверждает merge; browser suite повторить в среде с UI-зависимостями и разрешённым browser sandbox.
+Evidence: прежние Review/Verify относились к предыдущей версии и не подтверждают текущий кандидат; актуальные доказательства ещё не зафиксированы.
+One next action: провести независимый Review зафиксированного текущего кандидата, затем Verify и только после них обновить HEAD.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Карточка возвращена в ожидающий статус: `Verified PASS` был снят, потому что доказательства были привязаны к предыдущей версии. Новые Review и Verify должны идти после этого зафиксированного статуса.
 
 ### 2026-08-13 — Implement
 
