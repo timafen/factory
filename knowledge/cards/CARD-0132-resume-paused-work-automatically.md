@@ -26,4 +26,4 @@ Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — успешн
 | Потерянный ответ create не создаёт дубль | `PipelineWatchTests` | сторож находит уже созданного преемника |
 | Смежные пути не регрессируют | `just check`; UI после `npm ci` | Go vet/vuln/staticcheck и Go-тесты PASS; 178 UI-тестов PASS |
 
-Полный Pilot-набор кандидата: 257 тестов, 2 падения `CorrectionProvenanceStormTests`; те же два падения и тот же стек воспроизводятся на закреплённой базе до поставки. `test-tooling` не завершился из-за внешней переменной `FACTORY_BUILD_DIR`, подменившей ожидаемый тестом `FACTORY_V2_BUILD_DIR`; это не касается изменённых файлов.
+Полный Pilot-набор кандидата: 257 тестов, 2 падения `CorrectionProvenanceStormTests`; те же два падения и тот же стек воспроизводятся на закреплённой базе до поставки. После удаления внешней переменной `FACTORY_BUILD_DIR` инструментальный и launcher-наборы PASS; переменная подменяла ожидаемый тестом `FACTORY_V2_BUILD_DIR`.
