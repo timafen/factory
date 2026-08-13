@@ -6,7 +6,7 @@ Status: Verified PASS — awaiting human merge
 Branch: factory/b407ea36-0eb-f7cb5256-f32
 Implementation commit: 4707a6de747a52c01e5db914f905b4378b3159fe — исправлена проверка стабильной задержки lifecycle-теста
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: independent Review PASS и Verify PASS для `dc2a39d90c31f8ea90740e6ad677d35805b696a7`: `just test`, целевой lifecycle-тест, `just staticcheck` и `just build` завершились с exit 0. Browser suite не засчитан: `just test-browser` завершился до Playwright из-за отсутствующего `tsc` (exit 127); запуск browser sandbox остаётся ограничен политикой контейнера.
+Evidence: independent Review PASS и Verify PASS для `a1e8ce70080529f35e05672cccf061b8fd12474e`: pinned diff содержит только тест, эту карточку и спецификацию; Go format/vet/vuln/staticcheck и полный `go test ./...` прошли, целевой lifecycle-тест, UI-набор после `npm ci` и сборка прошли. Browser suite реально запустил Chromium: 5 тестов прошли, один существующий UI-тест упал на ожидании старого заголовка вне diff, остальные 15 не запускались.
 One next action: человек подтверждает merge.
 
 ## LOG
@@ -67,3 +67,16 @@ Verify выполнен именно для проверенного SHA `d2eaa3
 | Полный Go-набор | `just test` | PASS, exit 0; выполнен один раз. |
 | Operator-бинарники собираются | `FACTORY_BUILD_DIR=/tmp/factory-build-verify.S9jEZH just build` | PASS, exit 0. |
 | Browser suite не выдан за успешный | `just test-browser` | Не засчитан: exit 127, `tsc` не найден, Playwright не стартовал; browser sandbox ограничен политикой контейнера. |
+
+### 2026-08-13 — Verify
+
+Verify выполнен для кандидата `a1e8ce70080529f35e05672cccf061b8fd12474e` относительно закреплённой remote-базы `99701704b37e8740db3fdbe38c0193917570da5c`.
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Нет SA4000 в lifecycle-тесте | `just check` (этап `just staticcheck`) | PASS; `SA*,U1000` по всему Go-проекту завершён без замечаний. |
+| Lifecycle сохраняет инварианты | `go test ./internal/worker -run '^TestLeaseRenewal'` | PASS, exit 0; детерминированность, lease-бюджет и распределение фаз сохранены. |
+| Полный Go-набор и смежные ворота | `just check` | Go format, vet, vulncheck, staticcheck, boundary и `go test ./...` прошли; исходный запуск остановился на отсутствующем `eslint` в чистом checkout. После `just ui-install` команда `just ui-check` прошла: 15 файлов, 173 теста. |
+| Operator-бинарники собираются | `FACTORY_BUILD_DIR=/tmp/card0126-build.KLn3Zn just build` | PASS, exit 0; собраны три бинарника. |
+| Нет product code или UI в поставке | pinned diff `99701704b37e8740db3fdbe38c0193917570da5c...a1e8ce70080529f35e05672cccf061b8fd12474e` | Ровно три файла: lifecycle-тест, спецификация и карточка; product code и UI не изменены. |
+| Browser suite не выдан за успешный | `just test-browser` | FAIL, exit 1: Chromium запущен, 5 тестов прошли; один существующий UI-тест ожидал заголовок «Работа агентов», тогда как страница показывает «Работа», 15 тестов не запускались. UI вне diff; результат записан как смежная краснота, не как PASS. |
