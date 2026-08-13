@@ -4,11 +4,12 @@ Implementation commit: c07bb2ff7362a1a0057cf19232ffb46beebf5b6f — CPU-допу
 
 ## HEAD
 
-- Status: Implement + Test завершён; базовые сбои подтверждены на свежем `origin/main`; готово к Review.
-- Branch: `factory/e0fd21ab-0d5-e105c96a-7b5`.
+- Status: Implement + Test завершён; блокирующая TypeScript-ошибка устранена отдельным коммитом; готово к Review.
+- Branch: `factory/2b90b038-b3a-38dd2cc2-d86`.
 - Implementation commit: `c07bb2ff7362a1a0057cf19232ffb46beebf5b6f`.
 - What changed: продолжения одной работы делят CPU-резерв, одноимённые работы с разными `work_id` остаются независимыми; завершение освобождает резерв на свежем снимке.
-- Evidence: CPU admission 13/13, Overview 28/28, полный web-набор 172/172 и ESLint прошли; полный Python-набор: 248/250, два подтверждённых базовых сбоя.
+- What changed: конфигурация проверки e2e получила DOM-типы для `navigator.serviceWorker`; продуктовый код не менялся.
+- Evidence: CPU admission 13/13; `npm run typecheck`, `npm run build` и ESLint прошли. Полный Python: 248/250 (два базовых сбоя); полный web: 171/172 (базовый тест Overview).
 - Next action: Review проверяет diff относительно свежего default branch.
 
 ## LOG
@@ -30,3 +31,9 @@ Implementation commit: c07bb2ff7362a1a0057cf19232ffb46beebf5b6f — CPU-допу
 - Свежий `origin/main` зафиксирован как `c28b5bfc0c5bbb22c7d69d0749c316a2b340841e`; независимый снимок воспроизводит два `FAIL` в `CorrectionProvenanceStormTests.test_review_and_verify_corrections_complete_one_pipeline_after_restart` (`review_return`, `verify_return`) и `TS2339` в `web/e2e/control-plane.spec.ts:655` (`Navigator.serviceWorker`).
 - На ветке CARD-0105: `HostLoadAdmissionTests` — 13/13 PASS; `Overview.test.ts` — 28/28 PASS; полный web-набор — 172/172 PASS; ESLint — PASS. Полный `pilot.test_pilot` даёт 248 PASS, 2 тех же базовых FAIL, 13 skipped; `npm run build` даёт ту же базовую `TS2339`.
 - Чистая область `git diff --name-only origin/main...HEAD`: `knowledge/cards/CARD-0105-cpu-isolation-heavy-runs.md`, `knowledge/specs/cpu-isolation-heavy-runs.md`, `pilot/pilot.py`, `pilot/test_pilot.py`.
+
+### 2026-08-12 — Implement
+
+- Отдельным коммитом исправлена базовая `TS2339`: `web/tsconfig.node.json` теперь подключает DOM-типы для e2e, использующих `navigator.serviceWorker`; поведения продукта не меняет.
+- Проверено: `npm run typecheck`, `npm run build`, ESLint и 13 целевых `HostLoadAdmissionTests` — PASS.
+- Полный Python-набор: 248/250, те же два `CorrectionProvenanceStormTests` FAIL. Полный web-набор: 171/172; `Overview.test.ts` не получил ожидаемый release train. Browser-команда останавливается на расхождении уже отслеживаемых `web/dist` после сборки, до Playwright.
