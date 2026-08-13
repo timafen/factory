@@ -5012,15 +5012,26 @@ class PlanAutostartTest(unittest.TestCase):
     @mock.patch.object(pilot, "ideas_all")
     @mock.patch.object(pilot, "load_questions", return_value=[])
     @mock.patch.object(pilot, "load_limits", return_value={})
-    def test_hourly_task_cap_defers_without_requeuing(self, _limits, _questions,
-                                                      ideas, set_idea, notify):
+    @mock.patch.object(pilot.time, "time", return_value=1760000000)
+    def test_hourly_task_cap_waits_until_next_allowed_attempt(self, _time, _limits,
+                                                              _questions, ideas,
+                                                              set_idea, notify):
         ideas.return_value = self.cards
         with mock.patch.object(pilot, "create_task", side_effect=RuntimeError("hourly_task_cap")):
             self.assertIsNone(pilot.autostart_plan(self.conf, [], self.workflows, self.workers))
         self.assertIn(mock.call("top", state="planned",
                                 reason="Жду освобождения почасового лимита автоматических задач.",
+                                hourly_cap_retry_at="2025-10-09T09:53:20Z",
                                 hourly_cap_notified=True), set_idea.call_args_list)
         notify.assert_called_once()
+        self.cards[1]["hourly_cap_retry_at"] = "2025-10-09T09:53:20Z"
+        with mock.patch.object(pilot, "create_task") as create:
+            self.assertIsNone(pilot.autostart_plan(self.conf, [], self.workflows, self.workers))
+        create.assert_not_called()
+        self.cards[1]["hourly_cap_retry_at"] = "2025-10-09T08:53:19Z"
+        with mock.patch.object(pilot, "create_task", return_value={"task": {"id": "after-window"}}) as create:
+            self.assertEqual(pilot.autostart_plan(self.conf, [], self.workflows, self.workers), "after-window")
+        create.assert_called_once()
 
     @mock.patch.object(pilot, "set_idea")
     @mock.patch.object(pilot, "create_task", return_value={"task": {}})

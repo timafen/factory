@@ -2663,6 +2663,13 @@ def autostart_plan(conf, tasks, workflows, workers):
                 log("PLAN rejected " + repr(rec.get("title", "")[:70])
                     + ": " + closed_reason)
                 continue
+        retry_at = rec.get("hourly_cap_retry_at") or ""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
+        if retry_at and now < retry_at:
+            # The control plane owns the exact sliding window.  Waiting a full
+            # hour from its rejection is conservative, but avoids hammering it
+            # from every Pilot cycle before that window can possibly reopen.
+            continue
         if not rec.get("repo"):
             reason = "Не запущено автоматически: сначала выберите проект."
             already_explained = rec.get("state") == "new" and rec.get("reason") == reason
@@ -2715,7 +2722,12 @@ def autostart_plan(conf, tasks, workflows, workers):
             if "hourly_task_cap" in str(error):
                 # Keep the card planned: its stable request key makes the next
                 # attempt a replay-safe handoff after the shared window opens.
-                updates = {"state": "planned", "reason": "Жду освобождения почасового лимита автоматических задач."}
+                updates = {
+                    "state": "planned",
+                    "reason": "Жду освобождения почасового лимита автоматических задач.",
+                    "hourly_cap_retry_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)),
+                }
                 if not rec.get("hourly_cap_notified"):
                     updates["hourly_cap_notified"] = True
                     notify(conf, "Почасовой лимит задач исчерпан", rec["title"],
