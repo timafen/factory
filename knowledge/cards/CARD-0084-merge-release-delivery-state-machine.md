@@ -2,15 +2,25 @@
 
 ## HEAD
 
-- Status: Implemented — миграционное восстановление и сборка PASS; последний `just check` остановлен внешним SA4000.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
 Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
 - What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS; `just check` дошёл до прежнего SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
-- Next action: Исправить внешний SA4000 в `internal/worker`, затем повторить `just check`.
+- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
+- Next action: Human merge after reviewing this verification evidence.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Реальный цикл Pilot→broker | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | 10 PASS: Unix-socket POST, restart/recovery, lock join и отсутствие повторного физического executor. |
+| Durable terminal v1 | `go test -count=1 ./internal/releasebroker` | PASS: `.commit` marker подтверждает terminal, неподтверждённый terminal fail-closed восстанавливается как `failed`. |
+| Legacy terminal | тот же Go-пакет, `TestDiskBrokerPreservesLegacyTerminalStatusesWithoutExecutor` | PASS: статусы старого формата сохраняются без запуска executor. |
+| Полный регресс Go/Python | `just test` | PASS: `go test -timeout 5m ./...` и 10 Python-тестов завершились успешно. |
+| Чистота поставки | pinned diff и `git diff --check` | Только `internal/releasebroker/{broker.go,broker_test.go}` и данная карточка; whitespace ошибок нет. |
 
 ### 2026-08-12 — Implement
 
