@@ -427,6 +427,17 @@ if [ -n "$build_dir" ]; then
 fi
 exit 0
 EOF
+  cat >"$case_dir/bin/node" <<'EOF'
+#!/bin/bash
+printf 'path-node-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/trusted/node" <<'EOF'
+#!/bin/bash
+script=$1
+shift
+exec /bin/bash "$script" "$@"
+EOF
   cat >"$case_dir/trusted/sudo" <<'EOF'
 #!/bin/bash
 [ "${1:-}" != -H ] || shift
@@ -605,6 +616,7 @@ EOF
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
     -e "s|^TRUSTED_SUDO=.*$|TRUSTED_SUDO=$case_dir/trusted/sudo|" \
+    -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=$case_dir/trusted/node|" \
     -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
@@ -795,6 +807,17 @@ assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
 [ "$(grep -Fxc 'start factory-server.service' "$forked_success/events")" -eq 1 ] \
   || fail "successful fork scenario did not install exactly once"
 assert_no_fixture_processes "$forked_success"
+
+# A PATH-provided Node must not be able to turn either UI command into success.
+path_shadow="$temporary/path-shadow-chain"
+make_fixture "$path_shadow" parallel-success
+run_release "$path_shadow" parallel-success \
+  || { cat "$path_shadow/output" >&2; fail "PATH-shadowed gate did not complete"; }
+! grep -Fx 'path-setsid-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH shadow entered the trusted gate chain"
+! grep -Fx 'path-node-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH node entered the trusted gate chain"
+assert_no_fixture_processes "$path_shadow"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
