@@ -3,6 +3,16 @@
 set -uo pipefail
 
 ref="${1:-main}"
+
+# Под systemd у службы нет $HOME, а factory-server требует домашнюю папку даже
+# при явном -database (шаг snapshot). Автопоезд запускает выпуск именно как
+# службу, поэтому выпуск обязан работать без унаследованного окружения.
+if [ -z "${HOME:-}" ]; then
+  HOME=$(getent passwd "$(id -u)" | cut -d: -f6)
+  [ -n "$HOME" ] || HOME=/root
+  export HOME
+fi
+
 REPO="${FACTORY_RELEASE_REPO:-https://github.com/timafen/factory.git}"
 SERVER_BIN="${FACTORY_SERVER_BIN:-/opt/factory-data/bin/factory-server}"
 WORKER_BIN="${FACTORY_WORKER_BIN:-/opt/factory-data/bin/factory-worker}"
