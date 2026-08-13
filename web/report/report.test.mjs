@@ -1,16 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile, mkdir, mkdtemp } from "node:fs/promises";
+import { chmod, readFile, symlink, writeFile, mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { captureVisual } from "./capture.mjs";
 import { renderReport } from "./render.mjs";
 
 function restoreEnvironment(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+let installedRuntime;
+async function reportBrowserFixture() {
+  if (installedRuntime) return installedRuntime;
+  const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  execFileSync("npx", ["playwright", "install", "chromium"], { cwd: webRoot, stdio: "inherit" });
+  const browser = execFileSync("node", ["-e", "process.stdout.write(require('playwright').chromium.executablePath())"], { cwd: webRoot, encoding: "utf8" }).trim();
+  assert.match(browser, /^\//, "Playwright must provide an absolute Chromium executable");
+  const root = await mkdtemp(path.join(tmpdir(), "factory-report-runtime-"));
+  const runtime = path.join(root, "runtime");
+  const launcher = path.join(root, "factory-browser-sandbox");
+  await mkdir(runtime);
+  await writeFile(path.join(runtime, "package.json"), "{\"private\":true}\n", { mode: 0o600 });
+  await symlink(path.join(webRoot, "node_modules"), path.join(runtime, "node_modules"), "dir");
+  await writeFile(launcher, `#!/bin/sh\nexec ${JSON.stringify(browser)} "$@"\n`, { mode: 0o700 });
+  await chmod(launcher, 0o700);
+  installedRuntime = { launcher, runtime };
+  return installedRuntime;
 }
 
 test("capture requires the isolated launcher, Chromium sandbox, and an allowed host", async () => {
@@ -108,19 +129,17 @@ test("renderer uses the same installed launcher, sandbox, and runtime", async ()
   assert.match(source, /route\("\*\*\/\*"/);
 });
 
-test("renderer produces a PDF with an inline screenshot without fetching external resources", async (context) => {
+test("renderer produces a PDF with an inline screenshot without fetching external resources", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "factory-report-"));
   const output = path.join(dir, "daily.pdf");
-  const launcher = process.env.FACTORY_BROWSER_LAUNCHER;
-  if (!launcher) return context.skip("installed Chromium launcher is unavailable");
-  await renderReport("<h1>Ежедневный отчёт</h1><img alt='Снимок до' src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+V9ZqAAAAAElFTkSuQmCC'><img src='https://invalid.example/nope.png'>", output, launcher);
+  const { launcher, runtime } = await reportBrowserFixture();
+  await renderReport("<h1>Ежедневный отчёт</h1><img alt='Снимок до' src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+V9ZqAAAAAElFTkSuQmCC'><img src='https://invalid.example/nope.png'>", output, launcher, runtime);
   const bytes = await readFile(output);
   assert.equal(bytes.subarray(0, 5).toString(), "%PDF-");
 });
 
-test("capture uses the installed Chromium runtime for a late after screenshot", async (context) => {
-  const launcher = process.env.FACTORY_BROWSER_LAUNCHER;
-  if (!launcher) return context.skip("installed Chromium launcher is unavailable");
+test("capture uses the installed Chromium runtime for a late after screenshot", async () => {
+  const { launcher, runtime } = await reportBrowserFixture();
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end("<!doctype html><title>Factory</title><main>После готово</main>");
@@ -135,7 +154,7 @@ test("capture uses the installed Chromium runtime for a late after screenshot", 
       state_text: "После готово",
       viewport_width: 800,
       viewport_height: 600,
-    }, output, launcher);
+    }, output, launcher, runtime);
     const bytes = await readFile(output);
     assert.equal(bytes.subarray(1, 4).toString(), "PNG");
   } finally {
