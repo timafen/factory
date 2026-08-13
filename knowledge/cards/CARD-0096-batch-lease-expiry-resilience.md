@@ -4,7 +4,7 @@ Implementation commit: 5f0ab88e825a32667431e041ade3d262fe23ff25 — lease дли
 
 ## HEAD
 
-- Status: Verified PASS — merged in main.
+- Status: Verified PASS — scope corrected; implementation merged in main.
 - Branch: `main`.
 - Implementation commit: `5f0ab88e825a32667431e041ade3d262fe23ff25`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
@@ -12,7 +12,7 @@ Implementation commit: 5f0ab88e825a32667431e041ade3d262fe23ff25 — lease дли
   переждать остаток аренды после временной ошибки.
 - What changed: повтор renewal ограничивается оставшимся lease-бюджетом; десять
   fake-runtime через Manager/Store подтверждают renewal, отсутствие `lost` и успех.
-- Evidence: полный `go test ./...` прошёл; пять целевых worker/control-plane регрессий прошли; `git diff --check` чист.
+- Evidence: полный `go test ./...` прошёл; пять целевых worker/control-plane регрессий прошли; `origin/main...HEAD` содержит только CARD-0096; `git diff --check` чист.
 - One next action: наблюдать за устойчивостью lease в следующих рабочих прогонах.
 
 ## LOG
@@ -54,3 +54,9 @@ fail-closed lease, endpoint и operator retry не меняются.
 Предыдущая triage-ветка `factory/d3dc8ea2-3bb-cb2b6fde-b96` отсутствовала в
 origin на момент Specification; выводы карточки опираются на свежий `origin/main`
 и перечисленные регрессионные границы, а не на недоступный diff.
+
+### 2026-08-12 — Implement
+
+После замечания ревью из поставки удалены `CARD-0107` и лишняя спецификация;
+трёхточечный diff оставляет только `knowledge/cards/CARD-0096-batch-lease-expiry-resilience.md`.
+Проверено: `git diff --name-only origin/main...HEAD` показывает один файл, `git diff --check` чист.
