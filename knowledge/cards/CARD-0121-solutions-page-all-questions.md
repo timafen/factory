@@ -8,7 +8,7 @@ Implementation commit: b28bc152cd9968148365b057055907e7319e65ef — отдель
 - Branch: `factory/1ff8d702-32b-eaa842a1-d1e`.
 - Implementation commit: b28bc152cd9968148365b057055907e7319e65ef — отдельная read-only страница `/solutions` со всей историей вопросов.
 - What changed: пункт «Решения» открывает отдельный список всех вопросов и сохранённых ответов; действия владельца остались только в очереди «Нужен ответ».
-- Evidence: pinned-сравнение `fa98244835641826e5e682e938b88ca8f7dddb80...1b2c3f083736dcbb388e749cf4dc9f0fdfdabf78`; `go test ./...` passed; Vitest — 16 файлов и 175 тестов passed; typecheck, lint и production build passed, `dist` совпал; один старый Playwright-сбой воспроизведён на базе без кандидата.
+- Evidence: pinned-сравнение `fa98244835641826e5e682e938b88ca8f7dddb80...1b2c3f083736dcbb388e749cf4dc9f0fdfdabf78`; `go test ./...` passed; Vitest — 16 файлов и 175 тестов passed; typecheck, lint и production build passed, `dist` совпал; browser suite имеет старые сбои вне области, три из них воспроизведены на базе без кандидата.
 - Next action: человеку влить ветку в `main`.
 
 ## LOG
@@ -27,6 +27,6 @@ Implementation commit: b28bc152cd9968148365b057055907e7319e65ef — отдель
 | Смежная очередь ответов не сломана | `npm test` (`Answer.test.tsx`) | Выбор решения и отправка ответа проходят; весь Vitest: 16 файлов, 175 тестов passed. |
 | Backend-регрессии | `go test ./...` | Все Go-пакеты passed, включая `internal/controlplane` и `internal/worker`. |
 | Статика и поставленный frontend | `npm run typecheck`; `npm run lint`; `npm run build`; SHA-256 сравнение `dist` до/после | Все команды passed; production `dist` совпал байт-в-байт. |
-| Browser-регрессии | `npm run test:browser`; затем тот же упавший test на base SHA | 5 e2e passed; старый тест `/work` ожидает «Работа агентов» вместо фактического «Работа» и так же падает на `main` без кандидата. |
+| Browser-регрессии | `npm run test:browser`; остаток через `playwright test --grep-invert ...`; три упавших test отдельно на base SHA | 8 уникальных e2e passed; старые тесты ищут прежние подписи «Работа агентов», `Work`, `Workers`, а сценарий Resume не успевает за 8 секунд. Первые три сбоя воспроизведены на `main`; четвёртый проверяет неизменённую вне кандидата подпись `Work`. |
 
 Открытый риск: `npm ci` сообщает о двух high-severity уязвимостях зависимостей; миграций и ручных шагов для этой поставки нет.
