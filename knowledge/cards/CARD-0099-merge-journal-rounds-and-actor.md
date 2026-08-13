@@ -5,7 +5,7 @@ Implementation commit: pending — продуктовый код будет со
 ## HEAD
 
 - Status: Specification complete — ready for Implement + Test.
-- Branch: `factory/136c2075-513-840a1be1-d53`.
+- Branch: `factory/10392cea-eb0-634df81f-354`.
 - Specification: `knowledge/specs/merge-journal-rounds-and-actor.md`.
 - Owner impact: история вливания будет неизменно показывать число кругов и
   категорию участника без хранения лишних персональных данных.
@@ -28,3 +28,6 @@ head. Выбран контракт, утверждённый владельце
 свой исторический fallback. Новые строки становятся источником истины для
 кругов. Карточка `CARD-0099` проверена как свободная в свежем `origin/main` и
 опубликованных remote-ветках.
+
+Обязательная проверка реализации уточнена до четырёх новых именованных тестов:
+трёх сценариев записи/recovery Pilot и одного сценария совместимости метрики.
