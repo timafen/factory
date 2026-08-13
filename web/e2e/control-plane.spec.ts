@@ -964,11 +964,12 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
   expect(completedSettings.settings.stopped_pipelines).not.toContain(completedHTTPSWork);
 
   await page.goto("/work");
-  const completedCard = page.getByText(completedHTTPSWork, { exact: true })
-    .locator("xpath=ancestor::section[contains(@class, 'work-card')]");
+  const completedCard = page.locator("section.work-card")
+    .filter({ hasText: completedHTTPSWork })
+    .filter({ hasText: "Ожидает слияния и выпуска" });
   await expect(completedCard).toBeVisible();
   await expect(completedCard.getByText("Поставлено на паузу")).toHaveCount(0);
-  await expect(completedCard.getByText("работа завершена", { exact: true })).toBeVisible();
+  await expect(completedCard.getByText("Ожидает слияния и выпуска", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-phone.png", fullPage: true });
 });
