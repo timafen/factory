@@ -4781,6 +4781,32 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
 
 class AdminQuestionRoutingTests(unittest.TestCase):
+    def route_admin(self, decisions, *, attempts=0, command_result=(True, "HTTP 200"),
+                    config=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        conf = {"max_stage_attempts": 3, "max_work_rounds": 8}
+        conf.update(config or {})
+        patches = (
+            mock.patch.object(pilot, "QUESTION_DIR", temporary.name),
+            mock.patch.object(pilot, "selected_delivery", return_value=("", "")),
+            mock.patch.object(pilot, "notify"),
+            mock.patch.object(pilot, "_fixed_command", return_value=command_result),
+            mock.patch.object(pilot, "orchestrator_answer", side_effect=decisions),
+            mock.patch.object(pilot, "deep_diagnose", return_value=None),
+            mock.patch.object(pilot, "loop_baseline", return_value=0),
+            mock.patch.object(pilot, "cap_rescues", return_value=0),
+            mock.patch.object(pilot, "pause_pipeline"),
+        )
+        with contextlib.ExitStack() as stack:
+            active = [stack.enter_context(patch) for patch in patches]
+            escalated = pilot.route_question(
+                conf, "admin-regression", "Implement + Test", "Implement + Test",
+                "Проверить стенд", "repo-id", "Нужна проверка health",
+                "Стенд жив?", [], "", attempts_so_far=attempts)
+        record = pilot.load(os.path.join(temporary.name, "admin-regression.json"), {})
+        return escalated, record, active[2], active[3], active[8]
+
     def test_allowed_staging_health_is_resolved_by_orchestrator_before_owner(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 mock.patch.object(pilot, "QUESTION_DIR", temporary), \
@@ -4825,6 +4851,64 @@ class AdminQuestionRoutingTests(unittest.TestCase):
         command.assert_not_called()
         self.assertTrue(record["owner_only"])
         self.assertEqual(record["admin_result"], "denied")
+
+    def test_wait_after_successful_fx_pauses_without_owner_escalation(self):
+        escalated, record, notify, command, pause = self.route_admin([
+            {"decision": "admin_action", "action": {
+                "scope": "staging", "verb": "health", "args": []}},
+            {"decision": "wait", "reason": "Дождаться восстановления стенда"},
+        ])
+
+        self.assertFalse(escalated)
+        command.assert_called_once()
+        pause.assert_called_once()
+        self.assertEqual(record["machine_action"], "wait")
+        self.assertEqual(record["admin_result"], "executed")
+        self.assertFalse(record.get("owner_only", False))
+        self.assertFalse(any("Нужен твой ответ" in call.args[1]
+                             for call in notify.call_args_list))
+
+    def test_admin_action_is_handled_at_retry_cap(self):
+        escalated, record, _, command, _ = self.route_admin([
+            {"decision": "admin_action", "action": {
+                "scope": "staging", "verb": "health", "args": []}},
+            {"decision": "answer", "answer": "Стенд исправен"},
+        ], attempts=3)
+
+        self.assertFalse(escalated)
+        command.assert_called_once()
+        self.assertEqual(record["answered_by"], "orchestrator")
+
+    def test_admin_action_is_handled_at_loop_cap(self):
+        escalated, record, _, command, _ = self.route_admin([
+            {"decision": "admin_action", "action": {
+                "scope": "staging", "verb": "health", "args": []}},
+            {"decision": "answer", "answer": "Причина петли устранена"},
+        ], attempts=8)
+
+        self.assertFalse(escalated)
+        command.assert_called_once()
+        self.assertEqual(record["answered_by"], "orchestrator")
+
+    def test_unknown_admin_verb_and_argument_are_denied(self):
+        for action in (
+                {"scope": "staging", "verb": "deploy", "args": []},
+                {"scope": "staging", "verb": "health", "args": ["--force"]}):
+            with self.subTest(action=action):
+                argv, reason = pilot.admin_fx_argv(action)
+                self.assertIsNone(argv)
+                self.assertTrue(reason)
+
+    def test_fx_failure_escalates_with_audit_record(self):
+        escalated, record, _, command, _ = self.route_admin([
+            {"decision": "admin_action", "action": {
+                "scope": "staging", "verb": "health", "args": []}},
+        ], command_result=(False, "grant denied"))
+
+        self.assertTrue(escalated)
+        command.assert_called_once()
+        self.assertTrue(record["owner_only"])
+        self.assertEqual(record["admin_result"], "failed")
 
 
 class AdaptivePollingTests(unittest.TestCase):

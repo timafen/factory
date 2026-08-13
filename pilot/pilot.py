@@ -3689,9 +3689,11 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
     if verdict.get("decision") != "wait":
         return False
     reason = str(verdict.get("reason") or "").strip()
-    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                         question, options, prior_result, branch,
-                         status="resolved")
+    rec = load(f"{QUESTION_DIR}/{task_id}.json", {})
+    if not rec:
+        rec = write_question(task_id, stage, resume_stage, base, repo_id,
+                             situation, question, options, prior_result, branch)
+    rec["status"] = "resolved"
     rec["answer"] = reason
     rec["answered_by"] = "orchestrator"
     rec["machine_action"] = "wait"
@@ -3703,6 +3705,70 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
            f"{base}\n\n{reason}\n\nСледующий этап не запущен.",
            priority="low", tags="hourglass", click=f"{UI_BASE}/answer")
     return True
+
+
+def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base,
+                         repo_id, situation, question, options, prior_result,
+                         branch):
+    """Execute an allowed admin action and return its follow-up verdict.
+
+    The boolean result is true when a denied or failed action was already
+    persisted and escalated to the owner.
+    """
+    if verdict.get("decision") != "admin_action":
+        return verdict, False
+    action = verdict.get("action") or {}
+    argv, why = admin_fx_argv(action)
+    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
+                         question, options, prior_result, branch)
+    rec["authority"] = "admin"
+    rec["admin_action"] = action
+    if not argv:
+        rec["owner_only"] = True
+        rec["admin_result"] = "denied"
+        rec["escalation_reason"] = why
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(сам решить не могу: {why})",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return verdict, True
+    ok, output = _fixed_command(argv, timeout=60)
+    rec["admin_command"] = argv
+    rec["admin_result"] = "executed" if ok else "failed"
+    rec["admin_output"] = squeeze(output, 2000)
+    if not ok:
+        rec["owner_only"] = True
+        rec["escalation_reason"] = "fx отказал или завершился с ошибкой"
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(fx не выполнил разрешённую проверку)",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return verdict, True
+    follow_up = orchestrator_answer(
+        conf, stage, base, situation, question, prior_result, repo_id,
+        action_result="fx успешно выполнен:\n" + squeeze(output, 2000))
+    if follow_up.get("decision") == "answer":
+        rec["status"] = "answered"
+        rec["answer"] = follow_up["answer"]
+        rec["answered_by"] = "orchestrator"
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Решил сам · {stage}",
+               f"{base}\n\nРазрешённая проверка выполнена. {follow_up['answer']}",
+               priority="low", tags="robot", click=f"{UI_BASE}/answer")
+        return follow_up, True
+    # Keep the audit record, then let the common wait flow preserve it while
+    # applying the pause. Owner decisions finish here for the same reason.
+    if follow_up.get("decision") == "wait":
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        return follow_up, False
+    rec["owner_only"] = True
+    rec["escalation_reason"] = follow_up.get(
+        "reason", "после результата fx нужно решение владельца")
+    save(f"{QUESTION_DIR}/{task_id}.json", rec)
+    notify(conf, f"Нужен твой ответ · {stage}",
+           f"{base}\n\n❓ {question}\n\n(после проверки: {rec['escalation_reason']})",
+           priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+    return follow_up, True
 
 
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
@@ -3745,6 +3811,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+            v, admin_handled = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_handled:
+                return v.get("decision") != "answer"
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch):
@@ -3810,6 +3881,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            v, admin_handled = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_handled:
+                return v.get("decision") != "answer"
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3841,6 +3917,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            v, admin_handled = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_handled:
+                return v.get("decision") != "answer"
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3877,53 +3958,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
-    if verdict.get("decision") == "admin_action":
-        action = verdict.get("action") or {}
-        argv, why = admin_fx_argv(action)
-        rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                             question, options, prior_result, branch)
-        rec["authority"] = "admin"
-        rec["admin_action"] = action
-        if not argv:
-            rec["owner_only"] = True
-            rec["admin_result"] = "denied"
-            rec["escalation_reason"] = why
-            save(f"{QUESTION_DIR}/{task_id}.json", rec)
-            notify(conf, f"Нужен твой ответ · {stage}",
-                   f"{base}\n\n❓ {question}\n\n(сам решить не могу: {why})",
-                   priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
-            return True
-        ok, output = _fixed_command(argv, timeout=60)
-        rec["admin_command"] = argv
-        rec["admin_result"] = "executed" if ok else "failed"
-        rec["admin_output"] = squeeze(output, 2000)
-        if not ok:
-            rec["owner_only"] = True
-            rec["escalation_reason"] = "fx отказал или завершился с ошибкой"
-            save(f"{QUESTION_DIR}/{task_id}.json", rec)
-            notify(conf, f"Нужен твой ответ · {stage}",
-                   f"{base}\n\n❓ {question}\n\n(fx не выполнил разрешённую проверку)",
-                   priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
-            return True
-        follow_up = orchestrator_answer(
-            conf, stage, base, situation, question, prior_result, repo_id,
-            action_result="fx успешно выполнен:\n" + squeeze(output, 2000))
-        if follow_up.get("decision") == "answer":
-            rec["status"] = "answered"
-            rec["answer"] = follow_up["answer"]
-            rec["answered_by"] = "orchestrator"
-            save(f"{QUESTION_DIR}/{task_id}.json", rec)
-            notify(conf, f"Решил сам · {stage}",
-                   f"{base}\n\nРазрешённая проверка выполнена. {follow_up['answer']}",
-                   priority="low", tags="robot", click=f"{UI_BASE}/answer")
-            return False
-        rec["owner_only"] = True
-        rec["escalation_reason"] = follow_up.get("reason", "после результата fx нужно решение владельца")
-        save(f"{QUESTION_DIR}/{task_id}.json", rec)
-        notify(conf, f"Нужен твой ответ · {stage}",
-               f"{base}\n\n❓ {question}\n\n(после проверки: {rec['escalation_reason']})",
-               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
-        return True
+    verdict, admin_handled = resolve_admin_action(
+        conf, verdict, task_id, stage, resume_stage, base, repo_id, situation,
+        question, options, prior_result, branch)
+    if admin_handled:
+        return verdict.get("decision") != "answer"
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch):
