@@ -12,8 +12,8 @@ Implementation commit: f18d6440e3c62637143eb0560bfd1d1e03e72c92 — broker ра�
   socket; отказ выпуска сохраняется один раз и показывается владельцу.
 - What changed: installer fixture подтверждает первый restart Pilot; отдельный коммит
   `172b6503e10e687c979ffe150d04c3abe1a35a51` содержит только сборку `web/dist`.
-- Evidence: `go test ./internal/releasebroker`, installer fixture, сверка 28 waits,
-  `just ui-check`, `just test-browser` и `just test-release` — PASS.
+- Evidence: broker/wrapper/installer/reconciliation и 22 целевых Pilot-теста — PASS;
+  `just ui-check` — 173 теста, Overview browser-сценарий и `just test-release` — PASS.
 - Risk: production-манифест намеренно остаётся заблокированным до подтверждённого
   read-only snapshot и доказательств ручного выпуска.
 - Next action: повторно пройти Review с исправленным доказательством реализации.
@@ -34,4 +34,6 @@ embedded browser gate; installer fixture подтверждает безопас
 `f18d6440e3c62637143eb0560bfd1d1e03e72c92`, а коммит
 `172b6503e10e687c979ffe150d04c3abe1a35a51` только пересобирает встроенный
 интерфейс. Fixture установки теперь корректно различает перезапуски broker и
-Pilot. Production-манифест остаётся заблокированным до ручного выпуска.
+Pilot. Целевые проверки, сборка трёх бинарников, 173 UI-теста, Overview в
+реальном браузере и воспроизводимая release-сборка прошли. Production-манифест
+остаётся заблокированным до ручного выпуска.
