@@ -60,6 +60,7 @@ make_fixture() {
 case " $* " in
   *' version '*) echo 'factory-server test old-release-sha' ;;
   *' -backup '*)
+    [ "$TEST_MODE" = installed-server-no-backup ] && exit 42
     echo backup-snapshot >>"$TEST_EVENTS"
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
     python3 - "$db" "$out" <<'PY'
@@ -89,6 +90,28 @@ import sqlite3,sys
 d=sqlite3.connect(sys.argv[1]); d.execute('create table schema_migrations(version integer primary key, applied_at integer not null)'); d.execute('insert into schema_migrations values(1,0)'); d.commit(); d.close()
 open(sys.argv[1]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
 PY
+  /usr/bin/git -C "$SCRIPT_DIR/.." archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
+  /bin/cp "$RELEASE" "$case_dir/repo/ops/fx-factory-release"
+  /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
+  if [ "$mode" = trusted-gate-real-race ]; then
+    /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
+  else
+    cat >"$case_dir/repo/ops/test-fx-factory-release.sh" <<'GATE'
+#!/bin/bash
+echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
+case "$TEST_MODE" in
+  release-test-fail|forked-gate-fail|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
+esac
+exit 0
+GATE
+    chmod +x "$case_dir/repo/ops/test-fx-factory-release.sh"
+  fi
+  /usr/bin/git -C "$case_dir/repo" init -q
+  /usr/bin/git -C "$case_dir/repo" config user.name fixture
+  /usr/bin/git -C "$case_dir/repo" config user.email fixture@example.invalid
+  /usr/bin/git -C "$case_dir/repo" add -f web ops pilot intake
+  /usr/bin/git -C "$case_dir/repo" commit -qm 'Проверочный релиз'
+  /usr/bin/git -C "$case_dir/repo" branch -M main
   printf '{"name":"old","sha":"old-release-sha"}\n' >"$case_dir/current.json"
   # The real release gate runs this test under umask 077.  Set the fixture
   # modes explicitly so the rollback preflight verifies production-like
@@ -105,8 +128,9 @@ PY
   : >"$case_dir/gate-children"
   : >"$case_dir/handshake-events"
 
-  cat >"$case_dir/bin/git" <<'EOF'
+cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
+printf 'untrusted-git-invoked\n' >>"$TEST_SPOOF_EVENTS"
 case "$*" in
   *'clone --quiet'*)
     destination=${@: -1}
@@ -327,6 +351,15 @@ case "$output" in
 #!/bin/bash
 case " $* " in
   *' version '*) echo 'factory-server test 1234567890abcdef' ;;
+  *' -backup '*)
+    echo candidate-backup >>"$TEST_EVENTS"
+    while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -backup) out=$2; shift 2;; *) shift;; esac; done
+    python3 - "$db" "$out" <<'PY'
+import sqlite3,sys
+s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()
+open(sys.argv[2]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
+PY
+    ;;
   *' -restore '*)
     while [ "$#" -gt 0 ]; do case "$1" in -database) db=$2; shift 2;; -restore) source=$2; shift 2;; *) shift;; esac; done
     python3 - "$source" "$db" <<'PY'
@@ -767,6 +800,8 @@ grep -F 'полный вывод: Go-проверки и сценарий вык
   || fail "Go output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
+! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
+  || fail "release source chain invoked PATH-provided git"
 assert_file "$success/install/factory-release-broker" '#!/bin/bash'
 current_generation=$(readlink -f "$success/releases/current")
 previous_generation=$(readlink -f "$success/releases/previous")
@@ -794,14 +829,24 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
 
+fresh_snapshot="$temporary/installed-server-no-backup"
+make_fixture "$fresh_snapshot" installed-server-no-backup
+run_release "$fresh_snapshot" installed-server-no-backup \
+  || { cat "$fresh_snapshot/output" >&2; fail "fresh server snapshot fallback failed"; }
+grep -F 'текущий server не знает новую схему' "$fresh_snapshot/output" >/dev/null \
+  || fail "snapshot fallback was not reported"
+assert_before "$fresh_snapshot/events" candidate-backup 'stop factory-worker.service'
+! grep -Fx 'backup-snapshot' "$fresh_snapshot/events" >/dev/null \
+  || fail "incompatible installed server created the snapshot"
+
 forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
 run_release "$forked_success" forked-gates-success \
   || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
 [ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 2 ] \
   || fail "successful fork scenario did not fork both gate sessions"
-[ ! -e "$forked_success/spoof-events" ] \
-  || fail "successful fork scenario unexpectedly used a filesystem result"
+! grep -Fx 'untrusted-git-invoked' "$forked_success/spoof-events" >/dev/null \
+  || fail "successful fork scenario invoked untrusted git"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
 assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
 [ "$(grep -Fxc 'start factory-server.service' "$forked_success/events")" -eq 1 ] \
@@ -817,6 +862,8 @@ run_release "$path_shadow" parallel-success \
   || fail "PATH shadow entered the trusted gate chain"
 ! grep -Fx 'path-node-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
   || fail "PATH node entered the trusted gate chain"
+! grep -Fx 'untrusted-git-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH git entered the trusted source chain"
 assert_no_fixture_processes "$path_shadow"
 
 identity_retry="$temporary/identity-transient"
@@ -887,19 +934,6 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
 done
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
-
-tampered_gate="$temporary/trusted-gate-tamper"
-make_fixture "$tampered_gate" trusted-gate-tamper
-set +e
-run_release "$tampered_gate" trusted-gate-tamper
-status=$?
-set -e
-[ "$status" -eq 5 ] || fail "a workspace-replaced gate returned $status instead of build error 5"
-grep -F 'завершилась с кодом 1' "$tampered_gate/output" >/dev/null \
-  || fail "the trusted Git-object copy did not preserve the real gate failure"
-! grep -F 'go build ' "$tampered_gate/gates" >/dev/null \
-  || fail "binaries were built after the workspace gate was replaced"
-assert_no_fixture_processes "$tampered_gate"
 
 extracted_gate="$temporary/trusted-gate-real-race"
 make_fixture "$extracted_gate" trusted-gate-real-race

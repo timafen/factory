@@ -733,10 +733,10 @@ run_parallel_test_gates() {
 }
 
 step "беру исходники: $ref"
-as_user git clone --quiet "$REPO" "$work/src" \
+"$TRUSTED_GIT" clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
-as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+"$TRUSTED_GIT" -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || "$TRUSTED_GIT" -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
 sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD) \
   || { fail "не смог определить commit кандидата"; cleanup; exit 4; }
@@ -804,10 +804,10 @@ if { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID
   cleanup
   exit 4
 fi
-subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
+subject=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" log -1 --pretty=%s)
 case "$subject" in
   "Merge pull request #"*)
-    merged_title=$(as_user git -C "$work/src" log -1 --pretty=%B \
+    merged_title=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" log -1 --pretty=%B \
       | sed '1d; /^[[:space:]]*$/d' | head -n 1)
     [ -z "$merged_title" ] || subject=$merged_title
     ;;
@@ -933,7 +933,12 @@ printf 'services.tsv\t-\t600\t\n' >>"$inventory"
 step "создаю и повторно проверяю SQLite online snapshot"
 snapshot="$stage/database.sqlite3"
 "$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
-  || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
+  || {
+    fail "текущий server не знает новую схему — создаю snapshot свежесобранным server"
+    rm -f -- "$snapshot" "$snapshot-wal" "$snapshot-shm" "$snapshot.v2-control-plane"
+    "$work/factory-server" -database "$DATABASE" -backup "$snapshot" \
+      || { fail "собранный server также не смог создать проверенный snapshot"; cleanup; exit 4; }
+  }
 [ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
   || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
 chmod 600 "$snapshot" "$snapshot.v2-control-plane"
