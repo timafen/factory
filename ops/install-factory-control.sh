@@ -29,6 +29,9 @@ declare -a sources=("$fx_source" "$release_source")
 declare -a prepared=()
 declare -a backups=()
 committed=0
+installed_count=0
+TEST_FAIL_AFTER_INSTALLS=${FACTORY_CONTROL_TEST_FAIL_AFTER_INSTALLS:-0}
+case "$TEST_FAIL_AFTER_INSTALLS" in ''|*[!0-9]*) echo 'invalid control installer failpoint' >&2; exit 1 ;; esac
 
 cleanup() {
   local status=$?
@@ -123,6 +126,8 @@ for ((i=0; i<${#targets[@]}; i++)); do
   fi
   mv -- "$temporary" "$target"
   prepared[$i]=installed
+  installed_count=$((installed_count + 1))
+  [ "$installed_count" -ne "$TEST_FAIL_AFTER_INSTALLS" ] || exit 97
 done
 
 if [ "$BOOTSTRAP" = 1 ]; then

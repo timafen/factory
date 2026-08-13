@@ -633,6 +633,15 @@ stop_test_gates() {
   done
 }
 
+wait_for_gate_cgroup_empty() { # wait_for_gate_cgroup_empty <cgroup>
+  local cgroup=$1 i
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    "$TRUSTED_GATE_CGROUP" empty "$cgroup" && return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  "$TRUSTED_GATE_CGROUP" empty "$cgroup"
+}
+
 wait_for_test_gates() {
   local launcher cgroup
   [ "$test_gates_reaped" = 0 ] || return 0
@@ -641,7 +650,11 @@ wait_for_test_gates() {
   done
   for cgroup in "${gate_cgroups[@]:-}"; do
     [ -n "$cgroup" ] || continue
-    "$TRUSTED_GATE_CGROUP" empty "$cgroup" && "$TRUSTED_GATE_CGROUP" remove "$cgroup" || return 1
+    if ! wait_for_gate_cgroup_empty "$cgroup"; then
+      "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL 2>/dev/null || true
+      wait_for_gate_cgroup_empty "$cgroup" || return 1
+    fi
+    "$TRUSTED_GATE_CGROUP" remove "$cgroup" || return 1
   done
   gate_cgroups=()
   test_gates_reaped=1

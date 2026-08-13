@@ -198,6 +198,12 @@ if [ "${1:-}" = test ]; then
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
       ;;
+    term-resistant-daemon)
+      /usr/bin/setsid /bin/bash -c 'trap "" TERM; while :; do /bin/sleep 1; done' &
+      daemon=$!
+      printf '%s\n' "$daemon" >"$TEST_STUBBORN_PID"
+      for state in "$TEST_CGROUP_DIR"/*.pids; do printf '%s\n' "$daemon" >>"$state"; done
+      ;;
     go-test-fail) exit 1 ;;
   esac
   exit 0
@@ -356,7 +362,7 @@ descendants() {
 members() {
   [ -r "$state" ] && while read -r root; do descendants "$root"; done <"$state"
 }
-printf 'cgroup %s %s\n' "$1" "$name" >>"$TEST_GATES"
+printf 'cgroup %s %s %s\n' "$1" "$name" "${3:-}" >>"$TEST_GATES"
 case "$1" in
   create) : >"$state" ;;
   attach) printf '%s\n' "$3" >>"$state" ;;
@@ -462,6 +468,7 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_STUBBORN_PID="$case_dir/stubborn-pid" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" TEST_CGROUP_DIR="$case_dir/cgroups" TEST_SPOOF_EVENTS="$case_dir/spoof-events" \
     FACTORY_RELEASE_REPO="$case_dir/repo" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
@@ -586,6 +593,17 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+stubborn="$temporary/term-resistant-daemon"
+make_fixture "$stubborn" term-resistant-daemon
+run_release "$stubborn" term-resistant-daemon \
+  || { cat "$stubborn/output" >&2; fail "release with detached Gate child failed"; }
+grep -F 'cgroup signal factory-release-gate-' "$stubborn/gates" | grep -F 'KILL' >/dev/null \
+  || fail "TERM-resistant detached Gate child was not killed through cgroup"
+grep -F 'cgroup remove factory-release-gate-' "$stubborn/gates" >/dev/null \
+  || fail "cgroup was not removed after killing its detached child"
+stubborn_pid=$(cat "$stubborn/stubborn-pid")
+if kill -0 "$stubborn_pid" 2>/dev/null; then fail "TERM-resistant detached Gate child survived cleanup"; fi
 
 # Живая база бывает новее установленного server: неудачный кандидат успел
 # поднять схему, а откат вернул только бинарь. Старый server такой снимок

@@ -97,4 +97,20 @@ cmp -s "$temporary/fx.before" "$target_dir/bin/fx" \
 cmp -s "$temporary/release.before" "$target_dir/lib/fx-factory-release" \
   || fail "release driver changed after a rejected pair"
 
-echo "PASS: invalid control pair is preserved and helper requires pinned root bootstrap"
+cp "$SCRIPT_DIR/fx" "$source_dir/ops/fx"
+cp "$SCRIPT_DIR/fx-factory-release" "$source_dir/ops/fx-factory-release"
+printf 'sentinel fx\n' >"$target_dir/bin/fx"
+printf 'sentinel release\n' >"$target_dir/lib/fx-factory-release"
+if FACTORY_CONTROL_TEST_FAIL_AFTER_INSTALLS=1 \
+   FACTORY_FX_BIN="$target_dir/bin/fx" \
+   FACTORY_RELEASE_DRIVER="$target_dir/lib/fx-factory-release" \
+   FACTORY_CONTROL_OWNER='' \
+     bash "$INSTALLER" "$source_dir" >/dev/null 2>&1; then
+  fail "partial installation unexpectedly succeeded"
+fi
+grep -Fx 'sentinel fx' "$target_dir/bin/fx" >/dev/null \
+  || fail "fx was not restored after partial installation"
+grep -Fx 'sentinel release' "$target_dir/lib/fx-factory-release" >/dev/null \
+  || fail "release driver was not restored after partial installation"
+
+echo "PASS: control pair is atomic and helper requires pinned root bootstrap"

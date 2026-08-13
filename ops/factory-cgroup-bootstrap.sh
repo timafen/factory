@@ -1,5 +1,7 @@
 #!/bin/bash
 # One-shot, root-only installation and live check of the Factory gate helper.
+# SOURCE_DIR must first be created as a root-owned mode-0700 direct child named
+# /run/factory-release-gate/bootstrap-*; ops/README.md contains exact commands.
 set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH

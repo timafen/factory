@@ -45,12 +45,27 @@ git fetch origin main
 git checkout --detach origin/main
 git log -1 --decorate
 env FACTORY_CONTROL_BOOTSTRAP=1 bash ops/install-factory-control.sh "$PWD"
+
+# Подготовить ровно тот защищённый source-каталог, который принимает bootstrap.
+install -d -o root -g root -m 700 /run/factory-release-gate
+bootstrap_dir=/run/factory-release-gate/bootstrap-$(git rev-parse --short=12 HEAD)
+install -d -o root -g root -m 700 "$bootstrap_dir" "$bootstrap_dir/ops"
+for file in fx fx-factory-release factory-gate-cgroup factory-cgroup-bootstrap.sh; do
+  install -o root -g root -m 755 "ops/$file" "$bootstrap_dir/ops/$file"
+done
+
+# Живая проверка создаёт marker; без неё Gate остаётся закрыт.
+fx factory cgroup-helper-bootstrap "$bootstrap_dir"
+test "$(stat -c '%U %a' /var/lib/factory/cgroup-helper-bootstrap.done)" = 'root 600'
+test "$(cat /var/lib/factory/cgroup-helper-bootstrap.done)" = completed
 ```
 
 Перед последней командой root сравнивает показанный `HEAD` с согласованным
 коммитом `main` и читает изменяемые `ops/`-файлы. Установщик проверяет
 root-владение и права всей цепочки checkout, а также закреплённый SHA-256 helper;
-он не запускает `fx`. После этого первый `fx factory cgroup-helper-bootstrap`
-в доверенном каталоге выпуска выполняет живую cgroup v2-проверку и создаёт
-marker. До marker Gate намеренно остаётся закрытым; последующие выпуски сверяют
-owner, mode, hash и marker перед запуском Gate.
+он не запускает `fx`. Команды `install` создают прямого защищённого потомка
+`/run/factory-release-gate`, копируют только четыре проверяемых файла и не
+оставляют каталог доступным для записи обычному пользователю. Следующая команда
+выполняет живую cgroup v2-проверку и атомарно создаёт marker. До marker Gate
+намеренно остаётся закрытым; последующие выпуски сверяют owner, mode, hash и
+marker перед запуском Gate. Каталог в `/run` после успеха можно удалить.
