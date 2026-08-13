@@ -1,21 +1,17 @@
-Implementation commit: fc3af293e5e2b2c3802ad9b1d376f7796aa3b067 — Pilot-тесты перенесены из live data во временный `FACTORY_DATA_HOME`, поэтому новые тестовые вопросы не загрязняют production.
+Implementation commit: 613cf6a95ba114ef347daeede01cd8ca07b0f898 — API скрывает вопросы с Python mock repr, сохраняя исходные JSON-записи.
 
 # CARD-0108 — Скрыть Python `MagicMock` из вопросов production dashboard
 
 ## HEAD
 
-- Статус: Specification завершена; реализация API-фильтра ожидается.
-- Ветка: `factory/69ea8390-df8-b744463e-40a`.
-- Спецификация:
-  `knowledge/specs/production-dashboard-hides-python-magicmock-question.md`.
-- Влияние: владелец не увидит Python mock repr вместо вопроса; нормальные
-  вопросы и история решений сохранятся.
-- Область реализации: `internal/controlplane/questions_http.go` и новый
-  `internal/controlplane/questions_http_test.go`; UI и production JSON не
-  изменяются.
-- Следующее действие: на этапе Implement добавить узкий read-only фильтр API и
-  целевой HTTP-тест, затем заменить строку `Implementation commit` на commit
-  этой реализации.
+- Статус: Implement + Test завершены; фильтр API реализован.
+- Ветка: `factory/e781259d-ef1-c692f311-4e5`.
+- Спецификация: `knowledge/specs/production-dashboard-hides-python-magicmock-question.md`.
+- Implementation commit: `613cf6a95ba114ef347daeede01cd8ca07b0f898`.
+- Что изменено: `GET /api/v1/questions` исключает канонический `<MagicMock ...>` /
+  `<Mock ...>` только из владелец-видимых полей; исходные записи не меняются.
+- Evidence: `go test ./internal/controlplane` → PASS; `git diff --check` → PASS.
+- Следующее действие: выполнить финальный rebase на свежий `main`, полный build и push.
 
 ## LOG
 
@@ -35,3 +31,7 @@ Python mock repr не включаются в `GET /api/v1/questions`, но не
 Номер `CARD-0108` проверен после обновления свежего `origin/main` и всех
 опубликованных веток: `CARD-0105`, `CARD-0106` и `CARD-0107` заняты другими
 работами, а номер и этот путь свободны.
+
+### 2026-08-12 — Implement
+
+На ветке `factory/e781259d-ef1-c692f311-4e5` добавлен read-only фильтр API и HTTP-регрессия: production-подобный вопрос с mock repr скрывается, обычный вопрос и текст о `MagicMock` возвращаются, JSON на диске сохраняется. Проверено `go test ./internal/controlplane -run TestListQuestionsHidesPythonMockRepresentations`, `go test ./internal/controlplane` и `git diff --check`.
