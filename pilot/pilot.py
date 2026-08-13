@@ -1953,14 +1953,15 @@ def area_lock_arbitrate(tasks, candidate, areas=None):
     return {"allowed": False, "holder": (holder or {}).get("base", ""), "owners": winners}
 
 
-def area_busy(tasks, base, context="", repo=""):
+def area_busy(tasks, base, context="", repo="", work_id="", current_task=None):
     """Return the deterministic owner of an overlapping area, if any."""
     mine = area_of(base, context, repo)
     if not mine:
         return ""
-    decision = area_lock_arbitrate(tasks, {
-        "base": base, "work_id": base, "repository_id": repo, "paths": mine,
-    })
+    candidate = dict(current_task or {})
+    candidate.update({"base": base, "work_id": work_id or base,
+                      "repository_id": repo, "paths": mine})
+    decision = area_lock_arbitrate(tasks, candidate)
     return decision["holder"] if not decision["allowed"] else ""
 
 
@@ -2944,7 +2945,7 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
 
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
-                expected_card=""):
+                expected_card="", work_id="", current_task=None):
     """Create Review context only from a freshly fetched, pinned snapshot."""
     snapshot = fresh_branch_snapshot(repo_identity, branch)
     if snapshot.get("state") == "blocked":
@@ -3017,10 +3018,13 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         known = load(AREAS_PATH, {}) or {}
         mine = {p.split("::", 1)[1] if "::" in p else p
                 for p in known.get(base) or []}
-        lock = area_lock_arbitrate(active_tasks or [], {
-            "base": base, "work_id": base, "repository_id": area_repo or repo_identity,
+        candidate = dict(current_task or {})
+        candidate.update({
+            "base": base, "work_id": work_id or base,
+            "repository_id": area_repo or repo_identity,
             "paths": [((area_repo or repo_identity) + "::") + f for f in files],
-        }, known)
+        })
+        lock = area_lock_arbitrate(active_tasks or [], candidate, known)
         overlaps = sorted(f for owner, f in _area_paths(files, area_repo)
                           if any((owner, f) in row["area_paths"]
                                  for row in lock["owners"]
@@ -7557,7 +7561,8 @@ def cycle(conf, state):
 
         # Замок: не запускаем этап, если тот же файл уже правит другая работа.
         holder = area_busy(tasks, base_title(title), detail.get("context", ""),
-                           (detail.get("task") or {}).get("repository_id", ""))
+                           (detail.get("task") or {}).get("repository_id", ""),
+                           task_work_id(t), t)
         if holder:
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
             overlap_wait_decisions[tid] = verdict
@@ -7766,7 +7771,8 @@ def cycle(conf, state):
         if next_stage == "Review" and branch:
             rid_g = detail["task"].get("repository_id") or ""
             g = review_gate(conf, base, branch, repo_identity_by_id.get(rid_g, ""), tasks,
-                            area_repo=rid_g, expected_card=card)
+                            area_repo=rid_g, expected_card=card, work_id=task_work_id(t),
+                            current_task=t)
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
                 if tid in state["processed"]:

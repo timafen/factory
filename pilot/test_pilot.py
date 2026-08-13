@@ -2803,7 +2803,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
-            area_repo="repo-id", expected_card=card)
+            area_repo="repo-id", expected_card=card,
+            work_id=base, current_task=mock.ANY)
         merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
 
 
@@ -6885,6 +6886,46 @@ class AreaLockArbitrationTests(unittest.TestCase):
                  "Path": ["one::different.py"]}
         self.assertTrue(self.decide([owner, other_repo], other_repo, areas)["allowed"])
         self.assertTrue(self.decide([owner, other_path], other_path, areas)["allowed"])
+
+    def test_area_busy_admits_one_of_two_live_overlapping_works(self):
+        first = {"work_id": "work-a", "plan_order": 1, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] A", "state": "running"}
+        second = {"work_id": "work-b", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        with mock.patch.object(pilot, "area_of", return_value={"r::pilot/pilot.py"}), \
+                mock.patch.object(pilot, "load", return_value=areas):
+            first_holder = pilot.area_busy([first, second], "A", repo="r",
+                                            work_id="work-a", current_task=first)
+            second_holder = pilot.area_busy([second, first], "B", repo="r",
+                                             work_id="work-b", current_task=second)
+
+        self.assertEqual(first_holder, "")
+        self.assertEqual(second_holder, "A")
+
+    def test_review_gate_admits_one_of_two_live_overlapping_works(self):
+        first = {"work_id": "work-a", "plan_order": 1, "repository_id": "r",
+                 "title": "[auto] [3/5 Review] A", "state": "running"}
+        second = {"work_id": "work-b", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [3/5 Review] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        snapshot = {"state": "ok", "files": ["pilot/pilot.py"],
+                    "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                    "merge_base_sha": "a" * 40, "default_branch": "main",
+                    "base_ahead_by": 0, "ahead_by": 1}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "load", return_value=areas):
+            first_result = pilot.review_gate({}, "A", "factory/a", "file:///tmp/repo",
+                                             [first, second], area_repo="r", work_id="work-a",
+                                             current_task=first)
+            second_result = pilot.review_gate({}, "B", "factory/b", "file:///tmp/repo",
+                                              [second, first], area_repo="r", work_id="work-b",
+                                              current_task=second)
+
+        self.assertFalse(first_result.get("wait"))
+        self.assertTrue(second_result["wait"])
+        self.assertIn("A", second_result["note"])
 
 
 if __name__ == "__main__":
