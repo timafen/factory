@@ -2,14 +2,28 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Review
-Branch: factory/6df906ce-7fd-7be1f1d2-5c4
+Status: Verified PASS — awaiting human merge
+Branch: factory/37efec4f-48f-7945f5a9-dee
 Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: целевой lifecycle-тест, `just staticcheck`, полный `just test` и `just build` завершились успешно; browser suite не запускался, поскольку текущая контейнерная политика его блокирует.
-One next action: выполнить независимый Review опубликованного кандидата.
+Evidence: `just staticcheck`, целевой lifecycle-тест и полный `go test ./...` завершились успешно; сборка проверяется отдельно; browser suite заблокирован политикой контейнера (Playwright отсутствует).
+One next action: выполнить human merge после учёта ограничения browser suite.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+Проверен кандидат `2a4a0d5afe08915b4cd21110fd2e35cb5f3895f0` относительно
+закреплённой remote-базы `99701704b37e8740db3fdbe38c0193917570da5c`.
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Нет SA4000 в lifecycle-тесте | `just staticcheck` | PASS, exit 0; `SA*,U1000` по всему Go-проекту без замечаний. |
+| Lifecycle сохраняет инварианты | `go test ./internal/worker -run 'TestLeaseRenewal'` | PASS, exit 0; стабильность фазы, lease-бюджет и распределение задержек сохранены. |
+| Полный Go-набор | `go test ./...` | PASS, exit 0. |
+| Operator-бинарники собираются | `FACTORY_BUILD_DIR=<workspace>/verify-build just build` | Проверено отдельно перед публикацией; три бинарника собраны. |
+| Нет product code или UI в поставке | pinned diff `99701704b37e8740db3fdbe38c0193917570da5c...2a4a0d5afe08915b4cd21110fd2e35cb5f3895f0` | Ровно три ожидаемых файла: lifecycle-тест, спецификация и карточка. |
+| Browser suite не выдан за успешный | `just test-browser` | BLOCKED окружением: Playwright отсутствует, запуск браузера контейнерной политикой не подтверждён. |
 
 ### 2026-08-13 — Implement
 
