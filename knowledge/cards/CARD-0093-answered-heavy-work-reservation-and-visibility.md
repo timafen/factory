@@ -4,13 +4,13 @@ Implementation commit: f74e4e8b2ae7769fa7fe5edec909044e99da0657 — отвече
 
 ## HEAD
 
-Status: BLOCKED — committed `web/dist` не соответствует изменённому UI, поэтому HTTPS/browser-набор не доходит до запуска с реальным service worker.
-Branch: `factory/78a1871e-f1e-08ec2a95-2a7`.
-Implementation commit: f74e4e8b2ae7769fa7fe5edec909044e99da0657 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
+Status: PASS — HTTPS/browser-набор проходит с актуальным committed `web/dist` и реальным service worker.
+Branch: `factory/c3e701aa-721-27ee90cc-00a`.
+Implementation commit: c06015f3f03b8e75c7227342f4124b5984e0922a — завершённая работа сохраняет archived-статус после повторного ответа владельца и видна как завершённая.
 What changed: reservation хранится в записи вопроса, восстанавливается после рестарта и пропускает к ближайшему допустимому слоту только отвеченную тяжёлую стадию.
 What changed: dashboard, Answer, Work, Overview и навигация показывают «ответ принят», но не выдают новый badge и не требуют нового решения владельца.
-Evidence: reservation-поведение PASS — Python 7/7 и UI 29/29; `tsc`, Vite и Go build PASS. `just test-browser` → FAIL на проверке committed `web/dist`: сборка заменяет `index-Dzu-Lcbr.js` на `index-COKb8iDy.js`, поэтому HTTPS/Playwright не запускается.
-One next action: пересобрать и закоммитить `web/dist`, затем вернуть ветку на Verify полного HTTPS/browser-набора.
+Evidence: reservation-поведение PASS — Python 7/7 и UI 30/30; `go test ./internal/controlplane -run 'Test.*Resume|TestResume'` PASS; `just test-browser` PASS, 21/21.
+One next action: передать ветку на Review/Verify после push и проверки свежего `main`.
 
 ## LOG
 
@@ -49,3 +49,9 @@ Answer, Work и Overview.
 | Полный локальный набор | `just check` | FAIL только в неизменённом `internal/worker/TestLostClaimAndCompletionResponsesAreIdempotent`; отдельный повтор теста PASS за 3.629s, классифицирован как внешний флейк |
 | HTTPS/browser-набор с реальным service worker | `just test-browser` | BLOCKED до Playwright: committed `web/dist` расходится с результатом сборки |
 | Область и чистота | pinned diff `b448350413748b951462b5db8e999b59d7f8e278...618bd7f0cff780dc8f1aaf24757c379a1cece9bc`; `git status --short` | 11 заявленных файлов до Verify-карточки; дерево чистое после удаления проверочных артефактов |
+
+### 2026-08-12 — Implement
+
+- `pipeline_completed` теперь оставляет durable `archived`-статус, а Work показывает завершённую работу владельцу; добавлен unit-тест и HTTPS fixture.
+- `web/dist` пересобран отдельными коммитами после изменения UI; повторная сборка стабильна.
+- Доказательства: `go test ./internal/controlplane -run 'Test.*Resume|TestResume'` — PASS; `npx vitest run src/Work.test.ts` — 13/13; `just test-browser` — 21/21 с реальным HTTPS/service worker.
