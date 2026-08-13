@@ -12,9 +12,9 @@ Implementation commit: 317a740711afc1e6ce55495cf17a731ac48998ea — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` обрабатывает снимок до поиска домашней папки. Обычный запуск и другие режимы по-прежнему загружают обычные defaults и bootstrap.
 
-Evidence: в чистом архиве кандидата `go test -count=1 ./cmd/factory-server` и `go build ./...` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника. Полный `go test -count=1 ./...` не завершился до лимита окружения после шести ранних пакетов, включая затронутый серверный пакет.
+Evidence: в чистом архиве кандидата `go test -count=1 ./...` и `go build ./...` завершились успешно; целевая subprocess-проверка подтвердила четыре формы CLI без `HOME`, автономность снимка и неизменность источника. Pinned-сравнение базы `c6d8644aaf9700f10365891a30a0679fff45c73b` с кандидатом `1d821b25ea2a37ae1a833d84030567e7c96279b7` содержит только сервер, его тесты и эту карточку.
 
-One next action: выполнить человеческое решение о слиянии с учётом ограничения полного прогона в окружении проверки.
+One next action: принять человеческое решение о слиянии.
 
 ## LOG
 
@@ -68,3 +68,13 @@ One next action: выполнить человеческое решение о �
 | Сборка проекта | `go build ./...` в чистом архиве | PASS |
 | Полный набор Go | `go test -count=1 ./...` в чистом архиве | Не завершился до лимита выполнения среды; прошли шесть ранних пакетов, включая `cmd/factory-server` |
 | Область изменения | pinned `99701704b37e8740db3fdbe38c0193917570da5c...bb3fac2b48feb6d1a438e9d0bc2ee11f5c7ecc70` | PASS: только `main.go`, его тесты и карточка |
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Снимок с явной базой без домашней папки | `go test -count=1 -v ./cmd/factory-server -run 'TestBackupCLICreatesSnapshotWithoutHome'` | PASS: все четыре формы (`-`/`--`, раздельное значение/`=`) создали автономный backup без `HOME` и конфигурации; исходная база не изменилась |
+| Разбор форм явного backup | `go test -count=1 -v ./cmd/factory-server -run 'TestBackupWithExplicitDatabaseHonorsFlagGrammar'` | PASS: 7 корректных/некорректных комбинаций обработаны ожидаемо |
+| Полный набор и соседнее поведение | `go test -count=1 ./...` из чистого архива кандидата | PASS: все пакеты, включая `cmd/factory-server`, `internal/controlplane` и `internal/worker` |
+| Сборка проекта | `go build ./...` из чистого архива кандидата | PASS |
+| Область изменения | pinned `c6d8644aaf9700f10365891a30a0679fff45c73b...1d821b25ea2a37ae1a833d84030567e7c96279b7` | PASS: только `cmd/factory-server/main.go`, `cmd/factory-server/main_test.go` и `knowledge/cards/CARD-0124-server-database-snapshot-without-home.md` |
