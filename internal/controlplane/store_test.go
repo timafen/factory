@@ -1666,6 +1666,60 @@ func TestCreateTaskHourlyTaskCapReplayAndWindow(t *testing.T) {
 	}
 }
 
+func TestCreateTaskHourlyTaskCapConcurrent(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	worker := registerTestWorker(t, store, workerA, 20, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/hourly-cap-concurrent"})
+	repositoryID := worker.Repositories[0].ID
+	request := func(key string) protocol.CreateTaskRequest {
+		return protocol.CreateTaskRequest{RequestKey: key, Title: "[auto] concurrent hourly task", Description: "test", WorkerID: workerA, RepositoryID: repositoryID, TimeoutSeconds: 60}
+	}
+	for i := 0; i < 9; i++ {
+		if _, created, err := store.CreateTask(context.Background(), request(fmt.Sprintf("concurrent-hourly-%d", i))); err != nil || !created {
+			t.Fatalf("setup automatic task %d = created %v, err %v", i, created, err)
+		}
+	}
+	start := make(chan struct{})
+	type result struct {
+		created bool
+		err     error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, created, err := store.CreateTask(context.Background(), request(fmt.Sprintf("concurrent-hourly-race-%d", i)))
+			results <- result{created, err}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	created := 0
+	for result := range results {
+		if result.created {
+			created++
+		}
+		if result.err != nil {
+			assertErrorCode(t, result.err, "hourly_task_cap")
+		}
+	}
+	if created != 1 {
+		t.Fatalf("concurrent creates = %d; want 1", created)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE automatic = 1`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 10 {
+		t.Fatalf("automatic tasks in hourly window = %d; want 10", count)
+	}
+}
+
 func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
 	store := newTestStore(t)
 	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 1, Health: "healthy", Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}}})
