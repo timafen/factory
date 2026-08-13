@@ -2,15 +2,22 @@
 
 ## HEAD
 
-- Status: Implemented — awaiting review.
-- Branch: `factory/13285b85-081-0b0922cf-67c`.
-- Head commit: `61628e7` (проверенный снимок дополнительного сценария патруля).
-- Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
-- What changed: патруль по-прежнему обрабатывает только канонические автоматические задачи; добавлена защита от произвольного заголовка, который не создаёт ни остановку, ни новый этап.
-- Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 7 tests OK; `python3 -m unittest pilot.test_pilot` → 36 tests OK; `git diff --check` → OK.
+- Status: Implemented — миграция исторических номеров готова к проверке.
+- Branch: `factory/866878ce-23b-39129672-13e`.
+Implementation commit: 1a02b134c2c9bde216df46201b3a17b19a436a9a — утилита, тесты и одноразовое разведение исторических дублей номеров карточек.
+- Specification: `knowledge/specs/historical-card-number-deduplication.md`.
+- What changed: эта карточка перенесена на уникальный путь `CARD-0113`; её тело и исторический журнал сохранены.
+- Evidence: `python3 -m unittest -v scripts.test_renumber_historical_cards` → 4 tests OK; резервирование Пилота → 5 tests OK; повторный dry-run и проверка дублей → чистые.
 - One next action: проверить и влить поставку в `main`.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Добавлена стабильная строка `Implementation commit` с полным SHA кодовой
+реализации миграции; она предшествует этому документальному обновлению.
+Целевые тесты утилиты и резервирования, отсутствие дублей и повторный dry-run
+подтверждены.
 
 ### 2026-08-09 — Implement
 
