@@ -107,7 +107,7 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 	`, nowMillis).Scan(&hostActive); err != nil {
 		return nil, unavailable(err)
 	}
-	if hostActive >= s.hostMaxConcurrent {
+	if hostActive >= s.hostSlotLimit() {
 		if err := insertEmptyClaim(ctx, tx, workerID, input.RequestID, digest, nowMillis); err != nil {
 			return nil, err
 		}

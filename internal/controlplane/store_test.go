@@ -128,6 +128,21 @@ func TestClaimEnforcesHostMaxConcurrentAcrossWorkers(t *testing.T) {
 	}
 }
 
+func TestDirectStoreClaimUsesDefaultHostCapacity(t *testing.T) {
+	opened := newTestStore(t)
+	store := &Store{db: opened.db, now: opened.now, sweepEvery: opened.sweepEvery}
+	repository := protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/direct-store-capacity"}
+	worker := registerTestWorker(t, store, workerA, 1, repository)
+	createTestTask(t, store, "direct-store-capacity", workerA, worker.Repositories[0].ID)
+
+	claim, err := store.Claim(context.Background(), workerA, protocol.ClaimRequest{
+		RequestID: "direct-store-capacity-claim", LeaseToken: tokenA,
+	})
+	if err != nil || claim == nil {
+		t.Fatalf("claim from direct store = %#v, %v; want work", claim, err)
+	}
+}
+
 func TestConcurrentClaimsDoNotExceedHostCapacity(t *testing.T) {
 	hostCapacity := runtime.NumCPU()
 	store := newTestStore(t)

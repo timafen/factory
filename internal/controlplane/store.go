@@ -73,6 +73,15 @@ type Store struct {
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
 }
 
+// hostSlotLimit keeps direct Store construction safe for migration and focused
+// tests, while Open records the same limit explicitly for production stores.
+func (s *Store) hostSlotLimit() int {
+	if s.hostMaxConcurrent > 0 {
+		return s.hostMaxConcurrent
+	}
+	return max(1, runtime.NumCPU())
+}
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	return openStore(ctx, path, false)
 }
