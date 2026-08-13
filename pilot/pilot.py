@@ -831,7 +831,30 @@ def _snapshot_entry(task, decision, reason):
     }
 
 
-def write_dead_end_snapshot(tasks):
+def select_dead_end_snapshot_tasks(tasks):
+    """Return the precisely bounded, pre-cleanup set of emergency works.
+
+    The incident baseline is 73 failed pipeline works.  Do not silently trim
+    a larger result: a receipt is useful only when its complete membership is
+    known and can be checked before cleanup changes archive metadata.
+    """
+    by_key = {}
+    for task in tasks or []:
+        key = str(task.get("work_id") or task.get("id") or "")
+        if (not key or task.get("state") != "failed"
+                or not str(task.get("title") or "").startswith(PREFIX)):
+            continue
+        previous = by_key.get(key)
+        if previous is None or str(task.get("id") or "") < str(previous.get("id") or ""):
+            by_key[key] = task
+    selected = [by_key[key] for key in sorted(by_key)]
+    if len(selected) != DEAD_END_BASELINE:
+        raise ValueError("dead_end_snapshot_requires_%d_failed_works_got_%d" % (
+            DEAD_END_BASELINE, len(selected)))
+    return selected
+
+
+def write_dead_end_snapshot(tasks, captured_at=None):
     """Publish one reproducible, idempotent view of the archive decision.
 
     The digest excludes capture time, so an unchanged task set keeps its
@@ -859,7 +882,7 @@ def write_dead_end_snapshot(tasks):
     entries = sorted(by_key.values(), key=lambda item: (item["work_id"], item["task_id"]))
     body = {
         "version": DEAD_END_SNAPSHOT_VERSION,
-        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "captured_at": captured_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "query": {"path": "/tasks", "limit": 100, "paginated": True},
         "count": len(entries),
         "baseline_count": DEAD_END_BASELINE,
@@ -867,7 +890,9 @@ def write_dead_end_snapshot(tasks):
         "missing": [{"status": "unknown", "reason": "missing_immutable_snapshot"}],
         "entries": entries,
     }
-    digest_body = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    canonical = dict(body)
+    canonical.pop("captured_at")
+    digest_body = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     digest = hashlib.sha256(digest_body).hexdigest()
     existing = load(DEAD_END_SNAPSHOT_PATH, {}) or {}
     if existing.get("digest") == digest and existing.get("entries") == entries:
@@ -1051,6 +1076,12 @@ def cleanup_work_archive(conf, tasks):
     ``work_status.json`` carries the same human reason.  Existing receipts are
     never refreshed, so retries cannot silently extend retention.
     """
+    snapshot_tasks = None
+    try:
+        snapshot_tasks = select_dead_end_snapshot_tasks(tasks)
+    except ValueError as e:
+        log("dead_end_snapshot_selection_error", str(e))
+
     works = load(WORKS_PATH, {}) or {}
     statuses = load(f"{HOME}/pilot/work_status.json", {}) or {}
     questions = load_questions()
@@ -1171,7 +1202,8 @@ def cleanup_work_archive(conf, tasks):
     if statuses_changed:
         save(f"{HOME}/pilot/work_status.json", statuses)
     try:
-        write_dead_end_snapshot(tasks)
+        if snapshot_tasks is not None:
+            write_dead_end_snapshot(snapshot_tasks)
     except Exception as e:
         log("dead_end_snapshot_error", repr(e))
 

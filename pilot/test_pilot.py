@@ -2904,10 +2904,11 @@ class DeadEndSnapshotTests(unittest.TestCase):
         pilot.save(status_path, {})
         pilot.save(config_path, {})
         first = [{"id": f"task-{i}", "work_id": f"work-{i}",
-                  "title": f"[auto] [1/1] Work {i}", "state": "failed"}
+                  "title": f"[auto] [1/1] Work {i}",
+                  "state": "failed" if i < 73 else "succeeded"}
                  for i in range(100)]
         second = first[-1:] + [{"id": f"task-{i}", "work_id": f"work-{i}",
-                                "title": f"[auto] [1/1] Work {i}", "state": "failed"}
+                                "title": f"[auto] [1/1] Work {i}", "state": "succeeded"}
                                for i in range(100, 102)]
         calls = []
         def fake_api(path, body=None):
@@ -2921,15 +2922,33 @@ class DeadEndSnapshotTests(unittest.TestCase):
                 mock.patch.object(pilot, "CONF_PATH", config_path), \
                 mock.patch.object(pilot, "HOME", temporary.name):
             tasks = pilot.all_tasks(page_limit=100)
-            first_snapshot = pilot.write_dead_end_snapshot(tasks)
-            second_snapshot = pilot.write_dead_end_snapshot(tasks)
+            emergency_tasks = pilot.select_dead_end_snapshot_tasks(tasks)
+            first_snapshot = pilot.write_dead_end_snapshot(
+                emergency_tasks, captured_at="2026-08-12T00:00:00Z")
+            second_snapshot = pilot.write_dead_end_snapshot(
+                emergency_tasks, captured_at="2026-08-12T01:00:00Z")
+            with mock.patch.object(pilot, "DEAD_END_SNAPSHOT_PATH",
+                                   os.path.join(temporary.name, "second_snapshot.json")):
+                later_snapshot = pilot.write_dead_end_snapshot(
+                    emergency_tasks, captured_at="2026-08-12T01:00:00Z")
         self.assertEqual(len(tasks), 103)
         self.assertEqual(calls, ["/tasks?limit=100", "/tasks?limit=100&cursor=page-2"])
-        self.assertEqual(first_snapshot["count"], 102)
+        self.assertEqual(first_snapshot["count"], 73)
+        self.assertEqual([entry["work_id"] for entry in first_snapshot["entries"]],
+                         sorted(f"work-{i}" for i in range(73)))
         self.assertEqual(first_snapshot["reported_count"], 74)
         self.assertEqual(first_snapshot["missing"][0]["reason"], "missing_immutable_snapshot")
         self.assertEqual(first_snapshot["digest"], second_snapshot["digest"])
-        self.assertEqual(first_snapshot["captured_at"], second_snapshot["captured_at"])
+        self.assertNotEqual(first_snapshot["captured_at"], "2026-08-12T01:00:00Z")
+        self.assertEqual(first_snapshot["digest"], later_snapshot["digest"])
+        self.assertNotEqual(first_snapshot["captured_at"], later_snapshot["captured_at"])
+
+    def test_snapshot_selection_rejects_unknown_membership(self):
+        tasks = [{"id": f"task-{i}", "work_id": f"work-{i}",
+                  "title": f"[auto] [1/1] Work {i}", "state": "failed"}
+                 for i in range(74)]
+        with self.assertRaisesRegex(ValueError, "requires_73_failed_works_got_74"):
+            pilot.select_dead_end_snapshot_tasks(tasks)
 
 
 class WorkOriginAttributionTests(unittest.TestCase):
