@@ -3,15 +3,47 @@
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge.
-- Branch: `factory/56574781-e4b-7c963a00-510`.
+- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 5f2dca4e10002bfdc638736f4243a169fd5a65b6 — регрессия закрепляет fail-closed отказ NewAt для каталога `delivery-1.json`.
-- What changed: Проверка типа выполняется для каждого пути с суффиксом `.json`; каталог и иной не-регулярный путь завершают `NewAt` ошибкой.
-- What changed: Регрессионный тест подтверждает ошибку запуска и отсутствие физического вызова executor для `.json`-каталога.
-- Evidence: `go test -count=1 -timeout 5m ./internal/releasebroker` → OK; `just check` подтвердил format/vet/vuln/staticcheck и broker-тесты; независимые `internal/controlplane` и `internal/worker` достигли общего пятиминутного timeout.
-- Next action: Human merge reviews the recorded unrelated full-suite timeouts and merges the verified release-broker change.
+Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
+- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
+- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
+- Next action: Human merge after reviewing this verification evidence.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Реальный цикл Pilot→broker | `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` | 10 PASS: Unix-socket POST, restart/recovery, lock join и отсутствие повторного физического executor. |
+| Durable terminal v1 | `go test -count=1 ./internal/releasebroker` | PASS: `.commit` marker подтверждает terminal, неподтверждённый terminal fail-closed восстанавливается как `failed`. |
+| Legacy terminal | тот же Go-пакет, `TestDiskBrokerPreservesLegacyTerminalStatusesWithoutExecutor` | PASS: статусы старого формата сохраняются без запуска executor. |
+| Полный регресс Go/Python | `just test` | PASS: `go test -timeout 5m ./...` и 10 Python-тестов завершились успешно. |
+| Чистота поставки | pinned diff и `git diff --check` | Только `internal/releasebroker/{broker.go,broker_test.go}` и данная карточка; whitespace ошибок нет. |
+
+### 2026-08-12 — Implement
+
+Новые durable operation-записи помечаются версией 1, поэтому двухфазный
+`.commit` проверяется только для них. Legacy terminal-записи без версии после
+restart сохраняют `succeeded`, `locked`, rollback или `failed` без повторного
+executor. Целевой Go-пакет и `just build` прошли; последний `just check`
+остановлен прежним SA4000 вне области задачи.
+
+### 2026-08-12 — Implement
+
+Перебазировано на свежий `origin/main`; удалена неиспользуемая проверка
+operation, найденная full staticcheck. `go test -count=1
+./internal/releasebroker`, 10 Pilot-сценариев и оба shell-fixture прошли.
+`just build` прошёл; `just check` останавливается только на прежнем SA4000 в
+неизменённом `internal/worker/attempt_lifecycle_test.go`.
+
+### 2026-08-12 — Implement
+
+В `web/` зависимости восстановлены через штатный `npm ci`, без глобальной
+установки `eslint` и изменений lockfile. После этого TypeScript, UI lint и
+`just check` завершились успешно; после rebase целевой broker-тест повторно
+подтвердил fail-closed recovery при ошибке fsync каталога.
 
 ### 2026-08-11 — Specification
 
