@@ -34,11 +34,19 @@ func (api *API) downloadDailyReport(w http.ResponseWriter, r *http.Request) {
 	var status, path, hash string
 	var size int64
 	err := api.store.db.QueryRowContext(r.Context(), `SELECT status,pdf_path,pdf_sha256,pdf_size FROM daily_reports WHERE report_date=? AND timezone=?`, date, timezone).Scan(&status, &path, &hash, &size)
-	if errors.Is(err, sql.ErrNoRows) || status != "ready" {
+	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
 	}
-	if err != nil || filepath.Base(path) != path || path == "" {
+	if err != nil {
+		writeError(w, unavailable(err))
+		return
+	}
+	if status != "ready" {
+		http.NotFound(w, r)
+		return
+	}
+	if filepath.Base(path) != path || path == "" {
 		http.Error(w, "report unavailable", http.StatusConflict)
 		return
 	}
