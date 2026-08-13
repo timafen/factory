@@ -3,17 +3,27 @@
 ## HEAD
 
 Implementation commit: afd3d9b7acce926389aa79f5eed1b85e4e8a39a9 — устойчивое provenance и реальный перезапуск Review/Verify-конвейера Pilot.
-- Status: Реализовано и проверено; готово к Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/ed7ee7b4-87a-19b13995-d52`.
 - What changed: проверка полного цикла теперь запускает первый и второй Pilot
   в разных Python-процессах; второй получает только устойчивые JSON-фикстуры и state.
 - What changed: корректировка с изменённым заголовком продолжает тот же work_id
   через Review и Verify до финального merge/terminal verdict, без нового root.
-- Evidence: `python3 -m unittest pilot.test_pilot.CorrectionProvenanceStormTests` — 7 OK;
-  `go test ./internal/controlplane` — PASS; `python3 -m py_compile pilot/test_pilot.py` — PASS.
-- Next action: Review проверить независимое восстановление Pilot после рестарта.
+- Evidence: `go test ./...` — PASS; `python3 -m unittest -v pilot.test_pilot` —
+  230 OK (13 skipped); реальный subprocess-рестарт Review/Verify — 7 OK.
+- Next action: Человеку проверить evidence и принять решение о merge.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Acceptance evidence | Command/check | Observed result |
+|---|---|---|
+| Корректировка Review и Verify не создаёт второй конвейер после настоящего рестарта процесса Pilot | `python3 -m unittest -v pilot.test_pilot.CorrectionProvenanceStormTests` | PASS: 7 tests; subprocess fixture восстанавливает durable state и завершает один pipeline. |
+| Provenance хранится и API/миграция сохраняют обратную совместимость | `go test ./internal/controlplane -run '^(TestTaskProvenanceValidationAndReplay\|TestTaskProvenancePersistsAcrossReopenAndParentDelete\|TestTaskProvenanceMigrationUpgradesLegacyDatabase\|TestTaskProvenanceHTTPCompatibilityAndLogging\|TestResumePausedWorkUsesVerdictActionForReviewAndVerify)$' -count=1` | PASS: 5 tests. |
+| Регрессии Pilot рядом с обработкой конвейеров | `python3 -m unittest -v pilot.test_pilot` | PASS: 230 tests, 13 skipped. |
+| Полная проектная проверка | `go test ./...` | PASS; все Go packages, включая `internal/controlplane` и `internal/worker`. |
+| Гигиена поставки | pinned-SHA diff, `git diff --check`, чистый checkout | PASS; implementation commit является предком ветки и меняет код вне карточки. |
 
 ### 2026-08-11 — Specification
 
