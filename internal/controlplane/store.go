@@ -65,6 +65,7 @@ type Store struct {
 	db                    *sql.DB
 	attachmentRoot        string
 	projectSecretRoot     string
+	reportRoot            string
 	projectSecretOwnerUID uint32
 	projectSecretGroupID  func(string) (uint32, error)
 	now                   func() time.Time
@@ -2222,6 +2223,9 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	input.WorkflowRevisionID = strings.TrimSpace(input.WorkflowRevisionID)
 	input.ParentTaskID = strings.TrimSpace(input.ParentTaskID)
 	input.CorrectionKind = strings.TrimSpace(input.CorrectionKind)
+	if err := validateVisualTarget(input.VisualTarget); err != nil {
+		return protocol.TaskDetail{}, false, err
+	}
 	if input.RequestKey == "" || len(input.RequestKey) > 200 {
 		return protocol.TaskDetail{}, false, invalid("invalid_request_key", "request_key is required")
 	}
@@ -2295,6 +2299,9 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		return protocol.TaskDetail{}, false, invalid(
 			"correction_parent_required", "correction_kind requires parent_task_id",
 		)
+	}
+	if input.ParentTaskID != "" && input.VisualTarget != nil {
+		return protocol.TaskDetail{}, false, invalid("child_visual_target", "child tasks inherit the root visual target")
 	}
 	if input.CorrectionKind != "" && !validCorrectionKind(input.CorrectionKind) {
 		return protocol.TaskDetail{}, false, invalid("invalid_correction_kind", "correction_kind is not supported")
@@ -2495,6 +2502,13 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 			INSERT INTO executions(id, task_id, assigned_worker_id, required_runtime, state, created_at, updated_at)
 			VALUES (?, ?, ?, ?, 'queued', ?, ?)
 		`, executionID, taskID, input.WorkerID, runtime, now, now)
+	}
+	if err == nil && input.VisualTarget != nil {
+		_, err = tx.ExecContext(ctx, `INSERT INTO task_visual_targets(work_id,url,state_text,viewport_width,viewport_height,after_workflow_title,created_at) VALUES(?,?,?,?,?,?,?)`,
+			workID, input.VisualTarget.URL, input.VisualTarget.StateText, input.VisualTarget.ViewportWidth, input.VisualTarget.ViewportHeight, input.VisualTarget.AfterWorkflowTitle, now)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `INSERT INTO visual_captures(work_id,phase,status,updated_at) VALUES(?,'before','pending',?)`, workID, time.UnixMilli(now).UTC().Format(time.RFC3339Nano))
+		}
 	}
 	if err == nil && len(input.AttachmentIDs) > 0 {
 		for _, attachmentID := range input.AttachmentIDs {
