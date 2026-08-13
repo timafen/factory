@@ -1,17 +1,24 @@
 # HEAD карточки отражает включённую проверку Gate
 
-Implementation commit: f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2 — проверка не теряет ошибку Gate за форкающим launcher.
+Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — закреплена автоматическая передача успешной Verify в main и staging.
 
 ## HEAD
 
-Status: Verified PASS — готово к решению человека о слиянии.
-Branch: factory/a23b34a6-244-57387320-d56.
-Implementation commit: f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2 — целевая проверка forked Gate.
-What changed: HEAD CARD-0083 больше не сообщает об ожидании ручного merge и указывает `main`.
-Evidence: pinned diff меняет только CARD-0083 и CARD-0119; устаревшей строки в них нет; implementation commit существует, входит в свежий `main` и меняет release-тест вне `knowledge/cards/`; синтаксис и diff-check прошли.
-One next action: человеку влить документационную поставку в `main`.
+Status: Implemented + Tested — передано в автоматический Review.
+Branch: factory/6f8299e5-32b-01aad148-721.
+Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — регрессионный тест маршрутизации Verify.
+What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
+What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
+Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS.
+One next action: автоматическому Review проверить опубликованный candidate; после APPROVE Verify сама передаст его в `main` и staging.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Убрано ошибочное ожидание решения человека о слиянии из текущего HEAD карточки.
+Добавлен регрессионный тест подсказки Verify: успешная проверка автоматически ведёт
+в `main` и staging, а решение владельца требуется только для production.
 
 ### 2026-08-13 — Verify
 
