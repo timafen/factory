@@ -273,6 +273,15 @@ class ReleaseTrainDashboardTests(unittest.TestCase):
         self.assertEqual(train["next"], {"requested": True,
                                          "passengers": [{"title": "Следующий пассажир"}]})
 
+    def test_projection_uses_explicit_now_without_machine_clock(self):
+        generation = {"id": "g1", "sequence": 1, "phase": "running",
+                      "started_at": "1970-01-01T00:01:30Z", "waits": {}}
+        with mock.patch.object(pilot.time, "time", side_effect=AssertionError("machine clock")):
+            snapshot = self.block(self.target(generation), now=120)
+
+        self.assertEqual(snapshot["updated_at"], "1970-01-01T00:02:00Z")
+        self.assertEqual(snapshot["trains"][0]["elapsed_seconds"], 30)
+
     def test_terminal_results_remain_distinct_and_use_durable_finish_time(self):
         for phase, state in (("completed", "succeeded"), ("failed", "failed")):
             with self.subTest(phase=phase):
