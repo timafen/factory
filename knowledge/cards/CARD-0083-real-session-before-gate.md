@@ -1,18 +1,25 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2 — проверка не теряет ошибку Gate за форкающим launcher.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
-What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
+Status: Verified PASS — merged into main.
+Branch: main.
+Implementation commit: f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2 — проверка не теряет ошибку Gate за форкающим launcher.
+What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и код отказа Gate 5.
 What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; исторический целевой suite в LOG → PASS; текущий повтор остановлен fixture без результата.
+One next action: сохранять проверку forked Gate при следующих изменениях release.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+HEAD приведён к фактическому состоянию после включения проверки в `main`: удалено
+устаревшее ожидание ручного merge, закреплены реализационный коммит и текущая
+ветка. Синтаксическая проверка прошла; ранее записанный целевой suite остаётся
+PASS, повтор в этой среде остановился внутри fixture без результата.
 
 ### 2026-08-12 — Verify
 
