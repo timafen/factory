@@ -1,18 +1,24 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 084724917e38e5c30a75cffa75b20320dfde23c0 — Gate получает commit доверенным Git, а snapshot умеет fallback через свежий server.
+Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
 
 ## HEAD
 
-Status: Implemented — awaiting verification.
-Branch: factory/25336488-816-35e6ae85-cd2.
-Implementation commit: 084724917e38e5c30a75cffa75b20320dfde23c0 — Gate получает commit доверенным Git, а snapshot умеет fallback через свежий server.
-What changed: clone, checkout, SHA и subject выполняются `/usr/bin/git`; Gate извлекается только из закреплённого commit.
-What changed: отказ установленного server при новой схеме запускает backup свежесобранным server; добавлена целевая фикстура.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `git diff --check` → PASS; полный shell-suite не завершён из-за crash-cleanup сценария.
-One next action: повторить полный shell-suite в чистой среде и проверить fallback.
+Status: Verified — реализация и целевые испытания завершены.
+Branch: factory/f851f8f5-7e7-0715f029-f5f.
+Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
+What changed: crash recovery очищает hook перед повторным запуском; каждый release, signal и driver-сценарий имеет жёсткий timeout.
+What changed: разделены повторные PATH-fixture, добавлены trusted-gate env для фоновых и rollback runner; anti-spoof контракт сохранён.
+Evidence: полный `bash ops/test-fx-factory-release.sh` → PASS; `bash -n`, `git diff --check`, `go test ./...`, `go build ./cmd/factory-release-broker` → PASS.
+One next action: передать rebased branch на слияние.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После ответа владельца crash-cleanup запускается отдельно и каждый release, signal и driver-сценарий ограничен `/usr/bin/timeout`; recovery сбрасывает переменную crash hook.
+Исправлены повторное использование `path-shadow-chain`, неполный trusted-gate env в runner-ах и устаревший anti-spoof fixture; небезопасный result path по-прежнему не передаётся.
+Полный shell-suite завершился PASS для crash-фаз `prepared`, `old-stopped`, `pair-installed`, `services-started`, rollback, signal и PATH/anti-spoof проверок.
 
 ### 2026-08-13 — Implement
 
