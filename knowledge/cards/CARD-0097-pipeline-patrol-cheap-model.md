@@ -1,12 +1,12 @@
 # CARD-0097 — Патруль маршрутизируется на дешёвую модель
 
-Implementation commit: 0d3eea298699db44178326a42d2df55f88010064 — patrol сохраняет и передаёт точный override `gpt-5.6-terra` в Codex.
+Implementation commit: 9fa8ca06d722bccb8cff9a6293354b80f071732f — patrol сохраняет и передаёт точный override `gpt-5.6-terra` в Codex.
 
 ## HEAD
 
 - Status: Implemented — awaiting production 24-hour pair-run gate.
 - Branch: `factory/aa5fd162-32d-fa5313dc-d02`.
-- Implementation commit: `0d3eea298699db44178326a42d2df55f88010064`.
+- Implementation commit: `9fa8ca06d722bccb8cff9a6293354b80f071732f`.
 - What changed: the provisioned hourly patrol snapshots `gpt-5.6-terra` into
   its occurrence and task; the worker sends it as `codex exec -m`.
 - Safety: unknown overrides are rejected before execution; other tasks retain
