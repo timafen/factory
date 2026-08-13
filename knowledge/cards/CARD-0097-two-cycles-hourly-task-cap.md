@@ -1,17 +1,23 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: f412f7743b3e334f097a5d880b4cc0a7614f26b7 — контрольная плоскость ограничивает создание автоматических задач десятью за скользящий час.
+Implementation commit: a4cf5e79bca46aa6db16f2eec511279aa64401c2 — спецификация запускает существующую проверку Pilot для почасового лимита.
 
 ## HEAD
 
 - Status: Implement + Test — готово.
-- Branch: `factory/07095b28-30a-24d34201-e77`.
-- Implementation commit: `f412f7743b3e334f097a5d880b4cc0a7614f26b7` — общий атомарный почасовой лимит и отложенный Pilot handoff.
-- What changed: SQLite учитывает только `[auto]` задачи по серверному времени; replay и ручные задачи не расходуют окно. Pilot сохраняет карточку в плане и уведомляет один раз.
-- Evidence: `go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap' -count=1` → PASS; `python3 -m unittest pilot.test_pilot -q` → 242 tests PASS.
-- Next action: Review проверить конкурентный доступ к SQLite и HTTP-контракт `hourly_task_cap`.
+- Branch: `factory/2e9d307b-319-24ad6653-a51`.
+- Implementation commit: `a4cf5e79bca46aa6db16f2eec511279aa64401c2` — команда в спецификации запускает существующий класс Pilot.
+- What changed: обе ссылки на несуществующий `HourlyTaskCapTests` заменены на `PlanAutostartTest`; код лимита не изменён.
+- Evidence: целевая Go-команда и `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS; 17 тестов Pilot.
+- Next action: Передать ветку на Verify.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлены две ссылки в спецификации: обязательная команда теперь использует
+существующий `PlanAutostartTest`. Целевая Go-проверка и 17 Pilot-тестов прошли
+одной командой без `AttributeError`.
 
 ### 2026-08-12 — Implement
 
