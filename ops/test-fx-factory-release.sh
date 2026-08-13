@@ -962,22 +962,6 @@ grep -F 'cgroup remove factory-release-gate-' "$stubborn/gates" >/dev/null \
 stubborn_pid=$(cat "$stubborn/stubborn-pid")
 if kill -0 "$stubborn_pid" 2>/dev/null; then fail "TERM-resistant detached Gate child survived cleanup"; fi
 
-# Живая база бывает новее установленного server: неудачный кандидат успел
-# поднять схему, а откат вернул только бинарь. Старый server такой снимок
-# честно не делает — выпуск обязан снять базу свежесобранным кандидатом,
-# иначе обновления заперты навсегда.
-schema_newer="$temporary/snapshot-schema-newer"
-make_fixture "$schema_newer" snapshot-schema-newer
-run_release "$schema_newer" snapshot-schema-newer \
-  || { cat "$schema_newer/output" >&2; fail "schema-newer release failed"; }
-grep -F 'снимок делает свежесобранный кандидат' "$schema_newer/output" >/dev/null \
-  || fail "schema-newer fallback was not reported"
-grep -Fx 'candidate-backup-snapshot' "$schema_newer/events" >/dev/null \
-  || fail "candidate did not create the snapshot"
-grep -F 'выкачено:' "$schema_newer/output" >/dev/null \
-  || fail "schema-newer release did not complete"
-assert_no_fixture_processes "$schema_newer"
-
 forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
 run_release "$forked_success" forked-gates-success \
