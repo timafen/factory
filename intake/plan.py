@@ -241,6 +241,13 @@ def card_html(it, back):
     bits.append(f'<div class="t">{esc(it.get("title"))}</div>')
     if it.get("why"):
         bits.append(f'<div class="why">{esc(it["why"])}</div>')
+    complexity = it.get("complexity")
+    complexity_label = {"low": "простая", "medium": "обычная",
+                        "high": "сложная"}.get(complexity, "ещё не оценена")
+    assessment = f'Сложность: {complexity_label}'
+    if complexity in ("low", "medium", "high") and it.get("complexity_reason"):
+        assessment += f' — {esc(it["complexity_reason"])}'
+    bits.append(f'<div class="meta">{assessment}</div>')
     meta = f'завёл: {ORIGIN_RU.get(it.get("origin"), it.get("origin"))} · {esc(it.get("created"))}'
     if it.get("source"):
         meta += f' · из работы «{esc(it["source"])}»'
