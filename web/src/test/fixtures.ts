@@ -492,6 +492,15 @@ export function mockControlPlane(
       workflowDetail = { workflow: { ...workflowDetail.workflow, enabled: body.enabled }, revisions: workflowDetail.revisions };
       return Response.json(workflowDetail);
     }
+    if (path === "/api/v1/automations/status") {
+      return Response.json({ automations: [
+        { source: "control_plane", id: automationDetail.automation.id, category: "automation", title: "Scheduled issue patrol", purpose: "Implement issue", status: "healthy", data_status: "ok", last_activity_at: "2026-08-13T10:00:00Z" },
+        { source: "host", id: "factory-pilot", category: "pilot", title: "Factory pilot", purpose: "Управляет циклом Фабрики", status: "active", data_status: "ok", last_activity_at: "2026-08-13T10:00:00Z" },
+        { source: "host", id: "factory-release-broker", category: "release_broker", title: "Release broker", purpose: "Координирует выкладку", status: "unknown", data_status: "no_data" },
+        { source: "host", id: "factory-intake", category: "release", title: "Factory intake", purpose: "Принимает и выкладывает изменения", status: "active", data_status: "ok", last_activity_at: "2026-08-13T10:00:00Z" },
+        { source: "host", id: "factory-janitor", category: "janitor", title: "Factory janitor", purpose: "Очищает временные ресурсы", status: "unknown", data_status: "no_data" },
+      ] });
+    }
     if (path === "/api/v1/automations?limit=200") {
       const docsAutomation = {
         ...automationDetail.automation,

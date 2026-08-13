@@ -23,6 +23,7 @@ import { invalidateControlPlane } from "./controlPlaneQueries";
 import { useVisibleInterval } from "./polling";
 import type {
   Automation,
+	AutomationStatus,
   AutomationDetail as AutomationDetailType,
   AutomationOccurrence,
   AutomationTrigger,
@@ -55,6 +56,11 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
     queryFn: () => api.automations(),
     refetchInterval: interval,
   });
+	const statuses = useQuery({
+		queryKey: ["automations", "status"],
+		queryFn: () => api.automationStatuses(),
+		refetchInterval: interval,
+	});
   const loadMore = useMutation({
     mutationFn: ({ cursor }: { cursor: string; headCursor: string | null }) => api.automations(cursor),
     onSuccess: (page, request) => {
@@ -92,6 +98,7 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
         onRefresh={() => void query.refetch()}
       />
       {query.error && <StaleBanner error={query.error} />}
+	  {statuses.error && <StaleBanner error={statuses.error} />}
       <div className="view-toolbar">
         <p>Run coding agents from a saved Markdown runbook, GitHub state, or a schedule.</p>
         <div className="detail-actions">
@@ -103,6 +110,26 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
           </button>
         </div>
       </div>
+	  {statuses.data && (
+		<div className="workflow-list automation-list" aria-label="Живой статус автоматик">
+		  <div className="automation-table-head">
+			<span>Автоматика</span><span>Категория</span><span>Состояние</span><span>Назначение</span><span>Последняя активность</span><span />
+		  </div>
+		  {statuses.data.map((status: AutomationStatus) => {
+			const content = <>
+			  <span className="workflow-identity"><strong>{status.title}</strong><small>{status.source === "host" ? "Служба хоста" : "Control plane"}</small></span>
+			  <span>{status.category}</span>
+			  <span className="automation-list-copy"><strong>{status.data_status === "no_data" ? "Нет данных" : status.status}</strong><small>{status.diagnostic ?? "Живой статус"}</small></span>
+			  <span>{status.purpose}</span>
+			  <span>{status.last_activity_at ? formatTimestamp(status.last_activity_at) : "нет данных"}</span>
+			  {status.source === "control_plane" ? <ChevronRight size={15} className="row-chevron" /> : <span />}
+			</>;
+			return status.source === "control_plane"
+			  ? <button className="automation-row automation-live-row" key={`${status.source}:${status.id}`} onClick={() => onAutomation(status.id)}>{content}</button>
+			  : <div className="automation-row automation-live-row" key={`${status.source}:${status.id}`}>{content}</div>;
+		  })}
+		</div>
+	  )}
       {items.length > 0 && (
         <div className="automation-filterbar" aria-label="Filter Automations">
           <SlidersHorizontal size={14} aria-hidden="true" />

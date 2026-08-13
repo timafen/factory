@@ -362,6 +362,20 @@ describe("App", () => {
     expect(screen.getByText("Docs review")).toBeVisible();
   });
 
+  it("shows every Factory automation category and honest missing data", async () => {
+    window.history.replaceState({}, "", "/automations");
+    mockControlPlane();
+    renderApp();
+
+    const status = await screen.findByLabelText("Живой статус автоматик");
+    expect(within(status).getByText("Factory pilot")).toBeVisible();
+    expect(within(status).getByText("Release broker")).toBeVisible();
+    expect(within(status).getByText("Factory intake")).toBeVisible();
+    expect(within(status).getByText("Factory janitor")).toBeVisible();
+    expect(within(status).getAllByText("нет данных")).toHaveLength(2);
+    expect(within(status).getAllByText("Нет данных")).toHaveLength(2);
+  });
+
   it("shows the newest durable Run instead of an older dispatched task", async () => {
     window.history.replaceState({}, "", "/automations");
     mockControlPlane({ automationRunWithoutTaskState: "failed" });

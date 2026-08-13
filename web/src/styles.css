@@ -1282,6 +1282,10 @@ button { color: inherit; }
   .automation-table-head { display: none; }
   .automation-row { grid-template-columns: minmax(0, 1fr) 100px 16px; }
   .automation-row > :nth-child(3), .automation-row > :nth-child(4), .automation-row > :nth-child(5) { display: none; }
+  .automation-live-row { grid-template-columns: minmax(0, 1fr) minmax(100px, .7fr); gap: 8px 12px; }
+  .automation-live-row > :first-child { grid-column: 1 / -1; }
+  .automation-live-row > :nth-child(2), .automation-live-row > :nth-child(4), .automation-live-row > :nth-child(6) { display: none; }
+  .automation-live-row > :nth-child(3), .automation-live-row > :nth-child(5) { display: block; }
   .automation-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
