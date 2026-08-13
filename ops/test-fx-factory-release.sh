@@ -69,8 +69,8 @@ start_gate_directory_attack() {
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
-    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
+  mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
+    "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database" "$case_dir/cgroups"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
 # old-server
@@ -351,6 +351,12 @@ if [ "${1:-}" = test ]; then
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
       ;;
+    term-resistant-daemon)
+      /usr/bin/setsid /bin/bash -c 'trap "" TERM; while :; do /bin/sleep 1; done' &
+      daemon=$!
+      printf '%s\n' "$daemon" >"$TEST_STUBBORN_PID"
+      for state in "$TEST_CGROUP_DIR"/*.pids; do printf '%s\n' "$daemon" >>"$state"; done
+      ;;
     go-test-fail) exit 1 ;;
   esac
   exit 0
@@ -630,6 +636,51 @@ if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new
 fi
 exec /bin/chmod "$@"
 EOF
+  cat >"$case_dir/cgroup-helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+name=$2
+state="$TEST_CGROUP_DIR/$name.pids"
+descendants() {
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -z "$child" ] || descendants "$child"
+  done < <(/usr/bin/ps -eo pid=,ppid= | /usr/bin/awk -v p="$parent" '$2 == p {print $1}')
+}
+members() {
+  [ -r "$state" ] && while read -r root; do descendants "$root"; done <"$state"
+}
+printf 'cgroup %s %s %s\n' "$1" "$name" "${3:-}" >>"$TEST_GATES"
+case "$1" in
+  create) : >"$state" ;;
+  attach) printf '%s\n' "$3" >>"$state" ;;
+  empty)
+    while read -r pid; do
+      [ -r "/proc/$pid/stat" ] || continue
+      process_stat=$(<"/proc/$pid/stat")
+      process_rest=${process_stat##*) }
+      read -r process_state _ <<<"$process_rest"
+      [ "$process_state" = Z ] || exit 1
+    done < <(members)
+    ;;
+  signal) while read -r pid; do kill -"$3" "$pid" 2>/dev/null || true; done < <(members) ;;
+  remove) /bin/rm -f -- "$state" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod 755 "$case_dir/cgroup-helper"
+  printf 'completed\n' >"$case_dir/cgroup-bootstrap.done"
+  chmod 600 "$case_dir/cgroup-bootstrap.done"
+  helper_hash=$(/usr/bin/sha256sum "$case_dir/cgroup-helper" | /usr/bin/awk '{print $1}')
+  helper_uid=$(/usr/bin/id -u)
+  /usr/bin/sed \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/cgroup-helper|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$helper_hash|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
+    -e "s|^TRUSTED_CGROUP_OWNER_UID=.*$|TRUSTED_CGROUP_OWNER_UID=$helper_uid|" \
+    "$RELEASE" >"$case_dir/release-under-test"
+  chmod 755 "$case_dir/release-under-test"
   cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
 case "$*" in
@@ -663,6 +714,10 @@ EOF
   # remains unable to read PATH or environment overrides for the gate chain.
   fixture_uid=$(id -u)
   /bin/sed \
+    -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/cgroup-helper|" \
+    -e "s|^TRUSTED_GATE_CGROUP_SHA256=.*$|TRUSTED_GATE_CGROUP_SHA256=$helper_hash|" \
+    -e "s|^TRUSTED_CGROUP_BOOTSTRAP_MARKER=.*$|TRUSTED_CGROUP_BOOTSTRAP_MARKER=$case_dir/cgroup-bootstrap.done|" \
+    -e "s|^TRUSTED_CGROUP_OWNER_UID=.*$|TRUSTED_CGROUP_OWNER_UID=$helper_uid|" \
     -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
@@ -706,7 +761,9 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_STUBBORN_PID="$case_dir/stubborn-pid" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_CGROUP_DIR="$case_dir/cgroups" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
@@ -744,7 +801,7 @@ run_release() {
 
 run_driver() {
   case_dir=$1; shift
-  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE=control \
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_CGROUP_DIR="$case_dir/cgroups" TEST_MODE=control \
     PATH="$case_dir/bin:$PATH" FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" FACTORY_FX_BIN="$case_dir/install/fx" \
     FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" FACTORY_BRAIN_LIVE="$case_dir/live" \
@@ -772,6 +829,7 @@ start_release() {
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_CGROUP_DIR="$case_dir/cgroups" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
@@ -844,6 +902,9 @@ for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
+assert_before "$success/gates" 'cgroup attach factory-release-gate-' 'npx tsc -p tsconfig.app.json --noEmit'
+grep -F 'cgroup remove factory-release-gate-' "$success/gates" >/dev/null \
+  || fail "successful Gate did not remove its cgroup"
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
@@ -889,6 +950,33 @@ grep -F 'текущий server не знает новую схему' "$fresh_sn
 assert_before "$fresh_snapshot/events" candidate-backup 'stop factory-worker.service'
 ! grep -Fx 'backup-snapshot' "$fresh_snapshot/events" >/dev/null \
   || fail "incompatible installed server created the snapshot"
+
+stubborn="$temporary/term-resistant-daemon"
+make_fixture "$stubborn" term-resistant-daemon
+run_release "$stubborn" term-resistant-daemon \
+  || { cat "$stubborn/output" >&2; fail "release with detached Gate child failed"; }
+grep -F 'cgroup signal factory-release-gate-' "$stubborn/gates" | grep -F 'KILL' >/dev/null \
+  || fail "TERM-resistant detached Gate child was not killed through cgroup"
+grep -F 'cgroup remove factory-release-gate-' "$stubborn/gates" >/dev/null \
+  || fail "cgroup was not removed after killing its detached child"
+stubborn_pid=$(cat "$stubborn/stubborn-pid")
+if kill -0 "$stubborn_pid" 2>/dev/null; then fail "TERM-resistant detached Gate child survived cleanup"; fi
+
+# Живая база бывает новее установленного server: неудачный кандидат успел
+# поднять схему, а откат вернул только бинарь. Старый server такой снимок
+# честно не делает — выпуск обязан снять базу свежесобранным кандидатом,
+# иначе обновления заперты навсегда.
+schema_newer="$temporary/snapshot-schema-newer"
+make_fixture "$schema_newer" snapshot-schema-newer
+run_release "$schema_newer" snapshot-schema-newer \
+  || { cat "$schema_newer/output" >&2; fail "schema-newer release failed"; }
+grep -F 'снимок делает свежесобранный кандидат' "$schema_newer/output" >/dev/null \
+  || fail "schema-newer fallback was not reported"
+grep -Fx 'candidate-backup-snapshot' "$schema_newer/events" >/dev/null \
+  || fail "candidate did not create the snapshot"
+grep -F 'выкачено:' "$schema_newer/output" >/dev/null \
+  || fail "schema-newer release did not complete"
+assert_no_fixture_processes "$schema_newer"
 
 forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
