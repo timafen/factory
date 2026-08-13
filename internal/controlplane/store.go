@@ -2541,6 +2541,10 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		       CASE WHEN EXISTS (SELECT 1 FROM automation_occurrences marker_occurrence
+			JOIN automations marker_automation ON marker_automation.id = marker_occurrence.automation_id
+			WHERE marker_occurrence.task_id = t.id AND marker_automation.trigger_type = 'schedule'
+			  AND lower(marker_automation.title || ' ' || marker_automation.context) LIKE '%factory pipeline patrol%') THEN 1 ELSE 0 END,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id
 		WHERE NOT EXISTS (
@@ -2591,17 +2595,21 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var task protocol.Task
 	var created int64
+	var isPatrol int
 	var workID, parentTaskID, correctionKind sql.NullString
 	var err error
 	if detail {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.Description, &task.RepositoryID,
 			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&isPatrol,
 			&workID, &parentTaskID, &correctionKind)
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
 			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&isPatrol,
 			&workID, &parentTaskID, &correctionKind)
 	}
+	task.IsPatrol = isPatrol != 0
 	task.WorkID = workID.String
 	task.ParentTaskID = parentTaskID.String
 	task.CorrectionKind = correctionKind.String
@@ -2641,6 +2649,10 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 	row := s.db.QueryRowContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		       CASE WHEN EXISTS (SELECT 1 FROM automation_occurrences marker_occurrence
+			JOIN automations marker_automation ON marker_automation.id = marker_occurrence.automation_id
+			WHERE marker_occurrence.task_id = t.id AND marker_automation.trigger_type = 'schedule'
+			  AND lower(marker_automation.title || ' ' || marker_automation.context) LIKE '%factory pipeline patrol%') THEN 1 ELSE 0 END,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?
 	`, id)

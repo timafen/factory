@@ -157,6 +157,7 @@ func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTas
 	rows, err := a.store.db.QueryContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		       0,
 		       t.work_id, t.parent_task_id, t.correction_kind
 		FROM tasks t JOIN executions e ON e.task_id=t.id ORDER BY t.created_at, t.id`)
 	if err != nil {

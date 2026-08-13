@@ -359,6 +359,7 @@ type Task struct {
 	ReadOnly       bool      `json:"read_only"`
 	State          string    `json:"state"`
 	CreatedAt      time.Time `json:"created_at"`
+	IsPatrol       bool      `json:"is_patrol,omitempty"`
 	WorkID         string    `json:"work_id,omitempty"`
 	ParentTaskID   string    `json:"parent_task_id,omitempty"`
 	CorrectionKind string    `json:"correction_kind,omitempty"`

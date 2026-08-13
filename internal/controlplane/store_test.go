@@ -2985,6 +2985,13 @@ func TestTasksPagesExcludePatrolWithoutConsumingCursorSlots(t *testing.T) {
 		patrol.Task.ID, patrol.Task.ID, now.UnixMilli(), now.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
+	patrolDetail, err := store.Task(context.Background(), patrol.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !patrolDetail.Task.IsPatrol {
+		t.Fatalf("production-shaped schedule patrol was not marked: %#v", patrolDetail.Task)
+	}
 
 	first, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 1})
 	if err != nil {

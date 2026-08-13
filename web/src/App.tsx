@@ -504,6 +504,7 @@ function mergeTasks(...groups: Task[][]): Task[] {
   const unique = new Map<string, Task>();
   for (const group of groups) {
     for (const task of group) {
+      if (task.is_patrol) continue;
       if (!unique.has(task.id)) unique.set(task.id, task);
     }
   }

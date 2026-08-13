@@ -13,6 +13,10 @@ function task(id: string, stage: string, state: Task["state"], minute: number, w
 }
 
 describe("build", () => {
+  it("excludes a patrol marker even when cached metadata says orchestrator", () => {
+    const patrol = { ...task("patrol", "Review", "succeeded", 1), is_patrol: true };
+    expect(build([patrol], {}, [], { "Экран Работа": { origin: "orchestrator" } })).toEqual([]);
+  });
   it("groups stage titles by work identity and keeps equal names separate", () => {
     const sharedWork = build([
       task("triage", "Triage", "succeeded", 1, "work-shared"),
