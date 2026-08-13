@@ -2,17 +2,20 @@
 
 ## HEAD
 
-- Implementation commit: 332fca09a6d0261543fee0b0d4acb524b7259f30 — одноразово разведены исторические дубли номеров карточек.
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/af59fb23-758-18b9659a-85a`
-- Head commit: `3b95962` — реализация после rebase на свежий `origin/main`.
-- Evidence: `python3 -m unittest pilot.test_pilot` — 24/24 OK; `just test` —
-  PASS; `just ui-check` — 101/101 PASS; трёхточечный diff — только 5 файлов
-  CARD-0034. `just check` и браузерный набор отдельно выявляют прежние сбои
-  вне поставки, описанные в журнале.
+- Implementation commit: 19cbdceb1dea07723ca387eb07a0ea01d2080bec — одноразово разведены исторические дубли номеров карточек.
+- Status: Implementation reference repaired — awaiting human merge.
+- Branch: `factory/fa0a24f8-a20-5b90c0d0-a68`
+- Evidence: целевые тесты утилиты и проверка уникальности номеров выполнены
+  после перебазирования на `origin/main`.
 - Next action: человеку проверить и слить поставку.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После перебазирования ссылка на реализацию заменена на полный SHA коммита этой
+ветки: он содержит утилиту, её тесты и одноразовое разведение карточек. Это
+устраняет ошибку машинной проверки, вызванную SHA из другой ветки.
 
 ### 2026-08-12 — Implement
 
