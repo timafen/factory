@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import json, re, shlex, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
 
 API = "http://127.0.0.1:7337/api/v1"
 # Production keeps the fixed data root.  Tests and isolated tools may opt into
@@ -2521,6 +2521,11 @@ PROMISES_PATH = f"{HOME}/pilot/promises.json"
 PROMISE_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?ГОТОВО-КОГДА:\s*(файл|команда)\s*[:\-]?\s*(.+?)\s*$",
     re.M | re.I)
+PRE_REVIEW_TIMEOUT_SECONDS = 20 * 60
+PRE_REVIEW_MEMORY_MAX = "4G"
+PRE_REVIEW_CPU_QUOTA = "200%"
+PRE_REVIEW_LOG_LIMIT = 2 * 1024 * 1024
+PRE_REVIEW_SYSTEMD_RUN = "/usr/bin/systemd-run"
 
 
 def save_promises(base, text):
@@ -2789,6 +2794,305 @@ def _git(cwd, *args, timeout=180, input_text=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def _sanitize_pre_review_log(value):
+    """Remove host credentials and bound an otherwise complete command log."""
+    text = str(value or "")
+    secret_key = re.compile(r"token|secret|pass|credential|cookie|auth|api.?key", re.I)
+    secrets = sorted({str(v) for k, v in os.environ.items()
+                      if secret_key.search(k) and v and len(str(v)) >= 4},
+                     key=len, reverse=True)
+    for secret in secrets:
+        text = text.replace(secret, "[SECRET REDACTED]")
+    text = re.sub(r"(?i)\b(?:gh[opsu]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
+                  "[SECRET REDACTED]", text)
+    text = re.sub(r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@", text)
+    if HOME and HOME != "/":
+        text = text.replace(HOME, "[FACTORY STATE]")
+    if len(text) > PRE_REVIEW_LOG_LIMIT:
+        half = PRE_REVIEW_LOG_LIMIT // 2
+        omitted = len(text) - PRE_REVIEW_LOG_LIMIT
+        text = (text[:half] + "\n... журнал ограничен, пропущено %d байт ...\n" % omitted
+                + text[-half:])
+    return text.strip()
+
+
+def _pre_review_sandbox_argv(checkout, command, timeout_seconds, identity):
+    """Build the mandatory systemd sandbox; callers never fall back to a shell."""
+    marker = "FACTORY_PREFLIGHT_STARTED:" + identity
+    properties = (
+        "Type=exec",
+        "User=%d" % os.getuid(),
+        "Group=%d" % os.getgid(),
+        "PrivateNetwork=yes",
+        "RestrictAddressFamilies=AF_UNIX",
+        "IPAddressDeny=any",
+        "NoNewPrivileges=yes",
+        "PrivateUsers=yes",
+        "PrivateDevices=yes",
+        "ProtectSystem=strict",
+        "ProtectHome=yes",
+        "ProtectProc=invisible",
+        "ProcSubset=pid",
+        "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes",
+        "ProtectKernelLogs=yes",
+        "ProtectControlGroups=yes",
+        "ProtectClock=yes",
+        "ProtectHostname=yes",
+        "RestrictSUIDSGID=yes",
+        "RestrictRealtime=yes",
+        "LockPersonality=yes",
+        "RestrictNamespaces=yes",
+        "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
+        "DevicePolicy=closed",
+        "PrivateTmp=yes",
+        "UMask=0077",
+        "KillMode=control-group",
+        "TasksMax=512",
+        "MemoryMax=" + PRE_REVIEW_MEMORY_MAX,
+        "MemorySwapMax=0",
+        "CPUQuota=" + PRE_REVIEW_CPU_QUOTA,
+        "RuntimeMaxSec=%ds" % max(1, int(timeout_seconds)),
+        "InaccessiblePaths=/opt/factory-data -/var/lib/factory -/run/factory",
+        "BindReadOnlyPaths=%s:/workspace" % checkout,
+    )
+    argv = [PRE_REVIEW_SYSTEMD_RUN, "--quiet", "--wait", "--pipe", "--collect",
+            "--expand-environment=no", "--unit=factory-preflight-" + identity,
+            "--working-directory=/workspace"]
+    for prop in properties:
+        argv.extend(("--property", prop))
+    clean_environment = (
+        "HOME=/tmp/home",
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "TMPDIR=/tmp",
+        "XDG_CACHE_HOME=/tmp/cache",
+        "CI=1",
+        "LANG=C.UTF-8",
+    )
+    # timeout lives inside the unit, so KillMode=control-group also removes
+    # grandchildren.  The marker distinguishes a test failure from a unit
+    # that systemd refused to create with the mandatory isolation properties.
+    argv.extend(("/usr/bin/env", "-i", *clean_environment,
+                 "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s",
+                 "%ds" % max(1, int(timeout_seconds)), "/bin/sh", "-c",
+                 "printf '%s\\n' " + shlex.quote(marker)
+                 + " >&2; exec /bin/sh -c \"$1\"",
+                 "factory-preflight", command))
+    return argv, marker
+
+
+def _run_pre_review_command(checkout, command, timeout_seconds):
+    """Run one command in the mandatory sandbox and return normalized evidence."""
+    started = time.monotonic()
+    identity = uuid.uuid4().hex
+    if not (os.path.isfile(PRE_REVIEW_SYSTEMD_RUN)
+            and os.access(PRE_REVIEW_SYSTEMD_RUN, os.X_OK)):
+        return {"ok": False, "kind": "sandbox",
+                "reason": "обязательный systemd sandbox недоступен", "log": ""}
+    argv, marker = _pre_review_sandbox_argv(
+        checkout, command, max(1, int(timeout_seconds)), identity)
+    try:
+        process = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"},
+        )
+    except OSError as error:
+        return {"ok": False, "kind": "sandbox",
+                "reason": "обязательный systemd sandbox не запустился",
+                "log": _sanitize_pre_review_log(str(error))}
+    captured, capture_size, omitted = [], [0], [0]
+
+    def drain_output():
+        while True:
+            chunk = process.stdout.read(65536)
+            if not chunk:
+                return
+            room = PRE_REVIEW_LOG_LIMIT - capture_size[0]
+            if room > 0:
+                captured.append(chunk[:room])
+                capture_size[0] += min(len(chunk), room)
+            omitted[0] += max(0, len(chunk) - max(0, room))
+
+    drain = threading.Thread(target=drain_output, name="preflight-log", daemon=True)
+    drain.start()
+    try:
+        process.wait(timeout=max(1, int(timeout_seconds)) + 15)
+    except subprocess.TimeoutExpired:
+        try:
+            subprocess.run(["/usr/bin/systemctl", "kill",
+                            "factory-preflight-" + identity],
+                           capture_output=True, timeout=15)
+        except Exception:
+            pass
+        try:
+            process.kill()
+            process.wait(timeout=15)
+        except Exception:
+            pass
+        drain.join(timeout=15)
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
+        raw = b"".join(captured).decode("utf-8", "replace")
+        if omitted[0]:
+            raw += "\n... журнал ограничен, пропущено %d байт ..." % omitted[0]
+        return {"ok": False, "kind": "timeout",
+                "reason": "общий лимит времени исчерпан",
+                "log": _sanitize_pre_review_log(raw),
+                "duration_ms": int((time.monotonic() - started) * 1000)}
+    drain.join(timeout=15)
+    try:
+        process.stdout.close()
+    except Exception:
+        pass
+    raw = b"".join(captured).decode("utf-8", "replace")
+    if omitted[0]:
+        raw += "\n... журнал ограничен, пропущено %d байт ..." % omitted[0]
+    sandbox_started = marker in raw
+    raw = raw.replace(marker + "\n", "").replace(marker, "")
+    log_text = _sanitize_pre_review_log(raw)
+    duration_ms = int((time.monotonic() - started) * 1000)
+    if not sandbox_started:
+        return {"ok": False, "kind": "sandbox",
+                "reason": "systemd не применил обязательную изоляцию и лимиты",
+                "status": process.returncode, "log": log_text,
+                "duration_ms": duration_ms}
+    if process.returncode == 0:
+        return {"ok": True, "status": 0, "log": log_text,
+                "duration_ms": duration_ms}
+    lowered = log_text.lower()
+    if process.returncode == 124:
+        kind, reason = "timeout", "общий лимит времени исчерпан"
+    elif "out of memory" in lowered or "oom" in lowered or "memorymax" in lowered:
+        kind, reason = "memory", "превышен лимит памяти 4 ГБ"
+    elif process.returncode < 0 or 128 <= process.returncode <= 192:
+        signal_number = (-process.returncode if process.returncode < 0
+                         else process.returncode - 128)
+        kind, reason = "signal", "процесс завершён сигналом %d" % signal_number
+    else:
+        kind, reason = "exit", "команда завершилась с кодом %d" % process.returncode
+    return {"ok": False, "kind": kind, "reason": reason,
+            "status": process.returncode, "log": log_text,
+            "duration_ms": duration_ms}
+
+
+def pre_review_self_check(repo_identity, snapshot, commands, runner=None,
+                          deadline_seconds=PRE_REVIEW_TIMEOUT_SECONDS):
+    """Execute saved commands once on the exact published detached candidate."""
+    selected, seen = [], set()
+    for command in commands or []:
+        if (not isinstance(command, str) or not command or command != command.strip()
+                or len(command) > 4096 or any(ord(ch) < 32 for ch in command)):
+            return {"ok": False, "kind": "invalid", "command": str(command or ""),
+                    "reason": "сохранённая команда пуста или содержит недопустимые символы",
+                    "log": ""}
+        if command not in seen:
+            selected.append(command)
+            seen.add(command)
+    if not selected:
+        return {"ok": True, "commands": [],
+                "base_sha": snapshot.get("base_sha"),
+                "candidate_sha": snapshot.get("candidate_sha")}
+    url = _remote_url(repo_identity)
+    candidate_sha = snapshot.get("candidate_sha") or ""
+    base_sha = snapshot.get("base_sha") or ""
+    if not url or not GIT_SHA.fullmatch(candidate_sha) or not GIT_SHA.fullmatch(base_sha):
+        return {"blocked": True, "reason": "невозможно закрепить checkout кандидата"}
+    started = time.monotonic()
+    execute = runner or _run_pre_review_command
+    try:
+        with tempfile.TemporaryDirectory(prefix="factory-preflight-", dir="/tmp") as root:
+            checkout = os.path.join(root, "candidate")
+            rc, out = _git(root, "init", "-q", checkout)
+            if rc:
+                return {"blocked": True, "reason": "не удалось создать checkout: " + out[:240]}
+            rc, out = _git(checkout, "config", "core.hooksPath", "/dev/null")
+            if rc:
+                return {"blocked": True, "reason": "не удалось отключить git hooks: " + out[:240]}
+            rc, out = _git(checkout, "fetch", "--quiet", "--no-tags", "--depth=1",
+                           url, candidate_sha)
+            if rc:
+                return {"blocked": True, "reason": "не удалось получить pinned candidate: " + out[:240]}
+            rc, fetched = _git(checkout, "rev-parse", "FETCH_HEAD")
+            if rc or fetched.strip() != candidate_sha:
+                return {"blocked": True, "reason": "published candidate изменился во время подготовки"}
+            rc, out = _git(checkout, "checkout", "--quiet", "--detach", candidate_sha)
+            if rc:
+                return {"blocked": True, "reason": "не удалось открыть detached candidate: " + out[:240]}
+            rc, head = _git(checkout, "rev-parse", "HEAD")
+            detached_rc, _ = _git(checkout, "symbolic-ref", "-q", "HEAD")
+            if rc or head.strip() != candidate_sha or detached_rc == 0:
+                return {"blocked": True, "reason": "checkout кандидата не закреплён в detached HEAD"}
+            results = []
+            for command in selected:
+                remaining = deadline_seconds - (time.monotonic() - started)
+                if remaining <= 0:
+                    return {"ok": False, "kind": "timeout", "command": command,
+                            "reason": "общий лимит 20 минут исчерпан", "log": ""}
+                try:
+                    result = execute(checkout, command, remaining)
+                except Exception as error:
+                    return {"ok": False, "kind": "preparation", "command": command,
+                            "reason": "ошибка запуска sandbox",
+                            "log": _sanitize_pre_review_log(repr(error)),
+                            "base_sha": base_sha, "candidate_sha": candidate_sha}
+                result = dict(result or {})
+                result["command"] = command
+                result["log"] = _sanitize_pre_review_log(result.get("log"))
+                results.append(result)
+                if not result.get("ok"):
+                    result["ok"] = False
+                    result["results"] = results
+                    result["base_sha"] = base_sha
+                    result["candidate_sha"] = candidate_sha
+                    return result
+            return {"ok": True, "commands": results, "base_sha": base_sha,
+                    "candidate_sha": candidate_sha}
+    except Exception as error:
+        return {"ok": False, "kind": "preparation",
+                "reason": "ошибка подготовки: " + _sanitize_pre_review_log(repr(error)),
+                "log": ""}
+
+
+def _review_preflight_gate(repo_identity, snapshot, commands):
+    """Translate preflight evidence into the existing Review gate protocol."""
+    if not commands:
+        return None, ""
+    check = pre_review_self_check(repo_identity, snapshot, commands)
+    if check.get("blocked"):
+        return {"blocked": True, "note": (
+            "BLOCKED: review infrastructure. Самопроверка не может получить "
+            "закреплённый кандидат. Причина: " + check.get("reason", "неизвестно"))}, ""
+    if not check.get("ok"):
+        command = _sanitize_pre_review_log(check.get("command") or "не запущена")
+        reason = _sanitize_pre_review_log(check.get("reason") or "неизвестная ошибка")
+        journal_parts = []
+        for item in check.get("results") or []:
+            status = "успешно" if item.get("ok") else item.get("reason", "ошибка")
+            journal_parts.append("$ %s\n[%s]\n%s" % (
+                _sanitize_pre_review_log(item.get("command") or "неизвестная команда"),
+                _sanitize_pre_review_log(status),
+                _sanitize_pre_review_log(item.get("log")) or "(вывода нет)"))
+        journal = "\n\n".join(journal_parts) or check.get("log") or "(журнал пуст)"
+        journal = _sanitize_pre_review_log(journal)
+        return {"back": True,
+                "alert": "Вернул сам: обещанная проверка не прошла",
+                "alert_msg": ("Перед Review автоматически запущены проверки "
+                              "Specification; одна из них не прошла."),
+                "note": ("Самопроверка перед Review не прошла.\nКоманда: " + command
+                         + "\nПричина: " + reason + "\nПолный безопасный журнал:\n" + journal)}, ""
+    lines = []
+    for item in check.get("commands") or []:
+        lines.append("  - %s — успешно (%d мс)" %
+                     (item.get("command"), item.get("duration_ms", 0)))
+    summary = ("Автоматическая самопроверка прошла на закреплённом коммите "
+               "кандидата %s; повторный запуск в Review не нужен:\n%s" %
+               (check.get("candidate_sha"), "\n".join(lines)))
+    return None, summary
+
+
 def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo=""):
     """Собрать ветку от свежей главной, сохранив весь diff задачи.
 
@@ -2989,12 +3293,16 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                     return {"blocked": True, "note": (
                         "BLOCKED: review infrastructure. Пересобранная ветка создана, "
                         "но закрепить её SHA перед Review не удалось. Причина: " + reason)}
+                preflight_gate, preflight_summary = _review_preflight_gate(
+                    repo_identity, clean_snapshot, prom.get("commands") or [])
+                if preflight_gate:
+                    return preflight_gate
                 return {"back": False, "branch": clean,
                         "head": clean_snapshot["candidate_sha"],
                         "note": ("Ветка пересобрана машиной от свежей главной: "
                                  "в поставке остались только файлы области "
                                  "(" + ", ".join(sorted(mine))[:400] + "). "
-                                 "Проверяй ветку " + clean + ".")}
+                                 "Проверяй ветку " + clean + ".\n" + preflight_summary)}
         if foreign and cap_rescues(base, "DIRT") < 1:
             log(f"GATE '{base}': {len(foreign)} файлов вне области — возвращаю без Ревью")
             return {"back": True,
@@ -3025,10 +3333,17 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 mark = "НЕ ТРОНУТ!" if f in missing else "есть в поставке"
                 prom_note += f"\n  - файл {f} — {mark}"
             for c in prom.get("commands") or []:
-                prom_note += f"\n  - команда должна пройти: {c} — ПРОГОНИ ЕЁ и покажи вывод"
+                prom_note += f"\n  - команда автоматической самопроверки: {c}"
             if missing:
                 prom_note += ("\nОбещанные, но не тронутые файлы — повод вернуть работу, "
                               "если в отчёте нет внятного объяснения.")
+
+        preflight_gate, preflight_summary = _review_preflight_gate(
+            repo_identity, snapshot, prom.get("commands") or [])
+        if preflight_gate:
+            return preflight_gate
+        if preflight_summary:
+            prom_note += "\n" + preflight_summary
 
         base_status = ("Основная ветка продвинулась после публикации кандидата "
                        f"на {snapshot['base_ahead_by']} коммит(а); область остаётся "

@@ -522,6 +522,245 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertIn("BLOCKED: review infrastructure", blocked["note"])
 
 
+class PreReviewSelfCheckTests(unittest.TestCase):
+    def git(self, cwd, *args):
+        rc, out = pilot._git(cwd, *args)
+        self.assertEqual(rc, 0, out)
+        return out.strip()
+
+    def commit(self, work, name, body):
+        path = os.path.join(work, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(body)
+        self.git(work, "add", name)
+        self.git(work, "-c", "user.name=Test", "-c",
+                 "user.email=test@example.com", "commit", "-qm", name)
+
+    def published_candidate(self, root):
+        remote = os.path.join(root, "remote.git")
+        author = os.path.join(root, "author")
+        observer = os.path.join(root, "observer")
+        self.git(root, "init", "--bare", remote)
+        self.git(root, "init", "-q", author)
+        self.git(author, "checkout", "-qb", "main")
+        self.git(author, "remote", "add", "origin", remote)
+        self.commit(author, "README.md", "base\n")
+        self.git(author, "push", "-qu", "origin", "main")
+        self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+        self.git(author, "checkout", "-qb", "factory/candidate", "main")
+        self.commit(author, "delivery.txt", "published\n")
+        candidate = self.git(author, "rev-parse", "HEAD")
+        self.git(author, "push", "-qu", "origin", "factory/candidate")
+        self.git(author, "checkout", "-q", "main")
+        base = self.git(author, "rev-parse", "HEAD")
+        self.git(root, "clone", "-q", remote, observer)
+        self.git(observer, "checkout", "-qb", "worker-observer")
+        return remote, observer, {"state": "ok", "base_sha": base,
+                                  "candidate_sha": candidate}
+
+    def test_runs_only_saved_commands_once_in_detached_pinned_checkout(self):
+        with tempfile.TemporaryDirectory() as root:
+            remote, observer, snapshot = self.published_candidate(root)
+            before = self.git(observer, "symbolic-ref", "--short", "HEAD")
+            commands = ["test -f delivery.txt", "python3 -c 'print(2 + 2)'",
+                        "test -f delivery.txt"]
+            calls, checkout_paths = [], []
+
+            def runner(checkout, command, remaining):
+                calls.append(command)
+                checkout_paths.append(checkout)
+                self.assertGreater(remaining, 0)
+                self.assertEqual(self.git(checkout, "rev-parse", "HEAD"),
+                                 snapshot["candidate_sha"])
+                rc, _ = pilot._git(checkout, "symbolic-ref", "-q", "HEAD")
+                self.assertNotEqual(rc, 0)
+                result = subprocess.run(command, shell=True, cwd=checkout,
+                                        capture_output=True, text=True)
+                return {"ok": result.returncode == 0,
+                        "status": result.returncode,
+                        "log": result.stdout + result.stderr, "duration_ms": 1}
+
+            result = pilot.pre_review_self_check(
+                "file://" + remote, snapshot, commands, runner=runner)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(calls, commands[:2])
+            self.assertEqual([item["command"] for item in result["commands"]], commands[:2])
+            self.assertEqual(result["candidate_sha"], snapshot["candidate_sha"])
+            self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
+            self.assertTrue(checkout_paths)
+            self.assertFalse(os.path.exists(checkout_paths[0]))
+
+    def test_sandbox_contract_has_network_privilege_write_and_resource_limits(self):
+        argv, marker = pilot._pre_review_sandbox_argv(
+            "/tmp/pinned-candidate", "python3 -m unittest target", 1199, "proof")
+        rendered = "\n".join(argv)
+
+        for requirement in (
+                "PrivateNetwork=yes", "RestrictAddressFamilies=AF_UNIX",
+                "IPAddressDeny=any", "NoNewPrivileges=yes", "PrivateUsers=yes",
+                "CapabilityBoundingSet=", "ProtectSystem=strict",
+                "BindReadOnlyPaths=/tmp/pinned-candidate:/workspace",
+                "InaccessiblePaths=/opt/factory-data", "PrivateTmp=yes",
+                "MemoryMax=4G", "MemorySwapMax=0", "CPUQuota=200%",
+                "RuntimeMaxSec=1199s", "KillMode=control-group"):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, rendered)
+        self.assertIn("FACTORY_PREFLIGHT_STARTED:proof", marker)
+        self.assertEqual(argv[-1], "python3 -m unittest target")
+        self.assertIn("-i", argv)
+        self.assertNotIn("shell=True", rendered)
+
+    def test_sandbox_setup_failure_never_falls_back_to_host_shell(self):
+        failed = types.SimpleNamespace(
+            returncode=1, stdout=io.BytesIO(b"access denied"),
+            wait=mock.Mock(return_value=1), kill=mock.Mock())
+
+        with mock.patch.object(pilot.os.path, "isfile", return_value=True), \
+                mock.patch.object(pilot.os, "access", return_value=True), \
+                mock.patch.object(pilot.subprocess, "Popen", return_value=failed) as popen:
+            result = pilot._run_pre_review_command("/tmp/candidate", "echo unsafe", 10)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "sandbox")
+        self.assertIn("изоляцию", result["reason"])
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(popen.call_args.args[0][0], pilot.PRE_REVIEW_SYSTEMD_RUN)
+
+    def test_security_attempts_are_isolated_or_fail_closed_before_execution(self):
+        with tempfile.TemporaryDirectory(prefix="preflight-security-") as checkout, \
+                mock.patch.dict(os.environ,
+                                {"FACTORY_PREFLIGHT_TEST_SECRET": "must-not-leak"}):
+            command = (
+                "test -z \"$FACTORY_PREFLIGHT_TEST_SECRET\" && "
+                "! touch /workspace/escaped && "
+                "! python3 -c 'import socket; "
+                "socket.socket(socket.AF_INET, socket.SOCK_STREAM)'"
+            )
+            result = pilot._run_pre_review_command(checkout, command, 10)
+            escaped = os.path.join(checkout, "escaped")
+
+        self.assertFalse(os.path.exists(escaped))
+        if result.get("kind") == "sandbox":
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["reason"])
+        else:
+            # A successfully created unit reports success only when all three
+            # escape attempts were denied by its isolation contract.
+            self.assertTrue(result["ok"], result.get("log"))
+            self.assertNotIn("must-not-leak", result.get("log", ""))
+
+    def test_failure_kinds_and_logs_are_reported_without_secrets(self):
+        cases = (
+            (7, "failed", "exit", "кодом 7"),
+            (124, "slow", "timeout", "времени"),
+            (-9, "killed", "signal", "сигналом 9"),
+            (1, "OOM killed", "memory", "4 ГБ"),
+        )
+        for status, output, kind, reason in cases:
+            completed = types.SimpleNamespace(
+                returncode=status,
+                stdout=io.BytesIO(("STARTED\n" + output
+                                   + " super-private-value").encode()),
+                wait=mock.Mock(return_value=status), kill=mock.Mock())
+
+            with self.subTest(kind=kind), \
+                    mock.patch.object(pilot.os.path, "isfile", return_value=True), \
+                    mock.patch.object(pilot.os, "access", return_value=True), \
+                    mock.patch.object(pilot, "_pre_review_sandbox_argv",
+                                      return_value=(["sandbox"], "STARTED")), \
+                    mock.patch.object(pilot.subprocess, "Popen",
+                                      return_value=completed), \
+                    mock.patch.dict(os.environ,
+                                    {"FACTORY_TEST_SECRET": "super-private-value"}):
+                result = pilot._run_pre_review_command(
+                    "/tmp/candidate", "python3 check.py", 10)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], kind)
+            self.assertIn(reason, result["reason"])
+            self.assertNotIn("super-private-value", result["log"])
+            self.assertIn("SECRET REDACTED", result["log"])
+
+    def test_review_gate_returns_failed_saved_command_before_review(self):
+        snapshot = {
+            "state": "ok", "default_branch": "main", "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+            "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1,
+            "files": ["pilot/pilot.py", "pilot/test_pilot.py",
+                      "knowledge/cards/CARD-0097-review-preflight-self-check.md"],
+        }
+        promises = {"Работа": {"files": ["pilot/pilot.py"],
+                                "commands": ["python3 -m unittest target"]}}
+
+        def loader(path, default=None):
+            if path == pilot.PROMISES_PATH:
+                return promises
+            if path == pilot.AREAS_PATH:
+                return {"Работа": ["repo::pilot/pilot.py"]}
+            return default
+
+        failed = {"ok": False, "kind": "exit", "command": "python3 -m unittest target",
+                  "reason": "команда завершилась с кодом 3",
+                  "log": "assertion failed [SECRET REDACTED]",
+                  "results": [
+                      {"ok": True, "command": "python3 -m unittest earlier",
+                       "log": "earlier output"},
+                      {"ok": False, "command": "python3 -m unittest target",
+                       "reason": "команда завершилась с кодом 3",
+                       "log": "assertion failed [SECRET REDACTED]"},
+                  ]}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "pre_review_self_check", return_value=failed) as check:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo", active_tasks=[])
+
+        self.assertTrue(result["back"])
+        self.assertIn("кодом 3", result["note"])
+        self.assertIn("Полный безопасный журнал", result["note"])
+        self.assertIn("earlier output", result["note"])
+        self.assertIn("assertion failed", result["note"])
+        check.assert_called_once_with(
+            "github.com/example/repo", snapshot, ["python3 -m unittest target"])
+
+    def test_review_receives_pinned_success_summary_without_second_run_request(self):
+        snapshot = {
+            "state": "ok", "default_branch": "main", "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40, "merge_base_sha": "a" * 40,
+            "base_advanced": False, "base_ahead_by": 0, "ahead_by": 1,
+            "files": ["pilot/pilot.py", "pilot/test_pilot.py",
+                      "knowledge/cards/CARD-0097-review-preflight-self-check.md"],
+        }
+        promises = {"Работа": {"files": ["pilot/pilot.py"],
+                                "commands": ["python3 -m unittest target"]}}
+
+        def loader(path, default=None):
+            if path == pilot.PROMISES_PATH:
+                return promises
+            if path == pilot.AREAS_PATH:
+                return {"Работа": ["repo::pilot/pilot.py"]}
+            return default
+
+        passed = {"ok": True, "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                  "commands": [{"command": "python3 -m unittest target",
+                                "duration_ms": 23}]}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "pre_review_self_check", return_value=passed) as check:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo", active_tasks=[])
+
+        self.assertFalse(result["back"])
+        self.assertEqual(result["head"], "b" * 40)
+        self.assertIn("Автоматическая самопроверка прошла", result["note"])
+        self.assertIn("повторный запуск в Review не нужен", result["note"])
+        self.assertNotIn("ПРОГОНИ", result["note"])
+        check.assert_called_once()
+
+
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
         self.created = []
