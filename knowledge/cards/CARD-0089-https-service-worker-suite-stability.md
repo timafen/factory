@@ -1,12 +1,12 @@
 # CARD-0089 — стабильный HTTPS-набор с реальным service worker
 
-Implementation commit: c47a9685c39811ad7aac0c50ea201aa1ad9c97f4 — HTTPS-набор сохраняет доверенный Chromium-запрос к dashboard и стабильно проверяет адаптивную страницу.
+Implementation commit: 18ea0ebdd883c4f2d19ab7393db35c93fecd66bf — HTTPS-набор сохраняет доверенный Chromium-запрос к dashboard и стабильно проверяет адаптивную страницу.
 
 ## HEAD
 
 - Status: Implemented — HTTPS-набор подтверждает регистрацию реального service worker.
 - Branch: `factory/2a16b28b-22a-a0923efd-744`.
-- Implementation commit: `c47a9685c39811ad7aac0c50ea201aa1ad9c97f4`.
+- Implementation commit: `18ea0ebdd883c4f2d19ab7393db35c93fecd66bf`.
 - What changed: HTTPS-сценарий ожидает `navigator.serviceWorker.ready` и проверяет активный `/sw.js`; конфигурационный тест закрепляет эту регрессию.
 - Evidence: `npx tsc -p tsconfig.app.json --noEmit` → PASS; `npx vitest run src/playwrightConfig.test.ts` → 12/12 PASS.
 - Evidence: `npx playwright test e2e/control-plane.spec.ts` → 21/21 PASS на HTTPS fixture с реальным service worker.
@@ -39,3 +39,7 @@ Implementation commit: c47a9685c39811ad7aac0c50ea201aa1ad9c97f4 — HTTPS-наб
 - Исправлена ссылка реализации: карточка теперь указывает на HTTPS-коммит `c47a9685c39811ad7aac0c50ea201aa1ad9c97f4`, а не на базовый timeout-коммит.
 - HTTPS-сценарий ожидает готовность service worker и подтверждает активный `/sw.js`, поэтому молча сорванная регистрация больше не проходит набор.
 - Проверки: TypeScript без ошибок, `playwrightConfig.test.ts` 12/12 и реальный HTTPS Playwright-набор 21/21.
+
+### 2026-08-12 — Implement
+
+- После обязательного rebase на свежий `main` HTTPS-коммит получил новый SHA `18ea0ebdd883c4f2d19ab7393db35c93fecd66bf`; HEAD указывает на этот существующий предок ветки.
