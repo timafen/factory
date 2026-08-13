@@ -2,7 +2,8 @@
 
 Implementation commit: 822aa0604f05c52bdcc9444dd7305787b70dbaee — зафиксирована спецификация раннего backup-пути без HOME и сквозного CLI-регрессионного контракта.
 
-Статус: Specification завершена; карточка передаётся в Implement + Test.
+Статус: Specification повторно подтверждена по свежему `origin/main`;
+карточка передаётся в Implement + Test.
 
 ## Результат для владельца
 
