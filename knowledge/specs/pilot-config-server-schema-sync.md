@@ -80,7 +80,7 @@ boolean. Миграция файла не нужна: отсутствующий
 
 ## Карточка
 
-`knowledge/cards/CARD-0038-pilot-config-server-schema-sync.md`
+`knowledge/cards/CARD-0114-pilot-config-server-schema-sync.md`
 
 ГОТОВО-КОГДА: файл internal/protocol/types.go
 ГОТОВО-КОГДА: файл internal/controlplane/pilot_config.go
