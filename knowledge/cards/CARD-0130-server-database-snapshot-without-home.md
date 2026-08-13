@@ -4,7 +4,7 @@ Implementation commit: 1e4f7316513c7c8b329dfe01c8c43a41e5ee38cc — явный C
 
 ## HEAD
 
-Status: Implemented and verified.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/aaac33cd-686-712a01d8-21f`.
 
@@ -14,10 +14,10 @@ What changed: `factory-server -database SOURCE -backup DEST` создаёт
 автономный снимок без `HOME`, `FACTORY_DATA_HOME` и `FACTORY_V2_DATA_HOME`.
 Остальные режимы сохраняют прежнюю инициализацию.
 
-Evidence: subprocess-регрессия — PASS; `go test ./...` — PASS;
-`go build ./...` — PASS.
+Evidence: полный `go test -count=1 ./...` — PASS; полный `go build ./...`
+— PASS; целевая subprocess-проверка четырёх форм CLI без домашней папки — PASS.
 
-One next action: провести review и влить ветку в `main`.
+One next action: влить ветку в `main`.
 
 ## LOG
 
@@ -31,3 +31,12 @@ One next action: провести review и влить ветку в `main`.
 - `go test -count=1 ./cmd/factory-server -run
   '^TestBackupCLICreatesSnapshotWithoutHome$'`, `go test ./...` и
   `go build ./...` завершились успешно.
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Явный снимок не требует домашнюю папку | `go test -count=1 ./cmd/factory-server -run '^(TestBackupCLICreatesSnapshotWithoutHome|TestBackupWithExplicitDatabaseHonorsFlagGrammar)$'` | PASS: subprocess запускает сервер без `HOME`, `FACTORY_DATA_HOME` и `FACTORY_V2_DATA_HOME`. |
+| Принимаются четыре формы флагов | Та же subprocess-проверка | PASS: `-database VALUE -backup VALUE`, `--database VALUE --backup VALUE`, а также обе формы с `=`. |
+| Снимок автономен, источник не меняется | Та же subprocess-проверка | PASS: для снимка есть оба регулярных файла без WAL/SHM; байты исходной базы и маркера неизменны. |
+| Нет регрессий проекта | `go test -count=1 ./...`; `go build ./...` | PASS: полный набор тестов и сборка завершились успешно. |
