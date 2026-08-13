@@ -1,19 +1,18 @@
 # CARD-0097 — Патруль маршрутизируется на дешёвую модель
 
-Implementation commit: 9fa8ca06d722bccb8cff9a6293354b80f071732f — patrol сохраняет и передаёт точный override `gpt-5.6-terra` в Codex.
+Implementation commit: 618bb6b9bf6a9a41d02d0d46d5d34dae923219b7 — evaluator фиксирует 24-часовой pair-run и fail-closed выбор модели патруля.
 
 ## HEAD
 
-- Status: Implemented — awaiting production 24-hour pair-run gate.
-- Branch: `factory/aa5fd162-32d-fa5313dc-d02`.
-- Implementation commit: `9fa8ca06d722bccb8cff9a6293354b80f071732f`.
-- What changed: the provisioned hourly patrol snapshots `gpt-5.6-terra` into
-  its occurrence and task; the worker sends it as `codex exec -m`.
-- Safety: unknown overrides are rejected before execution; other tasks retain
-  no override.
-- Evidence: `go test ./internal/controlplane -run 'Test.*(Schedule|Patrol|Model)'`,
-  `go test ./internal/worker -run 'Test.*(Model|Prompt|Codex)'`, and `go test ./...` pass.
-- Next action: implement and run the 24-hour paired evaluator before enabling a production switch.
+- Status: Implemented — live 24-hour pair-run gate remains pending.
+- Branch: `factory/80d265cf-895-2613b138-272`.
+- Implementation commit: `618bb6b9bf6a9a41d02d0d46d5d34dae923219b7`.
+- What changed: evaluator records a canonical input hash, normalised findings
+  with explicit verdicts, 24-hour window, metrics and an immutable audit decision.
+- Safety: until the full window and both thresholds pass, effective model is
+  `gpt-5.6-sol`; malformed/missing audit data never enables terra.
+- Evidence: `python3 -m unittest pilot.test_pilot.PatrolModelEvaluationTests` → 5 pass.
+- Next action: start a live same-input terra/sol run, collect human/reference verdicts for 24 hours, then record its audit metrics here.
 
 ## LOG
 
@@ -39,3 +38,13 @@ dispatch and the worker supervisor preserve it through to the Codex command.
 Schedule/patrol and worker target tests passed, followed by `go test ./...`.
 The specification's 24-hour evaluator and production acceptance decision remain
 the next stage; no model switch is claimed from simulated tests.
+
+### 2026-08-12 — Implement
+
+Added the 24-hour pair-run evaluator with a deterministic input hash, stable
+finding keys, explicit `useful`/`false_positive` verdicts, retention and
+false-positive-delta gates. Its separate JSON audit is immutable after the
+decision; incomplete, mismatched, or unreviewed data keeps the effective model
+on sol. `python3 -m unittest pilot.test_pilot.PatrolModelEvaluationTests` passed
+(5 tests). A live 24-hour run has not yet completed, so no production switch or
+acceptance metrics are recorded.
