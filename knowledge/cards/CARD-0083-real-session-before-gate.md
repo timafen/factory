@@ -1,16 +1,17 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
+Implementation commit: 63a2faea86d02f85d08d3e7dd3dd469096300d8e — регрессия подтверждает ошибку настоящего gate за форкающим launcher даже при подделанном успехе.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/f851f8f5-7e7-0715f029-f5f.
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
-What changed: crash recovery очищает hook перед повторным запуском; каждый release, signal и driver-сценарий имеет жёсткий timeout.
-What changed: разделены повторные PATH-fixture, добавлены trusted-gate env для фоновых и rollback runner; anti-spoof контракт сохранён.
-Evidence: pinned `e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3`; полный release shell-suite → PASS; shell syntax и pinned diff-check → PASS. Общий `just check` остановился на существующем SA4000 вне области поставки.
-One next action: выполнить human merge ветки `factory/f851f8f5-7e7-0715f029-f5f`.
+Status: Implemented and target-tested — awaiting Verify.
+Branch: factory/c2f38b47-944-d44d6f63-7ab.
+Implementation commit: 63a2faea86d02f85d08d3e7dd3dd469096300d8e — регрессия подтверждает ошибку настоящего gate за форкающим launcher даже при подделанном успехе.
+What changed: работа перенесена на свежий `origin/main`; дублирующий production patch не нужен, поскольку безопасная launcher-цепочка уже в main.
+What changed: adversarial-сценарий пишет поддельный `status=0`, затем роняет настоящий forked Go gate и требует build error без установки и утечки процессов.
+Evidence: `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `bash -n ops/test-fx-factory-release.sh ops/fx-factory-release` и `git diff --check` → PASS.
+Evidence: `FACTORY_BUILD_DIR=<tmp> just build` → PASS, три бинарника; `just check` остановлен существующим `SA4000` в `internal/worker/attempt_lifecycle_test.go:31` вне области.
+One next action: Verify выполняет один полный набор проекта и проверяет поставку ветки.
 
 ## LOG
 
@@ -102,3 +103,12 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | Полный набор проекта | `just check` | НАХОДКА вне области: vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
 | Закреплённая поставка | isolated bare fetch; `git diff --name-only e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3` | PASS: изменены только карточка и два release-скрипта; implementation commit `f97fe77d83f844426623f2a0e8a2a27ffb3cc603` валиден. |
 | Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; pinned `git diff --check` | PASS. |
+
+### 2026-08-12 — Implement
+
+После конфликта с актуальным `main` сохранена только отсутствовавшая регрессия:
+фикстура подделывает успешный файловый result, но настоящий forked Go gate завершается
+ошибкой. Release возвращает build error 5, не устанавливает бинарники и не оставляет
+процессы. Целевой shell-suite, shell syntax и `git diff --check` завершились PASS.
+Сборка трёх бинарников прошла; общий `just check` остановился на существующем
+`SA4000` в `internal/worker/attempt_lifecycle_test.go:31`, который ветка не меняет.
