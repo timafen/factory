@@ -4,7 +4,7 @@ Implementation commit: 317a740711afc1e6ce55495cf17a731ac48998ea — явный C
 
 ## HEAD
 
-Status: Implemented — awaiting review.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/744b3693-10b-135be044-14f`.
 
@@ -12,9 +12,9 @@ Implementation commit: 317a740711afc1e6ce55495cf17a731ac48998ea — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` обрабатывает снимок до поиска домашней папки. Обычный запуск и другие режимы по-прежнему загружают обычные defaults и bootstrap.
 
-Evidence: `go test -count=1 ./cmd/factory-server`, `go test -count=1 ./...` и `go build ./...` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника.
+Evidence: в чистом архиве кандидата `go test -count=1 ./cmd/factory-server` и `go build ./...` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника. Полный `go test -count=1 ./...` не завершился до лимита окружения после шести ранних пакетов, включая затронутый серверный пакет.
 
-One next action: передать опубликованную ветку на review.
+One next action: выполнить человеческое решение о слиянии с учётом ограничения полного прогона в окружении проверки.
 
 ## LOG
 
@@ -59,3 +59,12 @@ One next action: передать опубликованную ветку на r
 - Кандидат `factory/744b3693-10b-135be044-14f` заново собран от свежего `origin/main`, без истории и посторонних файлов старой ветки.
 - Коммит реализации `317a740711afc1e6ce55495cf17a731ac48998ea` выполняет явный backup до вычисления домашней папки.
 - Проверено: `go test -count=1 ./cmd/factory-server`, `go test -count=1 ./...`, `go build ./...` — PASS; область — два файла сервера и эта карточка.
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Явный backup без домашней папки | `go test -count=1 ./cmd/factory-server` в чистом архиве | PASS: четыре формы флагов создают автономный снимок без `HOME`, источник не меняется |
+| Сборка проекта | `go build ./...` в чистом архиве | PASS |
+| Полный набор Go | `go test -count=1 ./...` в чистом архиве | Не завершился до лимита выполнения среды; прошли шесть ранних пакетов, включая `cmd/factory-server` |
+| Область изменения | pinned `99701704b37e8740db3fdbe38c0193917570da5c...bb3fac2b48feb6d1a438e9d0bc2ee11f5c7ecc70` | PASS: только `main.go`, его тесты и карточка |
