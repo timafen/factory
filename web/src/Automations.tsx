@@ -25,6 +25,7 @@ import type {
   Automation,
   AutomationDetail as AutomationDetailType,
   AutomationOccurrence,
+  AutomationTaskSummary,
   AutomationTrigger,
   CreateAutomationInput,
   LegacyPollerMigration,
@@ -1098,6 +1099,8 @@ function formatRunState(state: string): string {
 }
 
 function automationRunState(occurrence: AutomationOccurrence): { style: string; label: string } {
+	const retryStatus = occurrence.task?.retry_status;
+	if (retryStatus) return retryRunState(retryStatus);
   if (occurrence.task) {
     const state = occurrence.task.state;
     const known = new Set(["queued", "preparing", "running", "succeeded", "failed", "cancelled", "lost"]);
@@ -1109,6 +1112,18 @@ function automationRunState(occurrence: AutomationOccurrence): { style: string; 
   if (occurrence.state === "task_deleted") return { style: "cancelled", label: "Task deleted" };
   if (occurrence.state === "skipped") return { style: "skipped", label: "Skipped" };
   return { style: occurrence.state, label: formatRunState(occurrence.state) };
+}
+
+function retryRunState(status: NonNullable<AutomationTaskSummary["retry_status"]>): { style: string; label: string } {
+	const labels: Record<typeof status, { style: string; label: string }> = {
+		queued: { style: "queued", label: "Повтор ожидает запуска" },
+		running: { style: "running", label: "Повтор выполняется" },
+		succeeded: { style: "succeeded", label: "Повтор выполнен" },
+		final_failed: { style: "failed", label: "Сбой после повтора" },
+		skipped_disabled: { style: "failed", label: "Сбой — Automation отключена" },
+		skipped_worker_unavailable: { style: "failed", label: "Сбой — worker недоступен" },
+	};
+	return labels[status];
 }
 
 function triggerSummary(automation: Automation): string {

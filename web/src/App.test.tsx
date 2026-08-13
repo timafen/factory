@@ -395,6 +395,21 @@ describe("App", () => {
     expect(await screen.findByText("Implement the change and run the required checks.", { selector: ".runbook-copy" })).toBeVisible();
   });
 
+	 it.each([
+		["queued", "queued", "Повтор ожидает запуска"],
+		["running", "running", "Повтор выполняется"],
+		["failed", "final_failed", "Сбой после повтора"],
+		["failed", "skipped_disabled", "Сбой — Automation отключена"],
+		["failed", "skipped_worker_unavailable", "Сбой — worker недоступен"],
+	 ] as const)("shows owner-facing retry status %s", async (taskState, retryStatus, label) => {
+		window.history.replaceState({}, "", "/automations/automation-ready");
+		mockControlPlane({ automationTaskState: taskState, automationRetryStatus: retryStatus });
+		renderApp();
+
+		const badges = await screen.findAllByText(label, { selector: ".status-badge" });
+		expect(badges).toHaveLength(2);
+	 });
+
   it("previews, imports, resolves, and finalizes a legacy poller migration", async () => {
     window.history.replaceState({}, "", "/automations");
     const fetch = mockControlPlane();

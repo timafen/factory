@@ -172,6 +172,7 @@ export function mockControlPlane(
     ledgerOnlyMigration?: boolean;
     automationRunWithoutTaskState?: "pending" | "failed" | "skipped" | "task_deleted";
     automationTaskState?: Task["state"];
+	automationRetryStatus?: "queued" | "running" | "succeeded" | "final_failed" | "skipped_disabled" | "skipped_worker_unavailable";
     multiRepositoryAutomations?: boolean;
     paginatedAutomations?: boolean;
     paginatedAutomationOccurrences?: boolean;
@@ -219,6 +220,7 @@ export function mockControlPlane(
       id: "task-automation-run",
       title: "Review pull request #184",
       state: options.automationTaskState,
+		...(options.automationRetryStatus ? { retry_count: 1, retry_status: options.automationRetryStatus } : {}),
     };
     automationDetail = {
       automation: {

@@ -358,7 +358,7 @@ const automationOccurrenceSelect = `
 	       schedule.cron, schedule.timezone,
 	       occurrence.task_request_key, occurrence.task_id_snapshot,
 	       occurrence.diagnostic, occurrence.created_at, occurrence.updated_at,
-	       task.id, task.title, execution.state
+	       task.id, task.title, execution.state, execution.retry_count
 	FROM automation_occurrences occurrence
 	JOIN automations automation ON automation.id = occurrence.automation_id
 	LEFT JOIN automation_github_issue_occurrences issue ON issue.occurrence_id = occurrence.id
@@ -946,6 +946,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 		var scheduledAt sql.NullInt64
 		var issueLabels, pullRequestLabels []byte
 		var taskID, taskTitle, taskState sql.NullString
+		var retryCount sql.NullInt64
 		var createdAt, updatedAt int64
 		if err := rows.Scan(
 			&occurrence.ID, &occurrence.AutomationID, &occurrence.AutomationVersion,
@@ -956,7 +957,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 			&scheduleKind, &scheduledAt, &runRequestKey, &scheduleCron, &scheduleTimezone,
 			&occurrence.TaskRequestKey, &occurrence.TaskIDSnapshot,
 			&occurrence.Diagnostic, &createdAt, &updatedAt,
-			&taskID, &taskTitle, &taskState,
+			&taskID, &taskTitle, &taskState, &retryCount,
 		); err != nil {
 			return nil, unavailable(err)
 		}
@@ -1007,7 +1008,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 			return nil, unavailable(errors.New("Occurrence has an invalid trigger type"))
 		}
 		if taskID.Valid {
-			occurrence.Task = &protocol.AutomationTaskSummary{ID: taskID.String, Title: taskTitle.String, State: taskState.String}
+			occurrence.Task = &protocol.AutomationTaskSummary{ID: taskID.String, Title: taskTitle.String, State: taskState.String, RetryCount: int(retryCount.Int64), RetryStatus: automationRetryStatus(taskState.String, retryCount.Int64, occurrence.Diagnostic)}
 		}
 		occurrence.CreatedAt = fromMillis(createdAt)
 		occurrence.UpdatedAt = fromMillis(updatedAt)
@@ -1017,4 +1018,28 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 		return nil, unavailable(err)
 	}
 	return occurrences, nil
+}
+
+func automationRetryStatus(state string, retryCount int64, diagnostic string) string {
+	switch diagnostic {
+	case "retry_skipped_disabled":
+		return "skipped_disabled"
+	case "retry_skipped_worker_unavailable", "retry_skipped":
+		return "skipped_worker_unavailable"
+	}
+	if retryCount == 0 {
+		return ""
+	}
+	switch state {
+	case "queued":
+		return "queued"
+	case "preparing", "running":
+		return "running"
+	case "succeeded":
+		return "succeeded"
+	case "failed", "lost", "cancelled":
+		return "final_failed"
+	default:
+		return ""
+	}
 }

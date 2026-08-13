@@ -270,6 +270,8 @@ export interface AutomationTaskSummary {
 	id: string;
 	title: string;
 	state: string;
+	retry_count?: number;
+	retry_status?: "queued" | "running" | "succeeded" | "final_failed" | "skipped_disabled" | "skipped_worker_unavailable";
 }
 
 export interface AutomationHealth {
