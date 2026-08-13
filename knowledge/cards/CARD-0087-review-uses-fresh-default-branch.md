@@ -11,6 +11,13 @@ Next action: выполнить human merge в `main`.
 
 ## LOG
 
+### 2026-08-12 — Implement: повторная поставка конфигурации Pilot
+
+Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot удалены неподдерживаемые rollout-поля; коммит уже входит в свежий `main` `48983479beb82b80a75a3e98a658a0b3b1b337e9`.
+Ветка `factory/2a053e4b-d47-5aea2adf-0c3` повторно основана на свежем `main`; устаревшие конфликтующие подтверждения отброшены, append-only история сохранена.
+Целевой schema test, JSON-проверка без `rollout`, `review_revision`, `verify_revision` и `go build ./cmd/factory-server` — PASS.
+Полный `GOMAXPROCS=2 just check` остановлен вне области на существующем `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`.
+
 ### 2026-08-12 — Implement: исправление конфликта Pilot
 
 Ветка повторно основана на свежем `main` `33aa4b58d7f949420ba4d86cfc9639038fa0f3c8`; кодовый коммит `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` уже входит в базу и удаляет неподдерживаемые rollout-метаданные из примера Pilot.
