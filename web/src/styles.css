@@ -37,6 +37,10 @@
   -webkit-font-smoothing: antialiased;
 }
 
+.reports { max-width: 900px; margin: 0 auto; }
+.report-card { border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin: 14px 0; }
+.report-error { color: var(--danger, #a33); }
+
 * { box-sizing: border-box; }
 * { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 ::selection { background: #2b3350; }

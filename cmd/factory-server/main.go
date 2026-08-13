@@ -91,6 +91,13 @@ func run() (returnErr error) {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	reportRoot := os.Getenv("FACTORY_REPORT_ROOT")
+	if reportRoot == "" {
+		reportRoot = "/opt/factory-data/reports"
+	}
+	if err := os.MkdirAll(reportRoot, 0o700); err != nil {
+		return fmt.Errorf("prepare report storage: %w", err)
+	}
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	handled, err := runRecoveryMode(rootContext, *database, *backup, *restore, os.Stdout)
