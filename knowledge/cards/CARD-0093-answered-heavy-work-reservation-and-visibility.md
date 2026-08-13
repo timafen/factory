@@ -6,7 +6,7 @@ Implementation commit: f74e4e8b2ae7769fa7fe5edec909044e99da0657 — отвече
 
 Status: PASS — HTTPS/browser-набор проходит с актуальным committed `web/dist` и реальным service worker.
 Branch: `factory/c3e701aa-721-27ee90cc-00a`.
-Implementation commit: c06015f3f03b8e75c7227342f4124b5984e0922a — завершённая работа сохраняет archived-статус после повторного ответа владельца и видна как завершённая.
+Implementation commit: fc5453590e21f62845e081fc4f3214a66ce1df86 — завершённая работа сохраняет archived-статус после повторного ответа владельца и видна как завершённая.
 What changed: reservation хранится в записи вопроса, восстанавливается после рестарта и пропускает к ближайшему допустимому слоту только отвеченную тяжёлую стадию.
 What changed: dashboard, Answer, Work, Overview и навигация показывают «ответ принят», но не выдают новый badge и не требуют нового решения владельца.
 Evidence: reservation-поведение PASS — Python 7/7 и UI 30/30; `go test ./internal/controlplane -run 'Test.*Resume|TestResume'` PASS; `just test-browser` PASS, 21/21.
