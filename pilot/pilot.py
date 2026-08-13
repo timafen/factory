@@ -18,6 +18,7 @@ Planner layer (epics):
   task per subtask, then marks the epic 'running'. A UI Start button can call
   the same mechanism later.
 """
+import argparse
 import base64
 import calendar
 import datetime
@@ -84,6 +85,8 @@ def all_tasks():
         cursor = page.get("next_cursor") or ""
         if not cursor:
             break
+    if cursor:
+        raise RuntimeError("task pagination did not finish")
     return tasks
 
 
@@ -2380,6 +2383,99 @@ def reconcile_stale_plan_cards(tasks, now=None):
     if queued:
         save(IDEAS_PATH, items)
     return queued
+
+
+def _rfc3339(value):
+    """Parse an RFC3339 timestamp and require an explicit timezone."""
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("--before must be an RFC3339 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("--before must include a timezone")
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _cleanup_task_time(task_id):
+    detail = api(f"/tasks/{task_id}")
+    task = detail.get("task") or {}
+    execution = detail.get("execution") or task.get("execution") or {}
+    value = execution.get("updated_at")
+    if not value:
+        raise ValueError(f"task {task_id} has no execution.updated_at")
+    return _rfc3339(value)
+
+
+def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
+    """Find, and optionally atomically close, cards left before auto-cleanup."""
+    cutoff = _rfc3339(before)
+    tasks = all_tasks()
+    by_id = {task.get("id"): task for task in tasks if task.get("id")}
+    items = load(IDEAS_PATH, None)
+    if not isinstance(items, list):
+        raise ValueError("ideas.json must contain a list")
+    changes, skipped = [], []
+    terminal = {"succeeded", "failed", "cancelled"}
+
+    for idea in items:
+        if idea.get("state") not in ("planned", "in_work"):
+            continue
+        task_id = str(idea.get("task_id") or "").strip()
+        if not task_id:
+            skipped.append((idea, "no_task_id"))
+            continue
+        linked = by_id.get(task_id)
+        if not linked:
+            changes.append((idea, "linked_task_missing"))
+            continue
+
+        work_id = linked.get("work_id")
+        if work_id:
+            boundary = [task for task in tasks if task.get("work_id") == work_id]
+        else:
+            repo = linked.get("repository_id") or ""
+            title = base_title(linked.get("title") or "")
+            since = linked.get("created_at") or ""
+            if not repo or not title or not since:
+                skipped.append((idea, "ambiguous_legacy_link"))
+                continue
+            boundary = [task for task in tasks
+                        if not task.get("work_id")
+                        and task.get("repository_id") == repo
+                        and base_title(task.get("title") or "") == title
+                        and (task.get("created_at") or "") >= since]
+        boundary.sort(key=lambda task: (task.get("created_at") or "", task.get("id") or ""))
+        latest = boundary[-1] if boundary else None
+        state = (latest or {}).get("state")
+        if not latest or state not in terminal or state == "cancelled":
+            skipped.append((idea, "work_not_terminal"))
+            continue
+        if state == "succeeded":
+            match = PIPELINE_TITLE.match(latest.get("title") or "")
+            if (not match or match.group(1) != match.group(2)
+                    or not final_ok(latest.get("id"), strict=True)):
+                skipped.append((idea, "success_not_accepted_final"))
+                continue
+        if _cleanup_task_time(latest["id"]) >= cutoff:
+            skipped.append((idea, "terminal_not_before_cutoff"))
+            continue
+        changes.append((idea, "terminal_before_cutoff"))
+
+    for idea, reason in changes:
+        log(f"CLEANUP PLAN {idea.get('id')} {idea.get('title', '')!r} reason={reason}")
+    for idea, reason in skipped:
+        log(f"CLEANUP SKIP {idea.get('id')} {idea.get('title', '')!r} reason={reason}")
+    log(f"CLEANUP TOTAL changes={len(changes)} skipped={len(skipped)} apply={bool(apply)}")
+    if apply and changes:
+        stamp = (now_fn or (lambda: datetime.datetime.now(datetime.timezone.utc)))()
+        stamp = stamp.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        for idea, reason in changes:
+            idea.update(state="done", reason="закрыто уборкой", cleanup_at=stamp,
+                        cleanup_reason=reason,
+                        updated=time.strftime("%Y-%m-%d %H:%M"))
+        save(IDEAS_PATH, items)
+    return len(changes)
 
 
 def collect_ideas(result, repo_id="", source=""):
@@ -8626,7 +8722,15 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         completed += 1
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "cleanup-plan-cards":
+        parser = argparse.ArgumentParser(prog="pilot.py cleanup-plan-cards")
+        parser.add_argument("--before", required=True)
+        parser.add_argument("--apply", action="store_true")
+        args = parser.parse_args(argv[1:])
+        cleanup_legacy_plan_cards(args.before, apply=args.apply)
+        return
     log("factory-pilot started")
     run_loop()
 
