@@ -1,16 +1,17 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
+Implementation commit: e936207df35cb3c44b254bb684309b801a463159 — release сохраняет точный итог forked gate.
 
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: factory/4c92c207-803-93fc28aa-d9e.
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
-What changed: the complete gate chain starts only through validated absolute, root-owned executables; PATH shadowing cannot replace Node, npm, npx, or the gate launcher.
-Evidence: pinned remote comparison `base_sha=8dcb96ede53b14d3834af851252afa29786462c9`, `candidate_sha=ae4f780d1e8e2cf7dbb2c73c6efbe6aeebafedda`; target shell suite PASS.
-Evidence: `just check` passed formatting, vet, vulnerability scan, staticcheck, boundary, and all Go tests; UI checks were not runnable because clean environment lacks `web/node_modules/.bin/eslint` (exit 127).
-One next action: human merges after deciding whether to install UI dependencies and rerun the general check.
+Branch: factory/563a82cf-7c2-19d70f5e-5ad.
+Implementation commit: e936207df35cb3c44b254bb684309b801a463159 — release сохраняет точный итог forked gate.
+What changed: supervisor ждёт authoritative status настоящей команды за форкающим launcher.
+What changed: пропавший или повреждённый результат завершается fail-closed, без установки.
+Evidence: pinned remote comparison `base_sha=2cacc50ec06bacb069c53179f1cdb96871aed84b`, `candidate_sha=e506f64408fa343cf42dbd9d21a9c944e3171f64` → PASS; changed files are exactly the launcher, its test, and this card.
+Evidence: adversarial shell suite, syntax check, `just test-launcher`, `just test-worker-race`, `just build`, and `just test-release` → PASS after rebase onto fresh `origin/main`.
+One next action: human merge after reviewing the corrected pinned evidence.
 
 ## LOG
 
@@ -69,3 +70,10 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 Вложенный release gate в фикстуре заменён bounded stub: целевой self-test завершился
 с PASS за 150 секунд без рекурсивного роста процессов. Полный Verify зелёный до
 неизменённого browser-контракта pause/resume; его отдельный повтор воспроизвёл дефект main.
+
+### 2026-08-12 — Implement
+
+Исправлены устаревшие координаты поставки: pinned comparison повторён между
+`2cacc50ec06bacb069c53179f1cdb96871aed84b` и
+`e506f64408fa343cf42dbd9d21a9c944e3171f64` в изолированном bare-репозитории.
+Сравнение подтвердило ровно launcher, его тест и карточку; целевые проверки и сборка PASS.
