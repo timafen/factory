@@ -39,6 +39,7 @@ type scheduleSnapshot struct {
 	repositoryID         string
 	repositoryIdentity   string
 	context              string
+	modelID              string
 	timeoutSeconds       int
 	cron                 string
 	timezone             string
@@ -55,7 +56,7 @@ func loadScheduleSnapshot(ctx context.Context, tx *sql.Tx, automationID string) 
 		SELECT automation.id, automation.title, automation.version,
 		       workflow.id, revision.id, revision.title, revision.revision_number,
 		       revision.instructions, repository.id, repository.remote_identity,
-		       automation.context, automation.timeout_seconds,
+		       automation.context, automation.model_id, automation.timeout_seconds,
 		       schedule.cron, schedule.timezone, schedule.next_due_at,
 		       automation.enabled, workflow.enabled, repository.enabled
 		FROM automations automation
@@ -69,7 +70,7 @@ func loadScheduleSnapshot(ctx context.Context, tx *sql.Tx, automationID string) 
 		&snapshot.workflowID, &snapshot.workflowRevisionID, &snapshot.workflowTitle,
 		&snapshot.workflowRevision, &snapshot.workflowInstructions,
 		&snapshot.repositoryID, &snapshot.repositoryIdentity,
-		&snapshot.context, &snapshot.timeoutSeconds, &snapshot.cron, &snapshot.timezone,
+		&snapshot.context, &snapshot.modelID, &snapshot.timeoutSeconds, &snapshot.cron, &snapshot.timezone,
 		&snapshot.nextDueAt, &automationEnabled, &workflowEnabled, &repositoryEnabled,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -346,12 +347,12 @@ func (s *Store) insertScheduleOccurrence(
 		INSERT INTO automation_occurrences(
 			id, automation_id, automation_version, automation_title,
 			workflow_revision_id, repository_id, repository_identity,
-			context, timeout_seconds, state, resolved_prompt, task_request_key,
+			context, model_id, timeout_seconds, state, resolved_prompt, task_request_key,
 			diagnostic, retry_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, occurrenceID, snapshot.automationID, snapshot.automationVersion, snapshot.automationTitle,
 		snapshot.workflowRevisionID, snapshot.repositoryID, snapshot.repositoryIdentity,
-		snapshot.context, snapshot.timeoutSeconds, state, storedPrompt, requestKey,
+		snapshot.context, snapshot.modelID, snapshot.timeoutSeconds, state, storedPrompt, requestKey,
 		diagnostic, now.UnixMilli(), now.UnixMilli(), now.UnixMilli()); err != nil {
 		return unavailable(err)
 	}

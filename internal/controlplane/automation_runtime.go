@@ -1275,7 +1275,7 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 	}
 	defer tx.Rollback()
 	var automationID, automationTitle, triggerType, workflowRevisionID, repositoryID, repositoryIdentity string
-	var contextValue, prompt, requestKey string
+	var contextValue, prompt, requestKey, modelID string
 	var timeoutSeconds int
 	var issueNumber, pullRequestNumber, scheduledAt sql.NullInt64
 	var scheduleKind, runRequestKey sql.NullString
@@ -1285,7 +1285,7 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 		SELECT occurrence.automation_id, occurrence.automation_title, automation.trigger_type,
 		       occurrence.workflow_revision_id, occurrence.repository_id,
 		       occurrence.repository_identity, occurrence.context,
-		       occurrence.timeout_seconds, occurrence.resolved_prompt,
+		       occurrence.model_id, occurrence.timeout_seconds, occurrence.resolved_prompt,
 		       occurrence.task_request_key,
 		       issue.issue_number, pull_request.pull_request_number,
 		       schedule.kind, schedule.scheduled_at, schedule.run_request_key,
@@ -1305,7 +1305,7 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 		WHERE occurrence.id = ? AND occurrence.state = 'pending'
 	`, occurrenceID).Scan(
 		&automationID, &automationTitle, &triggerType, &workflowRevisionID, &repositoryID,
-		&repositoryIdentity, &contextValue, &timeoutSeconds, &prompt, &requestKey,
+		&repositoryIdentity, &contextValue, &modelID, &timeoutSeconds, &prompt, &requestKey,
 		&issueNumber, &pullRequestNumber, &scheduleKind, &scheduledAt, &runRequestKey,
 		&workflowID, &workflowTitle, &workflowRevisionNumber,
 		&automationEnabled, &workflowEnabled, &repositoryEnabled,
@@ -1374,17 +1374,17 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 	if selection.repositoryID != repositoryID {
 		return unavailable(errors.New("Automation route selected a different repository"))
 	}
-	var taskID, existingTitle, existingDescription, existingRepositoryID string
+	var taskID, existingTitle, existingDescription, existingRepositoryID, existingModelID string
 	var existingTimeout int
 	var existingWorkflowRevisionID, existingContext sql.NullString
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, title, description, repository_id, timeout_seconds,
+		SELECT id, title, description, repository_id, model_id, timeout_seconds,
 		       workflow_revision_id, context
 		FROM tasks WHERE request_key = ?
 	`, requestKey).Scan(&taskID, &existingTitle, &existingDescription, &existingRepositoryID,
-		&existingTimeout, &existingWorkflowRevisionID, &existingContext)
+		&existingModelID, &existingTimeout, &existingWorkflowRevisionID, &existingContext)
 	if err == nil {
-		if existingTitle != title || existingDescription != prompt || existingRepositoryID != repositoryID ||
+		if existingTitle != title || existingDescription != prompt || existingRepositoryID != repositoryID || existingModelID != modelID ||
 			existingTimeout != timeoutSeconds || existingWorkflowRevisionID.String != workflowRevisionID ||
 			existingContext.String != contextValue {
 			return unavailable(errors.New("Automation task request key conflicts with stored task data"))
@@ -1414,11 +1414,11 @@ func (s *Store) dispatchOccurrence(ctx context.Context, occurrenceID string) err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tasks(
-				id, request_key, title, description, repository_id, timeout_seconds,
+				id, request_key, title, description, repository_id, model_id, timeout_seconds,
 				created_at, workflow_id, workflow_revision_id, workflow_title,
 				workflow_revision_number, context, work_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, taskID, requestKey, title, prompt, repositoryID, timeoutSeconds, now,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, taskID, requestKey, title, prompt, repositoryID, modelID, timeoutSeconds, now,
 			workflowID, workflowRevisionID, workflowTitle, workflowRevisionNumber, contextValue,
 			taskID); err != nil {
 			return unavailable(err)

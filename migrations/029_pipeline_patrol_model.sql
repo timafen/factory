@@ -1,0 +1,3 @@
+ALTER TABLE automations ADD COLUMN model_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE automation_occurrences ADD COLUMN model_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN model_id TEXT NOT NULL DEFAULT '';

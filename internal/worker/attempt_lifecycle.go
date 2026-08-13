@@ -173,6 +173,7 @@ func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim,
 		Worktree:          value.Path,
 		ResultPath:        path,
 		Prompt:            prompt,
+		ModelID:           claim.Task.ModelID,
 		TimeoutSeconds:    remainingTimeoutSeconds(taskDeadline),
 	}, os.Stderr)
 	if err != nil {

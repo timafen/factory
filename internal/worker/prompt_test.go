@@ -49,3 +49,9 @@ func TestReadOnlyClaimCarriesCommittedSnapshotRule(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisorRejectsUnknownModelOverride(t *testing.T) {
+	if protocol.SupportedCodexModel("unknown") {
+		t.Fatal("unknown model must not be accepted")
+	}
+}

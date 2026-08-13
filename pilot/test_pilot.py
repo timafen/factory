@@ -46,6 +46,138 @@ class TestDataIsolationTests(unittest.TestCase):
         self.assertNotEqual(pilot.STATE_PATH, "/opt/factory-data/pilot/state.json")
 
 
+class PatrolModelEvaluationTests(unittest.TestCase):
+    def _audit(self):
+        return pilot.start_patrol_model_pair_run(
+            {"repository": "factory", "revision": "abc", "checks": ["go test"]},
+            started_at=1000)
+
+    def test_same_input_full_day_with_boundary_metrics_approves_terra(self):
+        audit = self._audit()
+        bundle = {"checks": ["go test"], "revision": "abc", "repository": "factory"}
+        for hour in range(25):
+            pilot.add_patrol_model_observation(audit, bundle,
+                [{"key": str(i), "verdict": "useful"} for i in range(19)] +
+                [{"key": "terra-fp", "verdict": "false_positive"}],
+                [{"key": str(i), "verdict": "useful"} for i in range(19)],
+                observed_at=1000 + hour * 3600)
+
+        result = pilot.evaluate_patrol_model_pair_run(audit, now=1000 + 86400)
+
+        self.assertEqual(result["decision"], "approved")
+        self.assertEqual(result["effective_model"], "gpt-5.6-terra")
+        self.assertEqual(result["metrics"]["useful_retention"], 1.0)
+        self.assertAlmostEqual(result["metrics"]["false_positive_delta_pp"], 5.0)
+
+    def test_sol_reference_labels_the_same_pair_without_affecting_patrol(self):
+        audit = self._audit()
+        bundle = {"repository": "factory", "revision": "abc", "checks": ["go test"]}
+
+        observation = pilot.add_patrol_model_reference_observation(
+            audit, bundle,
+            [{"key": "shared"}, {"key": "terra-only"}],
+            [{"key": "shared"}, {"key": "sol-only"}],
+            observed_at=1000,
+        )
+
+        self.assertEqual(observation["verdict_source"], {
+            "type": "model_reference", "model": "gpt-5.6-sol"})
+        self.assertEqual(
+            [finding["verdict"] for finding in observation["models"]["gpt-5.6-terra"]],
+            ["useful", "false_positive"])
+        self.assertEqual(
+            [finding["verdict"] for finding in observation["models"]["gpt-5.6-sol"]],
+            ["useful", "useful"])
+        self.assertEqual(audit["effective_model"], "gpt-5.6-sol")
+
+    def test_incomplete_window_hash_mismatch_or_missing_verdict_fails_closed(self):
+        audit = self._audit()
+        pilot.add_patrol_model_observation(audit, {"different": True},
+            [{"key": "a", "verdict": "useful"}],
+            [{"key": "a", "verdict": "unknown"}], observed_at=1000)
+
+        result = pilot.evaluate_patrol_model_pair_run(audit, now=1001)
+
+        self.assertEqual(result["decision"], "pending")
+        self.assertEqual(result["effective_model"], "gpt-5.6-sol")
+        self.assertIn("24-hour window has not completed", result["reasons"])
+        self.assertIn("input hash mismatch", result["reasons"])
+
+    def test_below_thresholds_leave_sol_effective_after_full_window(self):
+        audit = self._audit()
+        bundle = {"repository": "factory", "revision": "abc", "checks": ["go test"]}
+        for hour in range(25):
+            pilot.add_patrol_model_observation(audit, bundle,
+                [{"key": "a", "verdict": "useful"},
+                 {"key": "fp1", "verdict": "false_positive"},
+                 {"key": "fp2", "verdict": "false_positive"}],
+                [{"key": "a", "verdict": "useful"},
+                 {"key": "b", "verdict": "useful"},
+                 {"key": "fp", "verdict": "false_positive"}],
+                observed_at=1000 + hour * 3600)
+
+        result = pilot.evaluate_patrol_model_pair_run(audit, now=1000 + 86400)
+
+        self.assertEqual(result["decision"], "rejected")
+        self.assertEqual(result["effective_model"], "gpt-5.6-sol")
+        self.assertIn("useful retention below 0.90", result["reasons"])
+
+    def test_saved_approved_audit_is_revalidated_and_fails_closed(self):
+        audit = self._audit()
+        finished = dict(audit, decision="approved", effective_model="gpt-5.6-terra",
+                        evaluated_at=1000 + 86400, reasons=[], metrics={})
+
+        result = pilot.evaluate_patrol_model_pair_run(finished, now=999999)
+
+        self.assertEqual(result["decision"], "rejected")
+        self.assertEqual(result["effective_model"], "gpt-5.6-sol")
+        self.assertIn("stored audit decision is inconsistent", result["reasons"])
+
+    def test_saved_approved_audit_remains_approved_only_when_still_valid(self):
+        audit = self._audit()
+        bundle = {"repository": "factory", "revision": "abc", "checks": ["go test"]}
+        for hour in range(25):
+            pilot.add_patrol_model_observation(
+                audit, bundle, [{"key": "a", "verdict": "useful"}],
+                [{"key": "a", "verdict": "useful"}],
+                observed_at=1000 + hour * 3600)
+        approved = pilot.evaluate_patrol_model_pair_run(audit, now=1000 + 86400)
+
+        result = pilot.evaluate_patrol_model_pair_run(approved, now=999999)
+
+        self.assertEqual(result["decision"], "approved")
+        self.assertEqual(result["effective_model"], "gpt-5.6-terra")
+        self.assertEqual(result["input_hash"], audit["input_hash"])
+
+    def test_sparse_observations_do_not_count_as_full_day_coverage(self):
+        audit = self._audit()
+        bundle = {"repository": "factory", "revision": "abc", "checks": ["go test"]}
+        for observed_at in (1000, 1000 + 86400):
+            pilot.add_patrol_model_observation(audit, bundle,
+                [{"key": "a", "verdict": "useful"}],
+                [{"key": "a", "verdict": "useful"}], observed_at=observed_at)
+
+        result = pilot.evaluate_patrol_model_pair_run(audit, now=1000 + 86400)
+
+        self.assertEqual(result["decision"], "rejected")
+        self.assertEqual(result["effective_model"], "gpt-5.6-sol")
+        self.assertIn("observations do not continuously cover the 24-hour window",
+                      result["reasons"])
+
+    def test_audit_json_preserves_a_completed_decision(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = os.path.join(temporary.name, "audit.json")
+        audit = self._audit()
+        pilot.save_patrol_model_pair_run(path, audit)
+        self.assertEqual(pilot.load(path, {}), audit)
+
+        finished = dict(audit, decision="rejected")
+        pilot.save_patrol_model_pair_run(path, finished)
+        with self.assertRaises(ValueError):
+            pilot.save_patrol_model_pair_run(path, dict(audit, decision="approved"))
+
+
 class AgentRulesScopeTests(unittest.TestCase):
     def test_common_rules_exclude_stage_specific_requirements(self):
         self.assertNotIn("ГОТОВО-КОГДА", pilot.AGENT_RULES)
