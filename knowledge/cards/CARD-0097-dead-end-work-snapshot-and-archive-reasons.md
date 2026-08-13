@@ -1,21 +1,19 @@
 # CARD-0097 — Неизменяемый снимок состава тупиков и причины архивирования
 
-Implementation commit: 2cacc50ec06bacb069c53179f1cdb96871aed84b — предыдущая
-принятая code-работа уже присутствует в ancestry этой ветки; продуктовая
-реализация CARD-0097 планируется следующим этапом.
+Implementation commit: a1c60a516ccbf4c3a8cdf581f0276f5d5e649de6 — Pilot snapshot pagination, immutable digest, archive reasons, and snapshot-aware efficiency.
 
 ## HEAD
 
-- Status: Specification — awaiting implementation.
-- Branch: `factory/4587fd9a-021-c4edfe81-188`.
+- Status: Implemented — целевые проверки PASS; полный Go-набор остановлен на независимом integration timeout.
+- Branch: `factory/0174c41c-7b0-9804ab1b-dcf`.
 - Specification: `knowledge/specs/dead-end-work-snapshot-and-archive-reasons.md`.
 - Owner decision: обязательный текущий контур — 73 работы; 74 — первоначальная
   скользящая метрика, пропавшая работа неидентифицируема.
 - Scope: snapshot полного состава, digest, пагинация свыше 100, reason-коды
   архивирования и связь с efficiency; UI и продуктовые правила не меняются.
-- Evidence at Specification: код `pilot/pilot.py` ограничен
-  `/tasks?limit=100`, а `efficiency.go` считает терминальные хвосты без
-  immutable source snapshot.
+- What changed: Pilot получает все страницы, сохраняет идемпотентный snapshot с digest и reason-кодами; efficiency не считает недоказанные dead-end.
+- Evidence: `python3 -m unittest pilot.test_pilot.DeadEndSnapshotTests pilot.test_pilot.WorkArchiveCleanupTests` → 10 OK; `go test ./internal/controlplane -run TestEfficiency -count=1` → PASS; `py_compile`/`git diff --check` → PASS.
+- One next action: повторить полный `go test ./...` после устранения независимого integration timeout и влить ветку.
 
 ## LOG
 
@@ -30,3 +28,11 @@ atomic replace и регрессии для 101+ задач, повторног�
 
 Предыдущая ветка triage не разрешилась через origin; спецификация проверена
 по свежему `origin/main` и фактическим файлам репозитория.
+
+### 2026-08-12 — Implement
+
+Внедрён полный постраничный сбор задач, неизменяемый digest-снимок с baseline
+73 и историческим `reported_count=74`, стабильные причины архивирования и
+связь `FinalDeadEnds` с доказанным snapshot. Целевые Python-тесты (10),
+efficiency Go-тесты, синтаксис и `git diff --check` прошли; полный Go-набор
+остановлен на независимом долгом integration-пакете.
