@@ -1,19 +1,26 @@
 # CARD-0034 — Мозг конвейера переключается после лимита подписки
 
-Implementation commit: 345aface075ed562ee970b21544b4672869228d9 — исторический дубль номера этой карточки перенесён на CARD-0110 и ссылки обновлены автоматически
+Implementation commit: 19cbdceb1dea07723ca387eb07a0ea01d2080bec — исторический дубль номера этой карточки перенесён на CARD-0110 и точные ссылки обновлены автоматически
 
 ## HEAD
 
 - Status: IMPLEMENTED — уникальный номер CARD-0110 закреплён вместе со
   стабильной ссылкой на кодовый коммит одноразового переноса.
-- Branch: `factory/4a2377f6-5c7-de77f99b-a3a`.
+- Branch: `factory/4133b555-5a1-dada7747-1d4`.
 - What changed: карточка сохраняет историю исправления fallback, но больше не
-  делит номер с другими карточками и явно указывает реализацию перенумерации.
-- Evidence: `python3 -m unittest scripts.test_renumber_historical_cards` → OK;
-  проверка ancestry и состава implementation commit → успешно.
+  делит номер с другими карточками и ссылается на существующий коммит переноса.
+- Evidence: `python3 -m unittest -v scripts.test_renumber_historical_cards` → OK;
+  implementation commit является предком ветки и меняет утилиту вне карточек.
 - Next action: влить ветку в `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+- Исправлена устаревшая ссылка на отсутствующий SHA: теперь указан реальный
+  коммит одноразового переноса этой карточки, присутствующий в текущей ветке.
+- `python3 -m unittest -v scripts.test_renumber_historical_cards` → OK;
+  проверка ancestry и состава коммита подтверждает ссылку.
 
 ### 2026-08-12 — Implement
 
