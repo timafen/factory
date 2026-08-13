@@ -80,8 +80,11 @@
 - `pilot/test_pilot.py`: `hourly_task_cap` не переводит карточку в done/in_work
   ошибочно, не вызывает повторный create в следующем cycle без освобождения
   окна, а после освобождения продолжает один раз.
-- Команда при сдаче implementation: `go test ./internal/controlplane` и
-  `python3 -m unittest pilot.test_pilot` (без полного набора на Specification).
+- Обязательная целевая проверка implementation: `go test ./internal/controlplane
+  -run 'TestCreateTaskHourlyTaskCap|TestCreateTaskHourlyTaskCapConcurrent|TestCreateTaskHourlyTaskCapReplay' -count=1
+  && python3 -m unittest pilot.test_pilot.HourlyTaskCapTests`. Эти новые
+  регрессии должны выражать лимит, гонку и replay, а команда после реализации
+  обязана завершаться с кодом 0 (полный набор на этапе Specification не нужен).
 
 ## Риски и решения
 
@@ -107,4 +110,4 @@
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/controlplane/http_test.go
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда go test ./internal/controlplane
+ГОТОВО-КОГДА: команда go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap|TestCreateTaskHourlyTaskCapConcurrent|TestCreateTaskHourlyTaskCapReplay' -count=1 && python3 -m unittest pilot.test_pilot.HourlyTaskCapTests
