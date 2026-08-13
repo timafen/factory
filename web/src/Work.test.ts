@@ -107,6 +107,17 @@ describe("build", () => {
     });
   });
 
+  it("shows durably archived work as completed", () => {
+    const archived = build([task("archived", "Verify", "succeeded", 1)], {}, [], {}, {
+      "Экран Работа": { state: "archived", text: "проверка приняла результат" },
+    })[0];
+
+    expect(archived.status).toMatchObject({
+      kind: "done", label: "работа завершена", happened: "проверка приняла результат",
+    });
+    expect(sectionOf(archived)).toBe("done");
+  });
+
   it("archives cancelled and inactive old attempts while retaining successful completions", () => {
     const cancelled = build([task("cancelled", "Review", "cancelled", 1)], {}, [])[0];
     const closed = build([task("closed", "Review", "succeeded", 1)], {}, [], {

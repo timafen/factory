@@ -331,6 +331,10 @@ await writeFile(join(temporary, "pilot", "work_status.json"), JSON.stringify({
     state: "stopped_owner",
     text: "Пауза для проверки возобновления через HTTPS-прокси.",
   },
+  [completedHTTPSWork]: {
+    state: "archived",
+    text: "Проверка приняла изменения; работа завершена.",
+  },
 }, null, 2));
 await writeFile(join(workerData, "worker-id"), `${workerID}\n`, { mode: 0o600 });
 await writeFile(

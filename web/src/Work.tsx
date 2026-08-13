@@ -344,6 +344,12 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
         next: "Автоматический следующий шаг не запланирован.",
         owner: "Нужно твоё решение.",
       };
+    } else if (ws.state === "archived") {
+      g.status = {
+        kind: "done", label: "работа завершена", tone: "ok",
+        happened: ws.text || "Работа завершена и сохранена в истории.",
+        next: "Работа завершена.", owner: "Участие владельца не требуется.",
+      };
     }
   }
 

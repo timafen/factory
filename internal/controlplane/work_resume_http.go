@@ -32,6 +32,29 @@ type resumedStageTask struct {
 	stage string
 }
 
+func markWorkArchived(base string) error {
+	home := os.Getenv("FACTORY_DATA_HOME")
+	if home == "" {
+		home = "/opt/factory-data"
+	}
+	path := filepath.Join(home, "pilot", "work_status.json")
+	statuses := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, &statuses); err != nil {
+			return err
+		}
+	}
+	statuses[base] = map[string]string{
+		"state": "archived",
+		"text":  "Все обязательные этапы работы уже завершены.",
+	}
+	data, err := json.MarshalIndent(statuses, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
 // resumeWorkMetadata is written by Pilot when a work deliberately starts after
 // the first pipeline stage.  It is provenance, rather than an inference from
 // a missing task: a low-complexity work that starts at Implement must not be
@@ -108,6 +131,9 @@ func (a *API) resumePausedWork(ctx context.Context, base string) (resumeWorkResp
 			if _, err := a.pilotConfig.Write(settingsResponse.Version, settings); err != nil {
 				return resumeWorkResponse{}, err
 			}
+		}
+		if err := markWorkArchived(base); err != nil {
+			return resumeWorkResponse{}, unavailable(err)
 		}
 		return resumeWorkResponse{}, conflict("pipeline_completed", "all required pipeline stages have already completed")
 	}
