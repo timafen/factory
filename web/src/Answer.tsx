@@ -4,22 +4,7 @@ import { useRef, useState } from "react";
 import { useVisibleInterval } from "./polling";
 import { SpeakButton, unlockAudio } from "./Speak";
 import { ProjectTag, useProjectName } from "./project";
-
-type Question = {
-  id: string;
-  task_id: string;
-  stage: string;
-  resume_stage: string;
-  title: string;
-  situation?: string;
-  question?: string;
-  options?: string[];
-  repository_id?: string;
-  status: string;
-  answer?: string;
-  answered_by?: string;
-  escalation_reason?: string;
-};
+import type { OwnerQuestion } from "./types";
 
 export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
   const interval = useVisibleInterval(10_000);
@@ -32,10 +17,10 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
 
   const questions = useQuery({
     queryKey: ["questions"],
-    queryFn: async (): Promise<Question[]> => {
+    queryFn: async (): Promise<OwnerQuestion[]> => {
       const r = await fetch("/api/v1/questions");
       if (!r.ok) throw new Error(`questions ${r.status}`);
-      return ((await r.json()).questions ?? []) as Question[];
+      return ((await r.json()).questions ?? []) as OwnerQuestion[];
     },
     refetchInterval: interval,
   });
@@ -96,7 +81,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
 
   const stopRec = () => mediaRef.current?.stop();
 
-  const askFable = async (q: Question) => {
+  const askFable = async (q: OwnerQuestion) => {
     setPhase(q.id, "think");
     try {
       const r = await fetch("/intake/suggest-answer", {
@@ -116,7 +101,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
     }
   };
 
-  const send = async (q: Question, selectedAnswer?: string) => {
+  const send = async (q: OwnerQuestion, selectedAnswer?: string) => {
     const answer = (selectedAnswer ?? drafts[q.id] ?? "").trim();
     if (!answer) return;
     setPhase(q.id, "send");
@@ -133,7 +118,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
     }
   };
 
-  const dismiss = async (q: Question) => {
+  const dismiss = async (q: OwnerQuestion) => {
     if (!window.confirm("Убрать этот вопрос из списка? Конвейер по нему не продолжится.")) return;
     await fetch(`/api/v1/questions/${q.id}`, { method: "DELETE" });
     await queryClient.invalidateQueries({ queryKey: ["questions"] });
