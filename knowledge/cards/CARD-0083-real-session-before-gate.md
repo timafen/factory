@@ -1,16 +1,16 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: 67984c203695bcc8c10c7c76bca4e09119001be5 — проверка закрепляет ожидание статуса Gate за форкающим launcher и сохранение его отказа.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Status: Verified PASS — изменения уже влиты в main.
+Merged in main: 67984c203695bcc8c10c7c76bca4e09119001be5.
+Implementation commit: 67984c203695bcc8c10c7c76bca4e09119001be5 — проверка закрепляет ожидание статуса Gate за форкающим launcher и сохранение его отказа.
 What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
 What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
 Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+One next action: merge завершён; дальнейшая поставка не требуется. Факт deployment не установлен.
 
 ## LOG
 
