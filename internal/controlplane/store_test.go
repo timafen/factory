@@ -2957,6 +2957,42 @@ func TestTasksPagesEqualTimestampsByIDWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestTasksExposeAttemptStartedAtAndKeepPreparingQueued(t *testing.T) {
+	store := newTestStore(t)
+	fixed := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return fixed }
+	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/owainlewis/factory",
+	})
+	task := createTestTask(t, store, "attempt-started-at", workerA, worker.Repositories[0].ID)
+	claim := claimTestTask(t, store, workerA, "attempt-started-at-claim", tokenA)
+	if claim.Task.ID != task.Task.ID {
+		t.Fatalf("claimed task %s, want %s", claim.Task.ID, task.Task.ID)
+	}
+
+	page, err := store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tasks) != 1 || page.Tasks[0].State != "preparing" || page.Tasks[0].StartedAt != nil {
+		t.Fatalf("preparing task = %#v; want preparing without started_at", page.Tasks)
+	}
+
+	fixed = fixed.Add(time.Second)
+	if _, err := store.StartAttempt(context.Background(), claim.Attempt.ID, protocol.StartAttemptRequest{
+		LeaseToken: tokenA,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err = store.Tasks(context.Background(), protocol.TaskPageRequest{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tasks) != 1 || page.Tasks[0].State != "running" || page.Tasks[0].StartedAt == nil || !page.Tasks[0].StartedAt.Equal(fixed) {
+		t.Fatalf("started task = %#v; want running with started_at %s", page.Tasks, fixed)
+	}
+}
+
 func TestDatabaseUsesWALAndRefusesAnUnmarkedExistingDatabase(t *testing.T) {
 	root := t.TempDir()
 	path := root + "/restart.sqlite3"
@@ -3416,7 +3452,7 @@ func TestClaimOrderingRepositoryFilteringAndReplay(t *testing.T) {
 	if claim.Task.ID != eligible.Task.ID {
 		t.Fatalf("retained-capacity filter chose %s, want %s", claim.Task.ID, eligible.Task.ID)
 	}
-	if claim.Task.State != "running" || claim.Execution.State != "preparing" {
+	if claim.Task.State != "preparing" || claim.Execution.State != "preparing" {
 		t.Fatalf("task-level preparing mapping is wrong: task=%s execution=%s", claim.Task.State, claim.Execution.State)
 	}
 	replay := claimTestTask(t, store, workerA, "claim-replay", tokenA)

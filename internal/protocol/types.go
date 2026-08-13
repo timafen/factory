@@ -349,19 +349,20 @@ type TaskRoute struct {
 }
 
 type Task struct {
-	ID             string    `json:"id"`
-	RequestKey     string    `json:"request_key"`
-	Title          string    `json:"title"`
-	Description    string    `json:"description,omitempty"`
-	WorkerID       string    `json:"worker_id"`
-	RepositoryID   string    `json:"repository_id"`
-	TimeoutSeconds int       `json:"timeout_seconds"`
-	ReadOnly       bool      `json:"read_only"`
-	State          string    `json:"state"`
-	CreatedAt      time.Time `json:"created_at"`
-	WorkID         string    `json:"work_id,omitempty"`
-	ParentTaskID   string    `json:"parent_task_id,omitempty"`
-	CorrectionKind string    `json:"correction_kind,omitempty"`
+	ID             string     `json:"id"`
+	RequestKey     string     `json:"request_key"`
+	Title          string     `json:"title"`
+	Description    string     `json:"description,omitempty"`
+	WorkerID       string     `json:"worker_id"`
+	RepositoryID   string     `json:"repository_id"`
+	TimeoutSeconds int        `json:"timeout_seconds"`
+	ReadOnly       bool       `json:"read_only"`
+	State          string     `json:"state"`
+	CreatedAt      time.Time  `json:"created_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	WorkID         string     `json:"work_id,omitempty"`
+	ParentTaskID   string     `json:"parent_task_id,omitempty"`
+	CorrectionKind string     `json:"correction_kind,omitempty"`
 }
 
 type TaskCursor struct {

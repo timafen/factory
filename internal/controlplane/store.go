@@ -2541,8 +2541,10 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
-		       t.work_id, t.parent_task_id, t.correction_kind
-		FROM tasks t JOIN executions e ON e.task_id = t.id
+		       t.work_id, t.parent_task_id, t.correction_kind, a.started_at
+		FROM tasks t
+		JOIN executions e ON e.task_id = t.id
+		LEFT JOIN attempts a ON a.execution_id = e.id AND a.state IN ('preparing', 'running')
 	`
 	args := make([]any, 0, 3)
 	if request.Cursor != nil {
@@ -2582,6 +2584,7 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var task protocol.Task
 	var created int64
+	var started sql.NullInt64
 	var workID, parentTaskID, correctionKind sql.NullString
 	var err error
 	if detail {
@@ -2591,15 +2594,13 @@ func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
 			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
-			&workID, &parentTaskID, &correctionKind)
+			&workID, &parentTaskID, &correctionKind, &started)
 	}
 	task.WorkID = workID.String
 	task.ParentTaskID = parentTaskID.String
 	task.CorrectionKind = correctionKind.String
 	task.CreatedAt = fromMillis(created)
-	if task.State == "preparing" {
-		task.State = "running"
-	}
+	task.StartedAt = nullableTime(started)
 	return task, err
 }
 
