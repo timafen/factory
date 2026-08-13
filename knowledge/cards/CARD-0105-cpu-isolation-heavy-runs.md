@@ -4,13 +4,14 @@ Implementation commit: f11217fcb82d826abec646719f827da2a980c61f — CPU-допу
 
 ## HEAD
 
-- Status: Implement + Test завершён; блокирующая TypeScript-ошибка устранена отдельным коммитом; готово к Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/6eed9caf-d3f-a24b1bf7-b06`.
 - Implementation commit: `f11217fcb82d826abec646719f827da2a980c61f`.
 - What changed: продолжения одной работы делят CPU-резерв, одноимённые работы с разными `work_id` остаются независимыми; завершение освобождает резерв на свежем снимке.
 - What changed: конфигурация проверки e2e получила DOM-типы для `navigator.serviceWorker`; продуктовый код не менялся.
-- Evidence: CPU admission 13/13; `npm run typecheck`, `npm run build` и ESLint прошли. Целевой Playwright: 5 PASS, 1 известный базовый FAIL grouped Work view.
-- Next action: Review проверяет diff относительно свежего default branch.
+- Evidence: pinned `main` `f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2` → candidate `d5bbb2213149d8d8e2ffa192d5c8eee7b7dea9b0`; CPU admission 13/13, Overview 28/28, worker race PASS.
+- Evidence: полный CI-путь выявил только базовый `SA4000` в `internal/worker/attempt_lifecycle_test.go` и расхождение отслеживаемого `web/dist` перед browser-сценариями; область CARD-0105 не затронута.
+- Next action: Human merge после проверки базовых находок.
 
 ## LOG
 
@@ -42,3 +43,16 @@ Implementation commit: f11217fcb82d826abec646719f827da2a980c61f — CPU-допу
 
 - Ветка пересобрана от свежего `origin/main`; область содержит только карточку, спецификацию, `pilot/pilot.py`, `pilot/test_pilot.py` и `web/tsconfig.node.json`.
 - На свежем `dist` целевой `npx playwright test e2e/control-plane.spec.ts` запустил браузер: 5 сценариев PASS, один базовый grouped Work view FAIL; CPU admission 13/13 PASS.
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Наблюдение |
+|---|---|---|
+| Второй тяжёлый запуск ждёт при превышении CPU | `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` | 13/13 PASS: резерв учитывает уникальный `work_id`, CPU, память и диск. |
+| Одинаковые названия не делят блокировку | тот же целевой набор | PASS: независимые `work_id` получают независимые решения. |
+| Панель и Brain не блокируются | CPU admission + продолжение цикла в целевых тестах | PASS: отложенный тяжёлый запуск не расходует исполнительский слот. |
+| Overview показывает CPU, работы и слоты | `cd web && npm test -- --run src/Overview.test.ts` | 28/28 PASS, включая реальные и отсутствующие данные слотов. |
+| Ресурс освобождается и обычная нагрузка сохраняется | CPU admission target + `just test-worker-race` | PASS: 5 worker race-сценариев; освобождение и обычная нагрузка подтверждены. |
+
+- Полный CI-путь: `npm ci` PASS; `just check` остановлен базовым `SA4000` в `internal/worker/attempt_lifecycle_test.go`; UI build PASS, но clean-dist gate обнаружил отслеживаемое расхождение; browser-рецепт остановился на этом gate; worker race PASS.
+- Рабочее дерево после удаления только сгенерированного asset-файла чистое.
