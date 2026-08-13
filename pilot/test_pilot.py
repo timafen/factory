@@ -46,6 +46,27 @@ class TestDataIsolationTests(unittest.TestCase):
         self.assertNotEqual(pilot.STATE_PATH, "/opt/factory-data/pilot/state.json")
 
 
+class VerifyDecisionGuideTests(unittest.TestCase):
+    def test_verify_pass_is_described_as_automatic_merge(self):
+        captured = {}
+
+        def brain(_conf, prompt, timeout):
+            captured["prompt"] = prompt
+            return json.dumps({
+                "action": "stop",
+                "reason": "verification complete",
+                "handoff": "",
+            }), "test"
+
+        with mock.patch.object(pilot, "brain", side_effect=brain):
+            verdict = pilot.decide({}, "Verify", None, "card head", "PASS")
+
+        self.assertEqual(verdict["action"], "stop")
+        self.assertIn("squash-merged into main AUTOMATICALLY", captured["prompt"])
+        self.assertIn("deployed to staging", captured["prompt"])
+        self.assertIn("Only the PRODUCTION release is a human decision", captured["prompt"])
+
+
 class AgentRulesScopeTests(unittest.TestCase):
     def test_common_rules_exclude_stage_specific_requirements(self):
         self.assertNotIn("ГОТОВО-КОГДА", pilot.AGENT_RULES)
