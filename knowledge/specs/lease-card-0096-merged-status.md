@@ -82,5 +82,12 @@
 
 `knowledge/cards/CARD-0107-lease-card-0096-merged-status.md`
 
+## Обязательный контракт готовности следующего этапа
+
+Следующий этап считается завершённым только при наличии указанного изменения
+и успешном (с кодом 0) выполнении точечной проверки ниже. До обновления
+`CARD-0096` эта команда намеренно завершается ненулевым кодом и тем самым
+выражает ещё не выполненное требование спецификации.
+
 ГОТОВО-КОГДА: файл knowledge/cards/CARD-0096-batch-lease-expiry-resilience.md
 ГОТОВО-КОГДА: команда grep -Fq 'Implementation commit: 5f0ab88e825a32667431e041ade3d262fe23ff25' knowledge/cards/CARD-0096-batch-lease-expiry-resilience.md && grep -Fq 'merged in main' knowledge/cards/CARD-0096-batch-lease-expiry-resilience.md && ! grep -Fq 'awaiting human merge' knowledge/cards/CARD-0096-batch-lease-expiry-resilience.md
