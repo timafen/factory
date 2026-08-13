@@ -1,24 +1,30 @@
 # Сервер создаёт снимок базы без домашней папки
 
-Implementation commit: 3090866634059f02a6fc5ae5d2ada869e1662a97 — явный CLI backup обходит вычисление домашней папки и чтение bootstrap.
+Implementation commit: dac9cbfa1cb114599b6011d8ad8ff7165881a660 — явный CLI backup обходит вычисление домашней папки и чтение bootstrap.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
+Status: Implemented — awaiting review.
 
-Branch: `factory/7276dbb0-e0b-afc197a8-73b`.
+Branch: `factory/8e2dcf30-e06-681d9c60-c30`.
 
-Implementation commit: 3090866634059f02a6fc5ae5d2ada869e1662a97 — явный CLI backup обходит вычисление домашней папки и чтение bootstrap.
+Implementation commit: dac9cbfa1cb114599b6011d8ad8ff7165881a660 — явный CLI backup обходит вычисление домашней папки и чтение bootstrap.
 
 What changed: `factory-server -database SOURCE -backup DEST` обрабатывает снимок до поиска домашней папки. Обычный запуск и другие режимы по-прежнему загружают обычные defaults и bootstrap.
 
-Evidence: `go build ./...` и некэшированный `go test ./cmd/factory-server` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника. Полный `go test ./...` не завершился из-за зависших тестов `internal/controlplane` и `internal/worker` вне области изменения.
+Evidence: `go test -count=1 ./cmd/factory-server` завершился успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника.
 
 One next action: передать опубликованную ветку на review.
 
 ## LOG
 
 ### 2026-08-13 — Implement
+
+- Чистая ветка собрана от свежего `origin/main`; перенесены только сервер, его тесты и CARD-0124.
+- Коммит реализации `dac9cbfa1cb114599b6011d8ad8ff7165881a660` запускает явный backup до вычисления домашней папки.
+- Проверено: `go test -count=1 ./cmd/factory-server` — PASS; область — три ожидаемых файла.
+
+### 2026-08-13 — Implement (delivery retry)
 
 - Явный `-database` вместе с `-backup` теперь выполняет recovery mode до вычисления data-root, поэтому домашняя папка не требуется.
 - Добавлены проверки всех четырёх поддержанных форм флагов без `HOME`, автономности снимка и неизменности исходной базы.
