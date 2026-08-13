@@ -3,7 +3,7 @@
 ## HEAD
 
 - Status: Specification ready — awaiting Implement.
-- Branch: `factory/ef417a92-60f-4ef9bb7a-219`.
+- Branch: `factory/5c09952f-39c-ef313de3-f45`.
 - Specification: `knowledge/specs/concurrent-claude-health-probes.md`.
 - Owner impact: исправные Claude-службы с общим `cwd=/opt/factory` не будут
   становиться `unhealthy` только из-за совпавших version/auth probes.

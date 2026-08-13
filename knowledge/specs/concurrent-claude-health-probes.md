@@ -123,6 +123,12 @@ exclusive sentinel доказывают, что retry лишь ждёт lock и 
 
 `knowledge/cards/CARD-0098-concurrent-claude-health-probes.md`
 
+## Проверяемая граница готовности
+
+Ниже исчерпывающе перечислены оба файла продуктовой реализации и одна
+обязательная целевая проверка. Другие исходники для выполнения спецификации
+менять не требуется.
+
 ГОТОВО-КОГДА: файл internal/worker/health.go
 ГОТОВО-КОГДА: файл internal/worker/health_test.go
 ГОТОВО-КОГДА: команда go test ./internal/worker -count=1 -run '^(TestConcurrentClaudeHealthChecksWaitForIdenticalProbe|TestClaudeHealthCheckPreservesCommandFailure|TestClaudeHealthCheckLockWaitHonorsTimeout|TestRunCommandSkipsConcurrentDuplicate)$'
