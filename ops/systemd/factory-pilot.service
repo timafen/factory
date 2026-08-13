@@ -9,7 +9,7 @@ Type=simple
 User=factory
 Group=factory
 Environment=HOME=/opt/factory-data
-WorkingDirectory=/opt/factory-data/pilot
+WorkingDirectory=/opt/factory
 ExecStart=/usr/bin/python3 /opt/factory-data/pilot/pilot.py
 Restart=on-failure
 RestartSec=5

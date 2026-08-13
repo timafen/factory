@@ -5,7 +5,7 @@ After=network.target factory.service
 [Service]
 User=factory
 Group=factory
-WorkingDirectory=/opt/factory-data/intake
+WorkingDirectory=/opt/factory
 EnvironmentFile=/opt/factory-data/.claude/oauth.env
 Environment=HOME=/opt/factory-data
 Environment=WHISPER_MODEL=small
