@@ -6122,91 +6122,122 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
     save(DASH_PATH, data)
 
 
-def recent_done_block(tasks, n=5):
-    """Recent owner work, based on pipeline facts rather than push wording.
-
-    Only the merge journal proves successful completion.  Failed and cancelled
-    stages are terminal results; successful stages without a merge are merely
-    pipeline progress.  Old notification-only records remain a small fallback
-    while the task history ages in.
-    """
-    delivered = set()
+def _recent_done_attempt_text(task):
+    """Return only the last attempt's available human report."""
     try:
-        with io.open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as stream:
-            lines = stream.readlines()[-400:]
-        for line in reversed(lines):
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
-            if r.get("task_id"):
-                delivered.add(r["task_id"])
+        detail = api(f"/tasks/{task['id']}")
+        attempts = detail.get("attempts") or []
+        if not attempts:
+            return ""
+        attempt = attempts[-1] or {}
+        return str(attempt.get("result") or "").strip()
     except Exception:
-        pass
+        return ""
 
+
+def _recent_done_pick_latest(items, n):
+    """Deduplicate one recent-work group by title, then apply its own limit."""
     latest = {}
-    for task in tasks:
-        parsed = pipeline_title(task)
-        if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
-            continue
-        if task.get("state") == "succeeded" and task.get("id") not in delivered:
-            continue
-        title, stage = parsed
-        if not title or is_service_work(title):
-            continue
-        at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
+    for item in items:
+        title = item["title"]
         old = latest.get(title)
-        if old is None or at >= old[0]:
-            latest[title] = (at, task, stage)
+        if old is None or item["_sort_at"] >= old["_sort_at"]:
+            latest[title] = item
+    selected = sorted(latest.values(), key=lambda item: item["_sort_at"], reverse=True)[:n]
+    for item in selected:
+        item.pop("_sort_at", None)
+    return selected
 
-    out = []
-    for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
-        state = task.get("state")
-        if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
-        elif state == "succeeded":
-            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
-        else:
-            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
-        try:
-            attempts = api(f"/tasks/{task['id']}").get("attempts") or []
-            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
-            if proof:
-                detail += " Проверено: " + proof
-        except Exception:
-            pass
-        out.append({"title": title[:120], "detail": detail[:180], "at": at,
-                    "status": status})
-        if len(out) >= n:
-            return out
 
-    if out:
-        return out
-
-    # Before structured task history exists, show old real notifications but
-    # never revive the service noise that prompted this view's redesign.
+def _recent_done_legacy_audit(latest_titles, n):
+    """Keep old notifications visible to diagnostics, never as a merge fact."""
+    audit = []
     try:
         with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
             lines = stream.readlines()[-400:]
         for line in reversed(lines):
             try:
-                r = json.loads(line)
+                record = json.loads(line)
             except Exception:
                 continue
-            if r.get("title") != "Задача выполнена":
+            if record.get("title") != "Задача выполнена":
                 continue
-            body = (r.get("message") or "").split(chr(10))
+            body = (record.get("message") or "").split(chr(10))
             title = body[0].strip()
-            if not title or is_service_work(title) or title in latest:
+            if not title or is_service_work(title) or title in latest_titles:
                 continue
-            out.append({"title": title[:120],
-                        "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or "", "status": "legacy"})
-            if len(out) >= n:
+            audit.append({"title": title[:120],
+                          "detail": " ".join(x for x in body[1:] if x)[:180],
+                          "at": record.get("at") or "", "source": "legacy"})
+            if len(audit) >= n:
                 break
     except Exception:
         pass
-    return out
+    return audit
+
+
+def recent_done_block(tasks, n=5):
+    """Return independently limited merged work and terminal failures.
+
+    A delivery receipt is the only evidence that a successful pipeline stage
+    was actually merged.  Legacy notifications remain an audit-only field and
+    cannot create a new merged item.
+    """
+    receipts = {}
+    try:
+        with io.open(DELIVERY_RECEIPTS_PATH, encoding="utf-8") as stream:
+            lines = stream.readlines()[-400:]
+        for line in reversed(lines):
+            try:
+                receipt = json.loads(line)
+            except Exception:
+                continue
+            task_id = receipt.get("task_id")
+            if task_id and task_id not in receipts:
+                receipts[task_id] = receipt
+    except Exception:
+        pass
+
+    merged, failed = [], []
+    for task in tasks or []:
+        parsed = pipeline_title(task)
+        state = task.get("state")
+        if not parsed or state not in ("succeeded", "failed", "cancelled"):
+            continue
+        title, stage = parsed
+        if not title or is_service_work(title):
+            continue
+
+        receipt = receipts.get(task.get("id"))
+        if state == "succeeded":
+            # A successful stage without the delivery receipt is only progress.
+            if not receipt:
+                continue
+            at = receipt.get("at") or task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
+            report = _recent_done_attempt_text(task)
+            proof = proof_of(report)
+            merged.append({"title": title[:120],
+                           "detail": ("Проверено: " + proof if proof
+                                      else "Выпуск принят и проверен."),
+                           "at": at, "status": "merged",
+                           "_sort_at": at})
+            continue
+
+        at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
+        report = _recent_done_attempt_text(task)
+        failed.append({"title": title[:120], "stage": stage[:80],
+                       "reason": cut(report, 180) if report else "причина не указана",
+                       "at": at, "status": state, "_sort_at": at})
+
+    result = {
+        "merged": _recent_done_pick_latest(merged, n),
+        "failed": _recent_done_pick_latest(failed, n),
+    }
+    if not result["merged"] and not result["failed"]:
+        audit = _recent_done_legacy_audit(set(), n)
+        if audit:
+            result["audit"] = audit
+    return result
 
 
 def limits_view():

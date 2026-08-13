@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { cpuLoadExplanation, fetchAllTasks, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
+import { cpuLoadExplanation, fetchAllTasks, formatRecentDate, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
 import { stageHandoffTargetStatus } from "./efficiency";
 
 describe("cpuLoadExplanation", () => {
@@ -76,23 +76,44 @@ describe("Overview active work", () => {
 });
 
 describe("Overview recent work", () => {
-  it("shows human pipeline titles, proof and an honest failed result without IDs", async () => {
+  it("formats recent dates in the browser's local calendar", () => {
+    const now = new Date(2026, 7, 12, 16, 45);
+    expect(formatRecentDate("2026-08-12T09:05:00", now)).toBe("сегодня 09:05");
+    expect(formatRecentDate("2026-08-11T18:30:00", now)).toBe("вчера 18:30");
+    expect(formatRecentDate("2026-08-01T12:00:00", now)).toBe("01.08.2026 12:00");
+    expect(formatRecentDate("not-a-date", now)).toBe("дата неизвестна");
+    expect(formatRecentDate("", now)).toBe("дата неизвестна");
+  });
+
+  it("keeps merged and failed groups independent and shows honest failure details", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      const body = path === "/api/v1/dashboard" ? { recent_done: [
-        { title: "Витрина товаров", detail: "Влито в main. Проверено: сценарий прошёл.", at: "2026-08-10T12:00:00Z", status: "merged" },
-        { title: "Оплата картой", detail: "Этап «Review» не прошёл; в main не влито.", at: "2026-08-10T11:00:00Z", status: "failed" },
-      ] } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      const body = path === "/api/v1/dashboard" ? { recent_done: {
+        merged: [1, 2, 3, 4].map((n) => ({
+          title: `Влитая работа ${n}`, detail: "Сценарий прошёл.", at: `2026-08-12T15:0${n}:00`, status: "merged",
+        })),
+        failed: [1, 2, 3, 4, 5].map((n) => ({
+          title: `Остановленная работа ${n}`, stage: n === 1 ? "Review" : "Implement + Test",
+          reason: n === 1 ? "лимит провайдера" : n === 2 ? "причина не указана" : "проверка не прошла",
+          at: n === 1 ? "2026-08-11T14:20:00" : n === 5 ? "" : `2026-08-12T14:1${n}:00`, status: n === 2 ? "cancelled" : "failed",
+        })),
+      } } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
       return { ok: true, json: async () => body } as Response;
     }));
 
     render(createElement(Overview, {}));
     const section = await screen.findByRole("region", { name: "Сделано недавно" });
-    expect(within(section).getByText("Витрина товаров")).toBeVisible();
-    expect(within(section).getByText(/Влито в main. Проверено: сценарий прошёл/)).toBeVisible();
-    expect(within(section).getByText("Оплата картой")).toBeVisible();
-    expect(within(section).getByText(/в main не влито/)).toBeVisible();
-    expect(within(section).queryByText(/merged|failed/)).not.toBeInTheDocument();
+    const merged = within(section).getByRole("region", { name: "Влито в main" });
+    const failed = within(section).getByRole("region", { name: "Провалы" });
+    expect(within(merged).getByText("Влитая работа 4")).toBeVisible();
+    expect(within(merged).getByText("Влито в main")).toBeVisible();
+    expect(within(failed).getByText("Остановленная работа 1")).toBeVisible();
+    expect(failed).toHaveTextContent("Этап: Review");
+    expect(failed).toHaveTextContent("Причина: лимит провайдера");
+    expect(failed).toHaveTextContent("Причина: причина не указана");
+    expect(within(failed).getByText("дата неизвестна")).toBeVisible();
+    expect(section).not.toHaveTextContent(/2026-08-\d\dT/);
+    expect(section).not.toHaveTextContent(/merged|failed|cancelled/);
   });
 });
 
@@ -237,8 +258,8 @@ describe("Overview product capacity", () => {
     const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
     expect(within(section).getByText("данных мало")).toBeVisible();
     expect(within(section).getByText("0.0 / 4")).toBeVisible();
-    expect(within(section).getByText("очередь в 90% замеров")).toBeVisible();
-    expect(within(section).getByText("не больше 2 продуктовых работ")).toBeVisible();
+    expect(within(section).getByText("обычная длина очереди")).toBeVisible();
+    expect(within(section).getByText("очередь обычно не длиннее 2 продуктовых работ")).toBeVisible();
     expect(section).not.toHaveTextContent(/p90/i);
     fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
     expect(within(section).getByText(/unknown:/)).toBeVisible();
