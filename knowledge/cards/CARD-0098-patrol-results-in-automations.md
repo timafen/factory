@@ -1,6 +1,23 @@
 # CARD-0098: находки патрулей в Automations
 
-Implementation commit: e43462307fcd7c25003eecfe693fd21a9dfe8ba7 — базовый код Work и Automations до реализации этого этапа
+Implementation commit: 7382a3fd8c4b47a2a6c915354200fe249088fbe9 — находки патрулей исключены из Work и явно показаны в Runs Automation
+
+## HEAD
+
+- Status: Implemented
+- Branch: `factory/e3390a8c-8ac-f467446e-3ae`
+- Implementation commit: `7382a3fd8c4b47a2a6c915354200fe249088fbe9`
+- What changed: patrol-задачи исключаются из API и всех разделов Work без разрыва cursor-пагинации; Runs подписывает finding и сохраняет task link/tombstone.
+- Evidence: `go test ./internal/controlplane/...` → PASS; целевые Vitest 78/78 → PASS; lint, typecheck, build → PASS.
+- Next action: проверить экран `/automations` после выпуска.
+
+## LOG
+
+### 2026-08-12 — Implement
+
+Реализована durable-фильтрация Factory Pipeline Patrol до `LIMIT + 1`, защитная фильтрация Work и явная подпись finding в Automation Runs. Добавлены регрессии для cursor, обычных типов задач, run без задачи, deleted task и task link. Полный Vitest прошёл 164/164; полный Go-набор выявил только исправленную нестабильность новой фикстуры, после чего целевая backend-регрессия прошла.
+
+### 2026-08-12 — Specification
 
 ## Контекст
 
