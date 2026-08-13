@@ -14,7 +14,7 @@ mkdir -p "$TMP/bin" \
   "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/unmoved" "$TMP/worker/repositories/repo" \
   "$TMP/unhealthy/worktrees/current" "$TMP/unhealthy/repositories/repo" \
   "$TMP/healthy/worktrees/retained" "$TMP/healthy/repositories/repo" \
-  "$TMP/quarantine"
+  "$TMP/quarantine" "$TMP/cache/ms-playwright" "$TMP/releases" "$TMP/cache/active"
 printf 'name = "claude-haiku"\ndata_directory = "%s/worker"\n' "$TMP" >"$TMP/worker.toml"
 printf 'name = "online-unhealthy"\ndata_directory = "%s/unhealthy"\n' "$TMP" >"$TMP/unhealthy.toml"
 printf 'name = "online-healthy"\ndata_directory = "%s/healthy"\n' "$TMP" >"$TMP/healthy.toml"
@@ -34,7 +34,8 @@ class Handler(BaseHTTPRequestHandler):
         body = {"workers": [
             {"id": "worker-1", "name": "claude-haiku", "online": False, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-moved", "repository_id": "repo-1", "path": sys.argv[3], "reason": "failed", "cleanup_command": "cleanup moved"}, {"attempt_id": "attempt-missing", "repository_id": "repo-1", "path": sys.argv[4], "reason": "failed", "cleanup_command": "cleanup missing"}, {"attempt_id": "attempt-unmoved", "repository_id": "repo-1", "path": sys.argv[5], "reason": "failed", "cleanup_command": "cleanup unmoved"}]},
             {"id": "worker-2", "name": "online-unhealthy", "online": True, "active_count": 0, "health": "unhealthy", "retained_worktrees": []},
-            {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": "done", "cleanup_command": "keep"}]}
+            {"id": "worker-3", "name": "online-healthy", "online": True, "active_count": 0, "health": "healthy", "retained_worktrees": [{"attempt_id": "attempt-healthy", "repository_id": "repo-1", "path": sys.argv[6], "reason": "done", "cleanup_command": "keep"}]},
+            {"id": "worker-4", "name": "active-run", "online": True, "active_count": 1, "retained_worktrees": [{"path": sys.argv[7]}]}
         ]}
         encoded = json.dumps(body).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", len(encoded)); self.end_headers(); self.wfile.write(encoded)
@@ -47,7 +48,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/healthy/worktrees/retained" "$TMP/cache/active" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -60,6 +61,11 @@ PATH="$TMP/bin:$PATH" \
 FACTORY_JANITOR_LOG="$TMP/janitor.log" \
 FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
 FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_CACHE_ROOT="$TMP/cache" \
+FACTORY_JANITOR_BROWSER_ROOT="$TMP/cache/ms-playwright" \
+FACTORY_JANITOR_RELEASES_ROOT="$TMP/releases" \
+FACTORY_JANITOR_MANIFEST="$TMP/state/candidates.json" \
+FACTORY_JANITOR_LOCK="$TMP/janitor.lock" \
 FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
 bash "$ROOT/ops/factory-janitor.sh"
 
@@ -91,6 +97,11 @@ PATH="$TMP/bin:$PATH" \
 FACTORY_JANITOR_LOG="$TMP/janitor.log" \
 FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
 FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" \
+FACTORY_JANITOR_CACHE_ROOT="$TMP/cache" \
+FACTORY_JANITOR_BROWSER_ROOT="$TMP/cache/ms-playwright" \
+FACTORY_JANITOR_RELEASES_ROOT="$TMP/releases" \
+FACTORY_JANITOR_MANIFEST="$TMP/state/candidates.json" \
+FACTORY_JANITOR_LOCK="$TMP/janitor.lock" \
 FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" \
 bash "$ROOT/ops/factory-janitor.sh"
 
@@ -98,7 +109,64 @@ test ! -e "$TMP/worker/worktrees/missing"
 test -e "$TMP/quarantine/worker-missing."* 2>/dev/null
 grep -q 'не удалось подтвердить очистку retained worktree: claude-haiku' "$TMP/janitor.log"
 
+# Новая ежедневная фаза: старые разрешённые объекты сначала только попадают в
+# журнал, а на неизменившемся втором снимке удаляются. Свежие, активные,
+# неуспешные и две последние успешные версии сохраняются.
+mkdir -p "$TMP/cache/old" "$TMP/cache/fresh" "$TMP/cache/ms-playwright/old-browser" \
+  "$TMP/cache/active" "$TMP/quarantine/old-quarantine" "$TMP/quarantine/fresh-quarantine" \
+  "$TMP/releases/release-1" "$TMP/releases/release-2" "$TMP/releases/release-3" \
+  "$TMP/releases/release-4" "$TMP/releases/failed"
+touch "$TMP/releases/release-1/.successful" "$TMP/releases/release-2/.successful" \
+  "$TMP/releases/release-3/.successful" "$TMP/releases/release-4/.successful"
+ln -s release-4 "$TMP/releases/current"
+ln -s release-3 "$TMP/releases/previous"
+touch -d '8 days ago' "$TMP/cache/old" "$TMP/cache/ms-playwright/old-browser" \
+  "$TMP/cache/active" "$TMP/quarantine/old-quarantine" "$TMP/releases/release-1" "$TMP/releases/release-2"
+run_daily() {
+  PATH="$TMP/bin:$PATH" \
+  FACTORY_JANITOR_LOG="$TMP/janitor.log" FACTORY_JANITOR_STATE="$TMP/state/heals.json" \
+  FACTORY_JANITOR_QUARANTINE="$TMP/quarantine" FACTORY_JANITOR_CACHE_ROOT="$TMP/cache" \
+  FACTORY_JANITOR_BROWSER_ROOT="$TMP/cache/ms-playwright" FACTORY_JANITOR_RELEASES_ROOT="$TMP/releases" \
+  FACTORY_JANITOR_MANIFEST="$TMP/state/candidates.json" FACTORY_JANITOR_LOCK="$TMP/janitor.lock" \
+  FACTORY_JANITOR_API="http://127.0.0.1:$PORT/api/v1" bash "$ROOT/ops/factory-janitor.sh"
+}
+rm -f "$TMP/bin/curl" "$TMP/state/candidates.json"
+run_daily
+test -e "$TMP/cache/old" && test -e "$TMP/quarantine/old-quarantine"
+grep -q 'DRY-RUN категория=cache' "$TMP/janitor.log"
+grep -q 'DRY-RUN категория=quarantine' "$TMP/janitor.log"
+grep -q 'DRY-RUN категория=release' "$TMP/janitor.log"
+run_daily
+test ! -e "$TMP/cache/old" && test ! -e "$TMP/cache/ms-playwright/old-browser"
+test ! -e "$TMP/quarantine/old-quarantine"
+test -e "$TMP/cache/fresh" && test -e "$TMP/cache/active"
+test -e "$TMP/quarantine/fresh-quarantine"
+test ! -e "$TMP/releases/release-1" && test ! -e "$TMP/releases/release-2"
+test -e "$TMP/releases/release-3" && test -e "$TMP/releases/release-4"
+test -e "$TMP/releases/failed"
+
+# Параллельный запуск ничего не делает, а недоступный API останавливает фазу
+# до отбора и удаления кандидатов.
+exec 8>"$TMP/janitor.lock"
+flock -n 8
+run_daily
+grep -q 'другой janitor уже работает' "$TMP/janitor.log"
+flock -u 8
+mkdir -p "$TMP/cache/api-failure-candidate"
+touch -d '8 days ago' "$TMP/cache/api-failure-candidate"
+kill "$SERVER_PID"
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=
+if run_daily; then
+  echo 'janitor unexpectedly ignored API failure' >&2
+  exit 1
+fi
+test -e "$TMP/cache/api-failure-candidate"
+grep -q 'API активных прогонов недоступен' "$TMP/janitor.log"
+
 echo 'TestJanitorSelectsOfflineRetainedWorker: PASS'
 echo 'TestJanitorSkipsOnlineUnhealthyWorker: PASS'
 echo 'TestJanitorSkipsOnlineHealthyRetainedWorker: PASS'
 echo 'TestJanitorClearsRetainedWorktreeAfterQuarantine: PASS'
+echo 'TestJanitorDryRunThenCleansSafeDailyCandidates: PASS'
+echo 'TestJanitorLockAndApiFailureAreFailClosed: PASS'

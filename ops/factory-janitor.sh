@@ -7,10 +7,22 @@ LOG=${FACTORY_JANITOR_LOG:-/var/log/factory-janitor.log}
 STATE=${FACTORY_JANITOR_STATE:-/var/lib/factory-janitor/heals.json}
 QUAR=${FACTORY_JANITOR_QUARANTINE:-/opt/factory-data/quarantine}
 API=${FACTORY_JANITOR_API:-http://127.0.0.1:7337/api/v1}
+LOCK=${FACTORY_JANITOR_LOCK:-/run/factory-janitor.lock}
+CACHE_ROOT=${FACTORY_JANITOR_CACHE_ROOT:-/opt/factory-data/.cache}
+BROWSER_ROOT=${FACTORY_JANITOR_BROWSER_ROOT:-/opt/factory-data/.cache/ms-playwright}
+RELEASES_ROOT=${FACTORY_JANITOR_RELEASES_ROOT:-/opt/factory-data/releases}
+MANIFEST=${FACTORY_JANITOR_MANIFEST:-/var/lib/factory-janitor/cleanup-candidates.json}
 mkdir -p "$(dirname "$STATE")" "$QUAR"
 [ -f "$LOG" ] && [ "$(stat -c%s "$LOG")" -gt 5000000 ] \
   && tail -c 1000000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 say() { echo "$(date -Is) $*" >>"$LOG"; }
+
+mkdir -p "$(dirname "$LOCK")"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  say "другой janitor уже работает — ежедневная уборка пропущена"
+  exit 0
+fi
 
 declare -A UNIT
 while read -r unit; do
@@ -121,5 +133,115 @@ for worker in data.get("workers", []):
 PY
 )
 
-find "$QUAR" -maxdepth 1 -mtime +3 -exec rm -rf {} + 2>/dev/null
+# Ежедневная фаза намеренно вынесена в один fail-closed проход. Первый запуск
+# только фиксирует точный набор; удаление разрешено лишь если второй снимок
+# совпал с записанным манифестом.
+active_file=$(mktemp)
+trap 'rm -f "$active_file"' EXIT
+if ! python3 - "$API" >"$active_file" <<'PY'
+import json, sys, urllib.request
+try:
+    data = json.loads(urllib.request.urlopen(sys.argv[1] + "/workers", timeout=20).read())
+    for worker in data.get("workers", []):
+        if worker.get("active_count"):
+            for key in ("path", "worktree_path", "data_directory"):
+                if worker.get(key): print(worker[key])
+            for item in worker.get("retained_worktrees") or []:
+                if item.get("path"): print(item["path"])
+except Exception as exc:
+    print(f"не удалось определить активные прогоны: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+  say "ежедневная уборка пропущена: API активных прогонов недоступен"
+  exit 1
+fi
+
+if ! python3 - "$LOG" "$MANIFEST" "$CACHE_ROOT" "$BROWSER_ROOT" "$QUAR" \
+  "$RELEASES_ROOT" "$active_file" "${FACTORY_JANITOR_CACHE_DAYS:-3}" \
+  "${FACTORY_JANITOR_QUARANTINE_DAYS:-7}" "${FACTORY_JANITOR_KEEP_RELEASES:-2}" <<'PY'
+import json, os, shutil, sys, time
+log, manifest, cache, browser, quarantine, releases, active_file, cache_days, quarantine_days, keep = sys.argv[1:]
+cache_days, quarantine_days, keep = int(cache_days), int(quarantine_days), int(keep)
+now = int(time.time())
+
+def write(message):
+    with open(log, "a") as out:
+        out.write(time.strftime("%Y-%m-%dT%H:%M:%S%z ") + message + "\n")
+
+def valid_root(path):
+    return os.path.isabs(path) and os.path.normpath(path) != "/" and not os.path.islink(path)
+
+roots = [cache, browser, quarantine, releases]
+if not all(valid_root(path) for path in roots):
+    raise RuntimeError("небезопасный корень ежедневной уборки")
+active = [os.path.realpath(line.strip()) for line in open(active_file) if line.strip()]
+def protected(path):
+    real = os.path.realpath(path)
+    return any(real == item or real.startswith(item + os.sep) or item.startswith(real + os.sep) for item in active)
+
+candidates = []
+def scan(category, root, days):
+    if not os.path.isdir(root): return
+    boundary = now - days * 86400
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if os.path.islink(path) or protected(path): continue
+        info = os.lstat(path)
+        if int(info.st_mtime) < boundary:
+            candidates.append({"category": category, "path": path, "size": info.st_size,
+                               "mtime": int(info.st_mtime), "retention_days": days})
+
+# Browser is its own category; do not also nominate it through its parent cache.
+scan("cache", cache, cache_days)
+candidates[:] = [c for c in candidates if os.path.realpath(c["path"]) != os.path.realpath(browser)]
+scan("browser", browser, cache_days)
+scan("quarantine", quarantine, quarantine_days)
+
+if os.path.isdir(releases):
+    protected_releases = set()
+    for link in ("current", "previous"):
+        path = os.path.join(releases, link)
+        if os.path.islink(path): protected_releases.add(os.path.realpath(path))
+    successful = []
+    for name in os.listdir(releases):
+        path = os.path.join(releases, name)
+        if os.path.isdir(path) and not os.path.islink(path) and os.path.isfile(os.path.join(path, ".successful")):
+            successful.append((os.lstat(path).st_mtime, path))
+    protected_releases.update(path for _, path in sorted(successful, reverse=True)[:keep])
+    for _, path in successful:
+        if os.path.realpath(path) not in protected_releases and not protected(path):
+            info = os.lstat(path)
+            candidates.append({"category": "release", "path": path, "size": info.st_size,
+                               "mtime": int(info.st_mtime), "retention_days": 0})
+
+policy = {"cache_days": cache_days, "quarantine_days": quarantine_days, "keep_releases": keep,
+          "roots": roots}
+snapshot = {"policy": policy, "candidates": sorted(candidates, key=lambda x: (x["category"], x["path"]))}
+previous = None
+try:
+    previous = json.load(open(manifest))
+except FileNotFoundError:
+    pass
+if previous != snapshot:
+    os.makedirs(os.path.dirname(manifest), exist_ok=True)
+    tmp = manifest + ".tmp"
+    with open(tmp, "w") as out: json.dump(snapshot, out, ensure_ascii=False, indent=2)
+    os.replace(tmp, manifest)
+    for item in snapshot["candidates"]:
+        write("DRY-RUN категория={category} путь={path} размер={size} mtime={mtime} retention={retention_days}d".format(**item))
+    write(f"DRY-RUN сохранён манифест: кандидатов={len(candidates)}")
+else:
+    for item in snapshot["candidates"]:
+        path = item["path"]
+        if protected(path) or os.path.islink(path): raise RuntimeError("кандидат стал небезопасным: " + path)
+        if os.path.isdir(path): shutil.rmtree(path)
+        else: os.unlink(path)
+        write("УДАЛЕНО категория={category} путь={path}".format(**item))
+    os.unlink(manifest)
+PY
+then
+  say "ежедневная уборка завершилась ошибкой; широкое удаление остановлено"
+  exit 1
+fi
 exit 0

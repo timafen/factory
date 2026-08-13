@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневная уборка диска Factory
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+Persistent=true
+Unit=factory-janitor.service
+
+[Install]
+WantedBy=timers.target

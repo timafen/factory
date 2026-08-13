@@ -1,0 +1,14 @@
+[Unit]
+Description=Безопасная уборка диска Factory
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=factory
+Group=factory
+ExecStart=/opt/factory/ops/factory-janitor.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/factory-data /var/lib/factory-janitor /var/log /run
+
