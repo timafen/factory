@@ -1916,6 +1916,8 @@ def area_lock_arbitrate(tasks, candidate, areas=None):
     candidate = dict(candidate or {})
     candidate.setdefault("base", base_title(candidate.get("title") or ""))
     candidate.setdefault("work_id", task_work_id(candidate))
+    candidate_is_live = any(str(task_work_id(t)) == str(candidate["work_id"])
+                            for t in tasks or [])
     claims = [candidate]
     seen = {str(candidate["work_id"])}
     for task in tasks or []:
@@ -1923,11 +1925,12 @@ def area_lock_arbitrate(tasks, candidate, areas=None):
             continue
         base = base_title(task.get("title") or "")
         work = str(task_work_id(task))
-        if not base or work in seen:
+        if not base or base == candidate["base"] or work in seen:
             continue
         row = dict(task)
         row["base"] = base
         row["work_id"] = work
+        row["_existing_owner"] = not candidate_is_live
         seen.add(work)
         claims.append(row)
     for row in claims:
@@ -1937,7 +1940,8 @@ def area_lock_arbitrate(tasks, candidate, areas=None):
             raw = areas.get(row.get("base"), [])
         row["area_paths"] = _area_paths(raw, repo)
     winners, occupied = [], set()
-    for row in sorted(claims, key=_area_priority):
+    for row in sorted(claims, key=lambda row: (
+            0 if row.get("_existing_owner") else 1, _area_priority(row))):
         if row["area_paths"] and not (occupied & row["area_paths"]):
             winners.append(row)
             occupied |= row["area_paths"]
@@ -3014,8 +3018,8 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         mine = {p.split("::", 1)[1] if "::" in p else p
                 for p in known.get(base) or []}
         lock = area_lock_arbitrate(active_tasks or [], {
-            "base": base, "work_id": base, "repository_id": area_repo,
-            "paths": [(area_repo + "::" if area_repo else "") + f for f in files],
+            "base": base, "work_id": base, "repository_id": area_repo or repo_identity,
+            "paths": [((area_repo or repo_identity) + "::") + f for f in files],
         }, known)
         overlaps = sorted(f for owner, f in _area_paths(files, area_repo)
                           if any((owner, f) in row["area_paths"]
