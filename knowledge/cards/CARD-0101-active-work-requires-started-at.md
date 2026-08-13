@@ -5,7 +5,7 @@ Implementation commit: 507abf5bacde7075cd09b137a0623d78086e9aa4 — сущест
 ## HEAD
 
 - Status: Specification ready — awaiting implementation.
-- Branch: factory/22052306-790-e9db5025-ff2
+- Branch: factory/80b2485f-ec8-b585be7a-cc3
 - Specification: `knowledge/specs/active-work-requires-started-at.md`
 - Scope: только отличение `started_at = NULL` от фактически начатой попытки в server read-модели, Work и Overview.
 - Out of scope: lifecycle, назначение исполнителей, capacity и производительность.
@@ -23,6 +23,13 @@ Implementation commit: 507abf5bacde7075cd09b137a0623d78086e9aa4 — сущест
 
 Проверено по свежему `origin/main`: путь карточки свободен; опубликованные
 refs не содержат CARD-0101. Реализация и UI на этом этапе не изменялись.
+
+### 2026-08-12 — Specification handoff correction
+
+Спецификация дополнена явным проверяемым сценарием до/после `started_at` и
+заканчивается строками `ГОТОВО-КОГДА` с файлами реализации и обязательной
+командой. Карточка перенесена на назначенную ветку текущего этапа; код и UI
+не изменялись.
 
 ## Готовность к реализации
 
