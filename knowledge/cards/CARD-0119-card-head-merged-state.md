@@ -1,12 +1,12 @@
 # HEAD карточки отражает включённую проверку Gate
 
-Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — закреплена автоматическая передача успешной Verify в main и staging.
+Implementation commit: 7bbf29548b5d85ce4415b3990c0caf0144970a6f — закреплена автоматическая передача успешной Verify в main и staging.
 
 ## HEAD
 
 Status: Implemented + Tested — awaiting automatic Review.
 Branch: factory/2f83f6a4-837-6f550712-be1.
-Implementation commit: 2e25c20dd1fd2f4f60ce9555100b08069f2fd30d — регрессионный тест маршрутизации Verify.
+Implementation commit: 7bbf29548b5d85ce4415b3990c0caf0144970a6f — регрессионный тест маршрутизации Verify.
 What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
 What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
 Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS. Полный `just check` остановлен внешним SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
