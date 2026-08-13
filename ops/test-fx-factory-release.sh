@@ -828,6 +828,61 @@ run_crash_cleanup() {
   done
 }
 
+commit_fixture_change() {
+  local case_dir=$1 kind=$2 repo="$1/repo"
+  local -a paths
+  case "$kind" in
+    docs)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ с пробелом в имени\n' >"$repo/knowledge/release notes.md"
+      paths=('knowledge/release notes.md')
+      ;;
+    docs-whitespace)
+      mkdir -p "$repo/knowledge"
+      printf 'Неверный Markdown  \n' >"$repo/knowledge/broken.md"
+      paths=(knowledge/broken.md)
+      ;;
+    go)
+      printf 'package fixture\n' >"$repo/fixture.go"
+      paths=(fixture.go)
+      ;;
+    mixed)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/guide.md"
+      printf 'package fixture\n' >"$repo/fixture.go"
+      paths=(knowledge/guide.md fixture.go)
+      ;;
+    mode)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/executable.md"
+      chmod +x "$repo/knowledge/executable.md"
+      paths=(knowledge/executable.md)
+      ;;
+    symlink)
+      ln -s /dev/null "$repo/guide.md"
+      paths=(guide.md)
+      ;;
+    rename)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/old.md"
+      /usr/bin/git -C "$repo" add -- knowledge/old.md && /usr/bin/git -C "$repo" commit -qm 'Базовый документ'
+      /usr/bin/git -C "$repo" mv knowledge/old.md knowledge/new.md
+      paths=(knowledge/old.md knowledge/new.md)
+      ;;
+  esac
+  /usr/bin/git -C "$repo" add -- "${paths[@]}"
+  /usr/bin/git -C "$repo" commit -qm "Проверка $kind"
+}
+
+assert_full_gate() {
+  local case_dir=$1
+  grep -F 'npm ci --no-audit --no-fund --silent' "$case_dir/gates" >/dev/null \
+    || fail "${case_dir##*/} unexpectedly skipped npm ci"
+  for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' 'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+    grep -Fx "$gate" "$case_dir/gates" >/dev/null || fail "${case_dir##*/} did not run $gate"
+  done
+}
+
 if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
   run_crash_cleanup
   echo "PASS: crash-cleanup scenarios recovered every journal phase"
@@ -879,6 +934,43 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+docs_only="$temporary/docs-only"
+make_fixture "$docs_only" parallel-success
+commit_fixture_change "$docs_only" docs
+run_release "$docs_only" parallel-success \
+  || { cat "$docs_only/output" >&2; fail "Markdown-only release failed"; }
+grep -F 'документное изменение: проверяю Markdown лёгкими воротами' "$docs_only/output" >/dev/null \
+  || { cat "$docs_only/output" >&2; fail "Markdown-only release did not report the light gate"; }
+! grep -F 'npm ci --no-audit --no-fund --silent' "$docs_only/gates" >/dev/null 2>&1 \
+  || fail "Markdown-only release ran npm ci"
+for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' 'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  ! grep -Fx "$gate" "$docs_only/gates" >/dev/null 2>&1 || fail "Markdown-only release ran $gate"
+done
+grep -F 'npx vite build' "$docs_only/gates" >/dev/null || fail "Markdown-only release skipped the existing build"
+grep -F 'выкачено:' "$docs_only/output" >/dev/null || fail "Markdown-only release did not deploy"
+
+for kind in go mixed mode symlink rename; do
+  full_gate="$temporary/full-gate-$kind"
+  make_fixture "$full_gate" parallel-success
+  commit_fixture_change "$full_gate" "$kind"
+  run_release "$full_gate" parallel-success \
+    || { cat "$full_gate/output" >&2; fail "$kind fixture release failed"; }
+  assert_full_gate "$full_gate"
+done
+
+bad_markdown="$temporary/docs-whitespace"
+make_fixture "$bad_markdown" parallel-success
+commit_fixture_change "$bad_markdown" docs-whitespace
+set +e
+run_release "$bad_markdown" parallel-success
+bad_markdown_status=$?
+set -e
+[ "$bad_markdown_status" -ne 0 ] || fail "bad Markdown unexpectedly deployed"
+grep -F 'Markdown не прошёл git diff --check' "$bad_markdown/output" >/dev/null \
+  || fail "bad Markdown did not stop at diff check"
+[ ! -s "$bad_markdown/gates" ] || fail "bad Markdown started a build or heavy gate"
+[ ! -s "$bad_markdown/events" ] || fail "bad Markdown mutated services"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup
