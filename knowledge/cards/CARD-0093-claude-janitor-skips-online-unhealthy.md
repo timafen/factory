@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge
-- Branch: `factory/5149d29e-032-4f8c9176-d33`
-- Implementation commit: ca459e547e06bbd2ed9c57de1f61e10a4f3d2801 — санитар освобождает только offline idle Claude с retained worktrees.
-- What changed: online/unhealthy workers удалены из выборки санитаря; тест проверяет отсутствие stop/start и резервирования попытки. Offline retained cleanup, карантин и API-подтверждение сохранены.
-- Evidence: полный набор `just format-check`, `just vet`, `just vuln`, `just boundary`, `just test`, `just test-worker-race`, `just test-tooling`, `just test-launcher`, `just ui-check`, `just test-browser` → PASS; целевой `bash ops/test-factory-janitor.sh` → 4 PASS; `bash -n` и `git diff --check` → PASS.
-- One next action: human merge после просмотра этой проверки.
+- Status: Implemented — awaiting verification and human merge
+- Branch: `factory/d7f5f772-3e8-36f57e0c-bd0`
+- Implementation commit: 8dfe8b32f453d2e94e385cb59d812e04ddd8a0ad — тест доказывает, что санитар пропускает online/unhealthy Claude с retained worktree.
+- What changed: fixture online/unhealthy worker теперь содержит retained worktree, поэтому тест ловит ошибочный restart; offline cleanup и healthy worker сценарии сохранены.
+- Evidence: целевой `bash ops/test-factory-janitor.sh` → 4 PASS; `bash -n ops/test-factory-janitor.sh` и `git diff --check` → PASS.
+- One next action: выполнить полный набор проверок после rebase и передать ветку на human merge.
 
 ## LOG
 
@@ -22,3 +22,9 @@ Online/unhealthy Claude больше не останавливается и не
 | Online/unhealthy Claude не перезапускается | `bash ops/test-factory-janitor.sh` | Нет `stop/start`, worktree остаётся на месте, worker отсутствует в state-файле. |
 | Offline idle Claude с retained worktree очищается безопасно | Тот же тест | Карантин, API-подтверждение, обработка ошибки API и неперемещённый результат сохранены. |
 | Поставка не ломает проект | Полный набор `just`-проверок | Backend, UI и 21 браузерный тест прошли. |
+
+### 2026-08-13 — Implement
+
+Усилен тест online/unhealthy worker: API возвращает retained worktree, поэтому
+проверка действительно защищает от холостого restart, карантина и резервирования.
+Исправление находится в отдельном коммите реализации `8dfe8b32f453d2e94e385cb59d812e04ddd8a0ad`.
