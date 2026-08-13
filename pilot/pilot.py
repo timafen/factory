@@ -1587,7 +1587,12 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
                 "reason": v.get("reason", "оркестратор передал решение владельцу")}
     except Exception as e:
         log("orchestrator_answer_error", repr(e))
-        return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
+        # A broken classifier is an operational problem, not an owner choice.
+        # Keep the reason deliberately short: provider responses can contain
+        # credentials or a large transport dump.
+        return {"decision": "technical_retry", "answer": "",
+                "reason": ("авторазбор временно недоступен: "
+                           + type(e).__name__)[:200]}
 
 
 def archived_attempt_ids(reference):
@@ -2211,6 +2216,7 @@ def area_busy(tasks, base, context="", repo=""):
 # помощник или владелец добавляет ПРЕДЛОЖЕНИЕ, а НАХОДКА рождается только
 # внутри выполняемой воркером работы и всегда хранит источник этой работы.
 IDEAS_PATH = f"{HOME}/pilot/ideas.json"
+TECHNICAL_RETRIES_PATH = f"{HOME}/pilot/technical-question-retries.json"
 IDEA_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?(ПРЕДЛОЖЕНИЕ|НАХОДКА)(?:\*\*)?\s*:\s*(.+?)\s*$", re.M)
 IDEA_KINDS = ("idea", "finding")
@@ -2584,11 +2590,6 @@ def collect_automation_findings(state, tasks):
                 or task_state not in ("succeeded", "failed", "cancelled")
                 or task_id in processed):
             continue
-        if task_state != "succeeded":
-            processed.append(task_id)
-            log(f"automation result state={task_state} task={task_id} -> no findings")
-            continue
-
         detail = api(f"/tasks/{task_id}")
         attempts = detail.get("attempts") or []
         result = next(
@@ -2598,7 +2599,8 @@ def collect_automation_findings(state, tasks):
         ) or ""
         repository_id = detail.get("task", {}).get("repository_id") or ""
         workflow_title = (detail.get("workflow") or {}).get("title")
-        source = f"Automation: {workflow_title or task.get('title') or task_id}"
+        source = (f"Automation: {workflow_title or task.get('title') or 'работа'}"
+                  f" · задача {task_id}")
         found = collect_ideas(result, repository_id, source)
         processed.append(task_id)
         collected += found
@@ -4663,6 +4665,18 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
+    if verdict.get("decision") == "technical_retry":
+        pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
+        pending[task_id] = {
+            "task_id": task_id, "stage": stage, "base": base,
+            "repository_id": repo_id,
+            "reason": str(verdict.get("reason") or "сбой авторазбора")[:200],
+            "updated": time.strftime("%Y-%m-%d %H:%M"),
+        }
+        save(TECHNICAL_RETRIES_PATH, pending)
+        log(f"TECHNICAL QUESTION RETRY task={task_id} stage={stage}: "
+            f"{pending[task_id]['reason']}")
+        return False
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch,
@@ -8558,6 +8572,26 @@ def cycle(conf, state):
         if tid not in state["processed"]:
             state["processed"].append(tid)
 
+        # Findings belong to the terminal report, regardless of whether the
+        # stage itself passed.  Collect them before any retry/escalation branch
+        # so a failure cannot discard useful technical work.
+        terminal_attempts = detail.get("attempts") or []
+        terminal_result = next(
+            (a.get("result") for a in reversed(terminal_attempts)
+             if a.get("result")), "") or ""
+        try:
+            collect_ideas(
+                terminal_result,
+                detail["task"].get("repository_id") or "",
+                f"{base_title(title)} · задача {tid}",
+            )
+        except Exception as e:
+            # Retry the whole terminal handoff next cycle; the Plan key makes
+            # a partially completed collection idempotent.
+            state["processed"].remove(tid)
+            log("ideas_error", repr(e))
+            continue
+
         if tstate != "succeeded":
             attempts = detail.get("attempts") or []
             err = next((a.get("error") for a in reversed(attempts) if a.get("error")), "") or ""
@@ -8624,19 +8658,14 @@ def cycle(conf, state):
 
         idx = stages.index(wf)
         next_stage = stages[idx + 1] if idx + 1 < len(stages) else None
-        attempts = detail.get("attempts") or []
-        result = next((a.get("result") for a in reversed(attempts) if a.get("result")), "") or ""
+        attempts = terminal_attempts
+        result = terminal_result
 
         try:
             area_extend(base_title(title), result,
                         detail["task"].get("repository_id") or "")
         except Exception as e:
             log("area_extend_error", repr(e))
-        try:
-            collect_ideas(result, detail["task"].get("repository_id") or "",
-                          base_title(title))
-        except Exception as e:
-            log("ideas_error", repr(e))
         if wf == "Specification":
             try:
                 save_promises(base_title(title), result)
