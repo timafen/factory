@@ -6266,6 +6266,78 @@ pilot.save(pilot.STATE_PATH, state)
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_separates_merged_and_failed_with_independent_limits(self):
+        merged_tasks = [
+            {"id": f"merged-{i}", "title": f"[auto] [5/5 Verify] Влитая работа {i}",
+             "state": "succeeded", "updated_at": f"2026-08-12T10:0{i}:00Z"}
+            for i in range(1, 5)
+        ]
+        failed_tasks = [
+            {"id": "failed-1", "title": "[auto] [4/5 Review] Провал оплаты",
+             "state": "failed", "updated_at": "2026-08-12T11:05:00Z"},
+            {"id": "cancelled", "title": "[auto] [3/5 Implement + Test] Отменённая работа",
+             "state": "cancelled", "updated_at": "2026-08-12T11:04:00Z"},
+            {"id": "failed-2", "title": "[auto] [4/5 Review] Провал доставки",
+             "state": "failed", "updated_at": "2026-08-12T11:03:00Z"},
+            {"id": "failed-3", "title": "[auto] [4/5 Review] Провал каталога",
+             "state": "failed", "updated_at": "2026-08-12T11:02:00Z"},
+            {"id": "failed-4", "title": "[auto] [4/5 Review] Провал профиля",
+             "state": "failed", "updated_at": "2026-08-12T11:01:00Z"},
+            {"id": "failed-5", "title": "[auto] [4/5 Review] Лишний шестой провал",
+             "state": "failed", "updated_at": "2026-08-12T11:00:00Z"},
+            {"id": "failed-duplicate", "title": "[auto] [2/5 Specification] Провал оплаты",
+             "state": "failed", "updated_at": "2026-08-12T10:59:00Z"},
+        ]
+        unconfirmed = {
+            "id": "unconfirmed", "title": "[auto] [5/5 Verify] Ещё не влито",
+            "state": "succeeded", "updated_at": "2026-08-12T11:06:00Z",
+        }
+        tasks = merged_tasks + failed_tasks + [unconfirmed]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
+            for task in merged_tasks:
+                stream.write(json.dumps({
+                    "task_id": task["id"], "at": task["updated_at"],
+                }) + "\n")
+
+        reasons = {
+            "failed-1": "лимит провайдера",
+            "cancelled": "владелец остановил работу",
+            "failed-2": "не прошла проверка доставки",
+            "failed-3": "не прошла проверка каталога",
+            "failed-4": "не прошла проверка профиля",
+            "failed-5": "шестой провал",
+            "failed-duplicate": "старая причина",
+        }
+
+        def detail(path, body=None):
+            task_id = path.rsplit("/", 1)[-1]
+            return {"attempts": [{"result": reasons[task_id]}]} if task_id in reasons else {"attempts": []}
+
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
+                mock.patch.object(pilot, "api", side_effect=detail):
+            recent = pilot.recent_done_block(tasks)
+
+        self.assertEqual(len(recent["merged"]), 4)
+        self.assertEqual(
+            [item["title"] for item in recent["merged"]],
+            ["Влитая работа 4", "Влитая работа 3", "Влитая работа 2", "Влитая работа 1"],
+        )
+        self.assertEqual(len(recent["failed"]), 5)
+        self.assertEqual(
+            [item["title"] for item in recent["failed"]],
+            ["Провал оплаты", "Отменённая работа", "Провал доставки",
+             "Провал каталога", "Провал профиля"],
+        )
+        cancelled = recent["failed"][1]
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled["stage"], "Implement + Test")
+        self.assertEqual(cancelled["reason"], "владелец остановил работу")
+        self.assertEqual(recent["failed"][0]["reason"], "лимит провайдера")
+        self.assertNotIn("Ещё не влито", {item["title"] for group in ("merged", "failed") for item in recent[group]})
+
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
             "id": "triage",
@@ -6283,7 +6355,7 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api") as api:
             recent = pilot.recent_done_block([task])
 
-        self.assertEqual(recent, [])
+        self.assertEqual(recent, {"merged": [], "failed": []})
         api.assert_not_called()
 
     def test_excludes_successful_progress_and_unmerged_verify(self):
@@ -6307,9 +6379,11 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent],
-                         ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
+        self.assertEqual([item["title"] for item in recent["merged"]],
+                         ["Поиск товаров"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
+        self.assertEqual([item["status"] for item in recent["merged"]], ["merged"])
+        self.assertEqual([item["status"] for item in recent["failed"]], ["failed"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
@@ -6336,11 +6410,12 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
-        self.assertEqual(recent[0]["status"], "failed")
-        self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "delivered")
-        self.assertIn("Выпуск принят", recent[1]["detail"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
+        self.assertEqual(recent["failed"][0]["status"], "failed")
+        self.assertEqual(recent["failed"][0]["reason"], "ПРОВЕРКА: браузерный сценарий прошёл.")
+        self.assertEqual([item["title"] for item in recent["merged"]], ["Новая витрина"])
+        self.assertEqual(recent["merged"][0]["status"], "merged")
+        self.assertIn("Выпуск принят", recent["merged"][0]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
@@ -6354,8 +6429,10 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block([], n=3)
 
-        self.assertEqual([item["title"] for item in recent], ["Старый настоящий результат"])
-        self.assertEqual(recent[0]["status"], "legacy")
+        self.assertEqual(recent["merged"], [])
+        self.assertEqual(recent["failed"], [])
+        self.assertEqual([item["title"] for item in recent["audit"]], ["Старый настоящий результат"])
+        self.assertEqual(recent["audit"][0]["source"], "legacy")
 
     def test_reads_every_task_page(self):
         pages = [

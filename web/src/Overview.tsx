@@ -35,7 +35,7 @@ type Dash = {
   };
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
-  recent_done?: RecentDone[];
+  recent_done?: RecentDoneGroups | RecentDone[];
   projects?: ProductProject[];
   janitor?: string;
   release_train?: ReleaseTrainSnapshot | null;
@@ -160,9 +160,10 @@ type ActiveTask = {
 };
 type WorkMeta = { origin?: string };
 export type RecentDone = {
-  title: string; detail?: string; at?: string;
-  status?: "merged" | "passed" | "failed" | "legacy";
+  title: string; detail?: string; at?: string; stage?: string; reason?: string;
+  status?: "merged" | "passed" | "failed" | "cancelled" | "legacy";
 };
+type RecentDoneGroups = { merged?: RecentDone[]; failed?: RecentDone[]; audit?: RecentDone[] };
 type OverviewWork = {
   id: string;
   title: string;
@@ -291,6 +292,31 @@ function formatSeconds(seconds: number) {
   return Math.round(seconds).toLocaleString("ru-RU");
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatRecentDate(value: string | undefined, now = new Date()) {
+  const date = value ? new Date(value) : null;
+  const reference = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  if (!date || Number.isNaN(date.getTime())) return "дата неизвестна";
+
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const sameDay = (left: Date, right: Date) => left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+  if (sameDay(date, reference)) return `сегодня ${time}`;
+
+  const yesterday = new Date(reference);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (sameDay(date, yesterday)) return `вчера ${time}`;
+
+  return `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()} ${time}`;
+}
+
+function recentDoneGroups(value: Dash["recent_done"]): RecentDoneGroups {
+  // Old cached snapshots were arrays. Treat them as empty instead of mixing
+  // the old single limit with the new independent groups.
+  if (!value || Array.isArray(value)) return { merged: [], failed: [] };
+  return value;
+}
+
 function formatRate(rate: EfficiencyRate) {
   return rate.total ? `${rate.count} из ${rate.total} (${Math.round((rate.rate ?? 0) * 100)}%)` : "— (n=0)";
 }
@@ -407,7 +433,7 @@ function ProductCapacityPanel({ summary }: { summary: ProductCapacitySummary }) 
     {period.low_data && <div className="efficiency-verdict"><Pill text="данных мало" tone="muted" /><span>наблюдение началось {period.observation_from ? new Date(period.observation_from).toLocaleString("ru-RU") : "сейчас"}; историю не восстанавливали.</span></div>}
     <div className="efficiency-primary">
       <div><strong>{period.average_busy == null ? "—" : `${period.average_busy.toFixed(1)} / ${summary.capacity}`}</strong><span>средняя занятость</span><small>сэмплов: {period.samples}</small></div>
-      <div><strong>{period.queue_p90 == null ? "—" : period.queue_p90}</strong><span>очередь в 90% замеров</span><small>{period.queue_p90 == null ? "данных нет" : `не больше ${period.queue_p90} продуктовых работ`}</small></div>
+      <div><strong>{period.queue_p90 == null ? "—" : period.queue_p90}</strong><span>обычная длина очереди</span><small>{period.queue_p90 == null ? "данных нет" : `очередь обычно не длиннее ${period.queue_p90} продуктовых работ`}</small></div>
       <div><strong>{period.active_time.map((item) => `${item.active}: ${percentage(item.share)}`).join(" · ")}</strong><span>доля времени 0–4</span><small>в каждом числе — активных работ : доля</small></div>
     </div>
     <details className="efficiency-details"><summary>Показать причины недозагрузки</summary>
@@ -546,29 +572,49 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       {efficiency && <EfficiencyPanel summary={efficiency} />}
       {capacity && <ProductCapacityPanel summary={capacity} />}
 
-      {(d.recent_done ?? []).length > 0 && (
+      {(() => {
+        const recent = recentDoneGroups(d.recent_done);
+        const merged = recent.merged ?? [];
+        const failed = recent.failed ?? [];
+        if (!merged.length && !failed.length) return null;
+        const recentItem = (item: RecentDone, index: number, failure: boolean) => (
+          <div key={`${item.title}-${item.at ?? index}`} style={{ display: "flex", alignItems: "baseline", gap: 10,
+                                      padding: "7px 0", borderTop: index ? "1px solid #1d2430" : "none" }}>
+            <span style={{ color: failure ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
+              {failure ? "!" : "✓"}
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
+                            whiteSpace: "nowrap" }}>{item.title}</div>
+              {failure ? (
+                <div style={{ fontSize: 12, color: muted }}>
+                  Этап: {item.stage || "этап неизвестен"}<br />
+                  Причина: {item.reason || "причина не указана"}
+                </div>
+              ) : (
+                item.detail && <div style={{ fontSize: 12, color: muted, overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.detail}</div>
+              )}
+            </div>
+            <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{formatRecentDate(item.at)}</span>
+          </div>
+        );
+        return (
         <section style={card} aria-label="Сделано недавно">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <CheckCircle2 size={16} color="#7ee2a8" /><strong>Сделано недавно</strong>
           </div>
-          {(d.recent_done ?? []).map((r, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10,
-                                  padding: "7px 0",
-                                  borderTop: i ? "1px solid #1d2430" : "none" }}>
-              <span style={{ color: r.status === "failed" ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
-                {r.status === "failed" ? "!" : "✓"}
-              </span>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
-                              whiteSpace: "nowrap" }}>{r.title}</div>
-                {r.detail && <div style={{ fontSize: 12, color: muted, overflow: "hidden",
-                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.detail}</div>}
-              </div>
-              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{(r.at || "").slice(5, 16)}</span>
-            </div>
-          ))}
+          {merged.length > 0 && <section aria-label="Влито в main" style={{ marginBottom: failed.length ? 12 : 0 }}>
+            <strong>Влито в main</strong>
+            {merged.map((item, index) => recentItem(item, index, false))}
+          </section>}
+          {failed.length > 0 && <section aria-label="Провалы" style={{ borderTop: merged.length ? "1px solid #262c38" : "none", paddingTop: merged.length ? 12 : 0 }}>
+            <strong>Провалы</strong>
+            {failed.map((item, index) => recentItem(item, index, true))}
+          </section>}
         </section>
-      )}
+        );
+      })()}
 
       {/* 2. Продукты: один честный блок на зарегистрированный проект */}
       {(d.projects ?? []).map((project) => <section style={card} key={project.id} aria-label={`Продукт — ${project.name}`}>
