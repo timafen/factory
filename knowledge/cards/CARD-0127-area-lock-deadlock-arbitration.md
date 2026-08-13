@@ -4,14 +4,11 @@ Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — рабочи
 
 ## HEAD
 
-- Статус: Implemented.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/50207027-43c-a740580f-06c`.
-- Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — оба production-вызова передают UUID и полную текущую задачу.
-- Что изменено: `area_busy` и `review_gate` сохраняют реальный плановый
-  приоритет кандидата; две пересекающиеся работы допускаются в устойчивом порядке.
-- Evidence: `python3 -m unittest pilot.test_pilot.AreaLockArbitrationTests` → 6 tests, OK;
-  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` → OK.
-- Следующее действие: Review проверяет поставку после регрессий реального потока.
+- Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — оба production-вызова передают UUID и полную текущую задачу в детерминированный арбитр областей.
+- Evidence: pinned base SHA `73f4edce272cb113607540412425d842158e2b81`; pinned candidate SHA `2ae07ed5b4bea606be3409a628fed7b7d7e998f0`; целевые 6 тестов — OK; `py_compile` — OK; `go build ./...` — OK; `go test -timeout 5m ./...` — все пакеты OK. Полный Python-набор: 260 тестов, 13 skipped и 2 падения, воспроизведённые на base.
+- Следующее действие: Человеку принять слияние проверенной ветки.
 
 ## LOG
 
@@ -28,3 +25,12 @@ Implementation commit: 3e117ac2ba933c4004b1a07738908561b78898f0 — рабочи
 работы, поэтому её плановый приоритет не теряется. Регрессии через `area_busy`
 и `review_gate` воспроизводят две живые пересекающиеся работы: первая проходит,
 вторая ждёт первую, взаимного ожидания нет. Целевые 6 тестов и `py_compile` прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Стабильный владелец в обоих production-путях | `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` | 6 тестов, OK; `area_busy` пропускает первого владельца, `review_gate` ждёт его для второй работы. |
+| Сборка и полный Go-набор без регрессий | `go build ./...`; `go test -timeout 5m ./...` | Сборка OK; все Go-пакеты OK, включая controlplane и worker. |
+| Полный Python-набор и отделение проектного долга | `python3 -m unittest -v pilot.test_pilot`; тот же проблемный тест на pinned base | 260 тестов, 13 skipped, 2 известных падения; оба падения повторились на base. |
+| Карточка и реализация закреплены корректно | pinned bare-проверки ancestry и изменённых путей | Implementation commit — предок candidate и меняет `pilot/pilot.py` и `pilot/test_pilot.py`; рабочее дерево проверяющего чистое. |
