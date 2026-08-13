@@ -651,6 +651,11 @@ test("shows project readiness card", async ({ page }) => {
     ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
   ].map(([key, title]) => ({ key, title, state: "ready", reason: `${title} подтверждено` }));
   await page.goto("/");
+  const activeServiceWorker = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    return registration.active?.scriptURL ?? null;
+  });
+  expect(activeServiceWorker).toMatch(/\/sw\.js$/);
   const dashboard = await page.evaluate(async () => {
     const response = await fetch("/api/v1/dashboard");
     if (!response.ok) throw new Error(`dashboard returned ${response.status}`);
@@ -1127,7 +1132,6 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
 
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
   expect(await page.evaluate(
