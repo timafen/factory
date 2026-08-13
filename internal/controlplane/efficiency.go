@@ -120,6 +120,8 @@ type efficiencyAttempt struct {
 type efficiencyMerge struct {
 	taskID string
 	at     time.Time
+	actor  string
+	rounds int
 }
 
 type efficiencyReleaseEvent struct {
@@ -138,6 +140,7 @@ type efficiencyQuestion struct {
 type efficiencyWork struct {
 	mergeAt      time.Time
 	mergedTaskID string
+	mergeRounds  int
 	tasks        []*efficiencyTask
 }
 
@@ -341,6 +344,8 @@ func loadEfficiencyMerges() ([]efficiencyMerge, error) {
 		var raw struct {
 			TaskID string `json:"task_id"`
 			At     string `json:"at"`
+			Actor  string `json:"actor"`
+			Rounds int    `json:"rounds"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &raw) != nil || raw.TaskID == "" {
 			continue
@@ -353,7 +358,11 @@ func loadEfficiencyMerges() ([]efficiencyMerge, error) {
 			continue
 		}
 		seen[raw.TaskID] = struct{}{}
-		merges = append(merges, efficiencyMerge{taskID: raw.TaskID, at: at.UTC()})
+		actor := raw.Actor
+		if actor == "" {
+			actor = "automatic"
+		}
+		merges = append(merges, efficiencyMerge{taskID: raw.TaskID, at: at.UTC(), actor: actor, rounds: raw.Rounds})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -497,7 +506,7 @@ func buildEfficiencyWorks(tasks []*efficiencyTask, merges []efficiencyMerge) ([]
 		if len(workTasks) == 0 {
 			continue
 		}
-		works = append(works, efficiencyWork{mergeAt: merge.at, mergedTaskID: merge.taskID, tasks: workTasks})
+		works = append(works, efficiencyWork{mergeAt: merge.at, mergedTaskID: merge.taskID, mergeRounds: merge.rounds, tasks: workTasks})
 		boundaries[key] = merge.at
 	}
 	tails := make(map[string][]*efficiencyTask)
@@ -565,10 +574,12 @@ func summarizeEfficiencyPeriod(start, end time.Time, allTasks []*efficiencyTask,
 				period.VerifyFirstPass.Count++
 			}
 		}
-		rounds := 0
-		for _, stage := range []string{"Implement + Test", "Review", "Verify"} {
-			if len(stages[stage]) > rounds {
-				rounds = len(stages[stage])
+		rounds := work.mergeRounds
+		if rounds <= 0 {
+			for _, stage := range []string{"Implement + Test", "Review", "Verify"} {
+				if len(stages[stage]) > rounds {
+					rounds = len(stages[stage])
+				}
 			}
 		}
 		if rounds > 0 {
