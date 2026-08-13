@@ -1,18 +1,18 @@
-Implementation commit: ba3c396f7fc53af9ef808ad60ae424cb2b66d770 — Markdown-only кандидаты после доверенного checkout проходят `git diff --check`, а все сомнительные изменения сохраняют полный Gate.
+Implementation commit: bea5d8f48f14747ca56ac95b9ca9dce88a07d1e0 — все шесть неоднозначных Git-сценариев подтверждают fail-closed переход к полному Gate.
 
 # CARD-0105 — Документные изменения проходят лёгкие ворота
 
 ## HEAD
 
-- Status: Implemented — ready for verification.
-- Branch: `factory/6cde39c6-851-9e21a67b-306`.
-- Implementation commit: `ba3c396f7fc53af9ef808ad60ae424cb2b66d770`.
-- What changed: raw NUL-delimited diff допускает только непустые обычные `.md`
-  и запускает `git diff --check`; mode, symlink, rename, смешанные и кодовые
-  изменения продолжают идти через полный UI+Go+release Gate.
+- Status: Implemented — ready for review.
+- Branch: `factory/671ab15f-e72-da47c992-9c0d-4a26-8762-e874f7a0f097`.
+- Implementation commit: `bea5d8f48f14747ca56ac95b9ca9dce88a07d1e0`.
+- What changed: добавлены fail-closed испытания merge-коммита, коммита без
+  родителя, пустого коммита, submodule, ошибки `git diff-tree` и имени файла
+  с переводом строки; каждое подтверждает полный UI+Go+release Gate.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` →
   PASS; `bash ops/test-fx-factory-release.sh` → PASS.
-- Next action: проверить изменения независимым review перед слиянием.
+- Next action: выполнить независимый review перед слиянием.
 
 ## Контракт реализации
 
@@ -45,3 +45,10 @@ Implementation commit: ba3c396f7fc53af9ef808ad60ae424cb2b66d770 — Markdown-onl
 checkout. Markdown-only fixture подтверждает лёгкие ворота и поставку; fixtures
 для Go, mixed, mode, symlink и rename подтверждают полный Gate, а whitespace
 останавливает выпуск до сборки и мутаций. `bash ops/test-fx-factory-release.sh` — PASS.
+
+### 2026-08-12 — Implement
+
+Добавлены шесть обязательных fail-closed fixtures: merge, root, empty,
+submodule, ошибка `git diff-tree` и имя с переводом строки. Каждая fixture
+подтверждает запуск полного UI+Go+release Gate; `bash -n` и
+`bash ops/test-fx-factory-release.sh` — PASS.
