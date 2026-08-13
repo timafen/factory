@@ -3,9 +3,9 @@
 ## HEAD
 
 Status: Implemented — исторические дубли разведены.
-Branch: factory/46c41fc2-77a-11020acd-036
-Implementation commit: eb0a854dbcb524ebf10aeb6e3653f0e995707b9a — утилита и одноразовое переименование карточек.
-What changed: добавлена проверяемая утилита dry-run/`--apply`; 38 неканонических путей получили номера 0109–0146, точные ссылки обновлены.
+Branch: factory/4d9412b8-989-5379b729-17e
+Implementation commit: 332fca09a6d0261543fee0b0d4acb524b7259f30 — утилита и одноразовое переименование карточек.
+What changed: добавлена проверяемая утилита dry-run/`--apply`; 38 неканонических путей получили номера 0109–0146, а legacy-файл — 0148; точные ссылки обновлены.
 Evidence: `python3 -m unittest -v scripts.test_renumber_historical_cards` — OK (3 теста); резервирование Пилота — OK (5 тестов); дублей нет.
 Next action: проверить свежую ветку на Verify и влить изменение в `main`.
 
@@ -72,3 +72,10 @@ CARD-0089-release-process-recovery-review-fixes.md -> CARD-0146-release-process-
 числовому префиксу и повторным dry-run (`No duplicate card numbers found.`).
 Изменён только каталог знаний, ссылки в спецификациях и новая утилита с её
 тестом; `pilot/pilot.py` и `pilot/test_pilot.py` не менялись.
+
+### 2026-08-12 — Implement
+
+На текущей ветке обнаружен оставшийся bare-файл `CARD-0030.md`, который
+конфликтовал с общим backlog по числовому префиксу. Файл переименован в
+`CARD-0148.md` без изменения содержимого; проверка дублей по всем `CARD-*.md`
+теперь не находит совпадений.
