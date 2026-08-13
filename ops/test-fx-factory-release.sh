@@ -351,7 +351,7 @@ if [ "${1:-}" = test ]; then
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
       ;;
-    go-test-fail) exit 1 ;;
+    go-test-fail|forged-gate-result) exit 1 ;;
   esac
   exit 0
 fi
@@ -448,8 +448,18 @@ EOF
   cat >"$case_dir/trusted/setsid" <<'EOF'
 #!/bin/bash
 while [ "${1:-}" = --fork ] || [ "${1:-}" = --wait ]; do shift; done
+if [ "$TEST_MODE" = forged-gate-result ]; then
+  for argument in "$@"; do
+    case "$argument" in
+      *.session)
+        printf 'state=finished status=0\n' >"$argument.result"
+        printf 'forged-gate-result\n' >>"$TEST_SPOOF_EVENTS"
+        ;;
+    esac
+  done
+fi
 case "$TEST_MODE" in
-  forked-gates-success|forked-gate-fail|signal-forked-gates)
+  forked-gates-success|forked-gate-fail|forged-gate-result|signal-forked-gates)
     printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
     exec /usr/bin/setsid --fork --wait "$@"
     ;;
@@ -953,7 +963,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail; do
+for mode in ui-test-fail go-test-fail release-test-fail forged-gate-result; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -968,6 +978,8 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+grep -Fx 'forged-gate-result' "$temporary/forged-gate-result/spoof-events" >/dev/null \
+  || fail "forged result scenario did not inject a fake successful status"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
