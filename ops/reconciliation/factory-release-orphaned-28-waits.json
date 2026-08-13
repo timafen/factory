@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "status": "blocked-until-production-snapshot-is-confirmed",
+  "target": "factory",
+  "audit_id": "",
+  "generation_id": "",
+  "release_sha": "",
+  "waits": [],
+  "operator_note": "Заполнить только из read-only снимка Pilot и доказательств успешно установленного ручного выпуска; идентификаторы не угадывать."
+}

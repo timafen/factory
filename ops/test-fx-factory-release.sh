@@ -69,7 +69,7 @@ start_gate_directory_attack() {
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
+  mkdir -p "$case_dir/bin" "$case_dir/install/factory-pilot.service.d" "$case_dir/releases" "$case_dir/repo/web" \
     "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
@@ -95,7 +95,7 @@ EOF
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
-  printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/50-project-release-broker.conf"
+  printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/fx"
   /bin/cp "$RELEASE" "$case_dir/install/fx-factory-release"
   printf 'old pilot\n' >"$case_dir/live/pilot/pilot.py"
@@ -136,7 +136,7 @@ GATE
   chmod 755 "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
     "$case_dir/install/factory-release-broker" "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
   chmod 644 "$case_dir/install/factory-release-broker.service" \
-    "$case_dir/install/50-project-release-broker.conf" \
+    "$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
     "$case_dir/live/intake/app.py" "$case_dir/live/intake/plan.py"
   mkdir -p "$case_dir/trusted"
@@ -749,7 +749,7 @@ run_release() {
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
-    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
@@ -773,7 +773,7 @@ run_driver() {
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
-    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
     /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
     /bin/bash "$case_dir/fx-factory-release-under-test" "$@"
@@ -813,7 +813,7 @@ start_release() {
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
-    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
