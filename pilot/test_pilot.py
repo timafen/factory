@@ -6834,5 +6834,49 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
 
 
+class AreaLockArbitrationTests(unittest.TestCase):
+    """Замок областей решает споры детерминированно, а не взаимным ожиданием."""
+
+    AREAS = {
+        "Старшая работа": ["repo::pilot/pilot.py"],
+        "Младшая работа": ["repo::pilot/pilot.py"],
+    }
+
+    def _loader(self, path, default=None):
+        return dict(self.AREAS) if path == pilot.AREAS_PATH else (default or {})
+
+    def _busy(self, tasks, base):
+        with mock.patch.object(pilot, "load", side_effect=self._loader), \
+                mock.patch.object(pilot, "area_of",
+                                  return_value={"repo::pilot/pilot.py"}):
+            return pilot.area_busy(tasks, base)
+
+    def test_running_holder_still_blocks_unconditionally(self):
+        tasks = [{"state": "running", "created_at": "2026-08-13T10:00:00Z",
+                  "title": "[auto] [2/5 Implement + Test] Младшая работа"}]
+        self.assertEqual(self._busy(tasks, "Старшая работа"), "Младшая работа")
+
+    def test_mutual_queued_contention_has_exactly_one_winner(self):
+        tasks = [
+            {"state": "queued", "created_at": "2026-08-13T10:00:00Z",
+             "title": "[auto] [4/5 Review] Старшая работа"},
+            {"state": "queued", "created_at": "2026-08-13T09:00:00Z",
+             "title": "[auto] [2/5 Specification] Младшая работа"},
+        ]
+        # Дальше прошедшая по конвейеру работа проходит, младшая ждёт её.
+        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
+        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+
+    def test_equal_stage_earlier_start_wins(self):
+        tasks = [
+            {"state": "queued", "created_at": "2026-08-13T08:00:00Z",
+             "title": "[auto] [3/5 Implement + Test] Старшая работа"},
+            {"state": "queued", "created_at": "2026-08-13T11:00:00Z",
+             "title": "[auto] [3/5 Implement + Test] Младшая работа"},
+        ]
+        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
+        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+
+
 if __name__ == "__main__":
     unittest.main()

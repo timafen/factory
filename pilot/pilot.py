@@ -1881,12 +1881,41 @@ def area_replace(base, files, repo=""):
     return set(known[base])
 
 
+def _area_rank(tasks, base):
+    """Старшинство работы в споре за файл: (номер самой дальней живой стадии,
+    более ранний старт, заголовок). Сравнивается кортежами: строго старший
+    получает файл, младший ждёт. Антисимметрично, поэтому взаимное ожидание
+    невозможно: из двух спорящих ровно одна работа проходит."""
+    best_no, first_seen = 0, ""
+    for t in tasks:
+        if t.get("state") not in ("running", "queued"):
+            continue
+        m = STAGE_TITLE_RE.match(t.get("title", ""))
+        if not m or m.group(2).strip() != base:
+            continue
+        best_no = max(best_no, stage_no_of(t.get("title", "")))
+        created = str(t.get("created_at") or "")
+        if created and (not first_seen or created < first_seen):
+            first_seen = created
+    # Ранний старт важнее позднего: инвертируем строку даты посимвольно,
+    # чтобы «раньше начал» означало «кортеж больше».
+    inverted = "".join(chr(0x10FFFF - ord(ch)) for ch in first_seen)
+    return (best_no, inverted, base)
+
+
 def area_busy(tasks, base, context="", repo=""):
-    """Кто уже занял тот же файл. Возвращает имя работы или пустую строку."""
+    """Кто уже занял тот же файл. Возвращает имя работы или пустую строку.
+
+    Реально выполняющийся этап (running) держит файл безусловно. Если же
+    пересеклись только ожидающие (queued) работы, файл достаётся старшей по
+    _area_rank — той, что дальше прошла по конвейеру, при равенстве начатой
+    раньше. Раньше обе стороны честно уступали друг другу и вставали навсегда
+    (взаимное AREA WAIT); теперь спор решается детерминированно."""
     mine = area_of(base, context, repo)
     if not mine:
         return ""
     known = load(AREAS_PATH, {}) or {}
+    my_rank = None
     for t in tasks:
         if t.get("state") not in ("running", "queued"):
             continue
@@ -1896,7 +1925,13 @@ def area_busy(tasks, base, context="", repo=""):
         other = m.group(2).strip()
         if other == base.strip():
             continue
-        if mine & set(known.get(other) or []):
+        if not (mine & set(known.get(other) or [])):
+            continue
+        if t.get("state") == "running":
+            return other
+        if my_rank is None:
+            my_rank = _area_rank(tasks, base.strip())
+        if _area_rank(tasks, other) > my_rank:
             return other
     return ""
 
