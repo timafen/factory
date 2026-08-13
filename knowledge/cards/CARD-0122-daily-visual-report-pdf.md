@@ -4,13 +4,13 @@ Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт
 
 ## HEAD
 
-- Status: IMPLEMENTED / VERIFY PASS
-- Branch: `factory/e8d83036-21a-49f5b4f9-956`
+- Status: Verified PASS — awaiting human merge
+- Branch: `factory/f58e2684-3a8-7796bc35-dd3`
 - Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
 - What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
 - What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
-- Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
-- One next action: повторить Review поставки.
+- Evidence: pinned `main` `5f4e8eee02fa7845e857b6c549876648f10df836` → candidate `9d5f4bffe05811f7892d8fcfa5938983e1827507`; Go `./...`, UI 179/179, Node PDF 4/4, lint, typecheck и production build → PASS.
+- One next action: human merge после проверки отчёта.
 
 ## LOG
 
@@ -45,6 +45,15 @@ Node PDF, browser shell, lint, typecheck и production build завершили�
 | Защищённый capture и целостность скачивания | Node allowlist/sandbox-тест; Go-тесты report API | BLOCKED: Node-защита PASS, но новый Go-тест закрытой БД падает 5/5 при повторном `Store.Close` из cleanup. |
 | Сборка и регрессии | `go test -timeout 5m ./...`; `npm run lint`; `npm run typecheck`; `npm run build` | Web PASS; полный Go-набор также поймал внешний flaky `internal/worker` по разбросу lease renewal. |
 | Живая проверка `/reports` | Проверка системного browser launcher | Не выполнена: Chromium и `/usr/local/bin/factory-browser-launcher` на стенде отсутствуют. |
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Ежедневный PDF со снимками, инфографикой и сравнительными метриками | `go test -timeout 5m ./...`; `node web/report/report.test.mjs` | PASS: полный Go-набор; renderer создал `%PDF-` с inline PNG; Node 4/4. |
+| Защищённые снимки и целостная выдача отчёта | `go test -timeout 5m ./...`; `npm test` | PASS: API/capture/report тесты; UI 179/179 в 16 файлах. |
+| Сборка и регрессии интерфейса | `npm run lint`; `npm run typecheck`; `npm run build` | PASS: все команды завершились успешно; build выдал только предупреждение о размере чанка. |
+| Проверка поставки | pinned diff `base_sha...candidate_sha`; `git status --short` | PASS: 38 ожидаемых файлов реализации/карточки, рабочее дерево чисто после карточного коммита. |
 
 ### 2026-08-13 — Implement
 
