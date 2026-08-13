@@ -1,12 +1,12 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 24ae0c8cfff7adbd112c4f277276bf4f5c3bebb4 — E2E-фикстура устанавливает Chromium runtime до старта report-сервера, а Chromium-проверки используют актуальные названия экранов
+Implementation commit: 2a0d027598ef2e291ebad465d093ebfae8212e46 — E2E-фикстура устанавливает Chromium runtime до старта report-сервера, а Chromium-проверки используют актуальные названия экранов
 
 ## HEAD
 
 - Status: IN PROGRESS — report runtime и его Chromium-сценарии зелёные; полный UI browser-suite остановлен на устаревшем имени пункта «Исполнители».
 - Branch: `factory/83376113-b95-064efc12-ac6`
-- Implementation commit: `24ae0c8cfff7adbd112c4f277276bf4f5c3bebb4`
+- Implementation commit: `2a0d027598ef2e291ebad465d093ebfae8212e46`
 - What changed: E2E создаёт локальные Playwright runtime и launcher до Go-сервера; Node PDF/capture-сценарии больше не пропускаются без host launcher.
 - What changed: поле URL экрана подсказывает `staging-automation.tarser.net`; Chromium-тесты следуют актуальным названиям и состояниям экрана работы.
 - Evidence: `go test ./cmd/factory-server ./internal/controlplane` → PASS; `node --test report/report.test.mjs` → 6 PASS, 0 SKIP.
