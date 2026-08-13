@@ -83,14 +83,23 @@ func (s *Store) hostSlotLimit() int {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	return openStore(ctx, path, false)
+	return openStore(ctx, path, false, runtime.NumCPU())
+}
+
+// OpenForTest opens a Store with an explicit host slot limit for tests whose
+// concurrency contract must not depend on the test host's CPU count.
+func OpenForTest(ctx context.Context, path string, hostMaxConcurrent int) (*Store, error) {
+	if hostMaxConcurrent <= 0 {
+		return nil, errors.New("test host max concurrent must be positive")
+	}
+	return openStore(ctx, path, false, hostMaxConcurrent)
 }
 
 func openExistingStore(ctx context.Context, path string) (*Store, error) {
-	return openStore(ctx, path, true)
+	return openStore(ctx, path, true, runtime.NumCPU())
 }
 
-func openStore(ctx context.Context, path string, existingOnly bool) (*Store, error) {
+func openStore(ctx context.Context, path string, existingOnly bool, hostMaxConcurrent int) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
@@ -138,7 +147,7 @@ func openStore(ctx context.Context, path string, existingOnly bool) (*Store, err
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	attachmentRoot := "/opt/factory-data/attachments"
-	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second, hostMaxConcurrent: runtime.NumCPU()}
+	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second, hostMaxConcurrent: hostMaxConcurrent}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create attachment directory: %w", err)
