@@ -22,6 +22,9 @@ Run two workers when you want to send the same task to both agents. Each task
 launches a fresh runtime process and owns its own worktree, manifest, lease, and
 supervisor process group. `max_concurrent` accepts values from 1 through 100;
 preparing attempts consume slots as well as running attempts.
+Across all workers connected to one control plane, active preparing and running
+attempts are also capped at the host's logical CPU count. This host-wide limit
+is fixed by the control plane and has no worker configuration override.
 
 Factory migrates existing SQLite databases to the expanded worker capacity
 range when the control plane starts.

@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -67,6 +68,107 @@ func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	summary, err := store.Metrics(context.Background(), metricsWindowAll)
 	if err != nil || summary.QueueReassignments != 1 {
 		t.Fatalf("queue reassignment metric = %d, error %v; want 1", summary.QueueReassignments, err)
+	}
+}
+
+func TestClaimEnforcesHostMaxConcurrentAcrossWorkers(t *testing.T) {
+	hostCapacity := runtime.NumCPU()
+	workerCapacity := max(10, hostCapacity)
+	workerCount := 2
+	if workerCapacity > protocol.MaxWorkerCapacity {
+		workerCapacity = protocol.MaxWorkerCapacity
+		workerCount = hostCapacity/workerCapacity + 1
+	}
+	store := newTestStore(t)
+	repository := protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/host-capacity"}
+	workers := make([]string, workerCount)
+	for index := range workers {
+		workers[index] = fmt.Sprintf("host-capacity-worker-%d", index)
+	}
+	assigned := registerTestWorker(t, store, workers[0], workerCapacity, repository)
+	for _, workerID := range workers[1:] {
+		registerTestWorker(t, store, workerID, workerCapacity, repository)
+	}
+	for index := 0; index <= hostCapacity+1; index++ {
+		createTestTask(t, store, fmt.Sprintf("host-capacity-%d", index), workers[0], assigned.Repositories[0].ID)
+	}
+	claims := make([]*protocol.Claim, hostCapacity)
+	for index := range claims {
+		workerID := workers[index%len(workers)]
+		claim, err := store.Claim(context.Background(), workerID, protocol.ClaimRequest{RequestID: fmt.Sprintf("host-capacity-claim-%d", index), LeaseToken: fmt.Sprintf("%064x", index+1)})
+		if err != nil || claim == nil {
+			t.Fatalf("claim %d of %d = %#v, %v; want work", index+1, hostCapacity, claim, err)
+		}
+		claims[index] = claim
+	}
+	replayed, err := store.Claim(context.Background(), claims[0].Attempt.WorkerID, protocol.ClaimRequest{RequestID: "host-capacity-claim-0", LeaseToken: fmt.Sprintf("%064x", 1)})
+	if err != nil || replayed == nil || replayed.Attempt.ID != claims[0].Attempt.ID {
+		t.Fatalf("replayed claim = %#v, %v; want original attempt %q", replayed, err, claims[0].Attempt.ID)
+	}
+	blocked, err := store.Claim(context.Background(), workers[0], protocol.ClaimRequest{RequestID: "host-capacity-blocked", LeaseToken: strings.Repeat("f", 64)})
+	if err != nil || blocked != nil {
+		t.Fatalf("claim above host capacity = %#v, %v; want no work", blocked, err)
+	}
+	if _, err := store.StartAttempt(context.Background(), claims[hostCapacity-1].Attempt.ID, protocol.StartAttemptRequest{LeaseToken: fmt.Sprintf("%064x", hostCapacity)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), claims[hostCapacity-1].Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", hostCapacity), State: "succeeded", Result: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	freed, err := store.Claim(context.Background(), workers[0], protocol.ClaimRequest{RequestID: "host-capacity-freed", LeaseToken: strings.Repeat("e", 64)})
+	if err != nil || freed == nil {
+		t.Fatalf("claim after terminal attempt = %#v, %v; want work", freed, err)
+	}
+	if _, err := store.db.Exec(`UPDATE attempts SET lease_expires_at = 0 WHERE id = ?`, freed.Attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := store.Claim(context.Background(), workers[1%len(workers)], protocol.ClaimRequest{RequestID: "host-capacity-expired", LeaseToken: strings.Repeat("d", 64)})
+	if err != nil || expired == nil {
+		t.Fatalf("claim after expired lease = %#v, %v; want work", expired, err)
+	}
+}
+
+func TestConcurrentClaimsDoNotExceedHostCapacity(t *testing.T) {
+	hostCapacity := runtime.NumCPU()
+	store := newTestStore(t)
+	repository := protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/host-capacity-concurrent"}
+	assigned := registerTestWorker(t, store, "host-capacity-concurrent-a", max(10, hostCapacity), repository)
+	registerTestWorker(t, store, "host-capacity-concurrent-b", max(10, hostCapacity), repository)
+	for index := 0; index <= hostCapacity; index++ {
+		createTestTask(t, store, fmt.Sprintf("host-capacity-concurrent-%d", index), "host-capacity-concurrent-a", assigned.Repositories[0].ID)
+	}
+	for index := 0; index < hostCapacity-1; index++ {
+		claimTestTask(t, store, "host-capacity-concurrent-a", fmt.Sprintf("host-capacity-concurrent-fill-%d", index), fmt.Sprintf("%064x", index+1))
+	}
+
+	results := make(chan *protocol.Claim, 2)
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for index, workerID := range []string{"host-capacity-concurrent-a", "host-capacity-concurrent-b"} {
+		go func(index int, workerID string) {
+			ready.Done()
+			<-start
+			claim, err := store.Claim(context.Background(), workerID, protocol.ClaimRequest{RequestID: fmt.Sprintf("host-capacity-concurrent-last-%d", index), LeaseToken: fmt.Sprintf("%064x", hostCapacity+index+1)})
+			errs <- err
+			results <- claim
+		}(index, workerID)
+	}
+	ready.Wait()
+	close(start)
+
+	successes := 0
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if <-results != nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent claims at final host slot = %d successes; want 1", successes)
 	}
 }
 

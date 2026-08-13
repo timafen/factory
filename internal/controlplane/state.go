@@ -100,6 +100,22 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		}
 		return nil, nil
 	}
+	var hostActive int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM attempts
+		WHERE state IN ('preparing', 'running') AND lease_expires_at > ?
+	`, nowMillis).Scan(&hostActive); err != nil {
+		return nil, unavailable(err)
+	}
+	if hostActive >= s.hostMaxConcurrent {
+		if err := insertEmptyClaim(ctx, tx, workerID, input.RequestID, digest, nowMillis); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, unavailable(err)
+		}
+		return nil, nil
+	}
 
 	var executionID, assignedWorkerID string
 	err = tx.QueryRowContext(ctx, `
