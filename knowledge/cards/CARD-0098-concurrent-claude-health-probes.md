@@ -4,16 +4,18 @@ Implementation commit: b083860744997c99646b43a831a991e6df515d02 — health-check
 
 ## HEAD
 
-- Status: Implemented and targeted tests PASS — awaiting Verify.
-- Branch: `factory/9eee6045-e93-89a5e39d-2d3`.
+- Status: Verified PASS — awaiting human merge.
+- Branch: `factory/67deaa66-d9b-88731149-cea`.
 - Implementation commit: b083860744997c99646b43a831a991e6df515d02 — health-check ограниченно ждёт совпадающую команду, не ослабляя общий неблокирующий запуск.
 - Specification: `knowledge/specs/concurrent-claude-health-probes.md`.
 - What changed: все короткие command-probe в `checkHealth` повторяют только
   занятый идентичный запуск и делят ожидание с прежним timeout проверки.
 - What changed: общий `runCommand` и остальные вызывающие стороны не менялись.
-- Evidence: обязательные 4 целевых теста с `-count=10` → PASS; `go vet
-  ./internal/worker` и `git diff --check` → PASS.
-- One next action: Verify выполняет один полный `go test ./... -count=1`.
+- Evidence: три health-критерия с `-count=10` → PASS; `git diff --check` →
+  PASS. Полный `go test ./... -count=1` завершился с двумя независимыми
+  интеграционными группами: три controlplane manifest-сценария и worker pool
+  refill; целевые health-тесты остаются зелёными.
+- One next action: human merge после учёта известных нестабильных integration-тестов.
 
 ## LOG
 
@@ -41,3 +43,16 @@ CARD-0061 ввела глобальный неблокирующий `flock` п�
 последовательно в рамках прежнего timeout, а общая дедупликация команд остаётся
 неблокирующей. Четыре обязательных теста прошли десять раз подряд; отдельно
 успешны `go vet ./internal/worker` и `git diff --check`.
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Два одинаковых Claude health-probe не запускаются одновременно и оба становятся healthy | `go test ./internal/worker -run 'Test(ConcurrentClaudeHealthChecksWaitForIdenticalProbe|ClaudeHealthCheckPreservesCommandFailure|ClaudeHealthCheckLockWaitHonorsTimeout)$' -count=10` | PASS, 30/30 проверок |
+| Ошибка CLI сохраняется, timeout ожидания ограничен | та же целевая команда | PASS |
+| Общий `runCommand` остаётся неблокирующим | целевые health-тесты плюс проверка изменённых вызовов в `health.go` | PASS; код общего launcher не изменён |
+| Полный проект без регрессий | `go test ./... -count=1` | НАХОДКА: FAIL в трёх `controlplane` manifest-сценариях и `TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot`; повтор worker-сценария также FAIL, вне изменённых health-файлов |
+| Рабочее дерево и патч без ошибок форматирования | `git diff --check`, `git status --short` | PASS |
+
+Pinned base: `e6c884a4387b92e3059d1385cc84a3bc22c95c3b`; candidate:
+`08789a6fdb8e42e0acef9fc8711f4667c460a231`.
