@@ -53,6 +53,7 @@ export function DelegateModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+	const [visual, setVisual] = useState(false);
   const selectedWorker = workers.find((worker) => worker.id === workerID);
   const repositoryOptions = useQuery({
     queryKey: ["worker-repository-options", workerID],
@@ -116,6 +117,11 @@ export function DelegateModal({
     if (!context.trim()) nextErrors.description = "Enter task context.";
     if (!workerID) nextErrors.worker = "Choose a worker.";
     if (!repositoryID) nextErrors.repository = "Choose a repository.";
+	const visualURL = String(form.get("visual_url") ?? "").trim();
+	const visualState = String(form.get("visual_state") ?? "").trim();
+	const viewportWidth = Number(form.get("viewport_width"));
+	const viewportHeight = Number(form.get("viewport_height"));
+	if (visual && (!visualURL || !visualState || viewportWidth < 320 || viewportWidth > 2560 || viewportHeight < 320 || viewportHeight > 2560)) nextErrors.visual = "Укажите URL, точный текст и viewport от 320 до 2560 px.";
     const timeoutSeconds = Number(timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 28_800) {
       nextErrors.timeout = "Choose a timeout from one minute to eight hours.";
@@ -139,6 +145,7 @@ export function DelegateModal({
       ...(workflowRevisionID
         ? { context, workflow_revision_id: workflowRevisionID }
         : { description: context }),
+	  ...(visual ? { visual_target: { url: visualURL, state_text: visualState, viewport_width: viewportWidth, viewport_height: viewportHeight, after_workflow_title: mode === "auto" ? "Verify" : "" } } : {}),
     };
     const fingerprint = JSON.stringify(payload);
     if (requestRef.current?.fingerprint !== fingerprint) {
@@ -257,6 +264,13 @@ export function DelegateModal({
             <Field label="Files" htmlFor="task-files">
               <TaskFilePicker files={attachmentFiles} onChange={setAttachmentFiles} error={errors.attachments} />
             </Field>
+			<label className="checkbox-row"><input type="checkbox" checked={visual} onChange={event => setVisual(event.target.checked)} /> Меняется видимый экран</label>
+			{visual && <div className="visual-target-fields">
+			  <Field label="URL экрана" htmlFor="visual-url" error={errors.visual}><input id="visual-url" name="visual_url" type="url" placeholder="https://staging-automation.tarser.net/listings" /></Field>
+			  <Field label="Точный видимый текст" htmlFor="visual-state"><input id="visual-state" name="visual_state" placeholder="Объявления готовы" /></Field>
+			  <Field label="Ширина" htmlFor="viewport-width"><input id="viewport-width" name="viewport_width" type="number" min="320" max="2560" defaultValue="1280" /></Field>
+			  <Field label="Высота" htmlFor="viewport-height"><input id="viewport-height" name="viewport_height" type="number" min="320" max="2560" defaultValue="720" /></Field>
+			</div>}
             <Field label="Worker" htmlFor="delegate-worker" error={errors.worker}>
               <select
                 id="delegate-worker"

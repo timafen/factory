@@ -4,11 +4,12 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer as createHTTPSServer } from "node:https";
 import { request as proxyRequest } from "node:http";
@@ -21,6 +22,8 @@ const database = join(temporary, "server", "factory.sqlite3");
 const workerData = join(temporary, "worker");
 const workerConfig = join(temporary, "worker.toml");
 const fakeBin = join(temporary, "bin");
+const reportBrowserRuntime = join(temporary, "report-browser-runtime");
+const reportBrowserLauncher = join(temporary, "factory-browser-sandbox");
 const legacyRoot = resolve(import.meta.dirname, "../test-results/legacy-poller");
 const legacyConfig = join(legacyRoot, "poller.toml");
 const legacyLedger = join(legacyRoot, "poller", "poller.sqlite3");
@@ -176,6 +179,24 @@ exit 2
   await chmod(executable, 0o755);
 }
 
+// The production server refuses to start without the isolated report browser
+// runtime. Build the same runtime contract inside this fixture before spawning
+// the Go server, so Chromium report checks exercise an actual browser in a
+// clean checkout instead of depending on host-level installation state.
+async function createReportBrowserRuntimeFixture() {
+  await run("npx", ["playwright", "install", "chromium"], { cwd: join(root, "web") });
+  const browser = execFileSync(
+    "node",
+    ["-e", "process.stdout.write(require('playwright').chromium.executablePath())"],
+    { cwd: join(root, "web"), encoding: "utf8" },
+  ).trim();
+  if (!browser.startsWith("/")) throw new Error("Playwright did not provide an absolute Chromium executable");
+  await mkdir(reportBrowserRuntime, { recursive: true });
+  await writeFile(join(reportBrowserRuntime, "package.json"), '{"private":true}\n', { mode: 0o600 });
+  await symlink(join(root, "web", "node_modules"), join(reportBrowserRuntime, "node_modules"), "dir");
+  await writeFile(reportBrowserLauncher, `#!/bin/sh\nexec ${JSON.stringify(browser)} "$@"\n`, { mode: 0o700 });
+}
+
 async function createLegacyPollerFixture() {
   await rm(legacyRoot, { recursive: true, force: true });
   await mkdir(join(legacyRoot, "poller"), { recursive: true });
@@ -252,6 +273,7 @@ await Promise.all([
   createFakeGH(),
   createLegacyPollerFixture(),
 ]);
+await createReportBrowserRuntimeFixture();
 const [factoryRepository, handbookRepository] = await Promise.all([
   createRepository("factory-demo"),
   createRepository("handbook-demo"),
@@ -357,6 +379,8 @@ const server = spawn(
       ...process.env,
       HOME: temporary,
       FACTORY_DATA_HOME: temporary,
+      FACTORY_BROWSER_LAUNCHER: reportBrowserLauncher,
+      FACTORY_BROWSER_RUNTIME: reportBrowserRuntime,
       PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
     },
     stdio: "inherit",
