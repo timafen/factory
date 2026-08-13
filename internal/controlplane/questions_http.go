@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -48,6 +49,9 @@ func (a *API) listQuestions(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(data, &rec); err != nil {
 			continue
 		}
+		if questionContainsPythonMock(rec) {
+			continue
+		}
 		delete(rec, "prior_result") // large; not needed by the list UI
 		out = append(out, rec)
 	}
@@ -55,6 +59,27 @@ func (a *API) listQuestions(w http.ResponseWriter, r *http.Request) {
 		return toString(out[i]["id"]) < toString(out[j]["id"])
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"questions": out})
+}
+
+func questionContainsPythonMock(rec map[string]any) bool {
+	for _, field := range []string{"title", "situation", "question", "options", "answer", "escalation_reason"} {
+		if value, ok := rec[field].(string); ok && isPythonMockRepr(value) {
+			return true
+		}
+		if values, ok := rec[field].([]any); ok {
+			for _, value := range values {
+				if text, ok := value.(string); ok && isPythonMockRepr(text) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isPythonMockRepr(value string) bool {
+	value = strings.TrimSpace(value)
+	return (strings.HasPrefix(value, "<MagicMock ") || strings.HasPrefix(value, "<Mock ")) && strings.HasSuffix(value, ">")
 }
 
 func toString(v any) string {
