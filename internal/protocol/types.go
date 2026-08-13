@@ -294,21 +294,52 @@ type Worker struct {
 }
 
 type CreateTaskRequest struct {
-	RequestKey                 string     `json:"request_key"`
-	Title                      string     `json:"title"`
-	Description                string     `json:"description,omitempty"`
-	Context                    string     `json:"context,omitempty"`
-	WorkerID                   string     `json:"worker_id,omitempty"`
-	RepositoryID               string     `json:"repository_id,omitempty"`
-	Route                      *TaskRoute `json:"route,omitempty"`
-	TimeoutSeconds             int        `json:"timeout_seconds"`
-	WorkflowRevisionID         string     `json:"workflow_revision_id,omitempty"`
-	AttachmentIDs              []string   `json:"attachment_ids,omitempty"`
-	ParentTaskID               string     `json:"parent_task_id,omitempty"`
-	CorrectionKind             string     `json:"correction_kind,omitempty"`
-	DescriptionProvided        bool       `json:"-"`
-	ContextProvided            bool       `json:"-"`
-	WorkflowRevisionIDProvided bool       `json:"-"`
+	RequestKey                 string        `json:"request_key"`
+	Title                      string        `json:"title"`
+	Description                string        `json:"description,omitempty"`
+	Context                    string        `json:"context,omitempty"`
+	WorkerID                   string        `json:"worker_id,omitempty"`
+	RepositoryID               string        `json:"repository_id,omitempty"`
+	Route                      *TaskRoute    `json:"route,omitempty"`
+	TimeoutSeconds             int           `json:"timeout_seconds"`
+	WorkflowRevisionID         string        `json:"workflow_revision_id,omitempty"`
+	AttachmentIDs              []string      `json:"attachment_ids,omitempty"`
+	ParentTaskID               string        `json:"parent_task_id,omitempty"`
+	CorrectionKind             string        `json:"correction_kind,omitempty"`
+	VisualTarget               *VisualTarget `json:"visual_target,omitempty"`
+	DescriptionProvided        bool          `json:"-"`
+	ContextProvided            bool          `json:"-"`
+	WorkflowRevisionIDProvided bool          `json:"-"`
+}
+
+type VisualTarget struct {
+	WorkID             string `json:"work_id,omitempty"`
+	URL                string `json:"url"`
+	StateText          string `json:"state_text"`
+	ViewportWidth      int    `json:"viewport_width"`
+	ViewportHeight     int    `json:"viewport_height"`
+	AfterWorkflowTitle string `json:"after_workflow_title,omitempty"`
+}
+
+type VisualCapture struct {
+	WorkID     string    `json:"work_id,omitempty"`
+	Phase      string    `json:"phase"`
+	Status     string    `json:"status"`
+	Path       string    `json:"path,omitempty"`
+	SHA256     string    `json:"sha256,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	CapturedAt time.Time `json:"captured_at,omitempty"`
+}
+
+type DailyReport struct {
+	ReportDate string         `json:"report_date"`
+	Timezone   string         `json:"timezone"`
+	Status     string         `json:"status"`
+	Metrics    map[string]any `json:"metrics,omitempty"`
+	PDFPath    string         `json:"-"`
+	PDFSHA256  string         `json:"pdf_sha256,omitempty"`
+	PDFSize    int64          `json:"pdf_size,omitempty"`
+	Error      string         `json:"error,omitempty"`
 }
 
 const (
