@@ -1,16 +1,15 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
+Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — ошибка настоящего forked gate проходит через launcher, поддельный успех игнорируется.
 
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: factory/f851f8f5-7e7-0715f029-f5f.
-Implementation commit: f97fe77d83f844426623f2a0e8a2a27ffb3cc603 — crash-cleanup и все release-проверки Gate завершаются bounded и зелёно.
-What changed: crash recovery очищает hook перед повторным запуском; каждый release, signal и driver-сценарий имеет жёсткий timeout.
-What changed: разделены повторные PATH-fixture, добавлены trusted-gate env для фоновых и rollback runner; anti-spoof контракт сохранён.
-Evidence: pinned `e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3`; полный release shell-suite → PASS; shell syntax и pinned diff-check → PASS. Общий `just check` остановился на существующем SA4000 вне области поставки.
-One next action: выполнить human merge ветки `factory/f851f8f5-7e7-0715f029-f5f`.
+Branch: factory/e35e268f-1d3-934fca68-3f2.
+Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — регрессия проверяет ошибку настоящего forked gate за launcher.
+What changed: fixture подделывает успешный файловый result, пока настоящий forked gate завершается ошибкой; добавлен отдельный bounded-запуск сценария.
+Evidence: `timeout 120s env FACTORY_TEST_ONLY=forged-gate-result FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS, exit 0; release вернул gate error 5 и не запускал сборку или установку.
+One next action: выполнить human merge ветки `factory/e35e268f-1d3-934fca68-3f2`.
 
 ## LOG
 
@@ -102,3 +101,9 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | Полный набор проекта | `just check` | НАХОДКА вне области: vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
 | Закреплённая поставка | isolated bare fetch; `git diff --name-only e43462307fcd7c25003eecfe693fd21a9dfe8ba7...f56152de979f841d779ced73442f5f55241508b3` | PASS: изменены только карточка и два release-скрипта; implementation commit `f97fe77d83f844426623f2a0e8a2a27ffb3cc603` валиден. |
 | Чистота | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; pinned `git diff --check` | PASS. |
+
+### 2026-08-12 — Implement
+
+Регрессия подделывает успешный result рядом с настоящим forked gate и требует вернуть
+исходную ошибку 5 без сборки и установки. Изолированный сценарий с внешним timeout,
+внутренним timeout и trap-очисткой завершился PASS с кодом 0; синтаксис и diff-check прошли.
