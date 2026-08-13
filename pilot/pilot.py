@@ -1881,24 +1881,83 @@ def area_replace(base, files, repo=""):
     return set(known[base])
 
 
+def _area_paths(paths, repo=""):
+    """Canonical repository/path keys; old unqualified area records migrate on read."""
+    out = set()
+    for value in paths or []:
+        value = str(value or "").strip()
+        if not value:
+            continue
+        owner, path = value.split("::", 1) if "::" in value else (repo, value)
+        out.add((owner, path))
+    return out
+
+
+def _area_priority(task):
+    """Plan work wins over manual work, independently of /tasks response order."""
+    order = task.get("plan_order", task.get("order"))
+    work = str(task.get("work_id") or task_work_id(task))
+    if order is not None:
+        try:
+            return (0, int(order), work)
+        except (TypeError, ValueError):
+            pass
+    return (1, str(task.get("first_assigned_at") or task.get("created_at") or ""), work)
+
+
+def area_lock_arbitrate(tasks, candidate, areas=None):
+    """Atomically select non-overlapping area owners and return candidate's blocker.
+
+    The whole snapshot is sorted before any lock is granted.  This is important:
+    selecting the first matching neighbour made A wait for B and B wait for A
+    when the control plane happened to return tasks in the opposite order.
+    """
+    areas = areas if areas is not None else (load(AREAS_PATH, {}) or {})
+    candidate = dict(candidate or {})
+    candidate.setdefault("base", base_title(candidate.get("title") or ""))
+    candidate.setdefault("work_id", task_work_id(candidate))
+    claims = [candidate]
+    seen = {str(candidate["work_id"])}
+    for task in tasks or []:
+        if task.get("state") not in ("running", "queued"):
+            continue
+        base = base_title(task.get("title") or "")
+        work = str(task_work_id(task))
+        if not base or work in seen:
+            continue
+        row = dict(task)
+        row["base"] = base
+        row["work_id"] = work
+        seen.add(work)
+        claims.append(row)
+    for row in claims:
+        repo = row.get("repository_id") or row.get("repo") or ""
+        raw = row.get("paths")
+        if raw is None:
+            raw = areas.get(row.get("base"), [])
+        row["area_paths"] = _area_paths(raw, repo)
+    winners, occupied = [], set()
+    for row in sorted(claims, key=_area_priority):
+        if row["area_paths"] and not (occupied & row["area_paths"]):
+            winners.append(row)
+            occupied |= row["area_paths"]
+    mine = str(candidate["work_id"])
+    if any(str(row["work_id"]) == mine for row in winners):
+        return {"allowed": True, "holder": "", "owners": winners}
+    mine_paths = candidate["area_paths"]
+    holder = next((row for row in winners if mine_paths & row["area_paths"]), None)
+    return {"allowed": False, "holder": (holder or {}).get("base", ""), "owners": winners}
+
+
 def area_busy(tasks, base, context="", repo=""):
-    """Кто уже занял тот же файл. Возвращает имя работы или пустую строку."""
+    """Return the deterministic owner of an overlapping area, if any."""
     mine = area_of(base, context, repo)
     if not mine:
         return ""
-    known = load(AREAS_PATH, {}) or {}
-    for t in tasks:
-        if t.get("state") not in ("running", "queued"):
-            continue
-        m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m:
-            continue
-        other = m.group(2).strip()
-        if other == base.strip():
-            continue
-        if mine & set(known.get(other) or []):
-            return other
-    return ""
+    decision = area_lock_arbitrate(tasks, {
+        "base": base, "work_id": base, "repository_id": repo, "paths": mine,
+    })
+    return decision["holder"] if not decision["allowed"] else ""
 
 
 # ------------------------------------------------------------- предложения ---
@@ -2954,23 +3013,21 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         known = load(AREAS_PATH, {}) or {}
         mine = {p.split("::", 1)[1] if "::" in p else p
                 for p in known.get(base) or []}
-        alien = other_areas(base, active_tasks, area_repo or repo_identity)
-        overlaps = sorted(f for f in files if f in alien)
+        lock = area_lock_arbitrate(active_tasks or [], {
+            "base": base, "work_id": base, "repository_id": area_repo,
+            "paths": [(area_repo + "::" if area_repo else "") + f for f in files],
+        }, known)
+        overlaps = sorted(f for owner, f in _area_paths(files, area_repo)
+                          if any((owner, f) in row["area_paths"]
+                                 for row in lock["owners"]
+                                 if row.get("base") != base))
         noise = sorted(f for f in files if any(n in f for n in NOISE_PATHS))
-        if overlaps:
+        if not lock["allowed"]:
             # Нельзя «разрулить» настоящее пересечение удалением файлов из
             # одной ветки: это как раз и теряет готовую реализацию. Замок
             # остаётся строгим — ждём, пока соседняя живая работа освободит
             # область, затем пересчитаем её по фактическому diff.
-            holder = "другая живая работа"
-            for t in active_tasks or []:
-                m = STAGE_TITLE_RE.match(t.get("title", ""))
-                if (t.get("state") in ("running", "queued") and m
-                        and m.group(2).strip() != base
-                        and set(overlaps) & {p.split("::", 1)[1] if "::" in p else p
-                                             for p in known.get(m.group(2).strip()) or []}):
-                    holder = m.group(2).strip()
-                    break
+            holder = lock["holder"] or "другая живая работа"
             log(f"AREA WAIT {base!r} ждёт: пересечение с {holder!r}: "
                 + ", ".join(overlaps)[:160])
             return {"wait": True,

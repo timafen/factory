@@ -6834,5 +6834,58 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
 
 
+class AreaLockArbitrationTests(unittest.TestCase):
+    """Regression coverage for deterministic, whole-area admission."""
+
+    def decide(self, tasks, candidate, areas):
+        return pilot.area_lock_arbitrate(tasks, candidate, areas)
+
+    def test_same_file_has_one_winner_regardless_of_input_order(self):
+        first = {"work_id": "A", "plan_order": 2, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] A", "state": "running"}
+        second = {"work_id": "B", "plan_order": 1, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        for tasks in ([first, second], [second, first]):
+            self.assertFalse(self.decide(tasks, first, areas)["allowed"])
+            self.assertTrue(self.decide(tasks, second, areas)["allowed"])
+
+    def test_manual_priority_is_time_then_stable_work_id(self):
+        early = {"work_id": "z", "created_at": "2026-08-10T09:00:00Z",
+                 "repository_id": "r", "title": "[auto] [2/5 Implement] Early",
+                 "state": "running"}
+        same_time = {"work_id": "a", "created_at": "2026-08-10T09:00:00Z",
+                     "repository_id": "r", "title": "[auto] [2/5 Implement] Same",
+                     "state": "running"}
+        areas = {"Early": ["r::one.py"], "Same": ["r::one.py"]}
+        self.assertTrue(self.decide([early, same_time], same_time, areas)["allowed"])
+        self.assertFalse(self.decide([early, same_time], early, areas)["allowed"])
+
+    def test_whole_area_grant_never_partially_locks_middle_work(self):
+        left = {"work_id": "left", "plan_order": 1, "repository_id": "r",
+                "title": "[auto] [2/5 Implement] Left", "state": "running"}
+        middle = {"work_id": "middle", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] Middle", "state": "running"}
+        right = {"work_id": "right", "plan_order": 3, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] Right", "state": "running"}
+        areas = {"Left": ["r::a.py"], "Middle": ["r::a.py", "r::b.py"],
+                 "Right": ["r::b.py"]}
+        result = self.decide([middle, right, left], middle, areas)
+        self.assertFalse(result["allowed"])
+        self.assertEqual({row["work_id"] for row in result["owners"]}, {"left", "right"})
+
+    def test_repository_and_path_are_part_of_lock_identity(self):
+        owner = {"work_id": "owner", "plan_order": 1, "repository_id": "one",
+                 "title": "[auto] [2/5 Implement] Owner", "state": "running"}
+        other_repo = {"work_id": "other", "plan_order": 2, "repository_id": "two",
+                      "title": "[auto] [2/5 Implement] Other", "state": "running"}
+        other_path = {"work_id": "path", "plan_order": 2, "repository_id": "one",
+                      "title": "[auto] [2/5 Implement] Path", "state": "running"}
+        areas = {"Owner": ["one::same.py"], "Other": ["two::same.py"],
+                 "Path": ["one::different.py"]}
+        self.assertTrue(self.decide([owner, other_repo], other_repo, areas)["allowed"])
+        self.assertTrue(self.decide([owner, other_path], other_path, areas)["allowed"])
+
+
 if __name__ == "__main__":
     unittest.main()
