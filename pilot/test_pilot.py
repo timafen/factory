@@ -1630,6 +1630,56 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         diagnose.assert_not_called()
 
+    def test_live_sweep_diagnoses_modern_work_on_fifth_round(self):
+        running = dict(
+            self.task,
+            id="round-5",
+            work_id="work-1",
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        history = [dict(
+            running,
+            id=f"round-{round_no}",
+            state="succeeded" if round_no < 5 else "running",
+        ) for round_no in range(1, 6)]
+        conf = dict(self.conf, deep_diag_rounds=5)
+        verdict = {"причина": "цикл", "решение": "починить",
+                   "нужен_владелец": False}
+
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(
+                    pilot, "deep_diagnose", return_value=verdict) as diagnose:
+            pilot.diag_sweep(conf, history)
+
+        diagnose.assert_called_once_with(
+            conf, "Починить отчёт", "Implement + Test", 5, history,
+            repair_task=running)
+
+    def test_live_sweep_does_not_count_same_title_from_another_work(self):
+        running = dict(
+            self.task,
+            id="current-round",
+            work_id="current-work",
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        other_history = [dict(
+            running,
+            id=f"other-round-{round_no}",
+            work_id="other-work",
+            state="succeeded",
+        ) for round_no in range(1, 6)]
+        conf = dict(self.conf, deep_diag_rounds=5)
+
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+            pilot.diag_sweep(conf, [running] + other_history)
+
+        diagnose.assert_not_called()
+
     def test_terminal_route_does_not_repeat_spent_diagnosis(self):
         self.repairs["Починить отчёт"] = {"status": "resumed"}
         with mock.patch.object(pilot, "cap_rescues", return_value=1), \

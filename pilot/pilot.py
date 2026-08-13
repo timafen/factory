@@ -3621,8 +3621,12 @@ def diag_sweep(conf, tasks):
         # route_question, where a safe repair has enough evidence to start.
         if cap_rescues(base, "DIAG") >= 1:
             continue
-        rounds = max(stage_attempts(tasks, "Implement + Test", base),
-                     stage_attempts(tasks, "Review", base))
+        # Pass the live task, not only its owner-facing title. New pipeline
+        # rows have a durable work_id; comparing that ID with ``base`` made
+        # every modern work look as if it had completed zero rounds, so the
+        # early guard never fired and only the later money cap stopped it.
+        rounds = max(stage_attempts(tasks, "Implement + Test", t),
+                     stage_attempts(tasks, "Review", t))
         if rounds < diag_at:
             continue
         try:
