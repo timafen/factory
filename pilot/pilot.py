@@ -6171,54 +6171,26 @@ def recent_done_block(tasks, n=5):
         if old is None or at >= old[0]:
             latest[title] = (at, task, stage)
 
-    out = []
+    merged, failed = [], []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
         if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
-        elif state == "succeeded":
-            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
-        else:
-            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
+            merged.append({"title": title[:120], "at": at, "stage": stage})
+            continue
+        if state not in ("failed", "cancelled"):
+            continue
+        reason = "причина не указана"
         try:
             attempts = api(f"/tasks/{task['id']}").get("attempts") or []
-            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
-            if proof:
-                detail += " Проверено: " + proof
+            result = (attempts[-1].get("result") if attempts else "") or ""
+            reason = proof_of(result) or cut(result.strip(), 180) or reason
         except Exception:
             pass
-        out.append({"title": title[:120], "detail": detail[:180], "at": at,
-                    "status": status})
-        if len(out) >= n:
-            return out
+        failed.append({"title": title[:120], "at": at, "stage": stage,
+                       "reason": reason[:180]})
 
-    if out:
-        return out
-
-    # Before structured task history exists, show old real notifications but
-    # never revive the service noise that prompted this view's redesign.
-    try:
-        with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
-            lines = stream.readlines()[-400:]
-        for line in reversed(lines):
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
-            if r.get("title") != "Задача выполнена":
-                continue
-            body = (r.get("message") or "").split(chr(10))
-            title = body[0].strip()
-            if not title or is_service_work(title) or title in latest:
-                continue
-            out.append({"title": title[:120],
-                        "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or "", "status": "legacy"})
-            if len(out) >= n:
-                break
-    except Exception:
-        pass
-    return out
+    # Separate limits ensure a burst of fresh failures cannot hide delivered work.
+    return {"merged": merged[:n], "failed": failed[:n]}
 
 
 def limits_view():

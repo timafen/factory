@@ -35,7 +35,7 @@ type Dash = {
   };
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
-  recent_done?: RecentDone[];
+  recent_done?: RecentDoneGroups;
   projects?: ProductProject[];
   janitor?: string;
   release_train?: ReleaseTrainSnapshot | null;
@@ -161,9 +161,9 @@ type ActiveTask = {
 };
 type WorkMeta = { origin?: string };
 export type RecentDone = {
-  title: string; detail?: string; at?: string;
-  status?: "merged" | "passed" | "failed" | "legacy";
+  title: string; at?: string; stage?: string; reason?: string;
 };
+export type RecentDoneGroups = { merged?: RecentDone[]; failed?: RecentDone[] };
 type OverviewWork = {
   id: string;
   title: string;
@@ -290,6 +290,19 @@ function formatDuration(seconds: number | null) {
 
 function formatSeconds(seconds: number) {
   return Math.round(seconds).toLocaleString("ru-RU");
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatRecentDate(value?: string, now = new Date()) {
+  if (!value) return "дата неизвестна";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "дата неизвестна";
+  const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const difference = (day(now) - day(date)) / 86400000;
+  if (difference === 0) return `сегодня ${time}`;
+  if (difference === 1) return `вчера ${time}`;
+  return `${date.toLocaleDateString("ru-RU")} ${time}`;
 }
 
 function formatRate(rate: EfficiencyRate) {
@@ -547,27 +560,38 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       {efficiency && <EfficiencyPanel summary={efficiency} />}
       {capacity && <ProductCapacityPanel summary={capacity} />}
 
-      {(d.recent_done ?? []).length > 0 && (
+      {((d.recent_done?.merged?.length ?? 0) + (d.recent_done?.failed?.length ?? 0) > 0) && (
         <section style={card} aria-label="Сделано недавно">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <CheckCircle2 size={16} color="#7ee2a8" /><strong>Сделано недавно</strong>
           </div>
-          {(d.recent_done ?? []).map((r, i) => (
+          {(d.recent_done?.merged?.length ?? 0) > 0 && <><strong style={{ fontSize: 13 }}>Влито</strong>
+          {(d.recent_done?.merged ?? []).map((r, i) => (
             <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10,
                                   padding: "7px 0",
                                   borderTop: i ? "1px solid #1d2430" : "none" }}>
-              <span style={{ color: r.status === "failed" ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
-                {r.status === "failed" ? "!" : "✓"}
+              <span style={{ color: "#7ee2a8", fontSize: 13, flex: "none" }}>
+                ✓
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
                               whiteSpace: "nowrap" }}>{r.title}</div>
-                {r.detail && <div style={{ fontSize: 12, color: muted, overflow: "hidden",
-                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.detail}</div>}
+                <div style={{ fontSize: 12, color: muted }}>Влито в main</div>
               </div>
-              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{(r.at || "").slice(5, 16)}</span>
+              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{formatRecentDate(r.at)}</span>
             </div>
-          ))}
+          ))}</>}
+          {(d.recent_done?.failed?.length ?? 0) > 0 && <><strong style={{ display: "block", fontSize: 13, marginTop: 10 }}>Остановилось</strong>
+          {(d.recent_done?.failed ?? []).map((r, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "7px 0", borderTop: "1px solid #1d2430" }}>
+              <span style={{ color: "#ff9d9d", fontSize: 13, flex: "none" }}>!</span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5 }}>{r.title}</div>
+                <div style={{ fontSize: 12, color: muted }}>Этап: {r.stage || "не указан"} · {r.reason || "причина не указана"}</div>
+              </div>
+              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{formatRecentDate(r.at)}</span>
+            </div>
+          ))}</>}
         </section>
       )}
 

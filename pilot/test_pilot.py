@@ -6394,7 +6394,7 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api") as api:
             recent = pilot.recent_done_block([task])
 
-        self.assertEqual(recent, [])
+        self.assertEqual(recent, {"merged": [], "failed": []})
         api.assert_not_called()
 
     def test_excludes_successful_progress_and_unmerged_verify(self):
@@ -6418,9 +6418,8 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent],
-                         ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
+        self.assertEqual([item["title"] for item in recent["merged"]], ["Поиск товаров"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
@@ -6447,11 +6446,8 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
-        self.assertEqual(recent[0]["status"], "failed")
-        self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "delivered")
-        self.assertIn("Выпуск принят", recent[1]["detail"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
+        self.assertEqual([item["title"] for item in recent["merged"]], ["Новая витрина"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
@@ -6465,8 +6461,26 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block([], n=3)
 
-        self.assertEqual([item["title"] for item in recent], ["Старый настоящий результат"])
-        self.assertEqual(recent[0]["status"], "legacy")
+        self.assertEqual(recent, {"merged": [], "failed": []})
+
+    def test_separates_merged_and_failed_with_independent_limits(self):
+        merged = [{"id": f"merged-{i}", "title": f"[auto] [5/5 Verify] Влитая {i}",
+                   "state": "succeeded", "updated_at": f"2026-08-10T10:0{i}:00Z"} for i in range(4)]
+        failed = [{"id": f"failed-{i}", "title": f"[auto] [4/5 Review] Провал {i}",
+                   "state": "cancelled" if i == 0 else "failed", "updated_at": f"2026-08-10T12:0{i}:00Z"} for i in range(5)]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
+            for task in merged:
+                stream.write(json.dumps({"task_id": task["id"]}) + "\n")
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
+                mock.patch.object(pilot, "api", return_value={"attempts": [{"result": "ПРОВЕРКА: причина видна."}]}):
+            recent = pilot.recent_done_block(merged + failed)
+        self.assertEqual(len(recent["merged"]), 4)
+        self.assertEqual(len(recent["failed"]), 5)
+        self.assertEqual(recent["failed"][0]["stage"], "Review")
+        self.assertIn("причина видна.", recent["failed"][0]["reason"])
 
     def test_reads_every_task_page(self):
         pages = [
