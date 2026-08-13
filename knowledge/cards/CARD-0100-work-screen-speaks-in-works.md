@@ -12,10 +12,9 @@ Implementation commit: 044330df62abf376ab12a1f63ac023cc1d15b4d0 — карточ
   названию. Экран, навигация и ожидания получили смысловые русские подписи.
 - Scope: только уже существующие задачи и их `work_id`; pre-task реестр не
   создаётся.
-- Evidence: в чистой копии кандидата целевые web-тесты — 84/84;
-  `lint`, `typecheck` и production-сборка — без ошибок. `just check`
-  остановился на прежнем SA4000 в `internal/worker/attempt_lifecycle_test.go`,
-  вне области поставки.
+- Evidence: в чистой копии кандидата полный web-набор — 164/164;
+  `lint`, `typecheck` и production-сборка — без ошибок. Полный Go-набор
+  остановился на флейки-проверке в `internal/worker`, вне области поставки.
 - One next action: человеку проверить экран «Работа» на стенде перед merge.
 
 ## LOG
@@ -62,6 +61,8 @@ Web-контракт `Task` дополнен `work_id`; группировка, 
 | Смыслы ожидания различимы | `Work.test.ts`, `WorkView.test.tsx` | Подписи ожидания исполнителя, подготовки Factory и запуска задачи различны. |
 | Русские названия без технического id | `App.test.tsx`, `WorkView.test.tsx` | «Работа», «Исполнители»; `work_id` не отображается. |
 
-В чистой копии кандидата `npm --prefix web test -- --run src/Work.test.ts src/WorkView.test.tsx src/App.test.tsx` прошло: 3 файла, 84 теста.
-`lint`, `typecheck` и build прошли; `git diff --check` чист. `just check`
-останавливается на известном SA4000 в `internal/worker/attempt_lifecycle_test.go`, не изменённом поставкой.
+В чистой копии кандидата `npm --prefix web test` прошло: 14 файлов, 164 теста;
+обязательный целевой запуск прошёл: 3 файла, 84 теста. `lint`, `typecheck` и
+build прошли; `git diff --check` чист. Полный `just test` остановился только в
+неизменённом `internal/worker`: флейки-тест lease renewal измерил spread 3.02 ms;
+`just check` ранее также остановился на SA4000 в том же внешнем пакете.
