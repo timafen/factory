@@ -108,10 +108,11 @@ endpoint и новое поколение не нужны.
 
 ## Тест-план
 
-- `PipelineWatchTests`: одна фикстура с общим `work_id` проходит состояния
-  «пауза → terminal success → снятие паузы → successor», затем повторный цикл;
-  assertions покрывают stage, request key, parent/work identity, `processed`,
-  status и количество create-вызовов.
+- Новый `PipelineWatchTests.test_resumes_paused_terminal_success_without_new_generation`:
+  одна фикстура с общим `work_id` проходит состояния «пауза → terminal success
+  → снятие паузы → successor», затем повторный цикл; assertions покрывают
+  stage, request key, parent/work identity, `processed`, status и количество
+  create-вызовов.
 - Lifecycle-тесты Pilot: одинаковый `work_id` разрешён без `created_at`, другой
   `work_id` после explicit restart и durable close запрещены.
 - Failure-таблица Pilot: workflow disabled, worker unavailable, control-plane
@@ -169,4 +170,4 @@ Verify.
 ГОТОВО-КОГДА: файл internal/controlplane/work_resume_http_test.go
 ГОТОВО-КОГДА: файл web/src/Work.test.ts
 ГОТОВО-КОГДА: файл web/src/WorkView.test.tsx
-ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.PipelineWatchTests
+ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.PipelineWatchTests.test_resumes_paused_terminal_success_without_new_generation
