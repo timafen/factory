@@ -1,21 +1,20 @@
 # CARD-0100 — Экран «Работа» говорит на языке работ
 
-Implementation commit: c3f3a425e2d7e959079f09c33a99af8153c86a7a — зафиксирован проверяемый контракт реализации; продуктовый код на этапе Specification не изменялся.
+Implementation commit: 044330df62abf376ab12a1f63ac023cc1d15b4d0 — карточки работ разделены по `work_id`, а ожидания и навигация названы по смыслу.
 
 ## HEAD
 
-- Status: Specification complete — ready for Implement + Test.
+- Status: Implement + Test complete — ready for Review.
+- Branch: `factory/6516dc47-1b1-9ee020a6-f94`.
 - Specification: `knowledge/specs/work-screen-speaks-in-works.md`.
-- Owner impact: одноимённые работы перестанут сливаться, а разные виды
-  ожидания будут подписаны по смыслу.
+- What changed: этапы объединяются по `work_id`, одноимённые работы имеют
+  независимые карточки и раскрытие; legacy-задачи остаются сгруппированы по
+  названию. Экран, навигация и ожидания получили смысловые русские подписи.
 - Scope: только уже существующие задачи и их `work_id`; pre-task реестр не
   создаётся.
-- Implementation files: `web/src/types.ts`, `web/src/Work.tsx`,
-  `web/src/Work.test.ts`, `web/src/WorkView.test.tsx`,
-  `web/src/App.tsx`, `web/src/App.test.tsx`.
-- Required check: `npm --prefix web test -- --run src/Work.test.ts src/WorkView.test.tsx src/App.test.tsx`.
-- One next action: реализовать спецификацию и заменить эту строку
-  Implementation commit на полный SHA продуктового коммита.
+- Evidence: целевые web-тесты — 84/84; `typecheck` и `lint` — без ошибок;
+  production-сборка — успешна (1738 модулей).
+- One next action: на Review визуально проверить `/` в доступном окружении.
 
 ## LOG
 
@@ -39,3 +38,14 @@ Triage-ветка `factory/e993352d-43d-c2a304bc-244` отсутствовала
 момент Specification; её отчёт передан в контексте и подтверждал отсутствие
 изменений, поэтому спецификация построена по свежему `origin/main` и
 фактическим контрактам кода.
+
+### 2026-08-12 — Implement
+
+Web-контракт `Task` дополнен `work_id`; группировка, metadata lookup, React key,
+раскрытие и локальное состояние карточки переведены на identity с fallback по
+названию. Одноимённые работы больше не сливаются, технический id не выводится.
+
+Разведены подписи ожидания исполнителя, подготовки следующего этапа и запуска
+задачи; основной экран называется «Работа», служебная навигация —
+«Исполнители». Доказательства: 84/84 целевых теста, успешные `typecheck`,
+`lint`, production-сборка и `git diff --check`.
