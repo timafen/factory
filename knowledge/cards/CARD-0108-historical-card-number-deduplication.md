@@ -1,29 +1,74 @@
 # CARD-0108 — Одноразово развести исторические дубли номеров карточек
 
-Implementation commit: d0de88bf9a9d3693c844a78824244572fa345fcd — Пилот резервирует номера карточек для новых параллельных работ.
+## HEAD
 
-## Статус
+Status: Implemented — исторические дубли разведены.
+Branch: factory/46c41fc2-77a-11020acd-036
+Implementation commit: eb0a854dbcb524ebf10aeb6e3653f0e995707b9a — утилита и одноразовое переименование карточек.
+What changed: добавлена проверяемая утилита dry-run/`--apply`; 38 неканонических путей получили номера 0109–0146, точные ссылки обновлены.
+Evidence: `python3 -m unittest -v scripts.test_renumber_historical_cards` — OK (3 теста); резервирование Пилота — OK (5 тестов); дублей нет.
+Next action: проверить свежую ветку на Verify и влить изменение в `main`.
 
-Status: Specified — ожидает Implement + Test.
-Next action: выполнить детерминированную одноразовую миграцию исторического каталога.
+## LOG
 
-## Что требуется
+### 2026-08-12 — Specification
 
-В каталоге `knowledge/cards/` остались 23 повторяющихся номера, хотя новые
-работы уже получают резерв номера до разработки. Эта работа не меняет Пилот:
-она добавит проверяемую утилиту, один раз переименует неканонические карточки
-в свободные номера и исправит лишь точные ссылки на их старые пути.
+В каталоге `knowledge/cards/` остались 23 повторяющихся номера. Specification
+зафиксировала детерминированный выбор лексикографически первого пути, свободные
+номера после максимума, замену только полных ссылок и отсутствие изменений в
+Пилоте.
 
-## Границы
+### 2026-08-12 — Implement
 
-- Сохраняется один лексикографически первый путь в каждой группе номера;
-  остальные получают свободные номера после текущего максимума.
-- Не переписываются голые исторические номера, содержимое журналов и Git-история.
-- После применения повторный запуск не предлагает изменений.
+Применён dry-run со свежим каталогом: 105 файлов, 23 группы дублей, 38
+переименований. Канонический лексикографически первый путь оставлен, остальные
+получили номера 0109–0146; содержимое карточек сохранено, обновлены только
+точные ссылки на старые пути.
 
-## Проверка
+Манифест old-path → new-path:
 
-`python3 -m unittest -v scripts.test_renumber_historical_cards`
+```text
+CARD-0034-internal-factory-pipeline-patrol.md -> CARD-0109-internal-factory-pipeline-patrol.md
+CARD-0034-pilot-brain-provider-fallback.md -> CARD-0110-pilot-brain-provider-fallback.md
+CARD-0034-plan-priority-autostart.md -> CARD-0111-plan-priority-autostart.md
+CARD-0036-ui-shared-eslint-errors.md -> CARD-0112-ui-shared-eslint-errors.md
+CARD-0037-server-load-admission.md -> CARD-0113-server-load-admission.md
+CARD-0038-pilot-config-server-schema-sync.md -> CARD-0114-pilot-config-server-schema-sync.md
+CARD-0038-sandbox-ebay-owner-consent.md -> CARD-0115-sandbox-ebay-owner-consent.md
+CARD-0039-stage-specific-agent-rules.md -> CARD-0116-stage-specific-agent-rules.md
+CARD-0041-readable-work-history.md -> CARD-0117-readable-work-history.md
+CARD-0041-stalled-work-diagnosis-repair.md -> CARD-0118-stalled-work-diagnosis-repair.md
+CARD-0043-overview-project-products.md -> CARD-0119-overview-project-products.md
+CARD-0045-fable-automation-migration-audit.md -> CARD-0120-fable-automation-migration-audit.md
+CARD-0045-factory-claude-patrol-automation.md -> CARD-0121-factory-claude-patrol-automation.md
+CARD-0047-diag-repair-duplicate-active-runs.md -> CARD-0122-diag-repair-duplicate-active-runs.md
+CARD-0047-factory-control-bootstrap.md -> CARD-0123-factory-control-bootstrap.md
+CARD-0047-idempotent-verify-merge.md -> CARD-0124-idempotent-verify-merge.md
+CARD-0047-worker-utf8-runtime.md -> CARD-0125-worker-utf8-runtime.md
+CARD-0048-offline-claude-haiku-retained-worktree.md -> CARD-0126-offline-claude-haiku-retained-worktree.md
+CARD-0048-orphaned-paused-pipeline-cleanup.md -> CARD-0127-orphaned-paused-pipeline-cleanup.md
+CARD-0048-server-browser-network-isolation.md -> CARD-0128-server-browser-network-isolation.md
+CARD-0051-pilot-local-worker-notification-channel.md -> CARD-0129-pilot-local-worker-notification-channel.md
+CARD-0051-server-browser-network-isolation-verification.md -> CARD-0130-server-browser-network-isolation-verification.md
+CARD-0052-pilot-explicit-wait-action.md -> CARD-0131-pilot-explicit-wait-action.md
+CARD-0052-pipeline-watch-cycle.md -> CARD-0132-pipeline-watch-cycle.md
+CARD-0052-test-helper-cleanup.md -> CARD-0133-test-helper-cleanup.md
+CARD-0055-worker-slowest-tests.md -> CARD-0134-worker-slowest-tests.md
+CARD-0057-review-return-reasons.md -> CARD-0135-review-return-reasons.md
+CARD-0058-single-work-heavy-stage-deduplication.md -> CARD-0136-single-work-heavy-stage-deduplication.md
+CARD-0059-recent-done-final-results.md -> CARD-0137-recent-done-final-results.md
+CARD-0060-work-completed-task-visible.md -> CARD-0138-work-completed-task-visible.md
+CARD-0067-janitor-confirmation-route-regression.md -> CARD-0139-janitor-confirmation-route-regression.md
+CARD-0067-release-all-worker-services.md -> CARD-0140-release-all-worker-services.md
+CARD-0068-janitor-clears-already-missing-retained-worktree.md -> CARD-0141-janitor-clears-already-missing-retained-worktree.md
+CARD-0068-settings-conflict-safe-reload.md -> CARD-0142-settings-conflict-safe-reload.md
+CARD-0068-stable-work-done-browser-check.md -> CARD-0143-stable-work-done-browser-check.md
+CARD-0069-specification-branch-handoff.md -> CARD-0144-specification-branch-handoff.md
+CARD-0083-settings-save-without-first-verify.md -> CARD-0145-settings-save-without-first-verify.md
+CARD-0089-release-process-recovery-review-fixes.md -> CARD-0146-release-process-recovery-review-fixes.md
+```
 
-Дополнительно миграция считается принятой, когда проверка уникальности имён
-`CARD-NNNN` не находит ни одного дубля.
+Проверено целевыми unittest, `git diff --check`, отсутствием дублей по
+числовому префиксу и повторным dry-run (`No duplicate card numbers found.`).
+Изменён только каталог знаний, ссылки в спецификациях и новая утилита с её
+тестом; `pilot/pilot.py` и `pilot/test_pilot.py` не менялись.
