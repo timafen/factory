@@ -104,8 +104,8 @@ describe("Overview release train", () => {
     render(createElement(Overview, {}));
     const section = await screen.findByRole("region", { name: "Поезд выпуска" });
     expect(await within(section).findByText(expected)).toBeVisible();
-    expect(within(section).getByText("Едет: Витрина")).toBeVisible();
-    expect(within(section).getByText("состав № 4")).toBeVisible();
+    expect(await within(section).findByText("Едет: Витрина")).toBeVisible();
+    expect(await within(section).findByText("состав № 4")).toBeVisible();
   });
 
   it("shows N+1 after the current train without inventing its start time", async () => {
@@ -116,9 +116,21 @@ describe("Overview release train", () => {
     }] });
     render(createElement(Overview, {}));
     const section = await screen.findByRole("region", { name: "Поезд выпуска" });
-    expect(within(section).getByText("идёт 2 мин")).toBeVisible();
-    expect(within(section).getByText(/Следующий состав сядет в ближайший выпуск после текущего: Следующий заказ/)).toBeVisible();
+    expect(await within(section).findByText("идёт 2 мин")).toBeVisible();
+    expect(await within(section).findByText(/Следующий состав сядет в ближайший выпуск после текущего: Следующий заказ/)).toBeVisible();
     expect(within(section).queryByText(/Следующая попытка:/)).not.toBeInTheDocument();
+  });
+
+  it("shows the last failed train with owner-facing passenger names only", async () => {
+    dashboard({ updated_at: "2026-08-12T12:00:00Z", trains: [{
+      target: "Factory", state: "waiting", generation: 9, gate: "ожидает broker",
+      passengers: [{ title: "Новый заказ" }], next: { requested: false, passengers: [] },
+      previous: { state: "failed", passengers: [{ title: "Оплата картой" }] },
+    }] });
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Поезд выпуска" });
+    expect(await within(section).findByText(/Прошлый состав: ошибка.*Оплата картой/)).toBeVisible();
+    expect(section).not.toHaveTextContent(/[0-9a-f]{40}|PID|operation_id|generation_id|task_id/i);
   });
 });
 
