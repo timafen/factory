@@ -1,9 +1,11 @@
 import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export async function renderReport(html, outputPath) {
-  const browser = await chromium.launch({ headless: true });
+export async function renderReport(html, outputPath, launcher = process.env.FACTORY_BROWSER_LAUNCHER) {
+  if (!launcher || !path.isAbsolute(launcher)) throw new Error("absolute FACTORY_BROWSER_LAUNCHER is required");
+  const browser = await chromium.launch({ headless: true, executablePath: launcher, chromiumSandbox: true });
   try {
     const page = await browser.newPage();
     await page.route("**/*", route => route.abort("blockedbyclient"));

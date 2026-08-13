@@ -11,8 +11,10 @@ try {
 
 const outputPath = process.argv[2];
 if (!outputPath) throw new Error("output PDF path is required");
-const html = await readFile(0, "utf8");
-const browser = await chromium.launch({ headless: true });
+const launcher = process.env.FACTORY_BROWSER_LAUNCHER;
+if (!launcher || !path.isAbsolute(launcher)) throw new Error("absolute FACTORY_BROWSER_LAUNCHER is required");
+const html = await readFile("/dev/stdin", "utf8");
+const browser = await chromium.launch({ headless: true, executablePath: launcher, chromiumSandbox: true });
 try {
   const page = await browser.newPage();
   await page.route(/^https?:/, route => route.abort("blockedbyclient"));
