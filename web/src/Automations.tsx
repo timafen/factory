@@ -125,8 +125,8 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
 			  {status.source === "control_plane" ? <ChevronRight size={15} className="row-chevron" /> : <span />}
 			</>;
 			return status.source === "control_plane"
-			  ? <button className="automation-row" key={`${status.source}:${status.id}`} onClick={() => onAutomation(status.id)}>{content}</button>
-			  : <div className="automation-row" key={`${status.source}:${status.id}`}>{content}</div>;
+			  ? <button className="automation-row automation-live-row" key={`${status.source}:${status.id}`} onClick={() => onAutomation(status.id)}>{content}</button>
+			  : <div className="automation-row automation-live-row" key={`${status.source}:${status.id}`}>{content}</div>;
 		  })}
 		</div>
 	  )}

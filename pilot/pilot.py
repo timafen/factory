@@ -5529,6 +5529,17 @@ def parse_systemd_timestamp(timestamp):
         datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def parse_automation_timestamp(timestamp):
+    """Return a valid host timestamp normalized to UTC, or None."""
+    try:
+        parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return None
+
+
 def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log", pilot_completed_at=None):
     """Write a minimal allowlisted host snapshot; one failed unit stays visible."""
     run = run or subprocess.run
@@ -5554,7 +5565,8 @@ def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log"
         with open(janitor_log, encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()[-100:]
         matches = [re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})", line) for line in lines]
-        stamps = [match.group(0) for match in matches if match]
+        stamps = [parse_automation_timestamp(match.group(0)) for match in matches if match]
+        stamps = [stamp for stamp in stamps if stamp]
         if stamps:
             janitor.update(status="completed", data_status="ok", last_activity_at=stamps[-1])
     except (OSError, UnicodeError):

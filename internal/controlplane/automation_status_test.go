@@ -75,6 +75,28 @@ func TestAutomationStatusExpiredSnapshotKeepsHostRowsAsNoData(t *testing.T) {
 	}
 }
 
+func TestAutomationStatusFutureSnapshotKeepsHostRowsAsNoData(t *testing.T) {
+	store := newTestStore(t)
+	stamp := time.Now().UTC().Add(time.Second)
+	body, _ := json.Marshal(struct {
+		Automations []protocol.AutomationStatus `json:"automations"`
+		ObservedAt  *time.Time                  `json:"observed_at"`
+	}{Automations: []protocol.AutomationStatus{{Source: "host", ID: "factory-pilot", Status: "active", DataStatus: "ok", LastActivityAt: &stamp}}, ObservedAt: &stamp})
+	path := filepath.Join(t.TempDir(), "automation-status.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.AutomationStatuses(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Source == "host" && (item.DataStatus != "no_data" || item.Status != "unknown" || item.LastActivityAt != nil) {
+			t.Fatalf("future snapshot must not look live: %#v", item)
+		}
+	}
+}
+
 func TestAutomationStatusPathUsesConfiguredDataHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("FACTORY_DATA_HOME", home)

@@ -65,10 +65,13 @@ func (s *Store) AutomationStatuses(ctx context.Context, snapshotPath string) ([]
 	if readErr == nil {
 		readErr = json.Unmarshal(body, &snapshot)
 	}
-	if readErr == nil && snapshot.ObservedAt != nil && time.Since(*snapshot.ObservedAt) <= automationStatusSnapshotTTL {
-		for _, item := range snapshot.Automations {
-			if item.Source == "host" {
-				host[item.ID] = item
+	if readErr == nil && snapshot.ObservedAt != nil {
+		age := time.Since(*snapshot.ObservedAt)
+		if age >= 0 && age <= automationStatusSnapshotTTL {
+			for _, item := range snapshot.Automations {
+				if item.Source == "host" {
+					host[item.ID] = item
+				}
 			}
 		}
 	}

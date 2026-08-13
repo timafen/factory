@@ -6877,6 +6877,23 @@ class AutomationStatusSnapshotTests(unittest.TestCase):
         self.assertEqual("2026-08-13T16:00:00Z", snapshot["automations"][0]["last_activity_at"])
         self.assertEqual("2026-08-13T15:00:00Z", snapshot["automations"][1]["last_activity_at"])
 
+    def test_invalid_janitor_calendar_date_remains_no_data(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        log_path = os.path.join(_TEST_DATA_HOME.name, "janitor-invalid-date.log")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write("completed at 2026-99-99T10:00:00Z\\n")
+
+        try:
+            pilot.write_automation_status(lambda *_args, **_kwargs: types.SimpleNamespace(returncode=1, stdout=""), log_path)
+            with open(target, encoding="utf-8") as handle:
+                janitor = json.load(handle)["automations"][-1]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual("no_data", janitor["data_status"])
+        self.assertNotIn("last_activity_at", janitor)
+
 
 if __name__ == "__main__":
     unittest.main()
