@@ -24,6 +24,7 @@ import datetime
 import io
 import glob
 import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API = "http://127.0.0.1:7337/api/v1"
 # Production keeps the fixed data root.  Tests and isolated tools may opt into
@@ -5493,6 +5494,11 @@ def detect_limits(conf, tasks, workers_by_id):
 
 
 DASH_PATH = f"{HOME}/pilot/dashboard.json"
+DAILY_OWNER_SUMMARY_STATE_KEY = "daily_owner_summary_v1"
+DAILY_OWNER_SUMMARY_CRON = "0 8 * * *"
+DAILY_OWNER_SUMMARY_TIMEZONE = "America/Chicago"
+DAILY_OWNER_SUMMARY_TOPIC = "timafen-a8523d037f21"
+DAILY_OWNER_SUMMARY_CHANNEL = "https://ntfy.sh/timafen-a8523d037f21"
 _dash_slow = {"at": 0, "data": {}}
 
 PROJECT_READINESS_CHECKS = (
@@ -6212,6 +6218,220 @@ def recent_done_block(tasks, n=5):
     return out
 
 
+def daily_owner_summary_due_at(local_date, timezone=DAILY_OWNER_SUMMARY_TIMEZONE):
+    """Return the one real 08:00 instant for an IANA-zone calendar date."""
+    if isinstance(local_date, str):
+        local_date = datetime.date.fromisoformat(local_date)
+    if not isinstance(local_date, datetime.date) or isinstance(local_date, datetime.datetime):
+        raise ValueError("local_date must be an ISO calendar date")
+    timezone = str(timezone or "").strip()
+    if "/" not in timezone:
+        raise ValueError("daily owner summary timezone must be an IANA timezone")
+    try:
+        location = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("daily owner summary timezone must be an IANA timezone") from error
+    return datetime.datetime.combine(local_date, datetime.time(8), location)
+
+
+def _daily_summary_records(path, start, end, accepted_release=False):
+    records = []
+    try:
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                at = _work_time(record.get("at"))
+                if not at or not start <= at < end:
+                    continue
+                # New receipts spell out the live acceptance.  A legacy row in
+                # this authoritative journal was itself only written after the
+                # release broker reported success, so absent flags remain true.
+                if accepted_release and (record.get("accepted") is False
+                                         or record.get("live_acceptance") is False):
+                    continue
+                title = str(record.get("base") or record.get("title") or "").strip()
+                if title and not is_service_work(title):
+                    records.append({"title": title[:160], "at": at.isoformat()})
+    except OSError:
+        pass
+    unique = {}
+    for record in records:
+        unique[record["title"]] = record
+    return [unique[title] for title in sorted(unique)]
+
+
+def _daily_summary_metrics(previous_snapshot):
+    dashboard = load(DASH_PATH, {}) or {}
+    current = dashboard.get("health") if isinstance(dashboard.get("health"), dict) else None
+    previous = (previous_snapshot or {}).get("metrics")
+    effects = []
+    if current and isinstance(previous, dict):
+        labels = {
+            "rounds_median": "медиана кругов разработки",
+            "review_first_pass": "ревью с первого раза",
+            "minutes_median": "медиана минут до вливания",
+        }
+        for key, label in labels.items():
+            before, after = previous.get(key), current.get(key)
+            if before is not None and after is not None and before != after:
+                effects.append({"status": "changed", "label": label,
+                                "before": before, "after": after})
+        if not effects:
+            effects.append({"status": "zero", "label": "наблюдаемые метрики не изменились"})
+    elif current:
+        effects.append({"status": "unknown", "label": "нет предыдущего сопоставимого снимка"})
+    else:
+        effects.append({"status": "unknown", "label": "наблюдаемые метрики недоступны"})
+    return current or {}, effects
+
+
+def build_daily_owner_summary_snapshot(local_date, tasks=None, timezone=DAILY_OWNER_SUMMARY_TIMEZONE,
+                                       previous_snapshot=None):
+    """Freeze receipt, outcome, and blockage facts for one scheduled report."""
+    due = daily_owner_summary_due_at(local_date, timezone)
+    previous_due = daily_owner_summary_due_at(due.date() - datetime.timedelta(days=1), timezone)
+    start = previous_due.astimezone(datetime.timezone.utc)
+    end = due.astimezone(datetime.timezone.utc)
+    merged = _daily_summary_records(MERGES_PATH, start, end)
+    released = _daily_summary_records(DELIVERY_RECEIPTS_PATH, start, end, accepted_release=True)
+
+    blocked = {}
+    for task in tasks or []:
+        if task.get("state") not in ("failed", "cancelled"):
+            continue
+        at = _work_time(task.get("finished_at") or task.get("updated_at") or "")
+        parsed = pipeline_title(task)
+        if at and start <= at < end and parsed and not is_service_work(parsed[0]):
+            blocked[parsed[0]] = {"title": parsed[0][:160], "stage": parsed[1][:80]}
+
+    metrics, effects = _daily_summary_metrics(previous_snapshot)
+    return {
+        "local_date": due.date().isoformat(),
+        "timezone": timezone,
+        "scheduled_at": due.isoformat(),
+        "period_start": previous_due.isoformat(),
+        "period_end": due.isoformat(),
+        "merged": merged,
+        "released": released,
+        "effects": effects,
+        "blocked": [blocked[title] for title in sorted(blocked)],
+        "metrics": metrics,
+    }
+
+
+def format_daily_owner_summary(snapshot):
+    """Render owner facts without deriving release or causality from prose."""
+    def titles(records, empty):
+        return "; ".join(record["title"] for record in records) if records else empty
+
+    effect_lines = []
+    for effect in snapshot.get("effects") or []:
+        if effect.get("status") == "changed":
+            effect_lines.append(f"{effect['label']}: {effect.get('before')} → {effect.get('after')}")
+        elif effect.get("status") == "zero":
+            effect_lines.append("нулевой эффект — " + effect.get("label", "изменений не видно"))
+        else:
+            effect_lines.append("не подтверждено — " + effect.get("label", "нет данных"))
+    blocked = [f"{item['title']} (этап «{item['stage']}»)" for item in snapshot.get("blocked") or []]
+    return "\n".join([
+        f"Ежедневная сводка за {snapshot['local_date']} ({snapshot['timezone']})",
+        "Влито: " + titles(snapshot.get("merged") or [], "ничего подтверждённого"),
+        "Выпущено: " + titles(snapshot.get("released") or [], "ничего с принятой live-проверкой"),
+        "Что это дало: " + ("; ".join(effect_lines) if effect_lines else "не подтверждено — нет данных"),
+        "Тупики: " + ("; ".join(blocked) if blocked else "нет зафиксированных"),
+        "Канал: " + DAILY_OWNER_SUMMARY_CHANNEL,
+    ])
+
+
+def _post_daily_owner_summary(conf, event):
+    settings = conf.get("daily_owner_summary") or {}
+    server = str(settings.get("server") or conf.get("ntfy_server") or "https://ntfy.sh").rstrip("/")
+    topic = str(settings.get("topic") or DAILY_OWNER_SUMMARY_TOPIC).strip().strip("/")
+    sequence_id = event["id"].replace(":", "-")
+    body = {"topic": topic, "title": "Ежедневная сводка владельцу",
+            "message": event["message"], "priority": 3,
+            # ntfy clients replace retries with this stable logical event.
+            "sequence_id": sequence_id,
+            "actions": [{"action": "view", "label": "Открыть канал",
+                         "url": DAILY_OWNER_SUMMARY_CHANNEL, "clear": False}]}
+    request = urllib.request.Request(
+        server, data=json.dumps(body, ensure_ascii=False).encode(),
+        headers={"Content-Type": "application/json", "X-Sequence-ID": sequence_id},
+    )
+    try:
+        urllib.request.urlopen(request, timeout=15).read()
+        return True
+    except Exception as error:
+        log("daily_owner_summary_notify_error", repr(error))
+        return False
+
+
+def daily_owner_summary_tick(conf, state, tasks=None, now=None, sender=None):
+    """Reserve today's logical event, then retry its one idempotent push."""
+    settings = conf.get("daily_owner_summary") or {}
+    if not settings or settings.get("enabled", True) is False:
+        return None
+    cron = str(settings.get("cron") or DAILY_OWNER_SUMMARY_CRON).strip()
+    timezone = str(settings.get("timezone") or DAILY_OWNER_SUMMARY_TIMEZONE).strip()
+    if cron != DAILY_OWNER_SUMMARY_CRON:
+        raise ValueError("daily owner summary cron must be 0 8 * * *")
+    clock = (now if isinstance(now, datetime.datetime)
+             else datetime.datetime.fromtimestamp(time.time() if now is None else now,
+                                                  datetime.timezone.utc))
+    if clock.tzinfo is None:
+        raise ValueError("daily owner summary clock must include timezone")
+    try:
+        location = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("daily owner summary timezone must be an IANA timezone") from error
+    due_today = daily_owner_summary_due_at(clock.astimezone(location).date(), timezone)
+    if clock.astimezone(datetime.timezone.utc) < due_today.astimezone(datetime.timezone.utc):
+        return None
+
+    durable = state.setdefault(DAILY_OWNER_SUMMARY_STATE_KEY, {"version": 1, "events": {}})
+    if durable.get("version") != 1 or not isinstance(durable.get("events"), dict):
+        durable = {"version": 1, "events": {}, "audit": durable}
+        state[DAILY_OWNER_SUMMARY_STATE_KEY] = durable
+    local_date = due_today.date().isoformat()
+    event_id = "daily-owner-summary:" + local_date
+    event = durable["events"].get(event_id)
+    if event is None:
+        previous = next((item.get("snapshot") for _, item in sorted(
+            durable["events"].items(), reverse=True) if item.get("snapshot")), None)
+        snapshot = build_daily_owner_summary_snapshot(
+            local_date, tasks=tasks, timezone=timezone, previous_snapshot=previous)
+        event = {"id": event_id, "local_date": local_date, "status": "pending",
+                 "attempts": 0, "snapshot": snapshot,
+                 "message": format_daily_owner_summary(snapshot)}
+        durable["events"][event_id] = event
+        save(STATE_PATH, state)  # reservation is durable before external I/O
+    pending = next((item for _, item in sorted(durable["events"].items())
+                    if item.get("status") != "sent"
+                    and float(item.get("next_retry_at") or 0) <= clock.timestamp()), None)
+    if pending is None:
+        return event
+    event = pending
+
+    event["attempts"] = int(event.get("attempts") or 0) + 1
+    event["last_attempt_at"] = clock.astimezone(datetime.timezone.utc).isoformat()
+    save(STATE_PATH, state)
+    delivered = (sender or _post_daily_owner_summary)(conf, event)
+    if delivered:
+        event["status"] = "sent"
+        event["sent_at"] = clock.astimezone(datetime.timezone.utc).isoformat()
+        event.pop("next_retry_at", None)
+        save(STATE_PATH, state)
+        _notify_journal("Ежедневная сводка владельцу", event["message"], "done", True,
+                        DAILY_OWNER_SUMMARY_CHANNEL, journal_id=event["id"])
+    else:
+        event["next_retry_at"] = clock.timestamp() + 60
+        save(STATE_PATH, state)
+    return event
+
+
 def limits_view():
     """Экран получает правду: блок гаснет по сроку сам, а рядом — настоящий
     процент подписки из provider_limits.json, а не догадка по словам."""
@@ -6755,7 +6975,9 @@ def _complete_generation(conf, state, generation):
         if task_id in completed:
             continue
         receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
-                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                   "task_id": task_id, "base": wait.get("base", ""),
+                   "accepted": True, "live_acceptance": True,
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
         completed[task_id] = receipt["id"]
         mark_final(task_id, "Verify", True)
@@ -7100,6 +7322,13 @@ def cycle(conf, state):
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
+
+    try:
+        daily_owner_summary_tick(conf, state, tasks=tasks)
+    except Exception as e:
+        # A bad timezone or transient push must not stop pipeline handoffs.
+        # Pending delivery remains in the durable event for the next cycle.
+        log("daily_owner_summary_error", repr(e))
 
     # Настоящие проценты подписок — в файл и в уведомления на 80/95.
     try:

@@ -6723,5 +6723,142 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
 
 
+class DailyOwnerSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.paths = {
+            "state": os.path.join(self.temporary.name, "state.json"),
+            "merges": os.path.join(self.temporary.name, "merges.jsonl"),
+            "receipts": os.path.join(self.temporary.name, "receipts.jsonl"),
+            "dashboard": os.path.join(self.temporary.name, "dashboard.json"),
+            "notifications": os.path.join(self.temporary.name, "notifications.jsonl"),
+        }
+        self.patchers = [
+            mock.patch.object(pilot, "STATE_PATH", self.paths["state"]),
+            mock.patch.object(pilot, "MERGES_PATH", self.paths["merges"]),
+            mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.paths["receipts"]),
+            mock.patch.object(pilot, "DASH_PATH", self.paths["dashboard"]),
+            mock.patch.object(pilot, "NOTIFY_LOG_PATH", self.paths["notifications"]),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.conf = {"daily_owner_summary": {
+            "enabled": True, "cron": "0 8 * * *",
+            "timezone": "America/Chicago", "server": "https://ntfy.sh",
+            "topic": "timafen-a8523d037f21",
+        }}
+
+    def write_jsonl(self, name, records):
+        with open(self.paths[name], "w", encoding="utf-8") as stream:
+            for record in records:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def test_iana_schedule_keeps_eight_local_through_dst(self):
+        expected = {
+            "2026-01-15": "2026-01-15T14:00:00+00:00",
+            "2026-07-15": "2026-07-15T13:00:00+00:00",
+            "2026-03-08": "2026-03-08T13:00:00+00:00",
+            "2026-11-01": "2026-11-01T14:00:00+00:00",
+        }
+        for local_date, utc in expected.items():
+            with self.subTest(local_date=local_date):
+                due = pilot.daily_owner_summary_due_at(local_date)
+                self.assertEqual(due.hour, 8)
+                self.assertEqual(due.astimezone(datetime.timezone.utc).isoformat(), utc)
+        for timezone in ("-06:00", "UTC-6", "Mars/Olympus"):
+            with self.subTest(timezone=timezone), self.assertRaises(ValueError):
+                pilot.daily_owner_summary_due_at("2026-08-12", timezone)
+
+    def test_retry_restart_keeps_one_snapshot_and_one_successful_push(self):
+        self.write_jsonl("merges", [
+            {"base": "Только влито", "at": "2026-08-11T15:00:00Z"},
+            {"base": "Влито и выпущено", "at": "2026-08-12T12:00:00Z"},
+            {"base": "Будущее вливание", "at": "2026-08-12T13:01:00Z"},
+        ])
+        self.write_jsonl("receipts", [
+            {"base": "Влито и выпущено", "at": "2026-08-12T12:05:00Z",
+             "accepted": True, "live_acceptance": True},
+            {"base": "Verify без live-приёмки", "at": "2026-08-12T12:06:00Z",
+             "accepted": False, "live_acceptance": False},
+        ])
+        pilot.save(self.paths["dashboard"], {"health": {
+            "rounds_median": 1, "review_first_pass": [2, 2], "minutes_median": 18}})
+        state = {pilot.DAILY_OWNER_SUMMARY_STATE_KEY: {"version": 1, "events": {
+            "daily-owner-summary:2026-08-11": {"status": "sent", "snapshot": {"metrics": {
+                "rounds_median": 2, "review_first_pass": [1, 2], "minutes_median": 25}}}}}}
+        tasks = [
+            {"id": "verify-only", "title": "[auto] [5/5 Verify] Verify без live-приёмки",
+             "state": "succeeded", "updated_at": "2026-08-12T12:06:00Z"},
+            {"id": "blocked", "title": "[auto] [4/5 Review] Застрявшая оплата",
+             "state": "failed", "updated_at": "2026-08-12T12:10:00Z"},
+        ]
+        attempts, successes = [], []
+
+        def sender(_conf, event):
+            attempts.append((event["id"], event["message"]))
+            if len(attempts) == 1:
+                return False
+            successes.append(event["id"])
+            return True
+
+        before = datetime.datetime(2026, 8, 12, 12, 59, tzinfo=datetime.timezone.utc)
+        self.assertIsNone(pilot.daily_owner_summary_tick(
+            self.conf, state, tasks=tasks, now=before, sender=sender))
+        due = datetime.datetime(2026, 8, 12, 13, 0, tzinfo=datetime.timezone.utc)
+        first = pilot.daily_owner_summary_tick(self.conf, state, tasks=tasks, now=due, sender=sender)
+        self.assertEqual(first["status"], "pending")
+        self.assertEqual(first["id"], "daily-owner-summary:2026-08-12")
+
+        # A fresh process loads the reservation and retries the same immutable event.
+        restored = pilot.load(self.paths["state"], {})
+        second = pilot.daily_owner_summary_tick(
+            self.conf, restored, tasks=[], now=due + datetime.timedelta(minutes=1), sender=sender)
+        third = pilot.daily_owner_summary_tick(
+            self.conf, restored, tasks=[], now=due + datetime.timedelta(minutes=2), sender=sender)
+        self.assertEqual(second["status"], "sent")
+        self.assertIs(second, third)
+        self.assertEqual(len(restored[pilot.DAILY_OWNER_SUMMARY_STATE_KEY]["events"]), 2)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(successes, ["daily-owner-summary:2026-08-12"])
+        self.assertEqual(second["attempts"], 2)
+        self.assertEqual([item["title"] for item in second["snapshot"]["merged"]],
+                         ["Влито и выпущено", "Только влито"])
+        self.assertEqual([item["title"] for item in second["snapshot"]["released"]],
+                         ["Влито и выпущено"])
+        self.assertEqual([item["title"] for item in second["snapshot"]["blocked"]],
+                         ["Застрявшая оплата"])
+        self.assertIn("медиана кругов разработки: 2 → 1", second["message"])
+        self.assertIn("Канал: https://ntfy.sh/timafen-a8523d037f21", second["message"])
+        with open(self.paths["notifications"], encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+
+    def test_zero_effect_and_unknown_are_explicit(self):
+        pilot.save(self.paths["dashboard"], {"health": {"rounds_median": 1}})
+        unchanged = pilot.build_daily_owner_summary_snapshot(
+            "2026-08-12", previous_snapshot={"metrics": {"rounds_median": 1}})
+        self.assertEqual(unchanged["effects"][0]["status"], "zero")
+        os.remove(self.paths["dashboard"])
+        unknown = pilot.build_daily_owner_summary_snapshot("2026-08-12")
+        self.assertEqual(unknown["effects"][0]["status"], "unknown")
+        self.assertIn("не подтверждено", pilot.format_daily_owner_summary(unknown))
+
+    def test_ntfy_request_carries_stable_sequence_and_owner_channel(self):
+        event = {"id": "daily-owner-summary:2026-08-12", "message": "Итог дня"}
+        response = mock.Mock()
+        response.read.return_value = b"{}"
+        with mock.patch.object(pilot.urllib.request, "urlopen", return_value=response) as urlopen:
+            self.assertTrue(pilot._post_daily_owner_summary(self.conf, event))
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.headers["X-sequence-id"],
+                         "daily-owner-summary-2026-08-12")
+        payload = json.loads(request.data)
+        self.assertEqual(payload["topic"], "timafen-a8523d037f21")
+        self.assertEqual(payload["sequence_id"], "daily-owner-summary-2026-08-12")
+        self.assertEqual(payload["actions"][0]["url"],
+                         "https://ntfy.sh/timafen-a8523d037f21")
+
+
 if __name__ == "__main__":
     unittest.main()

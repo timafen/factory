@@ -94,6 +94,13 @@
  "ntfy_owner_topic": "ЗАМЕНИ_МЕНЯ",
  "ntfy_server": "https://ntfy.sh",
  "ntfy_topic": "ЗАМЕНИ_МЕНЯ",
+ "daily_owner_summary": {
+  "enabled": true,
+  "cron": "0 8 * * *",
+  "timezone": "America/Chicago",
+  "server": "https://ntfy.sh",
+  "topic": "timafen-a8523d037f21"
+ },
  "owner_chat_url": "https://claude.ai/code/session_01NMZVSSJpRQfYECuiG8T3hn",
  "owner_ui_url": "https://factory.timafen.com/work",
  "poll_seconds": 30,
