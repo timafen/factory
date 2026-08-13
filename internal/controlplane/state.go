@@ -126,6 +126,11 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		  ON wr.worker_id = ? AND wr.repository_id = t.repository_id
 		WHERE e.required_runtime = ?
 		  AND e.state = 'queued'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM visual_captures vc
+		      WHERE vc.work_id = t.work_id AND vc.phase = 'before'
+		        AND vc.status IN ('pending', 'running')
+		  )
 		  AND wr.advertised = 1
 		  AND wr.retained_count + (
 		      SELECT COUNT(*)

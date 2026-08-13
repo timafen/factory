@@ -23,9 +23,11 @@ import { Settings } from "./Settings";
 import { Dialog } from "./Dialog";
 import { SandboxKeys } from "./SandboxKeys";
 import { ProjectsView } from "./Projects";
+import { Reports } from "./Reports";
 
 type Route =
   | { page: "overview" }
+	| { page: "reports" }
   | { page: "say" }
   | { page: "epics" }
   | { page: "answer" }
@@ -63,6 +65,7 @@ function readRoute(): Route {
   if (parts[0] === "repositories" && parts[1]) return { page: "repository", id: parts[1] };
   if (parts[0] === "repositories") return { page: "repositories" };
   if (parts[0] === "projects") return { page: "projects" };
+	if (parts[0] === "reports") return { page: "reports" };
   if (parts[0] === "work") return { page: "work" };
   if (parts[0] === "say") return { page: "say" };
   if (parts[0] === "epics") return { page: "epics" };
@@ -87,6 +90,7 @@ function routePath(route: Route): string {
   if (route.page === "repository") return `/repositories/${route.id}`;
   if (route.page === "repositories") return "/repositories";
   if (route.page === "projects") return "/projects";
+	if (route.page === "reports") return "/reports";
   if (route.page === "say") return "/say";
   if (route.page === "epics") return "/epics";
   if (route.page === "answer") return "/answer";
@@ -210,6 +214,9 @@ export function App() {
           >
             <Gauge size={17} /> Обзор
           </button>
+		  <button className={`nav-item ${route.page === "reports" ? "active" : ""}`} aria-current={route.page === "reports" ? "page" : undefined} onClick={() => navigate({ page: "reports" })}>
+			<FileText size={17} /> Отчёты
+		  </button>
           <button
             className={`nav-item ${route.page === "say" ? "active" : ""}`}
             aria-current={route.page === "say" ? "page" : undefined}
@@ -382,6 +389,7 @@ export function App() {
           {route.page === "access" && <AccessView />}
           {route.page === "sandboxKeys" && <SandboxKeys />}
           {route.page === "overview" && <Overview onNav={(p) => navigate({ page: p } as Route)} />}
+		  {route.page === "reports" && <Reports />}
           {route.page === "work" && (
             <WorkView
               tasks={taskItems}
