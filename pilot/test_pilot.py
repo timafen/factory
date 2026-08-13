@@ -2803,7 +2803,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
-            area_repo="repo-id", expected_card=card)
+            area_repo="repo-id", expected_card=card,
+            work_id=base, current_task=mock.ANY)
         merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
 
 
@@ -6835,47 +6836,108 @@ class EpicCompletionReceiptTests(unittest.TestCase):
 
 
 class AreaLockArbitrationTests(unittest.TestCase):
-    """Замок областей решает споры детерминированно, а не взаимным ожиданием."""
+    """Regression coverage for deterministic, whole-area admission."""
 
-    AREAS = {
-        "Старшая работа": ["repo::pilot/pilot.py"],
-        "Младшая работа": ["repo::pilot/pilot.py"],
-    }
+    def decide(self, tasks, candidate, areas):
+        return pilot.area_lock_arbitrate(tasks, candidate, areas)
 
-    def _loader(self, path, default=None):
-        return dict(self.AREAS) if path == pilot.AREAS_PATH else (default or {})
+    def test_same_file_has_one_winner_regardless_of_input_order(self):
+        first = {"work_id": "A", "plan_order": 2, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] A", "state": "running"}
+        second = {"work_id": "B", "plan_order": 1, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        for tasks in ([first, second], [second, first]):
+            self.assertFalse(self.decide(tasks, first, areas)["allowed"])
+            self.assertTrue(self.decide(tasks, second, areas)["allowed"])
 
-    def _busy(self, tasks, base):
-        with mock.patch.object(pilot, "load", side_effect=self._loader), \
-                mock.patch.object(pilot, "area_of",
-                                  return_value={"repo::pilot/pilot.py"}):
-            return pilot.area_busy(tasks, base)
+    def test_manual_priority_is_time_then_stable_work_id(self):
+        early = {"work_id": "z", "created_at": "2026-08-10T09:00:00Z",
+                 "repository_id": "r", "title": "[auto] [2/5 Implement] Early",
+                 "state": "running"}
+        same_time = {"work_id": "a", "created_at": "2026-08-10T09:00:00Z",
+                     "repository_id": "r", "title": "[auto] [2/5 Implement] Same",
+                     "state": "running"}
+        areas = {"Early": ["r::one.py"], "Same": ["r::one.py"]}
+        self.assertTrue(self.decide([early, same_time], same_time, areas)["allowed"])
+        self.assertFalse(self.decide([early, same_time], early, areas)["allowed"])
 
-    def test_running_holder_still_blocks_unconditionally(self):
-        tasks = [{"state": "running", "created_at": "2026-08-13T10:00:00Z",
-                  "title": "[auto] [2/5 Implement + Test] Младшая работа"}]
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "Младшая работа")
+    def test_whole_area_grant_never_partially_locks_middle_work(self):
+        left = {"work_id": "left", "plan_order": 1, "repository_id": "r",
+                "title": "[auto] [2/5 Implement] Left", "state": "running"}
+        middle = {"work_id": "middle", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] Middle", "state": "running"}
+        right = {"work_id": "right", "plan_order": 3, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] Right", "state": "running"}
+        areas = {"Left": ["r::a.py"], "Middle": ["r::a.py", "r::b.py"],
+                 "Right": ["r::b.py"]}
+        result = self.decide([middle, right, left], middle, areas)
+        self.assertFalse(result["allowed"])
+        self.assertEqual({row["work_id"] for row in result["owners"]}, {"left", "right"})
 
-    def test_mutual_queued_contention_has_exactly_one_winner(self):
-        tasks = [
-            {"state": "queued", "created_at": "2026-08-13T10:00:00Z",
-             "title": "[auto] [4/5 Review] Старшая работа"},
-            {"state": "queued", "created_at": "2026-08-13T09:00:00Z",
-             "title": "[auto] [2/5 Specification] Младшая работа"},
-        ]
-        # Дальше прошедшая по конвейеру работа проходит, младшая ждёт её.
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
-        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+    def test_repository_and_path_are_part_of_lock_identity(self):
+        owner = {"work_id": "owner", "plan_order": 1, "repository_id": "one",
+                 "title": "[auto] [2/5 Implement] Owner", "state": "running"}
+        other_repo = {"work_id": "other", "plan_order": 2, "repository_id": "two",
+                      "title": "[auto] [2/5 Implement] Other", "state": "running"}
+        other_path = {"work_id": "path", "plan_order": 2, "repository_id": "one",
+                      "title": "[auto] [2/5 Implement] Path", "state": "running"}
+        areas = {"Owner": ["one::same.py"], "Other": ["two::same.py"],
+                 "Path": ["one::different.py"]}
+        self.assertTrue(self.decide([owner, other_repo], other_repo, areas)["allowed"])
+        self.assertTrue(self.decide([owner, other_path], other_path, areas)["allowed"])
 
-    def test_equal_stage_earlier_start_wins(self):
-        tasks = [
-            {"state": "queued", "created_at": "2026-08-13T08:00:00Z",
-             "title": "[auto] [3/5 Implement + Test] Старшая работа"},
-            {"state": "queued", "created_at": "2026-08-13T11:00:00Z",
-             "title": "[auto] [3/5 Implement + Test] Младшая работа"},
-        ]
-        self.assertEqual(self._busy(tasks, "Старшая работа"), "")
-        self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+    def test_finished_candidate_does_not_bypass_live_owner(self):
+        finished = {"work_id": "finished", "plan_order": 1, "repository_id": "r",
+                    "title": "[auto] [2/5 Implement] Finished", "state": "succeeded"}
+        owner = {"work_id": "owner", "plan_order": 2, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] Owner", "state": "running"}
+        areas = {"Finished": ["r::pilot/pilot.py"], "Owner": ["r::pilot/pilot.py"]}
+
+        result = self.decide([finished, owner], finished, areas)
+
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["holder"], "Owner")
+
+    def test_area_busy_admits_one_of_two_live_overlapping_works(self):
+        first = {"work_id": "work-a", "plan_order": 1, "repository_id": "r",
+                 "title": "[auto] [2/5 Implement] A", "state": "running"}
+        second = {"work_id": "work-b", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [2/5 Implement] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        with mock.patch.object(pilot, "area_of", return_value={"r::pilot/pilot.py"}), \
+                mock.patch.object(pilot, "load", return_value=areas):
+            first_holder = pilot.area_busy([first, second], "A", repo="r",
+                                            work_id="work-a", current_task=first)
+            second_holder = pilot.area_busy([second, first], "B", repo="r",
+                                             work_id="work-b", current_task=second)
+
+        self.assertEqual(first_holder, "")
+        self.assertEqual(second_holder, "A")
+
+    def test_review_gate_admits_one_of_two_live_overlapping_works(self):
+        first = {"work_id": "work-a", "plan_order": 1, "repository_id": "r",
+                 "title": "[auto] [3/5 Review] A", "state": "running"}
+        second = {"work_id": "work-b", "plan_order": 2, "repository_id": "r",
+                  "title": "[auto] [3/5 Review] B", "state": "running"}
+        areas = {"A": ["r::pilot/pilot.py"], "B": ["r::pilot/pilot.py"]}
+        snapshot = {"state": "ok", "files": ["pilot/pilot.py"],
+                    "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                    "merge_base_sha": "a" * 40, "default_branch": "main",
+                    "base_ahead_by": 0, "ahead_by": 1}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "load", return_value=areas):
+            first_result = pilot.review_gate({}, "A", "factory/a", "file:///tmp/repo",
+                                             [first, second], area_repo="r", work_id="work-a",
+                                             current_task=first)
+            second_result = pilot.review_gate({}, "B", "factory/b", "file:///tmp/repo",
+                                              [second, first], area_repo="r", work_id="work-b",
+                                              current_task=second)
+
+        self.assertFalse(first_result.get("wait"))
+        self.assertTrue(second_result["wait"])
+        self.assertIn("A", second_result["note"])
 
 
 if __name__ == "__main__":
