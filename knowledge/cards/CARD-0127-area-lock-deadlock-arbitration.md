@@ -4,12 +4,12 @@ Implementation commit: 65fe5496f58f48f334bbe3912c6336553a1ee7be — арбитр
 
 ## HEAD
 
-- Статус: Implemented — published, ready for Review.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/b7fa2d1e-124-6a803f32-b8d`.
 - Implementation commit: 65fe5496f58f48f334bbe3912c6336553a1ee7be — арбитр допускает только одного владельца пересекающейся области и не даёт завершённой работе обойти живого владельца.
-- What changed: кандидат считается живым только в состояниях `running` и `queued`; добавлена регрессия для `succeeded` кандидата и `running` владельца.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` — 7 tests, OK; `python3 -m py_compile pilot/pilot.py` — OK.
-- Следующее действие: Передать ветку на Review.
+- What changed: кандидат считается живым только в состояниях `running` и `queued`; завершённая работа не обходит живого владельца пересекающейся области.
+- Evidence: целевые 7 тестов OK; полный набор — 261 тест, 13 skipped, 2 известных падения, воспроизведённых на pinned base; `py_compile` OK.
+- Следующее действие: Человеку слить проверенную ветку в `main`.
 
 ## LOG
 
@@ -35,6 +35,15 @@ Implementation commit: 65fe5496f58f48f334bbe3912c6336553a1ee7be — арбитр
 | Сборка и полный Go-набор без регрессий | `go build ./...`; `go test -timeout 5m ./...` | Сборка OK; все Go-пакеты OK, включая controlplane и worker. |
 | Полный Python-набор и отделение проектного долга | `python3 -m unittest -v pilot.test_pilot`; тот же проблемный тест на pinned base | 260 тестов, 13 skipped, 2 известных падения; оба падения повторились на base. |
 | Карточка и реализация закреплены корректно | pinned bare-проверки ancestry и изменённых путей | Implementation commit — предок candidate и меняет `pilot/pilot.py` и `pilot/test_pilot.py`; рабочее дерево проверяющего чистое. |
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Арбитраж разводит две живые работы над одним файлом | `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` | Все 7 тестов OK: один владелец проходит, второй ждёт; порядок входных данных не меняет победителя, область не захватывается частично. |
+| Кандидат, уже завершившийся, не обходит живого владельца | `AreaLockArbitrationTests.test_finished_candidate_does_not_bypass_live_owner` | Тест OK: `succeeded`-кандидат не получает пересекающуюся область вместо `running`-владельца. |
+| Регрессии соседнего поведения проверены полным набором | `python3 -m unittest -v pilot.test_pilot` | 261 тест, 13 skipped; 2 падения в `CorrectionProvenanceStormTests` воспроизведены на pinned base и не относятся к изменённым файлам. |
+| Код собирается и дерево чистое | `python3 -m py_compile pilot/pilot.py`; `git status --short` | Компиляция OK; до изменения карточки рабочее дерево было чистым, stray/debug-файлов нет. |
 
 ### 2026-08-13 — Implement
 
