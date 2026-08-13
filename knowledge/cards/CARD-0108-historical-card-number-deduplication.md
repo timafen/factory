@@ -4,7 +4,7 @@
 
 Status: Implemented — исторические дубли разведены.
 Branch: factory/4d9412b8-989-5379b729-17e
-Implementation commit: 332fca09a6d0261543fee0b0d4acb524b7259f30 — утилита и одноразовое переименование карточек.
+Implementation commit: 96a64703e44d9a92f51276d4aaf0d2a29a3b3b61 — утилита и одноразовое переименование карточек.
 What changed: добавлена проверяемая утилита dry-run/`--apply`; 38 неканонических путей получили номера 0109–0146, а legacy-файл — 0148; точные ссылки обновлены.
 Evidence: `python3 -m unittest -v scripts.test_renumber_historical_cards` — OK (3 теста); резервирование Пилота — OK (5 тестов); дублей нет.
 Next action: проверить свежую ветку на Verify и влить изменение в `main`.
