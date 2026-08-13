@@ -36,6 +36,10 @@ GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
 JOURNAL="$REL/transaction"
+TRUSTED_GATE_CGROUP=/usr/local/libexec/factory-gate-cgroup
+TRUSTED_GATE_CGROUP_SHA256=b241be54c609c4c172dab0796f4408081fa5e9d7f429eba694712ffd03f109ac
+TRUSTED_CGROUP_BOOTSTRAP_MARKER=/var/lib/factory/cgroup-helper-bootstrap.done
+TRUSTED_CGROUP_OWNER_UID=0
 GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
 GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
@@ -361,9 +365,27 @@ if [ -e "$JOURNAL" ]; then
        rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
   esac
 fi
+
+validate_gate_cgroup_installation() {
+  local owner mode digest marker_owner marker_mode marker_content
+  [ -f "$TRUSTED_GATE_CGROUP" ] && [ ! -L "$TRUSTED_GATE_CGROUP" ] && [ -x "$TRUSTED_GATE_CGROUP" ] || return 1
+  owner=$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_CGROUP") || return 1
+  mode=$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_GATE_CGROUP") || return 1
+  digest=$(/usr/bin/sha256sum -- "$TRUSTED_GATE_CGROUP") || return 1
+  [ "$owner" = "$TRUSTED_CGROUP_OWNER_UID" ] && [ "$mode" = 755 ] && [ "${digest%% *}" = "$TRUSTED_GATE_CGROUP_SHA256" ] || return 1
+  [ -f "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] && [ ! -L "$TRUSTED_CGROUP_BOOTSTRAP_MARKER" ] || return 1
+  marker_owner=$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  marker_mode=$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  marker_content=$(/usr/bin/cat -- "$TRUSTED_CGROUP_BOOTSTRAP_MARKER") || return 1
+  [ "$marker_owner" = "$TRUSTED_CGROUP_OWNER_UID" ] && [ "$marker_mode" = 600 ] && [ "$marker_content" = completed ]
+}
+
+validate_gate_cgroup_installation || { fail "cgroup helper не прошёл обязательный root bootstrap (owner/mode/hash/marker)"; exit 4; }
+
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_names=()
+gate_cgroups=()
 test_gates_stopped=1
 test_gates_reaped=1
 cleanup() {
@@ -437,17 +459,18 @@ publish_test_gate_ack() { # publish_test_gate_ack <file> <nonce>
   fi
 }
 
-wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <file> <launcher> <nonce> <ack>
-  local handshake=$1 launcher=$2 nonce=$3 ack=$4 i
+wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <file> <launcher> <nonce> <ack> <cgroup>
+  local handshake=$1 launcher=$2 nonce=$3 ack=$4 cgroup=$5 i
   for ((i = 0; i < GATE_READY_ATTEMPTS; i++)); do
     if read_test_gate_handshake "$handshake" "$launcher" "$nonce"; then
-      publish_test_gate_ack "$ack" "$nonce"
+      "$TRUSTED_GATE_CGROUP" attach "$cgroup" "$gate_pgid" && publish_test_gate_ack "$ack" "$nonce"
       return
     fi
     process_identity "$launcher" || return 1
     "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
   done
   read_test_gate_handshake "$handshake" "$launcher" "$nonce" \
+    && "$TRUSTED_GATE_CGROUP" attach "$cgroup" "$gate_pgid" \
     && publish_test_gate_ack "$ack" "$nonce"
 }
 
@@ -524,8 +547,11 @@ stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
 }
 
 start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
-  local name=$1 log=$2 handshake=$3 launcher nonce ack
+  local name=$1 log=$2 handshake=$3 launcher nonce ack cgroup
   shift 3
+  cgroup="factory-release-gate-$$-${#gate_pids[@]}"
+  "$TRUSTED_GATE_CGROUP" create "$cgroup" || return 1
+  gate_cgroups+=("$cgroup")
   ack="${handshake}.ack"
   nonce=$("$TRUSTED_OD" -An -N16 -tx1 /dev/urandom) || return 1
   nonce=${nonce//[[:space:]]/}
@@ -581,7 +607,7 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
   gate_ready+=(0)
   gate_logs+=("$log")
   gate_names+=("$name")
-  if wait_for_test_gate_handshake "$handshake" "$launcher" "$nonce" "$ack"; then
+  if wait_for_test_gate_handshake "$handshake" "$launcher" "$nonce" "$ack" "$cgroup"; then
     gate_pgids[${#gate_pgids[@]}-1]=$gate_pgid
     gate_ready[${#gate_ready[@]}-1]=1
     return 0
@@ -591,7 +617,7 @@ start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <ко�
 }
 
 stop_test_gates() {
-  local i launcher
+  local i launcher cgroup
   [ "$test_gates_stopped" = 0 ] || return 0
   test_gates_stopped=1
   for i in "${!gate_pids[@]}"; do
@@ -602,14 +628,35 @@ stop_test_gates() {
       stop_unready_test_gate_launcher "$launcher"
     fi
   done
+  for cgroup in "${gate_cgroups[@]:-}"; do
+    [ -n "$cgroup" ] && "$TRUSTED_GATE_CGROUP" signal "$cgroup" TERM 2>/dev/null || true
+  done
+}
+
+wait_for_gate_cgroup_empty() { # wait_for_gate_cgroup_empty <cgroup>
+  local cgroup=$1 i
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    "$TRUSTED_GATE_CGROUP" empty "$cgroup" && return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  "$TRUSTED_GATE_CGROUP" empty "$cgroup"
 }
 
 wait_for_test_gates() {
-  local launcher
+  local launcher cgroup
   [ "$test_gates_reaped" = 0 ] || return 0
   for launcher in "${gate_pids[@]}"; do
     reap_test_gate_launcher "$launcher"
   done
+  for cgroup in "${gate_cgroups[@]:-}"; do
+    [ -n "$cgroup" ] || continue
+    if ! wait_for_gate_cgroup_empty "$cgroup"; then
+      "$TRUSTED_GATE_CGROUP" signal "$cgroup" KILL 2>/dev/null || true
+      wait_for_gate_cgroup_empty "$cgroup" || return 1
+    fi
+    "$TRUSTED_GATE_CGROUP" remove "$cgroup" || return 1
+  done
+  gate_cgroups=()
   test_gates_reaped=1
 }
 
@@ -645,6 +692,7 @@ run_parallel_test_gates() {
   gate_ready=()
   gate_logs=()
   gate_names=()
+  gate_cgroups=()
   test_gates_stopped=0
   test_gates_reaped=0
 
@@ -681,7 +729,7 @@ run_parallel_test_gates() {
     if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
     if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
     stop_test_gates
-    wait_for_test_gates
+    wait_for_test_gates || true
     trap - HUP INT TERM
     print_test_gate_logs
     fail "$failed_name завершилась с кодом $status"
@@ -716,7 +764,7 @@ run_parallel_test_gates() {
   print_test_gate_logs
   if [ "$status" -eq 0 ]; then
     test_gates_stopped=1
-    test_gates_reaped=1
+    wait_for_test_gates || status=1
   fi
   [ "$status" -eq 0 ]
 }

@@ -129,6 +129,8 @@ fx — разрешённые операции:
   fx factory release-info [--technical]
                                   что изменилось в текущей версии; служебный код
                                   показывается только с флагом --technical
+  fx factory cgroup-helper-bootstrap <каталог>
+                                  одноразово установить, проверить и закрепить helper
 
   fx repo status                  есть ли доступ к GitHub и от чьего имени
   fx repo head <ветка>            вершина ветки на origin (только чтение)
@@ -570,6 +572,13 @@ case "$scope" in
         else
           echo "через fx Фабрику ещё ни разу не выкатывали"
         fi
+        ;;
+      cgroup-helper-bootstrap)
+        [ "$#" -eq 3 ] || die "нужен ровно один каталог bootstrap"
+        require root "$verb"
+        case "$arg" in /*) ;; *) die "каталог bootstrap должен быть абсолютным" ;; esac
+        say factory cgroup-helper-bootstrap
+        /usr/local/libexec/factory-cgroup-bootstrap "$arg"
         ;;
       release)
         ref="${arg:-main}"
