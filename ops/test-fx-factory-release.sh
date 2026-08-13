@@ -3,6 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RELEASE="$SCRIPT_DIR/fx-factory-release"
+# Полигон сцен собирается из полного дерева репозитория (git archive HEAD).
+# Рядом с доверенной root-owned копией gate такого дерева нет — тогда берём
+# каталог кандидата: драйвер запускает gate с cwd = $work/src.
+FIXTURE_TREE="$SCRIPT_DIR/.."
+/usr/bin/git -C "$FIXTURE_TREE" rev-parse --git-dir >/dev/null 2>&1 || FIXTURE_TREE=$PWD
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 
@@ -107,7 +112,7 @@ import sqlite3,sys
 d=sqlite3.connect(sys.argv[1]); d.execute('create table schema_migrations(version integer primary key, applied_at integer not null)'); d.execute('insert into schema_migrations values(1,0)'); d.commit(); d.close()
 open(sys.argv[1]+'.v2-control-plane','w').write('factory-control-plane-v2\n')
 PY
-  /usr/bin/git -C "$SCRIPT_DIR/.." archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
+  /usr/bin/git -C "$FIXTURE_TREE" archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
   /bin/cp "$RELEASE" "$case_dir/repo/ops/fx-factory-release"
   /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
   if [ "$mode" = trusted-gate-real-race ]; then
