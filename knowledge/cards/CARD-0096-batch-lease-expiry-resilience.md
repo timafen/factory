@@ -1,19 +1,19 @@
 # CARD-0096 — Активные работы не теряют lease синхронной пачкой
 
-Implementation commit: ac824ad5682d53ed50dda1bde05353b29e7d28a9 — повтор heartbeat сохраняет бюджет lease, а пуловый сценарий проверяет десять runtime.
+Implementation commit: 5f0ab88e825a32667431e041ade3d262fe23ff25 — lease длится 30 секунд, первый heartbeat планируется через 10 секунд, sweeper запускается каждые 5 секунд.
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/3c22c13c-edd-30e68460-ff2`.
-- Implementation commit: `ac824ad5682d53ed50dda1bde05353b29e7d28a9`.
+- Status: Verified PASS — merged in main.
+- Branch: `main`.
+- Implementation commit: `5f0ab88e825a32667431e041ade3d262fe23ff25`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
 - Owner impact: краткая очередь heartbeat-запросов больше не заставляет worker
   переждать остаток аренды после временной ошибки.
 - What changed: повтор renewal ограничивается оставшимся lease-бюджетом; десять
   fake-runtime через Manager/Store подтверждают renewal, отсутствие `lost` и успех.
 - Evidence: полный `go test ./...` прошёл; пять целевых worker/control-plane регрессий прошли; `git diff --check` чист.
-- One next action: человек проверит и вольёт ветку.
+- One next action: наблюдать за устойчивостью lease в следующих рабочих прогонах.
 
 ## LOG
 
