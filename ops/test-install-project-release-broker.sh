@@ -16,7 +16,7 @@ if [ "$1" = is-active ]; then
   [ "${FACTORY_BROKER_ACTIVE:-0}" = 1 ]
   exit
 fi
-if [ "$1" = restart ]; then
+if [ "$1" = restart ] && [ "$2" = factory-release-broker.service ]; then
   grep -qx '# broker version 2' "$FACTORY_RELEASE_BROKER_BIN"
 fi
 EOF
@@ -62,7 +62,7 @@ grep -qx -- '--system factory-release' "$temporary/groupadd.log"
 grep -qx 'daemon-reload' "$temporary/systemctl.log"
 grep -qx 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
 grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
-test "$(grep -nE 'enable --now factory-release-broker|restart factory-pilot' "$temporary/systemctl.log" | cut -d: -f1 | tr '\n' ' ')" = "2 3 "
+test "$(grep -nE 'enable --now factory-release-broker|restart factory-pilot' "$temporary/systemctl.log" | cut -d: -f1 | tr '\n' ' ')" = "3 4 "
 
 cat >"$temporary/broker" <<'EOF'
 #!/bin/sh
