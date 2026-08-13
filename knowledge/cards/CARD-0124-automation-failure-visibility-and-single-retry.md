@@ -1,18 +1,20 @@
 # CARD-0124 — Провалившийся запуск Automation повторяется один раз
 
-Implementation commit: aad8346add8f23ab1c48a64a7c79050da961637f — Automation автоматически повторяет сбой у исходного исполнителя и точно показывает статус повтора.
+Implementation commit: ff28d0a639dcbcfef5bc00671c9cb438a0d293ac — Automation автоматически повторяет сбой у исходного исполнителя и точно показывает статус повтора.
 
 ## HEAD
 
-- Статус: Implemented; готово к повторному Review.
+- Статус: Verified PASS — ожидает решения человека о слиянии.
 - Ветка: `factory/a63ff03a-2de-c125f372-48c`.
-- Implementation commit: `aad8346add8f23ab1c48a64a7c79050da961637f` —
+- Implementation commit: `ff28d0a639dcbcfef5bc00671c9cb438a0d293ac` —
   автоматический retry привязан к исходному worker и не смешивается с ручным.
-- Что изменилось: durable `retry_queued` ограничивает claim исходным worker;
-  API выводит статусы только для автоматического retry и сохраняет `cancelled`.
-- Evidence: целевые lifecycle/regression Go-тесты → PASS; `go test ./...` → PASS;
-  `npm run typecheck` → PASS.
-- Следующее действие: повторно отправить CARD-0124 на Review.
+- Evidence: 6 целевых Go-сценариев и 5 UI-состояний повтора прошли; все 68
+  UI-тестов, сборка трёх Go-бинарников, boundary, launcher, tooling и
+  воспроизводимость `web/dist` прошли.
+  Общий набор остановлен двумя известными проверками вне области CARD-0124:
+  staticcheck `SA4000` и worker integration lost-response.
+- Следующее действие: человеку проверить отчёт Verify и принять решение о
+  слиянии ветки.
 
 ## LOG
 
@@ -59,3 +61,22 @@ disablement, offline/unhealthy worker и исключение GitHub/обычн�
 diagnostic для GitHub Automation. Implementation commit:
 `0e9a0f0b5a2a9fdcd3ee5a8735f2eec72ec7770c`; полный Go-набор, Go/web build,
 68 UI-тестов и lint прошли.
+
+### 2026-08-13 — Verify
+
+Сравнение закреплено между базой
+`99701704b37e8740db3fdbe38c0193917570da5c` и кандидатом
+`77b0756b140ddbca57858de8bb2896eda0f861d9`.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Первый сбой schedule Automation повторяется ровно один раз | 6 целевых Go lifecycle/eligibility тестов | PASS |
+| Повтор остаётся у исходного worker и не смешивается с ручным/GitHub retry | worker affinity и exclusion тесты | PASS |
+| UI показывает queued/running/final failure/disabled/offline | 5 параметризованных UI-проверок | PASS |
+| Повтор идемпотентен для completion, lease sweep и переоткрытия БД | lifecycle exactly-once тест | PASS |
+| Смежные интерфейсы и сборка не регрессировали | `just build`, 68 UI-тестов, boundary, launcher, tooling, `web/dist` | PASS |
+
+`just check` остановился на существующем `SA4000` в неизменённом
+`internal/worker/attempt_lifecycle_test.go`. Отдельный `just test` также выявил
+lost-response сбой в неизменённом `internal/worker/worker_integration_test.go`;
+целевой `internal/controlplane` и весь UI-набор прошли.
