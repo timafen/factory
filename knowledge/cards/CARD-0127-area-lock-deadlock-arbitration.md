@@ -1,13 +1,14 @@
 # CARD-0127 — Замок областей не создаёт взаимного ожидания
 
-Implementation commit: 236a09119a85b2ae3d16b015ba412813e396d160 — арбитр разводит живые работы с пересекающимися областями
+Implementation commit: f20b23139066bf8fe43278259e2a4d5ddf73202c — арбитр разводит живые работы с пересекающимися областями
 
 ## HEAD
 
-- Статус: Implemented — awaiting review.
-- Ветка: `factory/e4400996-707-a2a15684-c16`.
+- Статус: Implemented — ready for review.
+- Ветка: `factory/aa802da6-3ae-d50e791d-f56`.
 - Implementation commit: f20b23139066bf8fe43278259e2a4d5ddf73202c — арбитр выбирает одного устойчивого владельца полной пересекающейся области и разводит оба production-пути.
-- Evidence: 7 целевых тестов OK; `python3 -m py_compile pilot/pilot.py` OK.
+- What changed: арбитр сортирует живые работы по стабильному приоритету, сравнивает repository/path и выдаёт одному владельцу всю область; `area_busy` и `review_gate` используют единое решение.
+- Evidence: `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` — 7 тестов OK; `python3 -m py_compile pilot/pilot.py` — OK.
 - Следующее действие: Проверить опубликованный кандидат на review.
 
 ## LOG
@@ -81,3 +82,9 @@ repository/path, стабильный приоритет и не даёт зав
 | Полный набор и соседняя сборка | `go build ./...`; `go test -timeout 5m ./...`; `python3 -m py_compile pilot/pilot.py`; `python3 -m unittest -v pilot.test_pilot` | Go build OK; все Go-пакеты OK; Python compile OK; полный Python-набор: 261 тест, 13 skipped, 2 известных падения. |
 | Известные падения не внесены кандидатом | Тот же `CorrectionProvenanceStormTests.test_review_and_verify_corrections_complete_one_pipeline_after_restart` на pinned base | На базе воспроизведены те же 2 падения; они вне изменённого арбитража. |
 | Кандидат и карточка закреплены | `git ls-remote --symref origin HEAD`; pinned bare fetch; `base_sha...candidate_sha`; проверка ancestry и diff путей | База и кандидат закреплены; implementation commit — предок кандидата и меняет код; diff содержит только карточку, `pilot/pilot.py`, `pilot/test_pilot.py`; временный снимок чистый. |
+
+### 2026-08-13 — Implement
+
+Работа перенесена в текущую ветку `factory/aa802da6-3ae-d50e791d-f56`; карточка
+теперь ссылается на реальный кодовый коммит f20b23139066bf8fe43278259e2a4d5ddf73202c.
+Арбитраж подтверждён 7 целевыми тестами и компиляцией `pilot/pilot.py`.
