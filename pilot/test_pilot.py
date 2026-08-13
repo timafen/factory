@@ -328,16 +328,16 @@ class DeliveryAreaTests(unittest.TestCase):
         files = ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md",
                  "docs/foreign.md", "pilot/__pycache__/pilot.pyc"]
 
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": files, "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", return_value=known), \
                 mock.patch.object(pilot, "rebuild_clean_branch",
                                   return_value="task-clean") as rebuild:
-            result = pilot.review_gate({}, "Счётчик", "task", "repo", active_tasks=[])
+            result = pilot.review_gate({}, "Счётчик", "task", "file:///tmp/repo", active_tasks=[])
 
         self.assertEqual(result["branch"], "task-clean")
         rebuild.assert_called_once_with(
-            "repo", "task",
+            "file:///tmp/repo", "task",
             ["pilot/pilot.py", "web/src/Overview.tsx", "docs/extra.md",
              "docs/foreign.md"],
             "Счётчик",
@@ -363,25 +363,25 @@ class DeliveryAreaTests(unittest.TestCase):
                 return known
             return {}
 
-        with mock.patch.object(pilot, "branch_report", return_value=("есть", files)), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": files, "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
                 mock.patch.object(pilot, "rebuild_clean_branch",
                                   return_value="browser-clean") as rebuild:
-            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "repo",
+            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "file:///tmp/repo",
                                        active_tasks=[])
 
         self.assertEqual(result["branch"], "browser-clean")
         rebuild.assert_called_once_with(
-            "repo", "browser",
+            "file:///tmp/repo", "browser",
             ["web/src/Browser.tsx", "knowledge/cards/CARD-browser.md"],
             "Браузер после ожидания",
         )
 
     def test_browser_wait_holds_real_live_overlap(self):
         known = {
-            "Браузер после ожидания": ["repo::web/src/Browser.tsx"],
-            "Соседняя подзадача эпика": ["repo::web/src/Browser.tsx"],
+            "Браузер после ожидания": ["file:///tmp/repo::web/src/Browser.tsx"],
+            "Соседняя подзадача эпика": ["file:///tmp/repo::web/src/Browser.tsx"],
         }
         live = [{"state": "running",
                  "title": "[auto] [2/5 Implement + Test] Соседняя подзадача эпика"}]
@@ -389,12 +389,11 @@ class DeliveryAreaTests(unittest.TestCase):
         def loader(path, default=None):
             return known if path == pilot.AREAS_PATH else {}
 
-        with mock.patch.object(pilot, "branch_report",
-                               return_value=("есть", ["web/src/Browser.tsx"])), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": ["web/src/Browser.tsx"], "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
                 mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
-            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "repo",
+            result = pilot.review_gate({}, "Браузер после ожидания", "browser", "file:///tmp/repo",
                                        active_tasks=live)
 
         self.assertTrue(result["wait"])
@@ -425,11 +424,10 @@ class DeliveryAreaTests(unittest.TestCase):
                 return areas
             return default
 
-        with mock.patch.object(pilot, "branch_report", return_value=(
-                "есть", ["knowledge/cards/CARD-browser.md"])), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": ["knowledge/cards/CARD-browser.md"], "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader):
-            result = pilot.review_gate({}, "Браузер", "browser", "repo")
+            result = pilot.review_gate({}, "Браузер", "browser", "file:///tmp/repo")
 
         self.assertTrue(result["back"])
         self.assertIn("документация не заменяет", result["alert_msg"])
@@ -543,6 +541,50 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertTrue(any(
                 call.args[1:] == ("diff", "--name-only", expected_range)
                 for call in git_spy.call_args_list))
+            self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
+
+    def test_stale_cached_main_never_defines_review_scope(self):
+        """The observer's stale main ref cannot replace the fetched pinned base."""
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            observer = os.path.join(tmp, "observer")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "README.md", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+            # Clone before candidate publication and main advancement: this is
+            # the stale-cache state the production review must survive.
+            self.git(tmp, "clone", "-q", remote, observer)
+            cached_main = self.git(observer, "rev-parse", "refs/remotes/origin/main")
+            self.git(author, "checkout", "-qb", "factory/candidate", "main")
+            self.commit(author, "delivery.txt", "candidate\n")
+            candidate_sha = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "foreign.txt", "advanced main\n")
+            new_main = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "main")
+
+            self.git(observer, "fetch", "-q", "origin", "factory/candidate")
+            before = self.git(observer, "symbolic-ref", "--short", "HEAD")
+            snapshot = pilot.fresh_branch_snapshot("file://" + remote,
+                                                   "factory/candidate")
+
+            self.assertEqual(snapshot["state"], "ok")
+            self.assertEqual(cached_main, self.git(observer,
+                                                   "rev-parse", "refs/remotes/origin/main"))
+            self.assertNotEqual(cached_main, new_main)
+            self.assertEqual(snapshot["base_sha"], new_main)
+            self.assertEqual(snapshot["candidate_sha"], candidate_sha)
+            self.assertEqual(snapshot["files"], ["delivery.txt"])
+            self.assertEqual(snapshot["base_sha"] + "..." + snapshot["candidate_sha"],
+                             new_main + "..." + candidate_sha)
+            self.assertTrue(snapshot["base_advanced"])
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
@@ -930,10 +972,10 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                     self.assertEqual(pilot.cap_rescues("Работа", stage), 1)
 
     def test_review_gate_defers_missing_branch_cap_until_return_task_exists(self):
-        with mock.patch.object(pilot, "branch_report", return_value=("нет", [])), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "missing"}), \
                 mock.patch.object(pilot, "cap_rescues", return_value=0), \
                 mock.patch.object(pilot, "note_cap_rescue") as note:
-            result = pilot.review_gate({}, "Работа", "factory/missing", "repo")
+            result = pilot.review_gate({}, "Работа", "factory/missing", "file:///tmp/repo")
 
         self.assertEqual(result["cap_stage"], "GATE")
         note.assert_not_called()
@@ -944,14 +986,13 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
                 return {"Работа": ["repo::pilot/pilot.py"]}
             return default
 
-        with mock.patch.object(pilot, "branch_report", return_value=(
-                "есть", ["pilot/pilot.py", "node_modules/cache.js"])), \
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": ["pilot/pilot.py", "node_modules/cache.js"], "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
                 mock.patch.object(pilot, "rebuild_clean_branch", return_value=""), \
                 mock.patch.object(pilot, "cap_rescues", return_value=0), \
                 mock.patch.object(pilot, "note_cap_rescue") as note:
-            result = pilot.review_gate({}, "Работа", "factory/dirty", "repo")
+            result = pilot.review_gate({}, "Работа", "factory/dirty", "file:///tmp/repo")
 
         self.assertEqual(result["cap_stage"], "DIRT")
         note.assert_not_called()
