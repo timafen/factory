@@ -1,12 +1,12 @@
 # CARD-0098 — Общий предел worker-слотов по мощности машины
 
-Implementation commit: 7888a5edfd05c6873c8771649bfab6abac9e471d — прямой Store получает безопасный предел worker-слотов.
+Implementation commit: 7888a5ed5a6da700e8ef0cccb8aff9ca020abd0b — прямой Store получает безопасный предел worker-слотов.
 
 ## HEAD
 
 - Status: Implemented and verified.
 - Branch: `factory/f8b1d7e8-e3c-7b11af26-8a3`.
-- Implementation commit: 7888a5edfd05c6873c8771649bfab6abac9e471d — прямой Store получает безопасный предел worker-слотов.
+- Implementation commit: 7888a5ed5a6da700e8ef0cccb8aff9ca020abd0b — прямой Store получает безопасный предел worker-слотов.
 - What changed: `Claim` берёт предел из `runtime.NumCPU()`, когда Store создан напрямую без явного лимита; `Open` сохраняет явную инициализацию.
 - Evidence: `go test ./internal/controlplane -count=1` → PASS, включая проверку claim у прямого Store.
 - Next action: передать ветку на повторный review.
