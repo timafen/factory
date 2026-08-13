@@ -1,10 +1,15 @@
 # CARD-0097 — Прерванные worker-тесты очищают fake `gh` и `/tmp`
 
-Implementation commit: отсутствует — эта Specification-стадия намеренно не создаёт код; Implement добавит существующий полный SHA до обновления карточки.
+Implementation commit: b6bea3484d3589068671e4b9e6290f7cb5365526 — test-helper очищает fake gh, process group и временный корень после TERM, INT и HUP.
 
 ## HEAD
 
-- Status: READY FOR IMPLEMENT.
+- Status: IMPLEMENTED.
+- Branch: factory/49c3275e-3e7-966d9473-3aa
+- Implementation commit: b6bea3484d3589068671e4b9e6290f7cb5365526
+- What changed: добавлен Unix-only controlled helper с ограниченным TERM→KILL fallback и регрессия для трёх сигналов; production-файлы не затронуты.
+- Evidence: `go test ./internal/worker -run '^TestWorkerTestInterruptionCleanup$' -count=1` → PASS; `go test -timeout 5m ./...` → PASS.
+- One next action: проверить поведение на целевой CI/Unix-стенде при интеграции.
 - Specification: `knowledge/specs/worker-test-interruption-cleanup.md`.
 - Owner impact: остановка worker-теста не оставляет блокирующие fake `gh`, их
   process group и тестовые каталоги в `/tmp`.
@@ -16,6 +21,12 @@ Implementation commit: отсутствует — эта Specification-стад�
   в первую строку этой карточки и выполняет test-plan спецификации.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Добавлен test-only helper, который после TERM/INT/HUP завершает созданную process group,
+дожидается её завершения с ограничением и удаляет выделенный temp-root. Table-driven
+регрессия подтвердила исчезновение PID, PGID и каталога; целевые и полный Go-наборы зелёные.
 
 ### 2026-08-12 — Specification
 
