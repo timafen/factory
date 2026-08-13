@@ -39,15 +39,72 @@ JOURNAL="$REL/transaction"
 GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
 GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
+TRUSTED_OWNER_UID=0
+TRUSTED_SETSID=/usr/bin/setsid
+TRUSTED_SUDO=/usr/bin/sudo
+TRUSTED_BASH=/bin/bash
+TRUSTED_STAT=/usr/bin/stat
+TRUSTED_MKTEMP=/usr/bin/mktemp
+TRUSTED_MV=/usr/bin/mv
+TRUSTED_RM=/usr/bin/rm
+TRUSTED_SLEEP=/bin/sleep
+TRUSTED_OD=/usr/bin/od
+TRUSTED_PS=/usr/bin/ps
+TRUSTED_AWK=/usr/bin/awk
+TRUSTED_NODE=/usr/bin/node
+TRUSTED_NPX=/usr/bin/npx
+TRUSTED_NPM=/usr/bin/npm
+TRUSTED_GO=/usr/bin/go
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
+as_user_private() {
+  if [ -n "$AS" ]; then
+    $AS "$TRUSTED_BASH" -c 'umask 077; exec "$@"' factory-release-private "$@"
+  else
+    (umask 077; exec "$@")
+  fi
+}
 set_owner() { if [ -n "$OWNER" ]; then chown "$OWNER" "$@"; fi; }
 worker_service_list() { printf '%s\n' $WORKER_SERVICES; }
 stop_workers() { local service; while read -r service; do systemctl stop "$service" || return; done < <(worker_service_list); }
 start_workers() { local service; while read -r service; do systemctl start "$service" || return; done < <(worker_service_list); }
 restart_workers() { local service; while read -r service; do systemctl restart "$service" || return; done < <(worker_service_list); }
+
+case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
+  *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
+esac
+
+validate_trusted_executable() { # validate_trusted_executable <absolute path>
+  local executable=$1 owner mode
+  case "$executable" in /*) ;; *) return 1 ;; esac
+  [ -f "$executable" ] && [ -x "$executable" ] || return 1
+  owner=$("$TRUSTED_STAT" -Lc %u -- "$executable" 2>/dev/null) || return 1
+  mode=$("$TRUSTED_STAT" -Lc %a -- "$executable" 2>/dev/null) || return 1
+  [ "$owner" = "$TRUSTED_OWNER_UID" ] || return 1
+  (( (8#$mode & 0022) == 0 ))
+}
+
+for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
+  "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
+  "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" \
+  "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO"; do
+  validate_trusted_executable "$trusted_executable" \
+    || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
+done
+
+# $AS is a caller-controlled convenience wrapper, so it is excluded from the
+# trusted chain. Gate status comes only from the fixed root-owned launcher.
+gate_identity=()
+if [ -n "$OWNER" ]; then
+  gate_user=${OWNER%%:*}
+  if ! [[ "$gate_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+    fail "некорректный пользователь для test gate"
+    exit 4
+  fi
+  gate_identity=("$TRUSTED_SUDO" -H -u "$gate_user" --)
+fi
 
 sync_path() {
   python3 - "$1" <<'PY'
@@ -224,9 +281,6 @@ rollback_to_generation() { # generation, owner-facing reason
   rm -f "$JOURNAL"
   sync_path "$REL"
 }
-case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
-  *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
-esac
 
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
@@ -309,9 +363,6 @@ if [ -e "$JOURNAL" ]; then
 fi
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
-gate_pids=()
-gate_handshakes=()
-gate_logs=()
 gate_names=()
 test_gates_stopped=1
 test_gates_reaped=1
@@ -325,37 +376,79 @@ trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
 # их общего успеха. Реальную SID/PGID сообщает оболочка, уже запущенная через
-# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid и $AS могут
-# forkнуть. До атомарной записи handshake ни $AS, ни сама команда не стартуют.
-# Отдельная оболочка вокруг самой команды атомарно публикует её итоговый статус:
-# статус $AS не авторитетен, потому что fork-обёртка может вернуть 0 раньше gate.
-read_test_gate_handshake() { # read_test_gate_handshake <файл>; sets gate_sid/gate_pgid
-  local handshake=$1 sid_field='' pgid_field='' ready_field='' extra=''
+# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid может forkнуть.
+# До атомарной записи handshake сама команда gate не стартует.
+# $AS не участвует в запуске gate: равноправный launcher мог бы подменить любой
+# файл или канал того же UID. Фиксированный identity launcher и setsid --fork --wait
+# образуют waitable-цепочку, чей одноразовый exit status сообщает само ядро.
+process_identity() { # process_identity <pid>; sets process_state/ppid/pgid/sid
+  local pid=$1 stat rest
+  process_state=''
+  process_ppid=''
+  process_pgid=''
+  process_sid=''
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r "/proc/$pid/stat" ] || return 1
+  IFS= read -r stat <"/proc/$pid/stat" || return 1
+  rest=${stat##*) }
+  read -r process_state process_ppid process_pgid process_sid _ <<<"$rest"
+  [ "$process_state" != Z ] || return 1
+  case "$process_ppid:$process_pgid:$process_sid" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+}
+
+read_test_gate_handshake() { # read_test_gate_handshake <file> <launcher> <nonce>
+  local handshake=$1 launcher=$2 expected_nonce=$3
+  local sid_field='' pgid_field='' nonce_field='' ready_field='' extra=''
   gate_sid=''
   gate_pgid=''
   [ -s "$handshake" ] || return 1
-  IFS=' ' read -r sid_field pgid_field ready_field extra <"$handshake" || return 1
-  case "$sid_field:$pgid_field:$ready_field:$extra" in
-    sid=*:pgid=*:ready=1:) ;;
+  IFS=' ' read -r sid_field pgid_field nonce_field ready_field extra <"$handshake" || return 1
+  case "$sid_field:$pgid_field:$nonce_field:$ready_field:$extra" in
+    sid=*:pgid=*:nonce=*:ready=1:) ;;
     *) return 1 ;;
   esac
   gate_sid=${sid_field#sid=}
   gate_pgid=${pgid_field#pgid=}
+  [ "${nonce_field#nonce=}" = "$expected_nonce" ] || return 1
   case "$gate_sid:$gate_pgid" in
     *[!0-9:]*|:*|*:) return 1 ;;
   esac
-  # A setsid wrapper is the session and process-group leader. Rejecting any
-  # other record prevents a stale launcher PID from becoming a kill target.
-  [ "$gate_sid" = "$gate_pgid" ]
+  [ "$gate_sid" = "$gate_pgid" ] || return 1
+  process_identity "$launcher" || return 1
+  process_identity "$gate_sid" || return 1
+  # --fork makes the launched setsid process a stable supervisor. Its one
+  # direct child must be the live session/process-group leader that published
+  # this launch's nonce. A numeric, stale or unrelated process is never ready.
+  [ "$process_ppid" = "$launcher" ] \
+    && [ "$process_pgid" = "$gate_pgid" ] \
+    && [ "$process_sid" = "$gate_sid" ] \
+    && test_gate_group_alive "$gate_pgid"
 }
 
-wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <файл>
-  local handshake=$1 i
+publish_test_gate_ack() { # publish_test_gate_ack <file> <nonce>
+  local ack=$1 nonce=$2 temporary_ack
+  temporary_ack=$($TRUSTED_MKTEMP "${ack}.tmp.XXXXXX") || return 1
+  if ! printf 'nonce=%s accepted=1\n' "$nonce" >"$temporary_ack" \
+    || ! "$TRUSTED_MV" -f -- "$temporary_ack" "$ack"; then
+    "$TRUSTED_RM" -f -- "$temporary_ack"
+    return 1
+  fi
+}
+
+wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <file> <launcher> <nonce> <ack>
+  local handshake=$1 launcher=$2 nonce=$3 ack=$4 i
   for ((i = 0; i < GATE_READY_ATTEMPTS; i++)); do
-    read_test_gate_handshake "$handshake" && return 0
-    sleep "$GATE_POLL_DELAY"
+    if read_test_gate_handshake "$handshake" "$launcher" "$nonce"; then
+      publish_test_gate_ack "$ack" "$nonce"
+      return
+    fi
+    process_identity "$launcher" || return 1
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
   done
-  read_test_gate_handshake "$handshake"
+  read_test_gate_handshake "$handshake" "$launcher" "$nonce" \
+    && publish_test_gate_ack "$ack" "$nonce"
 }
 
 test_gate_group_alive() { kill -0 -- "-$1" 2>/dev/null; }
@@ -364,7 +457,7 @@ wait_for_test_gate_group_exit() { # wait_for_test_gate_group_exit <pgid>
   local pgid=$1 i
   for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
     test_gate_group_alive "$pgid" || return 0
-    sleep "$GATE_POLL_DELAY"
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
   done
   ! test_gate_group_alive "$pgid"
 }
@@ -377,7 +470,7 @@ wait_for_test_gate_pids_exit() { # wait_for_test_gate_pids_exit <pid...>
       if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
     done
     [ "$alive" = 0 ] && return 0
-    sleep "$GATE_POLL_DELAY"
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
   done
   for pid in "$@"; do
     kill -0 "$pid" 2>/dev/null && return 1
@@ -391,7 +484,8 @@ test_gate_launcher_tree() { # test_gate_launcher_tree <launcher-pid>
   while read -r child; do
     [ -n "$child" ] || continue
     test_gate_launcher_tree "$child"
-  done < <(ps -eo pid=,ppid= | awk -v parent="$parent" '$2 == parent {print $1}')
+  done < <("$TRUSTED_PS" -eo pid=,ppid= \
+    | "$TRUSTED_AWK" -v parent="$parent" '$2 == parent {print $1}')
 }
 
 reap_test_gate_launcher() { # reap_test_gate_launcher <launcher-pid>
@@ -430,125 +524,80 @@ stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
 }
 
 start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
-  local name=$1 log=$2 handshake=$3 result="${3}.result" launcher
-  local -a as_command=()
+  local name=$1 log=$2 handshake=$3 launcher nonce ack
   shift 3
-  [ -z "$AS" ] || read -r -a as_command <<<"$AS"
-  rm -f -- "$handshake" "$result"
-  setsid --wait bash -c '
+  ack="${handshake}.ack"
+  nonce=$("$TRUSTED_OD" -An -N16 -tx1 /dev/urandom) || return 1
+  nonce=${nonce//[[:space:]]/}
+  [ "${#nonce}" -eq 32 ] || return 1
+  "$TRUSTED_RM" -f -- "$handshake" "$ack"
+  "$TRUSTED_SETSID" --fork --wait "$TRUSTED_BASH" -c '
     handshake=$1
-    result=$2
-    as_count=$3
-    stop_attempts=$4
-    poll_delay=$5
-    shift 5
-    as_command=("${@:1:as_count}")
-    shift "$as_count"
+    ack=$2
+    nonce=$3
+    poll_delay=$4
+    trusted_mktemp=$5
+    trusted_mv=$6
+    trusted_rm=$7
+    trusted_sleep=$8
+    shift 8
     trap - HUP INT TERM
-    read -r sid pgid < <(ps -o sid= -o pgid= -p "$$") || exit 125
+    stat=$(<"/proc/$$/stat") || exit 125
+    rest=${stat##*) }
+    read -r state ppid pgid sid _ <<<"$rest"
     case "$sid:$pgid" in
       *[!0-9:]*|:*|*:) exit 125 ;;
     esac
     [ "$sid" = "$pgid" ] || exit 125
-    temporary_handshake=$(mktemp "${handshake}.tmp.XXXXXX") || exit 125
-    if ! printf "sid=%s pgid=%s ready=1\\n" "$sid" "$pgid" >"$temporary_handshake" \
-      || ! mv -f -- "$temporary_handshake" "$handshake"; then
-      rm -f -- "$temporary_handshake"
+    temporary_handshake=$("$trusted_mktemp" "${handshake}.tmp.XXXXXX") || exit 125
+    if ! printf "sid=%s pgid=%s nonce=%s ready=1\\n" "$sid" "$pgid" "$nonce" >"$temporary_handshake" \
+      || ! "$trusted_mv" -f -- "$temporary_handshake" "$handshake"; then
+      "$trusted_rm" -f -- "$temporary_handshake"
       exit 125
     fi
 
-    # This wrapper, rather than the possibly forking $AS launcher, observes the
-    # real gate. Each state is published by rename so the supervisor never
-    # accepts a partial or stale successful record.
-    "${as_command[@]}" bash -c '\''
-      result=$1
-      shift
-      publish_gate_result() {
-        local contents=$1 temporary_result
-        temporary_result=$(mktemp "${result}.tmp.XXXXXX") || return 1
-        if ! printf "%s\\n" "$contents" >"$temporary_result" \
-          || ! mv -f -- "$temporary_result" "$result"; then
-          rm -f -- "$temporary_result"
-          return 1
-        fi
-      }
-      publish_gate_result "state=running pid=$$" || exit 125
-      "$@"
-      gate_status=$?
-      publish_gate_result "state=finished status=$gate_status" || exit 125
-      exit "$gate_status"
-    '\'' bash "$result" "$@" &
-    as_pid=$!
-    wait "$as_pid"
-    as_status=$?
-
-    # A synchronous $AS has already waited for the writer. A forking $AS may
-    # return first, so follow the published writer PID while it belongs to this
-    # process group. Once it disappears, only bounded retries are allowed and
-    # any missing/malformed final record fails closed.
-    unsettled=0
-    while :; do
-      state_field= value_field= extra=
-      if [ -s "$result" ] \
-        && IFS=" " read -r state_field value_field extra <"$result"; then
-        case "$state_field:$value_field:$extra" in
-          state=finished:status=*:)
-            gate_status=${value_field#status=}
-            case "$gate_status" in
-              ""|*[!0-9]*) exit 125 ;;
-            esac
-            [ "$gate_status" -le 255 ] || exit 125
-            [ "$gate_status" -ne 0 ] && exit "$gate_status"
-            [ "$as_status" -eq 0 ] || exit 125
-            exit 0
-            ;;
-          state=running:pid=:*) ;;
-          state=running:pid=*:)
-            gate_pid=${value_field#pid=}
-            case "$gate_pid" in
-              ""|*[!0-9]*) gate_pid= ;;
-            esac
-            if [ -n "$gate_pid" ]; then
-              actual_pgid= process_state=
-              read -r actual_pgid process_state \
-                < <(ps -o pgid= -o stat= -p "$gate_pid") || true
-              case "$process_state" in Z*|"") ;; *)
-                if [ "$actual_pgid" = "$pgid" ]; then
-                  unsettled=0
-                  sleep "$poll_delay"
-                  continue
-                fi
-                ;;
-              esac
-            fi
-            ;;
-        esac
+    accepted=
+    for ((i = 0; i < 500; i++)); do
+      nonce_field= accepted_field= extra=
+      if [ -s "$ack" ]; then
+        IFS=" " read -r nonce_field accepted_field extra <"$ack" || true
       fi
-      ((unsettled++))
-      [ "$unsettled" -lt "$stop_attempts" ] || exit 125
-      sleep "$poll_delay"
+      if [ "$nonce_field" = "nonce=$nonce" ] \
+        && [ "$accepted_field" = accepted=1 ] && [ -z "$extra" ]; then
+        accepted=1
+        break
+      fi
+      "$trusted_sleep" "$poll_delay"
     done
-  ' bash "$handshake" "$result" "${#as_command[@]}" "$GATE_STOP_ATTEMPTS" \
-    "$GATE_POLL_DELAY" "${as_command[@]}" "$@" >"$log" 2>&1 &
+    [ "$accepted" = 1 ] || exit 125
+
+    exec "$@"
+  ' "$TRUSTED_BASH" "$handshake" "$ack" "$nonce" "$GATE_POLL_DELAY" \
+    "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" "$TRUSTED_SLEEP" \
+    "${gate_identity[@]}" "$@" >"$log" 2>&1 &
   launcher=$!
   gate_pids+=("$launcher")
-  gate_handshakes+=("$handshake")
+  gate_pgids+=("")
+  gate_ready+=(0)
   gate_logs+=("$log")
   gate_names+=("$name")
-  if wait_for_test_gate_handshake "$handshake"; then return 0; fi
+  if wait_for_test_gate_handshake "$handshake" "$launcher" "$nonce" "$ack"; then
+    gate_pgids[${#gate_pgids[@]}-1]=$gate_pgid
+    gate_ready[${#gate_ready[@]}-1]=1
+    return 0
+  fi
   fail "не дождался handshake реальной session для $name"
   return 1
 }
 
 stop_test_gates() {
-  local i launcher handshake
+  local i launcher
   [ "$test_gates_stopped" = 0 ] || return 0
   test_gates_stopped=1
   for i in "${!gate_pids[@]}"; do
     launcher=${gate_pids[$i]}
-    handshake=${gate_handshakes[$i]}
-    if wait_for_test_gate_handshake "$handshake"; then
-      stop_ready_test_gate "$launcher" "$gate_pgid"
+    if [ "${gate_ready[$i]}" = 1 ]; then
+      stop_ready_test_gate "$launcher" "${gate_pgids[$i]}"
     else
       stop_unready_test_gate_launcher "$launcher"
     fi
@@ -564,11 +613,10 @@ wait_for_test_gates() {
   test_gates_reaped=1
 }
 
-wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <handshake>
-  local handshake=$1
-  read_test_gate_handshake "$handshake" || return 1
-  while test_gate_group_alive "$gate_pgid"; do
-    sleep "$GATE_POLL_DELAY"
+wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <pgid>
+  local pgid=$1
+  while test_gate_group_alive "$pgid"; do
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
   done
 }
 
@@ -593,7 +641,8 @@ on_test_gate_signal() {
 run_parallel_test_gates() {
   local completed status failed_name completed_index other_index
   gate_pids=()
-  gate_handshakes=()
+  gate_pgids=()
+  gate_ready=()
   gate_logs=()
   gate_names=()
   test_gates_stopped=0
@@ -607,8 +656,8 @@ run_parallel_test_gates() {
   trap 'on_test_gate_signal TERM' TERM
 
   if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
-    bash -c 'cd "$1" && npx tsc -p tsconfig.app.json --noEmit && npm test' \
-    bash "$work/src/web"; then
+    "$TRUSTED_BASH" -c 'cd "$1" && "$2" "$3" tsc -p tsconfig.app.json --noEmit && "$2" "$4" test' \
+    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -616,8 +665,8 @@ run_parallel_test_gates() {
     return 1
   fi
   if ! start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
-    bash -c 'umask 077; cd "$1" && go test ./... && bash ops/test-fx-factory-release.sh' \
-    bash "$work/src"; then
+    "$TRUSTED_BASH" -c 'umask 077; cd "$1" && "$2" test ./... && "$3" "$4"' \
+    "$TRUSTED_BASH" "$work/src" "$TRUSTED_GO" "$TRUSTED_BASH" "$trusted_gate_script"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -641,7 +690,7 @@ run_parallel_test_gates() {
 
   completed_index=1
   [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
-  if ! wait_for_test_gate_descendants "${gate_handshakes[$completed_index]}"; then
+  if ! wait_for_test_gate_descendants "${gate_pgids[$completed_index]}"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -655,7 +704,7 @@ run_parallel_test_gates() {
   wait "${gate_pids[$other_index]}"
   status=$?
   if [ "$status" -eq 0 ] \
-    && ! wait_for_test_gate_descendants "${gate_handshakes[$other_index]}"; then
+    && ! wait_for_test_gate_descendants "${gate_pgids[$other_index]}"; then
     status=1
   fi
   if [ "$status" -ne 0 ]; then
@@ -673,11 +722,26 @@ run_parallel_test_gates() {
 }
 
 step "беру исходники: $ref"
-as_user git clone --quiet "$REPO" "$work/src" \
+as_user_private git clone --quiet "$REPO" "$work/src" \
   || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
-as_user git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
-  || as_user git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+as_user_private git -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user_private git -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
   || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
+trusted_gate_script="$work/src/ops/test-fx-factory-release.sh"
+case "$trusted_gate_script" in /*) ;; *) fail "gate script не имеет абсолютного пути"; cleanup; exit 4 ;; esac
+gate_script_owner=$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_script" 2>/dev/null) \
+  || { fail "не смог проверить gate script"; cleanup; exit 4; }
+work_owner=$("$TRUSTED_STAT" -Lc %u -- "$work" 2>/dev/null) \
+  || { fail "не смог проверить владельца сборки"; cleanup; exit 4; }
+gate_script_mode=$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_script" 2>/dev/null) \
+  || { fail "не смог проверить права gate script"; cleanup; exit 4; }
+if [ ! -f "$trusted_gate_script" ] || [ -L "$trusted_gate_script" ] \
+  || [ ! -r "$trusted_gate_script" ] || [ "$gate_script_owner" != "$work_owner" ] \
+  || (( (8#$gate_script_mode & 0022) != 0 )); then
+  fail "gate script не прошёл проверку доверенного пути"
+  cleanup
+  exit 4
+fi
 sha=$(as_user git -C "$work/src" rev-parse HEAD)
 subject=$(as_user git -C "$work/src" log -1 --pretty=%s)
 case "$subject" in
@@ -806,11 +870,34 @@ chmod 600 "$services"
 printf 'services.tsv\t-\t600\t\n' >>"$inventory"
 
 step "создаю и повторно проверяю SQLite online snapshot"
-snapshot="$stage/database.sqlite3"
-"$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
-  || { fail "текущий server отказался создать проверенный snapshot"; cleanup; exit 4; }
-[ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
+# The live database and all of its recovery-path ancestors belong to the
+# Factory service account.  Run the backup through the same account instead
+# of root, then copy the verified standalone snapshot into the root-managed
+# immutable generation.
+working_snapshot="$work/database.sqlite3"
+snapshot_errors="$work/snapshot-errors.log"
+if ! as_user "$SERVER_BIN" -database "$DATABASE" -backup "$working_snapshot" 2>"$snapshot_errors"; then
+  cat "$snapshot_errors" >&2 || true
+  if grep -Fq "backup schema is newer than this Factory binary supports" "$snapshot_errors"; then
+    # Живая база бывает новее установленного server: неудачный кандидат успел
+    # поднять схему, а откат вернул только бинарь. Такой base старый server
+    # честно не снимает — снимок делает свежесобранный кандидат: он только что
+    # прошёл все ворота и знает эту схему. Без этого выпуски заперты навсегда.
+    step "живая база новее текущего server — снимок делает свежесобранный кандидат"
+    as_user "$work/factory-server" -database "$DATABASE" -backup "$working_snapshot" \
+      || { fail "кандидатный server тоже отказался создать snapshot"; cleanup; exit 4; }
+  else
+    fail "текущий server отказался создать проверенный snapshot"
+    cleanup
+    exit 4
+  fi
+fi
+[ -f "$working_snapshot" ] && [ ! -e "$working_snapshot-wal" ] && [ ! -e "$working_snapshot-shm" ] \
   || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
+snapshot="$stage/database.sqlite3"
+cp -f "$working_snapshot" "$snapshot" \
+  && cp -f "$working_snapshot.v2-control-plane" "$snapshot.v2-control-plane" \
+  || { fail "не удалось перенести snapshot в поколение выпуска"; cleanup; exit 4; }
 chmod 600 "$snapshot" "$snapshot.v2-control-plane"
 ledger=$(database_ledger "$snapshot") || { cleanup; exit 4; }
 schema_digest=$(python3 - "$snapshot" <<'PY'
