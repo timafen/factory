@@ -1,4 +1,4 @@
-Implementation commit: ff303b1c3c02090f023ae4bbc61a719d30fc468c — admin-вопросы при stage-cap и пауза после fx проходят общий маршрут старшей модели.
+Implementation commit: 215c0dae0c2166f1220bc4e866a1a1e2143b9e68 — admin-вопросы при stage-cap и пауза после fx проходят общий маршрут старшей модели.
 
 # CARD-0116 — Административный вопрос сначала решает старшая модель
 
@@ -6,7 +6,7 @@ Implementation commit: ff303b1c3c02090f023ae4bbc61a719d30fc468c — admin-воп
 
 - Статус: Implemented; review-блокеры stage-cap и wait-after-fx исправлены.
 - Ветка: `factory/72b69167-acd-afbeb4e9-0c3`.
-- Implementation commit: `ff303b1c3c02090f023ae4bbc61a719d30fc468c` — admin-маршрут работает в обеих ветках stage-cap, а wait после fx ставит конвейер на паузу.
+- Implementation commit: `215c0dae0c2166f1220bc4e866a1a1e2143b9e68` — admin-маршрут работает в обеих ветках stage-cap, а wait после fx ставит конвейер на паузу.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
 - Что изменено: Pilot принимает типизированное `admin_action`, пропускает только
   консервативный staging allowlist и запускает единственный фиксированный argv.
@@ -20,7 +20,7 @@ Implementation commit: ff303b1c3c02090f023ae4bbc61a719d30fc468c — admin-воп
 ### 2026-08-13 — Implement
 
 Исправлена верхняя строка подтверждения реализации: она теперь указывает на
-`ff303b1c3c02090f023ae4bbc61a719d30fc468c`, существующий предок этой ветки,
+`215c0dae0c2166f1220bc4e866a1a1e2143b9e68`, существующий предок этой ветки,
 который меняет Pilot и HTTP-регрессии. Это устраняет ссылку на чужой коммит.
 
 ### 2026-08-13 — Implement
