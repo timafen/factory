@@ -8,13 +8,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+func TestWorkerTestInterruptionCleanup(t *testing.T) {
+	for _, signal := range []os.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
+		t.Run(signal.String(), func(t *testing.T) {
+			root := t.TempDir()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestWorkerTestInterruptionCleanup$")
+			cmd.Env = append(os.Environ(), interruptedTestHelperEnv+"=1", "FACTORY_WORKER_INTERRUPTION_ROOT="+root)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, 5*time.Second, func() bool { _, err := os.Stat(filepath.Join(root, "ready")); return err == nil })
+			pgidBytes, err := os.ReadFile(filepath.Join(root, "pgid"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pgid, err := strconv.Atoi(strings.TrimSpace(string(pgidBytes)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Process.Signal(signal); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatalf("helper exited after %s: %v", signal, err)
+			}
+			if processGroupAlive(pgid) {
+				t.Fatalf("process group %d survived %s", pgid, signal)
+			}
+			if _, err := os.Stat(root); !os.IsNotExist(err) {
+				t.Fatalf("temporary root remains: %v", err)
+			}
+		})
+	}
+}
 
 type managedAcquisitionFixture struct {
 	manager *Manager
