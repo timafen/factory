@@ -182,4 +182,4 @@ PDF прямо показывает «Снимок до отсутствует»
 ГОТОВО-КОГДА: файл web/src/types.ts
 ГОТОВО-КОГДА: файл web/src/styles.css
 ГОТОВО-КОГДА: файл web/e2e/control-plane.spec.ts
-ГОТОВО-КОГДА: команда go test ./internal/controlplane -run '^TestDailyVisualReportKeepsMissingBeforeHonest$'
+ГОТОВО-КОГДА: команда sh -c "grep -q 'func TestDailyVisualReportKeepsMissingBeforeHonest' internal/controlplane/reports_test.go && go test ./internal/controlplane -run '^TestDailyVisualReportKeepsMissingBeforeHonest$'"

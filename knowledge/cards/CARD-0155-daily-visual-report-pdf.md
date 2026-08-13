@@ -44,7 +44,10 @@ before capture, допускает работу после terminal failure, з�
 и собирает PDF model. В модели обязаны остаться missing-placeholder и исходная
 причина; ни один другой PNG не может занять позицию «до».
 
-Команда: `go test ./internal/controlplane -run '^TestDailyVisualReportKeepsMissingBeforeHonest$'`.
+Команда:
+`sh -c "grep -q 'func TestDailyVisualReportKeepsMissingBeforeHonest' internal/controlplane/reports_test.go && go test ./internal/controlplane -run '^TestDailyVisualReportKeepsMissingBeforeHonest$'"`.
+Так проверка не может ложно пройти, если Go не нашёл именованный
+тест.
 
 ## История
 
