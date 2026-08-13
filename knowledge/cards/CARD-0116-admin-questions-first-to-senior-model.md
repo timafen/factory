@@ -4,7 +4,7 @@ Implementation commit: 899120cfcbb94156b6002146df40bd56f75ffeb4 — безопа
 
 ## HEAD
 
-- Статус: готово к Review.
+- Статус: BLOCKED: Verify — в окружении отсутствуют зависимости UI (`web/node_modules`, `vitest`), полный Pilot-набор не дошёл до итоговой строки.
 - Ветка: `factory/635b7f2d-0fe-e1cd7d03-a84`.
 - Implementation commit: `899120cfcbb94156b6002146df40bd56f75ffeb4` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
@@ -12,11 +12,25 @@ Implementation commit: 899120cfcbb94156b6002146df40bd56f75ffeb4 — безопа
   API скрывает завершённый admin-аудит от владельца.
 - Что изменено: `manage migrate`, sandbox без `--dry-run` и любой `--force`
   эскалируются владельцу до исполнения; `collectstatic` остаётся разрешённым.
-- Evidence: `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 tests OK;
-  `go test ./internal/controlplane` → PASS (159.131s); compile/format/diff checks → PASS.
-- Следующее действие: провести Review этой поставки.
+- Evidence: pinned base `d98c9b10c72add76401f216a770da0994f73fe5f` → candidate
+  `ca9db9f2975097648fbf8eb70a043e795824db41`; `go test -timeout 5m ./...` → PASS;
+  `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 tests OK;
+  full UI `cd web && npm test` → BLOCKED (`vitest: not found`); full Pilot run did not
+  emit a completion summary. Tree clean and `git diff --check` → PASS.
+- Следующее действие: установить зависимости `web` и повторить полный Verify.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Безопасные admin-вопросы сначала обрабатываются старшей моделью | `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` | PASS: 8/8; разрешённые staging-действия проходят через фиксированный argv, опасные действия эскалируются владельцу. |
+| HTTP API не показывает завершённый admin-аудит как вопрос владельцу | `go test -timeout 5m ./...` | PASS: полный Go-набор. |
+| Полный Verify воспроизводим на чистом окружении | `cd web && npm test`; `python3 -m unittest pilot.test_pilot` | BLOCKED: UI не имеет установленного `vitest`; Pilot не вывел итоговую строку. |
+| Сравнение выполнено по свежим удалённым SHA | `git ls-remote --symref origin HEAD` и isolated bare fetch | PASS: base `d98c9b10c72add76401f216a770da0994f73fe5f`, candidate `ca9db9f2975097648fbf8eb70a043e795824db41`. |
+
+Причина BLOCKED — только состояние Verify-окружения; ошибок в целевых Python- и полном Go-тестах не обнаружено.
 
 ### 2026-08-13 — Implement
 
