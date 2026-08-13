@@ -581,6 +581,10 @@ def _note_admitted_task(conf, response, body):
     task = dict((response or {}).get("task") or {})
     task.setdefault("title", body.get("title", ""))
     task.setdefault("state", "created")
+    # Reserve an initial stage immediately even when the API response has not
+    # populated work_id yet. The next cycle replaces this local snapshot with
+    # the authoritative task list, which also releases completed works.
+    task.setdefault("work_id", body.get("work_id") or task.get("id"))
     for key in ("_active_work_tasks", "_host_load_tasks"):
         tasks = (conf or {}).get(key)
         if (isinstance(tasks, list)
@@ -5933,8 +5937,11 @@ def host_load_admits(tasks, stage, load, respect_host_load=True):
     if any((load.get(resource) or {}).get("state") == "over"
            for resource in ("memory", "disk")):
         return False
-    active = sum(1 for task in (tasks or [])
-                 if task.get("state") in HOST_LOAD_ACTIVE_STATES)
+    # Pipeline continuations share one CPU reservation. Counting task rows
+    # would briefly consume two slots during a handoff, while using a title
+    # would merge two independent, equally named works.
+    active = len({task_work_id(task) for task in (tasks or [])
+                  if task.get("state") in HOST_LOAD_ACTIVE_STATES})
     if active < HOST_LOAD_MINIMUM_ACTIVE:
         return True
     return stage in HOST_LOAD_LIGHT_STAGES

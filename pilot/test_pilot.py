@@ -5337,7 +5337,29 @@ class HostLoadAdmissionTests(unittest.TestCase):
         for state in ("running", "queued", "pending", "created", "starting"):
             with self.subTest(state=state):
                 self.assertFalse(pilot.host_load_admits(
-                    [{"state": state}], "Verify", self.cpu_over))
+                    [{"id": state, "work_id": "work-1", "state": state}],
+                    "Verify", self.cpu_over))
+
+    def test_handoffs_for_one_work_share_one_reservation(self):
+        tasks = [
+            {"id": "implement", "work_id": "work-1", "state": "running"},
+            {"id": "verify", "work_id": "work-1", "state": "created"},
+        ]
+
+        self.assertFalse(pilot.host_load_admits(
+            tasks, "Implement + Test", self.cpu_over))
+
+    def test_equally_named_works_keep_independent_reservations(self):
+        tasks = [
+            {"id": "first", "work_id": "work-1", "state": "running",
+             "title": "[auto] [3/5 Implement + Test] Одинаковое имя"},
+            {"id": "second", "work_id": "work-2", "state": "running",
+             "title": "[auto] [3/5 Implement + Test] Одинаковое имя"},
+        ]
+
+        self.assertEqual(pilot.active_auto_works(tasks), {"work-1", "work-2"})
+        self.assertFalse(pilot.host_load_admits(
+            tasks, "Verify", self.cpu_over))
 
     def test_memory_or_disk_emergency_blocks_even_the_guaranteed_slot(self):
         for resource in ("memory", "disk"):
@@ -5364,6 +5386,13 @@ class HostLoadAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stage deferred"):
             pilot.create_task(body, conf)
         api.assert_called_once()
+        self.assertEqual(conf["_host_load_tasks"][0]["work_id"], "one")
+
+    def test_finished_work_releases_reservation_on_fresh_snapshot(self):
+        finished = [{"id": "one", "work_id": "work-1", "state": "succeeded"}]
+
+        self.assertTrue(pilot.host_load_admits(
+            finished, "Implement + Test", self.cpu_over))
 
     @mock.patch.object(pilot, "load_questions", return_value=[])
     @mock.patch.object(pilot, "money_guard")
