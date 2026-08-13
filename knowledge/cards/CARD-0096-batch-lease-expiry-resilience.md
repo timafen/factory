@@ -4,18 +4,28 @@ Implementation commit: 5f0ab88e825a32667431e041ade3d262fe23ff25 — lease дли
 
 ## HEAD
 
-- Status: Verified PASS — scope corrected; implementation merged in main.
-- Branch: `main`.
+- Status: Verified PASS — awaiting human merge.
+- Branch: `factory/dc529098-99e-a4d9a920-78d`.
 - Implementation commit: `5f0ab88e825a32667431e041ade3d262fe23ff25`.
 - Specification: `knowledge/specs/batch-lease-expiry-resilience.md`.
 - Owner impact: краткая очередь heartbeat-запросов больше не заставляет worker
   переждать остаток аренды после временной ошибки.
 - What changed: повтор renewal ограничивается оставшимся lease-бюджетом; десять
   fake-runtime через Manager/Store подтверждают renewal, отсутствие `lost` и успех.
-- Evidence: полный `go test ./...` прошёл; пять целевых worker/control-plane регрессий прошли; `origin/main...HEAD` содержит только CARD-0096; `git diff --check` чист.
-- One next action: наблюдать за устойчивостью lease в следующих рабочих прогонах.
+- Evidence: `just build`, `go test -timeout 5m ./...`, целевые lease-тесты, tooling и launcher прошли; закреплённый diff `c28b5bfc...2e86c3d0` содержит только CARD-0096 и чист по `diff --check`. Базовые `staticcheck` SA4000 и UI typecheck остаются вне области поставки.
+- One next action: человеку слить карточечную ветку.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Закреплённый состав | `git diff --name-only c28b5bfc...2e86c3d0`; `git diff --check` | PASS: изменена только CARD-0096, whitespace-ошибок нет. |
+| Параметры pipeline | константы и запуск целевых Go-тестов | PASS: lease 30 с, первый heartbeat 10 с, sweeper 5 с; worker/control-plane PASS. |
+| Сборка | `just build` | PASS: собраны server, worker и release-broker. |
+| Полные Go-тесты | `go test -timeout 5m ./...` | PASS: все пакеты прошли. |
+| Смежные проверки | `just test-tooling`; `just test-launcher`; `just ui-check`; `staticcheck` | Tooling/launcher PASS; в базе есть UI TS2339 и SA4000 в файлах вне diff. |
 
 ### 2026-08-12 — Verify
 
