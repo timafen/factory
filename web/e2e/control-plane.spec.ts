@@ -833,12 +833,12 @@ test("cancels active work running in the real worker", async ({ page }) => {
 test("renders grouped work and saves the desktop Work view", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/work");
-  await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Work", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("heading", { name: "Работа", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Работа", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  await expect(page.getByRole("heading", { name: "В работе" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "В работе прямо сейчас" })).toBeVisible();
   await expect(page.getByText("Не вышло / остановлено")).toHaveCount(0);
   const doneSection = page.getByRole("heading", { name: "Сделано" }).locator("..").locator("..");
   await expect(doneSection.getByText("Ship the stable API client", { exact: true })).toBeVisible();
