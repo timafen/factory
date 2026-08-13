@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/92da7e03-e26-8114028f-ae3
+Status: Implemented — awaiting Review
+Branch: factory/2b530665-c45-529c1cd2-8f6
 Implementation commit: 4707a6de747a52c01e5db914f905b4378b3159fe — исправлена проверка стабильной задержки lifecycle-теста
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: на закреплённом commit `48be829a203d721145513ffe376accc60afd8c28` прошли `go test ./internal/worker -run '^TestLeaseRenewal'`, `just staticcheck`, `just test` и `just build`; сборка выпустила три operator-бинарника. Browser suite не засчитан: чистый контейнер не имеет UI-зависимостей, а известная политика контейнера блокирует запуск sandbox браузера.
-One next action: человек подтверждает merge; browser suite повторить в среде с UI-зависимостями и разрешённым `factory-browser-sandbox`.
+Evidence: реализация закреплена коммитом `4707a6de747a52c01e5db914f905b4378b3159fe`; прежний Verify относился к старому HEAD и не засчитывается.
+One next action: провести Review текущего HEAD, затем Verify ровно проверенного SHA.
 
 ## LOG
 
@@ -17,6 +17,8 @@ One next action: человек подтверждает merge; browser suite п
 Целевые и полные Go-проверки, staticcheck и сборка прошли; browser suite дошёл до запуска и остановлен контейнерной политикой `no new privileges`.
 
 ### 2026-08-13 — Verify
+
+Эта проверка не засчитана: она выполнена до Review текущего HEAD и для прежнего SHA.
 
 | Критерий | Проверка | Результат |
 | --- | --- | --- |
