@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RELEASE="$SCRIPT_DIR/fx-factory-release"
 temporary=$(mktemp -d)
-trap 'rm -rf "$temporary"' EXIT
+fixture_pids=()
+trap 'if [ "${#fixture_pids[@]}" -gt 0 ]; then kill "${fixture_pids[@]}" 2>/dev/null || true; wait "${fixture_pids[@]}" 2>/dev/null || true; fi; rm -rf "$temporary"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
@@ -39,7 +40,7 @@ assert_no_fixture_processes() {
 
 make_fixture() {
   case_dir=$1 mode=$2
-  mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
+  mkdir -p "$case_dir/bin" "$case_dir/trusted" "$case_dir/install" "$case_dir/releases" "$case_dir/proc" "$case_dir/repo/web" \
     "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
@@ -424,6 +425,7 @@ run_release() {
     FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_RELEASE_PROC_ROOT="$case_dir/proc" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
@@ -534,6 +536,64 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+cleanup_case="$temporary/orphan-cleanup"
+make_fixture "$cleanup_case" parallel-success
+run_release "$cleanup_case" parallel-success || fail "cleanup fixture setup release failed"
+cleanup_current=$(readlink -f "$cleanup_case/releases/current")
+cleanup_previous=$(readlink -f "$cleanup_case/releases/previous")
+cp -a "$cleanup_current" "$cleanup_case/releases/build-current"
+cp -a "$cleanup_previous" "$cleanup_case/releases/build-previous"
+cp -a "$cleanup_previous" "$cleanup_case/releases/build-transaction"
+ln -sfn "$cleanup_case/releases/build-current" "$cleanup_case/releases/current"
+ln -sfn "$cleanup_case/releases/build-previous" "$cleanup_case/releases/previous"
+printf 'phase=%q\ngeneration=%q\nprevious=%q\n' committed \
+  "$cleanup_case/releases/build-transaction" "$cleanup_case/releases/build-previous" \
+  >"$cleanup_case/releases/transaction"
+mkdir "$cleanup_case/releases/build-orphan" "$cleanup_case/releases/build-fresh" \
+  "$cleanup_case/releases/review-unknown" "$cleanup_case/releases/build-cwd" \
+  "$cleanup_case/releases/build-fd" "$cleanup_case/releases/build-exe" \
+  "$cleanup_case/releases/build-map"
+ln -s "$temporary" "$cleanup_case/releases/build-symlink"
+printf 'held\n' >"$cleanup_case/releases/build-fd/held"
+cp /bin/sleep "$cleanup_case/releases/build-exe/sleep"
+dd if=/dev/zero of="$cleanup_case/releases/build-map/mapped" bs=4096 count=1 status=none
+touch -d '25 hours ago' "$cleanup_case/releases"/build-{current,previous,transaction,orphan,cwd,fd,exe,map} \
+  "$cleanup_case/releases/review-unknown"
+touch -d '23 hours ago' "$cleanup_case/releases/build-fresh"
+(cd "$cleanup_case/releases/build-cwd" && exec /bin/sleep 120) & fixture_pids+=("$!")
+(exec 7<"$cleanup_case/releases/build-fd/held"; exec /bin/sleep 120) & fixture_pids+=("$!")
+"$cleanup_case/releases/build-exe/sleep" 120 & fixture_pids+=("$!")
+python3 - "$cleanup_case/releases/build-map/mapped" <<'PY' & fixture_pids+=("$!")
+import mmap,sys,time
+with open(sys.argv[1], "rb") as source:
+    mapping=mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ)
+time.sleep(120)
+PY
+for fixture_pid in "${fixture_pids[@]}"; do
+  ln -s "/proc/$fixture_pid" "$cleanup_case/proc/$fixture_pid"
+done
+/bin/sleep 0.1
+run_driver "$cleanup_case" --status >"$cleanup_case/status-output" 2>&1
+[ -d "$cleanup_case/releases/build-orphan" ] || fail "status mode ran orphan cleanup"
+: >"$cleanup_case/events"
+run_release "$cleanup_case" parallel-success \
+  || { cat "$cleanup_case/output" >&2; fail "release with orphan cleanup failed"; }
+[ ! -e "$cleanup_case/releases/build-orphan" ] || fail "old unprotected build survived cleanup"
+for kept in build-fresh review-unknown build-current build-previous build-transaction \
+  build-cwd build-fd build-exe build-map build-symlink; do
+  [ -e "$cleanup_case/releases/$kept" ] || fail "cleanup removed protected $kept"
+done
+grep -F 'build-orphan удалён — оставленный штатный build старше 24 часов' "$cleanup_case/output" >/dev/null \
+  || fail "cleanup did not explain orphan removal"
+grep -F 'используется живым процессом' "$cleanup_case/output" >/dev/null \
+  || fail "cleanup did not explain process protection"
+grep -F 'защищён current, previous или transaction' "$cleanup_case/output" >/dev/null \
+  || fail "cleanup did not explain pointer protection"
+kill "${fixture_pids[@]}"
+wait "${fixture_pids[@]}" 2>/dev/null || true
+fixture_pids=()
+assert_no_fixture_processes "$cleanup_case"
 
 # Живая база бывает новее установленного server: неудачный кандидат успел
 # поднять схему, а откат вернул только бинарь. Старый server такой снимок
@@ -693,6 +753,8 @@ grep -F 'недостаточно свободного места или inode' 
 rollback_case="$temporary/full-rollback"
 make_fixture "$rollback_case" parallel-success
 run_release "$rollback_case" parallel-success || fail "rollback fixture release failed"
+mkdir "$rollback_case/releases/build-control-mode"
+touch -d '25 hours ago' "$rollback_case/releases/build-control-mode"
 candidate=$(readlink -f "$rollback_case/releases/current")
 snapshot="$candidate/database.sqlite3"
 manifest=$(<"$candidate/manifest.sha256")
@@ -707,6 +769,7 @@ run_driver "$rollback_case" --rollback >"$rollback_case/rollback-output" 2>&1
 status=$?
 set -e
 [ "$status" -eq 9 ] || fail "incompatible ledger rollback did not require explicit DB restore"
+[ -d "$rollback_case/releases/build-control-mode" ] || fail "rollback mode ran orphan cleanup"
 [ "$(sha256sum "$rollback_case/database/factory.sqlite3" | awk '{print $1}')" = "$migrated_db" ] \
   || fail "ordinary rollback changed the database"
 assert_file "$rollback_case/install/factory-server" old-server
@@ -716,6 +779,7 @@ assert_file "$rollback_case/live/pilot/pilot.py" 'old pilot'
 assert_file "$rollback_case/releases/transaction" 'phase=db_restore_required'
 run_driver "$rollback_case" --restore-db "$snapshot" "$manifest" RESTORE-FACTORY-DATABASE \
   >"$rollback_case/restore-output" 2>&1 || { cat "$rollback_case/restore-output" >&2; fail "explicit DB restore failed"; }
+[ -d "$rollback_case/releases/build-control-mode" ] || fail "restore-db mode ran orphan cleanup"
 [ "$(python3 - "$rollback_case/database/factory.sqlite3" <<'PY'
 import sqlite3,sys
 print(sqlite3.connect(sys.argv[1]).execute('select max(version) from schema_migrations').fetchone()[0])

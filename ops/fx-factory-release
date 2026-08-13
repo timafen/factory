@@ -36,6 +36,7 @@ GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
 JOURNAL="$REL/transaction"
+PROC_ROOT="${FACTORY_RELEASE_PROC_ROOT:-/proc}"
 GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
 GATE_POLL_DELAY="${FACTORY_RELEASE_GATE_POLL_DELAY:-0.01}"
@@ -128,6 +129,134 @@ write_journal() { # phase generation previous
 read_journal() {
   phase= generation= previous=
   [ ! -e "$JOURNAL" ] || . "$JOURNAL"
+}
+
+build_used_by_process() { # build_used_by_process <canonical directory>
+  python3 - "$1" "$PROC_ROOT" <<'PY'
+import errno, os, sys
+
+candidate = os.path.realpath(sys.argv[1])
+proc_root = sys.argv[2]
+prefix = candidate + os.sep
+incomplete = False
+
+def inside(path):
+    try:
+        resolved = os.path.realpath(path)
+    except OSError:
+        return False
+    return resolved == candidate or resolved.startswith(prefix)
+
+for name in os.listdir(proc_root):
+    if not name.isdigit():
+        continue
+    process = os.path.join(proc_root, name)
+    for entry in ("cwd", "root", "exe"):
+        link = os.path.join(process, entry)
+        try:
+            target = os.readlink(link)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOENT, errno.ESRCH):
+                incomplete = True
+            continue
+        if inside(os.path.join(os.path.dirname(link), target) if not os.path.isabs(target) else target):
+            raise SystemExit(1)
+    try:
+        descriptors = os.listdir(os.path.join(process, "fd"))
+    except OSError as exc:
+        if exc.errno not in (errno.ENOENT, errno.ESRCH):
+            incomplete = True
+        descriptors = ()
+    for descriptor in descriptors:
+        link = os.path.join(process, "fd", descriptor)
+        try:
+            target = os.readlink(link)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOENT, errno.ESRCH):
+                incomplete = True
+            continue
+        target = target.removesuffix(" (deleted)")
+        if inside(os.path.join(os.path.dirname(link), target) if not os.path.isabs(target) else target):
+            raise SystemExit(1)
+    try:
+        with open(os.path.join(process, "maps"), encoding="utf-8", errors="replace") as mappings:
+            for line in mappings:
+                fields = line.rstrip().split(None, 5)
+                if len(fields) == 6 and fields[5].startswith("/") and inside(fields[5].removesuffix(" (deleted)")):
+                    raise SystemExit(1)
+    except OSError as exc:
+        if exc.errno not in (errno.ENOENT, errno.ESRCH):
+            incomplete = True
+
+raise SystemExit(2 if incomplete else 0)
+PY
+}
+
+cleanup_orphan_builds() {
+  local rel_real candidate candidate_real protected target proc_status uncertain=0
+  rel_real=$(readlink -f -- "$REL") || return 0
+  protected=$'\n'
+  for target in "$CURRENT" "$PREVIOUS"; do
+    if [ -L "$target" ]; then
+      candidate_real=$(readlink -f -- "$target" 2>/dev/null) || { uncertain=1; continue; }
+      protected+="$candidate_real"$'\n'
+    elif [ -e "$target" ]; then
+      uncertain=1
+    fi
+  done
+  if [ -e "$JOURNAL" ]; then
+    read_journal
+    for target in "${generation:-}" "${previous:-}"; do
+      [ -n "$target" ] || continue
+      candidate_real=$(readlink -f -- "$target" 2>/dev/null) || { uncertain=1; continue; }
+      protected+="$candidate_real"$'\n'
+    done
+  fi
+
+  for candidate in "$REL"/build-*; do
+    [ -e "$candidate" ] || continue
+    if [ ! -d "$candidate" ] || [ -L "$candidate" ]; then
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — это не реальный каталог build"
+      continue
+    fi
+    candidate_real=$(readlink -f -- "$candidate" 2>/dev/null) || {
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — путь не удалось проверить"
+      continue
+    }
+    [ "$(dirname "$candidate_real")" = "$rel_real" ] || {
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — путь находится вне каталога выпусков"
+      continue
+    }
+    find "$candidate" -maxdepth 0 -type d -mmin +1440 -print -quit | grep -q . || {
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — build младше 24 часов"
+      continue
+    }
+    if [ "$uncertain" -ne 0 ]; then
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — защитные ссылки не удалось проверить"
+      continue
+    fi
+    case "$protected" in *$'\n'"$candidate_real"$'\n'*)
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — защищён current, previous или transaction"
+      continue
+    esac
+    build_used_by_process "$candidate_real"
+    proc_status=$?
+    if [ "$proc_status" -eq 1 ]; then
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — используется живым процессом"
+      continue
+    elif [ "$proc_status" -ne 0 ]; then
+      echo "== уборка выпусков: $(basename "$candidate") оставлен — проверка процессов неполна"
+      continue
+    fi
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] \
+      && [ "$(readlink -f -- "$candidate" 2>/dev/null)" = "$candidate_real" ] \
+      && [ "$(dirname "$candidate_real")" = "$rel_real" ] || {
+        echo "== уборка выпусков: $(basename "$candidate") оставлен — путь изменился перед удалением"
+        continue
+      }
+    rm -rf -- "$candidate"
+    echo "== уборка выпусков: $(basename "$candidate") удалён — оставленный штатный build старше 24 часов"
+  done
 }
 
 manifest_hash() { sha256sum "$1/manifest.json" | awk '{print $1}'; }
@@ -351,6 +480,8 @@ case "$ref" in
     exit 0
     ;;
 esac
+
+cleanup_orphan_builds
 
 if [ -e "$JOURNAL" ]; then
   read_journal
