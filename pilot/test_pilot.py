@@ -3691,6 +3691,57 @@ class PipelineWatchMergeTests(unittest.TestCase):
             "timeout_seconds": 900,
         }
 
+    def _recover_merge(self, intent, already_merged=False, merge_ok=True):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        state = {"merge_intents": {"verify-1": dict(intent)}}
+        with mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "STATE_PATH", os.path.join(temporary.name, "state.json")), \
+                mock.patch.object(pilot, "gh_json", return_value={"commit": {"sha": "a" * 40}}), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=already_merged), \
+                mock.patch.object(pilot, "gh_merge", return_value=(merge_ok, "merged")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge", return_value=None):
+            pilot.recover_merge_intents({}, state)
+        with open(journal, encoding="utf-8") as stream:
+            records = [json.loads(line) for line in stream]
+        return state, records, merge
+
+    def test_merge_journal_records_rounds_and_automatic_actor(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 3, "actor_id": None,
+        })
+
+        merge.assert_called_once()
+        self.assertEqual(records, [{"task_id": "verify-1", "base": "Круги",
+            "at": records[0]["at"], "actor": "automatic", "actor_id": None,
+            "rounds": 3}])
+
+    def test_owner_merge_records_owner_and_preserves_rounds(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 2, "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual((records[0]["actor"], records[0]["actor_id"], records[0]["rounds"]),
+                         ("owner", None, 2))
+
+    def test_merge_recovery_preserves_actor_and_rounds(self):
+        state, records, merge = self._recover_merge({
+            "phase": "merging", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 4, "actor": "automatic", "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["actor"], records[0]["rounds"]), ("automatic", 4))
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "journaled")
+
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
         self.conf["stages"] = [{"workflow": "Verify"}]

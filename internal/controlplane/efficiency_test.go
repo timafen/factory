@@ -304,6 +304,48 @@ func TestEfficiencyUsesRealLegacyMergeJournalLine(t *testing.T) {
 	}
 }
 
+func TestEfficiencyUsesPersistedMergeRoundsAndLegacyFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "pilot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	journalPath := filepath.Join(home, "pilot", "merges.jsonl")
+	writeJSONLines(t, journalPath, []any{
+		map[string]any{"task_id": "new-verify", "base": "New", "at": now.Add(-time.Hour).Format(time.RFC3339), "actor": "owner", "actor_id": nil, "rounds": 5},
+		map[string]any{"task_id": "legacy-verify", "base": "Legacy", "at": now.Add(-30 * time.Minute).Format(time.RFC3339)},
+	})
+	original, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merges, err := loadEfficiencyMerges()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merges) != 2 || merges[0].actor != "owner" || merges[0].rounds != 5 ||
+		merges[1].actor != "automatic" || merges[1].rounds != 0 {
+		t.Fatalf("merge compatibility = %#v", merges)
+	}
+	tasks := []*efficiencyTask{
+		{id: "new-verify", base: "New", stage: "Verify", repositoryID: "repo", state: "succeeded", createdAt: now.Add(-2 * time.Hour)},
+		{id: "legacy-implement-1", base: "Legacy", stage: "Implement + Test", repositoryID: "repo", state: "failed", createdAt: now.Add(-50 * time.Minute)},
+		{id: "legacy-implement-2", base: "Legacy", stage: "Implement + Test", repositoryID: "repo", state: "succeeded", createdAt: now.Add(-40 * time.Minute)},
+		{id: "legacy-verify", base: "Legacy", stage: "Verify", repositoryID: "repo", state: "succeeded", createdAt: now.Add(-35 * time.Minute)},
+	}
+	works, tails := buildEfficiencyWorks(tasks, merges)
+	period := summarizeEfficiencyPeriod(now.Add(-24*time.Hour), now, tasks, works, tails, nil, nil)
+	if period.Rounds.Sample != 2 || period.Rounds.Median == nil || *period.Rounds.Median != 3.5 ||
+		period.Rounds.P90 == nil || *period.Rounds.P90 != 5 {
+		t.Fatalf("persisted and legacy rounds = %#v", period.Rounds)
+	}
+	after, err := os.ReadFile(journalPath)
+	if err != nil || string(after) != string(original) {
+		t.Fatalf("legacy journal was rewritten: err=%v", err)
+	}
+}
+
 func TestEfficiencyEmptyPeriodsDoNotInventRatesOrGreenStatus(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
