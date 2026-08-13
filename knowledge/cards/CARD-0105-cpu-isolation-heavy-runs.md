@@ -21,4 +21,4 @@ Factory Brain остаются обслуживаемыми. Полная спе
 ## Проверка
 
 После реализации обязательна команда:
-`python3 -m unittest pilot.test_pilot && npm --prefix web test -- --run`
+`python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests`

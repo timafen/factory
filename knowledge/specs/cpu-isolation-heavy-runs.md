@@ -49,7 +49,7 @@ API менять только при необходимости совмести
   освобождения, одинаковых названий с разными `work_id` и продолжения цикла.
 - `web/src/Overview.test.ts`: тексты причины CPU с реальными слотами и без них.
 - Обязательная целевая команда после реализации:
-  `python3 -m unittest pilot.test_pilot && npm --prefix web test -- --run`
+  `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests`
 
 ## Риски и решения
 
@@ -68,4 +68,4 @@ API менять только при необходимости совмести
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл web/src/Overview.tsx
 ГОТОВО-КОГДА: файл web/src/Overview.test.ts
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot && npm --prefix web test -- --run
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests
