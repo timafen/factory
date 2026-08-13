@@ -1,4 +1,4 @@
-Implementation commit: bea5d8f48f14747ca56ac95b9ca9dce88a07d1e0 — все шесть неоднозначных Git-сценариев подтверждают fail-closed переход к полному Gate.
+Implementation commit: 947e0c782d225e478b48d51fdd64e1873f125239 — все шесть неоднозначных Git-сценариев подтверждают fail-closed переход к полному Gate.
 
 # CARD-0105 — Документные изменения проходят лёгкие ворота
 
@@ -6,12 +6,13 @@ Implementation commit: bea5d8f48f14747ca56ac95b9ca9dce88a07d1e0 — все ше�
 
 - Status: Implemented — ready for review.
 - Branch: `factory/671ab15f-e72-da47c992-9c0d-4a26-8762-e874f7a0f097`.
-- Implementation commit: `bea5d8f48f14747ca56ac95b9ca9dce88a07d1e0`.
+- Implementation commit: `947e0c782d225e478b48d51fdd64e1873f125239`.
 - What changed: добавлены fail-closed испытания merge-коммита, коммита без
   родителя, пустого коммита, submodule, ошибки `git diff-tree` и имени файла
   с переводом строки; каждое подтверждает полный UI+Go+release Gate.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` →
-  PASS; `bash ops/test-fx-factory-release.sh` → PASS.
+  PASS; `bash ops/test-fx-factory-release.sh`, `cd web && npm test`,
+  `cd web && npm run build`, `go test ./...` → PASS.
 - Next action: выполнить независимый review перед слиянием.
 
 ## Контракт реализации
