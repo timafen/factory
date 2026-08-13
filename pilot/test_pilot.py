@@ -67,6 +67,26 @@ class PatrolModelEvaluationTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["useful_retention"], 1.0)
         self.assertAlmostEqual(result["metrics"]["false_positive_delta_pp"], 5.0)
 
+    def test_sol_reference_labels_the_same_pair_without_affecting_patrol(self):
+        audit = self._audit()
+        bundle = {"repository": "factory", "revision": "abc", "checks": ["go test"]}
+
+        observation = pilot.add_patrol_model_reference_observation(
+            audit, bundle,
+            [{"key": "shared"}, {"key": "terra-only"}],
+            [{"key": "shared"}, {"key": "sol-only"}],
+        )
+
+        self.assertEqual(observation["verdict_source"], {
+            "type": "model_reference", "model": "gpt-5.6-sol"})
+        self.assertEqual(
+            [finding["verdict"] for finding in observation["models"]["gpt-5.6-terra"]],
+            ["useful", "false_positive"])
+        self.assertEqual(
+            [finding["verdict"] for finding in observation["models"]["gpt-5.6-sol"]],
+            ["useful", "useful"])
+        self.assertEqual(audit["effective_model"], "gpt-5.6-sol")
+
     def test_incomplete_window_hash_mismatch_or_missing_verdict_fails_closed(self):
         audit = self._audit()
         pilot.add_patrol_model_observation(audit, {"different": True},

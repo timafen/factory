@@ -110,6 +110,31 @@ def add_patrol_model_observation(audit, input_bundle, terra_findings, sol_findin
     return observation
 
 
+def add_patrol_model_reference_observation(audit, input_bundle, terra_findings,
+                                           sol_findings):
+    """Record a shadow pair using sol's findings as the approved reference."""
+    sol_keys = {patrol_finding_key(finding) for finding in sol_findings}
+
+    def labelled(finding, verdict):
+        item = dict(finding) if isinstance(finding, dict) else {"key": str(finding)}
+        item["verdict"] = verdict
+        return item
+
+    labelled_sol = [labelled(finding, "useful") for finding in sol_findings]
+    labelled_terra = [
+        labelled(finding, "useful" if patrol_finding_key(finding) in sol_keys
+                 else "false_positive")
+        for finding in terra_findings
+    ]
+    observation = add_patrol_model_observation(
+        audit, input_bundle, labelled_terra, labelled_sol)
+    observation["verdict_source"] = {
+        "type": "model_reference",
+        "model": PATROL_MODEL_SOL,
+    }
+    return observation
+
+
 def save_patrol_model_pair_run(path, audit):
     """Persist the standalone audit JSON without replacing a final decision."""
     existing = load(path, None)
