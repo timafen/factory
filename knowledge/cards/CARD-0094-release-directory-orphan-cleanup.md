@@ -1,22 +1,30 @@
 # CARD-0094 — Каталог выпусков очищает только оставленные штатные сборки
 
-Implementation commit: 91900b587cb8882bc1d5c5a87724e0e4a53118ff — подготовлена проверяемая спецификация безопасной уборки штатных временных сборок; продуктовый код на этапе Specification намеренно не менялся.
+Implementation commit: 55cf1ee276e9cf5ea306403e48708c1c61a94be2 — обычный выпуск удаляет только безопасно распознанные остатки штатной сборки старше суток.
 
 ## HEAD
 
-- Status: Specification ready.
-- Branch: `factory/f04f6183-2a8-3e94c556-4c1`.
-- Specification: `knowledge/specs/release-directory-orphan-cleanup.md`.
-- Owner decision: удалять только распознанные штатные `build-*` старше 24
-  часов, без живого процесса и без целей `current`, `previous` или
-  `transaction`; неизвестные каталоги не удалять, не перемещать в карантин.
-- Implementation scope: `ops/fx-factory-release`,
-  `ops/test-fx-factory-release.sh`.
-- Required check: `bash ops/test-fx-factory-release.sh`.
-- Next action: реализовать fail-closed уборку и fixture из спецификации;
-  отдельным расследованием установить владельцев неизвестных каталогов.
+- Status: Implemented and tested.
+- Branch: `factory/c239085c-d19-29cc11c6-64b`.
+- Implementation commit: `55cf1ee276e9cf5ea306403e48708c1c61a94be2`.
+- What changed: обычный выпуск до recovery удаляет только непосредственные
+  реальные `build-*` старше 24 часов после fail-closed проверки указателей,
+  transaction и путей живых процессов; служебные режимы ничего не чистят.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`
+  → exit 0; `bash ops/test-fx-factory-release.sh` → PASS.
+- Next action: отдельно установить владельцев неизвестных каталогов из
+  инвентаризации, не расширяя автоматическую уборку.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Добавлена fail-closed уборка оставленных штатных `build-*` и изолированная
+fixture, которая подтверждает удаление старого orphan, сохранение свежих,
+неизвестных, symlink- и pointer-защищённых путей, а также защиту живыми
+процессами через `cwd`, `exe`, fd и mapping. `--status`, `--rollback` и
+`--restore-db` проверены как режимы без уборки. Shell syntax check завершился
+с exit 0, `bash ops/test-fx-factory-release.sh` — PASS.
 
 ### 2026-08-12 — Specification
 
