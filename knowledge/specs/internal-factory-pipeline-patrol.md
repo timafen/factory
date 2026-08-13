@@ -49,7 +49,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0034-internal-factory-pipeline-patrol.md`
+`knowledge/cards/CARD-0109-internal-factory-pipeline-patrol.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py

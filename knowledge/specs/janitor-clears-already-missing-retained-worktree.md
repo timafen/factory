@@ -81,7 +81,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0068-janitor-clears-already-missing-retained-worktree.md`
+`knowledge/cards/CARD-0141-janitor-clears-already-missing-retained-worktree.md`
 
 ГОТОВО-КОГДА: файл ops/factory-janitor.sh
 ГОТОВО-КОГДА: файл ops/test-factory-janitor.sh
