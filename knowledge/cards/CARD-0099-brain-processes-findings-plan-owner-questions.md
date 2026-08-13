@@ -5,7 +5,7 @@ Implementation commit: 6ecf7f81bbf07111a46d244eafb5c97e065fb023 — находк
 ## HEAD
 
 - Status: Implemented and tested.
-- Branch: `factory/5e7b009f-622-a8cc20c8-2f5`.
+- Branch: `factory/0df54577-a89-21260c7c-53c`.
 - Implementation commit: `6ecf7f81bbf07111a46d244eafb5c97e065fb023`.
 - What changed: успешные и неуспешные terminal-result и Automation сохраняют
   дедуплицированную находку с проектом и конкретной задачей-источником.
@@ -14,7 +14,7 @@ Implementation commit: 6ecf7f81bbf07111a46d244eafb5c97e065fb023 — находк
 - Evidence: 26 целевых тестов Pilot — OK; `py_compile` — OK.
 - Evidence: полный Pilot — 242 passed, 13 skipped, 2 известных baseline failure;
   те же 2 failure воспроизведены на чистом `origin/main`.
-- One next action: провести Review изменений `pilot/`.
+- One next action: слить ветку после проверки свежей базы `main`.
 
 ## LOG
 
@@ -37,3 +37,10 @@ control-plane API и схема данных не требуют изменен�
 не пишет вопрос владельцу. Целевые 26 тестов прошли; общий Pilot дал 242
 успешных, 13 пропущенных и 2 baseline failure, независимо воспроизведённых на
 чистом `origin/main`.
+
+### 2026-08-12 — Implement
+
+Реализация повторно забрана на рабочую ветку после восстановления `origin`;
+свежая база `main` зафиксирована перед сравнением. Целевые тесты Pilot и
+проверка компиляции проходят; риск остаётся только в двух известных baseline
+ошибках полного Pilot, воспроизведённых предыдущей реализацией на `main`.
