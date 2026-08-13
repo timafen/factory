@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Status: Implemented and tested — ready for review.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/6744a76a-9c3-f1742113-076`.
 
@@ -10,7 +10,7 @@ Implementation commit: 9d4cea0356bf3facc3666860288f986b9c10728e — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` теперь сразу использует явно заданные пути. Обычный запуск, restore и backup без явной базы сохраняют прежнюю подготовку defaults.
 
-Evidence: целевые subprocess-проверки прошли: четыре формы CLI создали автономные снимки без `HOME`, не изменив исходную базу. `go build ./...` и полный набор тестов также прошли.
+Evidence: на закреплённом кандидате четыре формы CLI создали автономные снимки без `HOME`, не изменив исходную базу; смежные defaults/bootstrap, чистая сборка и полный набор тестов прошли.
 
 One next action: проверить и влить опубликованную ветку в `main`.
 
@@ -72,3 +72,14 @@ One next action: проверить и влить опубликованную �
 - Код и тесты перенесены на свежий `origin/main` отдельным коммитом `9d4cea0356bf3facc3666860288f986b9c10728e`, без файлов вне области задачи.
 - Целевой subprocess-тест подтвердил четыре формы CLI backup без `HOME`, автономность снимка и неизменность исходной базы.
 - `go build ./...` и `go test -count=1 -timeout 5m ./...` завершились успешно.
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Кандидат закреплён относительно свежей удалённой базы | `git ls-remote --symref origin HEAD`; изолированный bare-fetch `99701704b37e8740db3fdbe38c0193917570da5c...71b14d4198a2abb82d0d9dd49498765031a6ed1d` | PASS: default ref — `refs/heads/main`, fetched SHA совпали с remote, merge-base равен base SHA |
+| Явные source и backup не требуют домашнюю папку во всех четырёх формах CLI | `go test -count=1 -v ./cmd/factory-server -run '^(TestBackupCLICreatesSnapshotWithoutHome|TestBackupWithExplicitDatabaseHonorsFlagGrammar|TestBackupModeRejectsMissingSourceWithoutCreatingState|TestDefaultDatabasePathUsesFactoryHome)$'` | PASS: `-flag value`, `--flag value`, `-flag=value`, `--flag=value` создали снимки без `HOME`, data-home и доступного bootstrap |
+| Снимок автономен, источник не изменяется | `TestBackupCLICreatesSnapshotWithoutHome` | PASS: backup и marker — обычные файлы без WAL/SHM; source и marker побайтово не изменились после каждого запуска |
+| Смежные defaults и bootstrap сохранены | целевые `TestDefaultDatabasePathHonors…` и `TestServerBootstrapConfig…` | PASS: четыре смежных теста прошли |
+| Чистая сборка и полный набор | новый `GOCACHE`; `go build ./...`; `go test -count=1 -timeout 5m ./...` | PASS: обе команды завершились с exit 0, все пакеты зелёные |
+| Граница, история и чистота поставки | pinned `git diff --name-only`, `git diff --check`, проверка implementation commit и debug-маркеров, `git status --short` | PASS: только `main.go`, `main_test.go` и CARD-0124; implementation commit валиден; whitespace/debug/stray-файлов нет |
