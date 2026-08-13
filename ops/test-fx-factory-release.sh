@@ -447,7 +447,13 @@ exec /bin/bash "$@"
 EOF
   cat >"$case_dir/trusted/setsid" <<'EOF'
 #!/bin/bash
-while [ "${1:-}" = --fork ] || [ "${1:-}" = --wait ]; do shift; done
+saw_fork=0
+saw_wait=0
+while [ "${1:-}" = --fork ] || [ "${1:-}" = --wait ]; do
+  [ "$1" != --fork ] || saw_fork=1
+  [ "$1" != --wait ] || saw_wait=1
+  shift
+done
 if [ "$TEST_MODE" = forged-gate-result ]; then
   for argument in "$@"; do
     case "$argument" in
@@ -461,6 +467,9 @@ fi
 case "$TEST_MODE" in
   forked-gates-success|forked-gate-fail|forged-gate-result|signal-forked-gates)
     printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
+    [ "$saw_fork:$saw_wait" = 1:1 ] \
+      || { printf 'setsid-missing-wait\n' >>"$TEST_HANDSHAKE_EVENTS"; exit 125; }
+    printf 'setsid-waits\n' >>"$TEST_HANDSHAKE_EVENTS"
     exec /usr/bin/setsid --fork --wait "$@"
     ;;
   signal-before-ready)
@@ -1050,6 +1059,8 @@ set -e
 [ "$status" -eq 5 ] || fail "forked failing gate returned $status instead of build error 5"
 [ "$(grep -Fxc 'setsid-forked' "$forked_failed/handshake-events")" -eq 2 ] \
   || fail "failing fork scenario did not fork both gate sessions"
+[ "$(grep -Fxc 'setsid-waits' "$forked_failed/handshake-events")" -eq 2 ] \
+  || fail "forked failure did not keep the launcher waiting for both gate statuses"
 grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
   || fail "forked failure did not reach the actual release gate"
 grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \

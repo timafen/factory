@@ -1,17 +1,38 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — ошибка настоящего forked gate проходит через launcher, поддельный успех игнорируется.
+Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
 
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
-Branch: factory/e35e268f-1d3-934fca68-3f2.
-Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — регрессия проверяет ошибку настоящего forked gate за launcher.
-What changed: fixture подделывает успешный файловый result, пока настоящий forked gate завершается ошибкой; добавлен отдельный bounded-запуск сценария.
-Evidence: pinned candidate `2be97a66737caee20ee1a7390d1ba68f38a9f606` прошёл целевой forged-gate сценарий: release сохранил ошибку настоящего gate и не запускал установку; полный `just check` остановился на существующем `SA4000` вне области.
-One next action: выполнить human merge ветки `factory/e35e268f-1d3-934fca68-3f2`.
+Branch: factory/80c250e3-e3d-30a97909-840.
+Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
+What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
+One next action: влить ветку в main.
 
 ## LOG
+
+### 2026-08-12 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Launcher ждёт оба forked Gate | `timeout 300 bash ops/test-fx-factory-release.sh` | PASS: fixture видит `--fork --wait` дважды. |
+| Ошибка Gate не теряется | тот же suite, `forked-gate-fail` | PASS: release возвращает code 5 и сохраняет Gate status 1. |
+| После отказа нет build/install | тот же suite | PASS: старые binaries целы, events пуст, `go build` не вызвался. |
+| Смежный release lifecycle | тот же suite | PASS: Gate, единая установка, регистрация, rollback и cleanup. |
+| Полный набор проекта | `just check` | НАХОДКА вне области: `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`); vet и govulncheck PASS. |
+| Синтаксис и чистота | `bash -n ...`; `git diff --check` | PASS. |
+
+Pinned review: base `5d9f3f330412bc59ab9b689d1ca3315ea137c0b3`, candidate `517fc3dd33f9fe4c2457df68cf1d8c9a3acd6790`;
+после rebase кодовый implementation commit — `d320c99f3948000fb7c11d21e749337a279d3e1d`.
+
+### 2026-08-12 — Implement
+
+После конфликтов с main проверка форкающего launcher дополнена явным контрактом
+`--fork --wait`: релиз ждёт kernel exit status обеих Gate-групп, а не ранний успех
+родительского launcher. Shell-suite подтвердил отказ с code 5 без установки и сборки.
 
 ### 2026-08-12 — Implement
 
