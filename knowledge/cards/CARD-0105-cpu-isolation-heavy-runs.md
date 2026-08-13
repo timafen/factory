@@ -1,24 +1,26 @@
 # CARD-0105 — Изоляция по процессору для тяжёлых прогонов
 
-Implementation commit: c28b5bfc0c5bbb22c7d69d0749c316a2b340841e — базовый код пилота и панели, на который опирается спецификация
+Implementation commit: c07bb2ff7362a1a0057cf19232ffb46beebf5b6f — CPU-допуск резервирует тяжёлые прогоны по уникальному `work_id`
 
-## Статус
+## HEAD
 
-Specification — готова к реализации.
+- Status: Implement + Test завершён; готово к Review.
+- Branch: `factory/5e40a9ea-eeb-ee1401ae-fa8`.
+- Implementation commit: `c07bb2ff7362a1a0057cf19232ffb46beebf5b6f`.
+- What changed: продолжения одной работы делят CPU-резерв, одноимённые работы с разными `work_id` остаются независимыми; завершение освобождает резерв на свежем снимке.
+- Evidence: `python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests` → 13 passed; `npm test -- --run src/Overview.test.ts` → 28 passed; `npm run lint` → passed.
+- Next action: Review проверяет diff относительно свежего default branch.
 
-## Контракт работы
+## LOG
 
-Тяжёлые прогоны ограничиваются CPU и слотами по `work_id`, при этом панель и
-Factory Brain остаются обслуживаемыми. Полная спецификация: `knowledge/specs/cpu-isolation-heavy-runs.md`.
+### 2026-08-12 — Specification
 
-## Область реализации
+- Зафиксирован контракт мягкого CPU-допуска, сохранения доступности панели и Brain, диагностики активных работ и исполнительских слотов.
+- Полная спецификация: `knowledge/specs/cpu-isolation-heavy-runs.md`.
 
-- `pilot/pilot.py`
-- `pilot/test_pilot.py`
-- `web/src/Overview.tsx`
-- `web/src/Overview.test.ts`
+### 2026-08-12 — Implement
 
-## Проверка
-
-После реализации обязательна команда:
-`python3 -m unittest pilot.test_pilot.HostLoadAdmissionTests`
+- Резерв тяжёлого запуска переведён с количества строк задач на уникальные `work_id`; новый запуск резервируется сразу после ответа API.
+- Целевые проверки: 13 Python-тестов и 28 UI-тестов прошли, lint прошёл.
+- Общий Python-набор: 248 из 250 прошли, 13 skipped; два существующих сбоя `CorrectionProvenanceStormTests` вне области изменения.
+- Web build заблокирован существующей ошибкой типов в `web/e2e/control-plane.spec.ts:655`, вне области CARD-0105.
