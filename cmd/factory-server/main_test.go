@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/owainlewis/factory/internal/controlplane"
 )
 
 func TestBackupModeRejectsMissingSourceWithoutCreatingState(t *testing.T) {
@@ -73,6 +75,50 @@ func TestDefaultDatabasePathHonorsPreviewAlias(t *testing.T) {
 	}
 	if want := filepath.Join(root, "server", "factory.sqlite3"); database != want {
 		t.Fatalf("database = %q, want %q", database, want)
+	}
+}
+
+func TestDefaultReportRuntimeLivesUnderFactoryDataRoot(t *testing.T) {
+	root := t.TempDir()
+	capture, renderer, err := controlplane.MaterializeReportScripts(filepath.Join(root, "reports"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, script := range []string{capture, renderer} {
+		if !filepath.IsAbs(script) || !strings.HasPrefix(script, filepath.Join(root, "reports")+string(filepath.Separator)) {
+			t.Fatalf("embedded report script=%q", script)
+		}
+		if info, err := os.Stat(script); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("script info=%v err=%v", info, err)
+		}
+	}
+}
+
+func TestReportBrowserRuntimeStartupCheckUsesInstalledModule(t *testing.T) {
+	root := t.TempDir()
+	launcher := filepath.Join(root, "factory-browser-sandbox")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(root, "runtime", "node_modules", "playwright")
+	if err := os.MkdirAll(module, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "runtime", "package.json"), []byte(`{"private":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(module, "index.js"), []byte(`exports.chromium={launch(){}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := controlplane.NewReportBrowserRuntime(launcher, filepath.Join(root, "runtime"))
+	if err := runtime.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlplane.NewReportBrowserRuntime(filepath.Join(root, "missing-launcher"), filepath.Join(root, "runtime")).Check(context.Background()); err == nil {
+		t.Fatal("startup check accepted a missing browser launcher")
+	}
+	if got := controlplane.NewReportBrowserRuntime("", ""); got.Launcher != controlplane.DefaultReportBrowserLauncher || got.Root != controlplane.DefaultReportBrowserRoot {
+		t.Fatalf("production browser defaults=%+v", got)
 	}
 }
 
