@@ -1,12 +1,12 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: 75410ad75705be54e1f4271e468c42a0aac8c015 — Pilot ждёт следующей допустимой попытки, а лимит проверен конкурентно.
+Implementation commit: ec50c36fb263dd8637d4820ee3a9d69be8ee13b2 — Pilot ждёт следующей допустимой попытки, а лимит проверен конкурентно.
 
 ## HEAD
 
 - Status: Implement + Test — готово.
 - Branch: `factory/d329a8f9-09f-c8e8d9e4-835`.
-- Implementation commit: `75410ad75705be54e1f4271e468c42a0aac8c015` — Pilot не вызывает создание до сохранённого срока, а control plane проверен при гонке.
+- Implementation commit: `ec50c36fb263dd8637d4820ee3a9d69be8ee13b2` — Pilot не вызывает создание до сохранённого срока, а control plane проверен при гонке.
 - What changed: сохраняется `hourly_cap_retry_at`; следующий цикл пропускается, а после срока задача создаётся.
 - What changed: добавлен `TestCreateTaskHourlyTaskCapConcurrent` с двумя горутинами и пределом в 10 задач.
 - Evidence: `go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap(ReplayAndWindow|Concurrent)$'` → PASS.
