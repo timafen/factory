@@ -52,6 +52,12 @@ func (a *API) listQuestions(w http.ResponseWriter, r *http.Request) {
 		if questionContainsPythonMock(rec) {
 			continue
 		}
+		// Admin records are an audit trail for an action the orchestrator already
+		// attempted.  They are not questions for the owner unless explicitly
+		// escalated after that attempt.
+		if toString(rec["authority"]) == "admin" && rec["owner_only"] != true {
+			continue
+		}
 		delete(rec, "prior_result") // large; not needed by the list UI
 		out = append(out, rec)
 	}
