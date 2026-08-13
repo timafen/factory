@@ -116,8 +116,8 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
     }
   };
 
-  const send = async (q: Question) => {
-    const answer = (drafts[q.id] || "").trim();
+  const send = async (q: Question, selectedAnswer?: string) => {
+    const answer = (selectedAnswer ?? drafts[q.id] ?? "").trim();
     if (!answer) return;
     setPhase(q.id, "send");
     try {
@@ -185,7 +185,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
 
             {q.situation && <p style={{ margin: 0, fontSize: 14 }}>{q.situation}</p>}
             {q.question && (
-              <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#8ec5ff" }}>❓ {q.question}</p>
+              <p title={q.question} style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#8ec5ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>❓ {q.question}</p>
             )}
             {q.escalation_reason && (
               <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted, #8a94a6)" }}>
@@ -202,6 +202,15 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
                 ))}
               </div>
             )}
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="button button-primary" onClick={() => void send(q, "Делаем")} disabled={Boolean(phase)}>
+                Делаем
+              </button>
+              <button className="button" onClick={() => void send(q, "Не делаем")} disabled={Boolean(phase)}>
+                Не делаем
+              </button>
+            </div>
 
             <textarea
               rows={3}
