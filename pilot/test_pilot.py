@@ -1374,6 +1374,33 @@ class DiagnosisRepairTests(unittest.TestCase):
             "workflow_revision_id": "revision-id",
         }
 
+    def test_branch_from_history_restores_modern_retry_by_work_id(self):
+        current = dict(self.task, id="retry", work_id="work-a", context="")
+        previous = dict(self.task, id="previous", work_id="work-a")
+
+        def api(path, body=None):
+            self.assertIsNone(body)
+            if path == "/tasks/retry":
+                return {"task": {"context": ""}}
+            if path == "/tasks/previous":
+                return {"task": {"context": "BRANCH: factory/work-a"}}
+            raise AssertionError(path)
+
+        with mock.patch.object(pilot, "api", side_effect=api):
+            branch = pilot.branch_from_history([current, previous], "work-a")
+
+        self.assertEqual(branch, "factory/work-a")
+
+    def test_branch_from_history_restores_legacy_text_reference(self):
+        legacy = dict(self.task, id="legacy", work_id=None)
+
+        with mock.patch.object(pilot, "api", return_value={
+                "task": {"context": "BRANCH: factory/legacy-work"}}):
+            branch = pilot.branch_from_history(
+                [legacy], "Починить отчёт")
+
+        self.assertEqual(branch, "factory/legacy-work")
+
     def test_duplicate_active_id_is_cancelled_once_then_resumed_same_branch(self):
         verdict = {"причина": "исполнитель повторяет один и тот же шаг",
                    "решение": "исправить проверку состояния", "нужен_владелец": False}
@@ -1385,9 +1412,9 @@ class DiagnosisRepairTests(unittest.TestCase):
             return self.detail_api(path, body)
 
         with mock.patch.object(pilot, "api", side_effect=duplicate_list_api):
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
 
         cancels = [call for call in self.api_calls if call[0].endswith("/cancel")]
@@ -1462,7 +1489,7 @@ class DiagnosisRepairTests(unittest.TestCase):
         verdict = {"причина": "цикл", "решение": "починить", "нужен_владелец": False}
         with mock.patch.object(pilot, "api", return_value={
                 "tasks": [self.task, other], "next_cursor": None}) as api:
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task, other], self.task)
         api.assert_called_once_with("/tasks?limit=200")
         repair = self.repairs["Починить отчёт"]
@@ -1482,7 +1509,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             raise AssertionError("cancel must not be called")
 
         with mock.patch.object(pilot, "api", side_effect=paged_api):
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
 
         self.assertEqual([path for path, _ in self.api_calls], [
@@ -1507,7 +1534,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             raise AssertionError("cancel must not be called")
 
         with mock.patch.object(pilot, "api", side_effect=api_without_branch):
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
 
         self.assertFalse(any(path.endswith("/cancel") for path, _ in self.api_calls))
@@ -1526,9 +1553,9 @@ class DiagnosisRepairTests(unittest.TestCase):
             raise RuntimeError("control plane unavailable")
 
         with mock.patch.object(pilot, "api", side_effect=failing_api):
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
-            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Implement + Test",
+            pilot.begin_diag_repair(self.conf, "Починить отчёт", "Починить отчёт", "Implement + Test",
                                     verdict, [self.task], self.task)
 
         self.assertEqual(calls.count("/tasks/looping-task/cancel"), 1)
@@ -1629,6 +1656,105 @@ class DiagnosisRepairTests(unittest.TestCase):
             pilot.diag_sweep(conf, [running])
 
         diagnose.assert_not_called()
+
+    def test_live_sweep_diagnoses_modern_work_on_fifth_round(self):
+        running = dict(
+            self.task,
+            id="round-5",
+            work_id="work-1",
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        history = [dict(
+            running,
+            id=f"round-{round_no}",
+            state="succeeded" if round_no < 5 else "running",
+        ) for round_no in range(1, 6)]
+        conf = dict(self.conf, deep_diag_rounds=5)
+        verdict = {"причина": "цикл", "решение": "починить",
+                   "нужен_владелец": False}
+
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(
+                    pilot, "deep_diagnose", return_value=verdict) as diagnose:
+            pilot.diag_sweep(conf, history)
+
+        diagnose.assert_called_once_with(
+            conf, "Починить отчёт", "Implement + Test", 5, history,
+            repair_task=running)
+
+    def test_live_sweep_does_not_count_same_title_from_another_work(self):
+        running = dict(
+            self.task,
+            id="current-round",
+            work_id="current-work",
+            state="running",
+            title="[auto] [3/5 Implement + Test] Починить отчёт",
+        )
+        other_history = [dict(
+            running,
+            id=f"other-round-{round_no}",
+            work_id="other-work",
+            state="succeeded",
+        ) for round_no in range(1, 6)]
+        conf = dict(self.conf, deep_diag_rounds=5)
+
+        with mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose:
+            pilot.diag_sweep(conf, [running] + other_history)
+
+        diagnose.assert_not_called()
+
+    def test_live_sweep_repairs_same_title_works_separately_by_work_id(self):
+        """The real sweep-to-repair path must not merge concurrent same-title work."""
+        title = "[auto] [3/5 Implement + Test] Починить отчёт"
+        live = [
+            {"id": "work-a-5", "work_id": "work-a", "title": title,
+             "state": "running", "repository_id": "repo-id"},
+            {"id": "work-b-5", "work_id": "work-b", "title": title,
+             "state": "running", "repository_id": "repo-id"},
+        ]
+        history = live + [
+            {"id": f"{work}-{round_no}", "work_id": work, "title": title,
+             "state": "succeeded", "repository_id": "repo-id"}
+            for work in ("work-a", "work-b") for round_no in range(1, 5)
+        ]
+        prompts = []
+
+        def api_for_two_works(path, body=None):
+            self.api_calls.append((path, body))
+            if path == "/tasks?limit=200":
+                return {"tasks": history, "next_cursor": None}
+            if path.endswith("/cancel"):
+                return {"task": {"id": path.split("/")[2]}}
+            task_id = path.rsplit("/", 1)[-1]
+            task = next(task for task in history if task["id"] == task_id)
+            return {"task": dict(task, worker_id="worker-id",
+                                  context="ветка factory/old-work"),
+                    "workflow": {"revision_id": "revision-id"},
+                    "attempts": [{"result": f"отчёт {task_id}"}]}
+
+        def diagnose(_conf, prompt, timeout=240):
+            prompts.append(prompt)
+            return ('{"причина":"цикл","решение":"исправить",'
+                    '"нужен_владелец":false}', "brain")
+
+        conf = dict(self.conf, deep_diag_rounds=5)
+        with mock.patch.object(pilot, "api", side_effect=api_for_two_works), \
+                mock.patch.object(pilot, "brain", side_effect=diagnose):
+            pilot.diag_sweep(conf, history)
+
+        cancels = [path for path, _ in self.api_calls if path.endswith("/cancel")]
+        self.assertEqual(cancels, ["/tasks/work-a-5/cancel", "/tasks/work-b-5/cancel"])
+        self.assertEqual(set(self.repairs), {"work-a", "work-b"})
+        self.assertEqual(self.repairs["work-a"]["status"], "cancellation_requested")
+        self.assertEqual(self.repairs["work-b"]["status"], "cancellation_requested")
+        self.assertIn("отчёт work-a-1", prompts[0])
+        self.assertNotIn("отчёт work-b-1", prompts[0])
+        self.assertIn("отчёт work-b-1", prompts[1])
+        self.assertNotIn("отчёт work-a-1", prompts[1])
 
     def test_terminal_route_does_not_repeat_spent_diagnosis(self):
         self.repairs["Починить отчёт"] = {"status": "resumed"}
