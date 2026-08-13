@@ -2241,6 +2241,7 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 	if err := validateVisualTarget(input.VisualTarget); err != nil {
 		return protocol.TaskDetail{}, false, err
 	}
+	automatic := strings.HasPrefix(input.Title, "[auto]")
 	if input.RequestKey == "" || len(input.RequestKey) > 200 {
 		return protocol.TaskDetail{}, false, invalid("invalid_request_key", "request_key is required")
 	}
@@ -2369,6 +2370,24 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 			"reserved_request_key_prefix",
 			"request_key values beginning with automation: are reserved for control-plane Automations",
 		)
+	}
+	// The replay check above must precede this reservation: retrying a request
+	// that already created a task is free. Counting committed server timestamps
+	// inside the same SQLite transaction gives every Pilot process one window.
+	if automatic {
+		var createdInHour int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM tasks
+			WHERE automatic = 1 AND created_at > ?
+		`, now-int64(time.Hour/time.Millisecond)).Scan(&createdInHour); err != nil {
+			return protocol.TaskDetail{}, false, unavailable(err)
+		}
+		if createdInHour >= 10 {
+			return protocol.TaskDetail{}, false, conflict(
+				"hourly_task_cap",
+				"automatic task creation is limited to 10 tasks per rolling hour",
+			)
+		}
 	}
 	resolvedPrompt := taskContext
 	var workflowID, workflowName string
@@ -2505,13 +2524,13 @@ func (s *Store) CreateTask(ctx context.Context, input protocol.CreateTaskRequest
 		INSERT INTO tasks(
 			id, request_key, title, description, repository_id, timeout_seconds, created_at,
 			workflow_id, workflow_revision_id, workflow_title, workflow_revision_number,
-			context, read_only, work_id, parent_task_id, correction_kind
+			context, read_only, work_id, parent_task_id, correction_kind, automatic
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, input.RequestKey, input.Title, resolvedPrompt, input.RepositoryID,
 		input.TimeoutSeconds, now, nullableString(workflowID), nullableString(input.WorkflowRevisionID),
 		nullableString(workflowName), nullableInt(workflowRevisionNumber), taskContext, readOnly,
-		workID, nullableString(input.ParentTaskID), nullableString(input.CorrectionKind))
+		workID, nullableString(input.ParentTaskID), nullableString(input.CorrectionKind), automatic)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO executions(id, task_id, assigned_worker_id, required_runtime, state, created_at, updated_at)

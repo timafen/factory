@@ -1807,6 +1807,39 @@ func createTestTask(t *testing.T, store *Store, requestKey, workerID, repository
 	return task
 }
 
+func TestCreateTaskHourlyTaskCapReplayAndWindow(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	worker := registerTestWorker(t, store, workerA, 20, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/hourly-cap"})
+	repositoryID := worker.Repositories[0].ID
+	request := func(key string) protocol.CreateTaskRequest {
+		return protocol.CreateTaskRequest{RequestKey: key, Title: "[auto] hourly task", Description: "test", WorkerID: workerA, RepositoryID: repositoryID, TimeoutSeconds: 60}
+	}
+	for i := 0; i < 10; i++ {
+		if _, created, err := store.CreateTask(context.Background(), request(fmt.Sprintf("hourly-%d", i))); err != nil || !created {
+			t.Fatalf("automatic task %d = created %v, err %v", i, created, err)
+		}
+	}
+	if _, _, err := store.CreateTask(context.Background(), request("hourly-10")); err == nil {
+		t.Fatal("eleventh automatic task unexpectedly created")
+	} else {
+		assertErrorCode(t, err, "hourly_task_cap")
+	}
+	if _, created, err := store.CreateTask(context.Background(), request("hourly-0")); err != nil || created {
+		t.Fatalf("replay = created %v, err %v", created, err)
+	}
+	manual := request("manual-after-cap")
+	manual.Title = "Manual task"
+	if _, created, err := store.CreateTask(context.Background(), manual); err != nil || !created {
+		t.Fatalf("manual task = created %v, err %v", created, err)
+	}
+	now = now.Add(time.Hour)
+	if _, created, err := store.CreateTask(context.Background(), request("hourly-after-window")); err != nil || !created {
+		t.Fatalf("task after window = created %v, err %v", created, err)
+	}
+}
+
 func TestTaskAttachmentsAreOwnedLimitedAndStoredByTask(t *testing.T) {
 	store := newTestStore(t)
 	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{Name: "worker", WorkerVersion: "test", Runtime: protocol.RuntimeCodex, Capacity: 1, Health: "healthy", Repositories: []protocol.RepositoryRegistration{{Key: "factory", RemoteIdentity: "github.com/example/factory"}}})
