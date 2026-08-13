@@ -933,7 +933,7 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
     "x-factory-e2e-backend-forwarded-proto": "https",
   });
   await expect(page.getByText("Поставлено на паузу")).toHaveCount(0);
-  await expect(page.getByText("В очереди Factory").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ожидают исполнителя" })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-desktop.png", fullPage: true });
 
   const resumedSettings = await page.evaluate(async () => {
