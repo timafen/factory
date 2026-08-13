@@ -4,7 +4,7 @@ Implementation commit: 8e825c0e7436ff69347dc8548ed7ffe093b08772 — старша
 
 ## HEAD
 
-- Статус: Implemented.
+- Статус: Verified PASS — ожидает ручного слияния.
 - Ветка: `factory/1387f4ea-7c6-4044112a-932`.
 - Implementation commit: `8e825c0e7436ff69347dc8548ed7ffe093b08772` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
@@ -13,8 +13,10 @@ Implementation commit: 8e825c0e7436ff69347dc8548ed7ffe093b08772 — старша
 - Что изменено: `manage migrate`, sandbox без `--dry-run` и любой `--force`
   эскалируются владельцу до исполнения; `collectstatic` остаётся разрешённым.
 - Evidence: `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 tests OK;
-  `go test ./internal/controlplane` → PASS; `git diff --check` → PASS.
-- Следующее действие: выполнить полный Verify перед слиянием.
+  `go test -timeout 5m ./...` → PASS; `cd web && npm test` → 173 tests PASS;
+  адресная проверка controlplane API и `git diff --check` → PASS. Две ошибки
+  общего Python-набора в restart-сценарии полностью воспроизводятся на pinned base.
+- Следующее действие: владельцу вручную слить ветку после просмотра доказательств.
 
 ## LOG
 
@@ -114,3 +116,14 @@ restart/provenance общего набора остались нестабиль
 удалены из автоматического allowlist: они создают owner-вопрос до исполнения;
 `collectstatic` и sandbox `--dry-run` остаются разрешёнными. Маршрутизационные
 Python-тесты (8) и `go test ./internal/controlplane` прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Безопасная staging-проверка решается старшей моделью до owner-вопроса | `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` | PASS: 8/8, разрешённые действия исполняются только фиксированным `fx` argv. |
+| Опасные и неразрешённые действия доходят до владельца без исполнения | Тот же маршрутизационный набор: migrate, sandbox без `--dry-run`, `--force`, logs и неизвестная команда | PASS: команда не запускается, создаётся owner-вопрос. |
+| Служебный admin-аудит скрыт из owner API | `go test ./internal/controlplane -run 'Question|Admin' -count=1` | PASS. |
+| Смежные Go/UI-сценарии не сломаны | `go test -timeout 5m ./...`; `cd web && npm test` | PASS; UI 173/173. |
+| Фоновая краснота Python не вызвана поставкой | полный `python3 -m unittest pilot.test_pilot`, затем тот же failing restart-тест на pinned base | 260 тестов проходят, 2 restart-подслучая падают одинаково на candidate и base. |
+| Сравнение и чистота изменений | isolated fetch `d98c9b10c72add76401f216a770da0994f73fe5f...1d3fd8f20abc2117b61f7e3170e68c78c3ffd324`; `git diff --check` | PASS: 6 ожидаемых файлов, ошибок пробелов нет. |
