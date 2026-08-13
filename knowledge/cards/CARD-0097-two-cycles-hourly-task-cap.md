@@ -1,6 +1,21 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: 2a6eb6046f5a595e5156a4ec0300e0a1aa2f6e11 — базовый снимок для спецификации; продуктовая реализация запрещена на этапе Specification и будет выполнена отдельным коммитом.
+Implementation commit: d0e2f92103bee3f2c5104ccd3cc4d3d4a77c4105 — контрольная плоскость ограничивает создание автоматических задач десятью за скользящий час.
+
+## HEAD
+
+- Status: Implement + Test — готово.
+- Branch: `factory/07095b28-30a-24d34201-e77`.
+- Implementation commit: `d0e2f92103bee3f2c5104ccd3cc4d3d4a77c4105` — общий атомарный почасовой лимит и отложенный Pilot handoff.
+- What changed: SQLite учитывает только `[auto]` задачи по серверному времени; replay и ручные задачи не расходуют окно. Pilot сохраняет карточку в плане и уведомляет один раз.
+- Evidence: `go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap' -count=1` → PASS; `python3 -m unittest pilot.test_pilot -q` → 242 tests PASS.
+- Next action: Review проверить конкурентный доступ к SQLite и HTTP-контракт `hourly_task_cap`.
+
+## LOG
+
+### 2026-08-12 — Implement
+
+Добавлены durable-метка автоматической задачи, атомарная проверка скользящего часа и миграция 028. Целевой Go-тест подтверждает границу, replay, ручную задачу и освобождение окна; Pilot-тест подтверждает defer и одно уведомление.
 
 ## Статус
 
