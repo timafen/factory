@@ -2,10 +2,10 @@
 
 ## HEAD
 
-Implementation commit: 7140b35eeca338079ca28d38b831816943630d4f — `Claim` ограничивает суммарные активные lease числом CPU машины
+Implementation commit: 6cef241a78a6a7e8361c7325c9d9ca44729f0ef6 — `Claim` ограничивает суммарные активные lease числом CPU машины
 
 - Status: Implemented and verified.
-- Branch: `factory/3556e388-3ae-7bc51285-a31`.
+- Branch: `factory/f61c4ef3-c59-fd78c93f-691`.
 - What changed: control plane атомарно считает непросроченные `preparing` и
   `running` attempts всех worker; после заполнения машинного бюджета новый
   claim возвращается пустым и не создаёт attempt.
