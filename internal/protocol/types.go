@@ -652,6 +652,20 @@ type AutomationHealth struct {
 	Message string `json:"message,omitempty"`
 }
 
+// AutomationStatus is the read-only, source-neutral view shown on the
+// Automations screen. It deliberately contains no host commands or logs.
+type AutomationStatus struct {
+	Source         string     `json:"source"`
+	ID             string     `json:"id"`
+	Category       string     `json:"category"`
+	Title          string     `json:"title"`
+	Purpose        string     `json:"purpose"`
+	Status         string     `json:"status"`
+	DataStatus     string     `json:"data_status"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	Diagnostic     string     `json:"diagnostic,omitempty"`
+}
+
 type Automation struct {
 	ID                 string                 `json:"id"`
 	Title              string                 `json:"title"`

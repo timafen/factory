@@ -1164,6 +1164,19 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   browser.assertClean();
 });
 
+test("keeps live Automation state and activity visible on a phone", async ({ page }) => {
+  const browser = observeBrowser(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/automations");
+
+  const liveStatuses = page.getByLabel("Живой статус автоматик");
+  await expect(liveStatuses).toBeVisible();
+  await expect(liveStatuses.getByText("Нет данных").first()).toBeVisible();
+  await expect(liveStatuses.getByText("нет данных").first()).toBeVisible();
+  await page.screenshot({ path: "test-results/screenshots/automations-narrow.png", fullPage: true });
+  browser.assertClean();
+});
+
 test("audits every Factory screen on desktop and phone", async ({ context, baseURL }) => {
   test.setTimeout(240_000);
   const api = await request.newContext({ baseURL: baseURL, ignoreHTTPSErrors: true });
