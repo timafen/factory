@@ -4,12 +4,12 @@ Implementation commit: f20b23139066bf8fe43278259e2a4d5ddf73202c — арбитр
 
 ## HEAD
 
-- Статус: Implemented — ready for review.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/aa802da6-3ae-d50e791d-f56`.
 - Implementation commit: f20b23139066bf8fe43278259e2a4d5ddf73202c — арбитр выбирает одного устойчивого владельца полной пересекающейся области и разводит оба production-пути.
 - What changed: арбитр сортирует живые работы по стабильному приоритету, сравнивает repository/path и выдаёт одному владельцу всю область; `area_busy` и `review_gate` используют единое решение.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` — 7 тестов OK; `python3 -m py_compile pilot/pilot.py` — OK.
-- Следующее действие: Проверить опубликованный кандидат на review.
+- Evidence: 7/7 целевых сценариев арбитража, все Go-пакеты и 178/178 UI-тестов прошли; 2 Python-сбоя идентично воспроизведены на pinned base и не внесены кандидатом.
+- Следующее действие: Влить проверенный кандидат в `main` после решения человека.
 
 ## LOG
 
@@ -88,3 +88,14 @@ repository/path, стабильный приоритет и не даёт зав
 Работа перенесена в текущую ветку `factory/aa802da6-3ae-d50e791d-f56`; карточка
 теперь ссылается на реальный кодовый коммит f20b23139066bf8fe43278259e2a4d5ddf73202c.
 Арбитраж подтверждён 7 целевыми тестами и компиляцией `pilot/pilot.py`.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Две живые работы над одним файлом не ждут друг друга | `python3 -m unittest -v pilot.test_pilot.AreaLockArbitrationTests` | 7/7 OK: `area_busy` и `review_gate` пропускают одного устойчивого владельца, второй ждёт именно его. |
+| Решение не зависит от порядка и не дробит область | Целевые сценарии порядка, tie-break и whole-area grant | OK: перестановка входа не меняет владельца, средняя работа не получает частичный замок. |
+| Границы замка и состояния соседей сохранены | Целевые сценарии repository/path и finished candidate | OK: разные репозитории/пути не конфликтуют, `succeeded` не обходит живого владельца. |
+| Сборка и полный набор проекта | `go build ./...`; `just check`; после `npm ci` — `just ui-check`, `env -u FACTORY_BUILD_DIR -u FACTORY_V2_BUILD_DIR just test-tooling`, `just test-launcher`; `python3 -m unittest -v pilot.test_pilot` | Build OK; Go vet/vuln/staticcheck/tests OK; UI 178/178; tooling и launcher OK. Python: 261 тест, 13 skipped, 2 известных падения. |
+| Известные Python-падения не внесены поставкой | Тот же `CorrectionProvenanceStormTests.test_review_and_verify_corrections_complete_one_pipeline_after_restart` из archive pinned base | На `73f4edce272cb113607540412425d842158e2b81` повторились оба subtest-падения (`review_return`, `verify_return`). |
+| Кандидат и карточка закреплены корректно | Изолированный bare fetch; `73f4edce272cb113607540412425d842158e2b81...5829aff6439b7a396a1b7cf15b516c1a1ebe80bd`; ancestry и `git diff --check` | Diff непустой и чистый; implementation-коммит — предок кандидата, отличается от tip и меняет `pilot/pilot.py`, `pilot/test_pilot.py`. |
