@@ -4,7 +4,7 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
+- Status: BLOCKED: общий `just check` не завершился в verify-среде.
 - Branch: `factory/db86ddee-ec7-d45dcede-582`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
@@ -16,7 +16,7 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
 - Known baseline: общий `just check` в чистой копии дошёл до `staticcheck`, но
   среда прервала запуск после автоматической смены Go toolchain; целевой fixture
   и синтаксис прошли полностью.
-- One next action: человеку проверить итог общего `just check` в CI и влить в main.
+- One next action: выполнить полный `just check` в CI, затем принять решение о вливании.
 
 ## LOG
 
