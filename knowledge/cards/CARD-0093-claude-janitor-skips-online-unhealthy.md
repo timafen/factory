@@ -4,7 +4,7 @@
 
 - Status: Implemented — awaiting verification and human merge
 - Branch: `factory/d7f5f772-3e8-36f57e0c-bd0`
-- Implementation commit: f2e168f4d52dc9b22b2d099a3dbf22b6e0b11551 — тест доказывает, что санитар пропускает online/unhealthy Claude с retained worktree.
+- Implementation commit: 8f0335b1d6d13ba6d8340944258837841127fee4 — тест доказывает, что санитар пропускает online/unhealthy Claude с retained worktree.
 - What changed: fixture online/unhealthy worker теперь содержит retained worktree, поэтому тест ловит ошибочный restart; offline cleanup и healthy worker сценарии сохранены.
 - Evidence: целевой `bash ops/test-factory-janitor.sh` → 4 PASS; `bash -n ops/test-factory-janitor.sh` и `git diff --check` → PASS.
 - One next action: выполнить полный набор проверок после rebase и передать ветку на human merge.
@@ -27,4 +27,4 @@ Online/unhealthy Claude больше не останавливается и не
 
 Усилен тест online/unhealthy worker: API возвращает retained worktree, поэтому
 проверка действительно защищает от холостого restart, карантина и резервирования.
-Исправление находится в отдельном коммите реализации `f2e168f4d52dc9b22b2d099a3dbf22b6e0b11551`.
+Исправление находится в отдельном коммите реализации `8f0335b1d6d13ba6d8340944258837841127fee4`.
