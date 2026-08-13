@@ -1,17 +1,21 @@
 # CARD-0098: находки патрулей в Automations
 
-Implementation commit: 7382a3fd8c4b47a2a6c915354200fe249088fbe9 — находки патрулей исключены из Work и явно показаны в Runs Automation
+Implementation commit: 232c46a11d83b75512b70f9a69d3f923602b1267 — Tasks API сообщает устойчивый признак patrol, а Work фильтрует кешированную историю
 
 ## HEAD
 
-- Status: Implemented
-- Branch: `factory/e3390a8c-8ac-f467446e-3ae`
-- Implementation commit: `7382a3fd8c4b47a2a6c915354200fe249088fbe9`
-- What changed: patrol-задачи исключаются из API и всех разделов Work без разрыва cursor-пагинации; Runs подписывает finding и сохраняет task link/tombstone.
-- Evidence: `go test ./internal/controlplane/...` → PASS; целевые Vitest 78/78 → PASS; lint, typecheck, build → PASS.
-- Next action: проверить экран `/automations` после выпуска.
+- Status: Implemented, awaiting Review
+- Branch: `factory/50900d82-810-6fad25a8-6e0`
+- Implementation commit: `232c46a11d83b75512b70f9a69d3f923602b1267`
+- What changed: Tasks API вычисляет `is_patrol` из durable schedule Automation; Work отбрасывает этот признак при объединении свежей и кешированной истории.
+- Evidence: `go test ./internal/controlplane/...` → PASS; `npm test -- --run src/Work.test.ts` → 16/16 PASS; `git diff --check` → PASS.
+- Next action: повторить Review на свежей ветке.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Добавлен явный `is_patrol` в Tasks API и production-shaped регрессия для schedule Automation с patrol title; Work фильтрует такой task до построения разделов и при merge кеша, включая `origin: orchestrator`. Целевой Go-набор и Work-тесты зелёные; typecheck заблокирован существующей ошибкой `Navigator.serviceWorker` в e2e.
 
 ### 2026-08-12 — Implement
 
