@@ -1006,8 +1006,25 @@ fi
 success="$temporary/success"
 make_fixture "$success" parallel-success
 cp "$success/current.json" "$success/source-current.json"
+mkdir -p "$success/releases/build-orphaned" "$success/releases/operator-data" \
+  "$success/outside-build-target"
+printf 'remove me\n' >"$success/releases/build-orphaned/marker"
+printf 'keep me\n' >"$success/releases/operator-data/marker"
+printf 'outside stays\n' >"$success/outside-build-target/marker"
+ln -s "$success/outside-build-target" "$success/releases/build-external-link"
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
+[ ! -e "$success/releases/build-orphaned" ] \
+  || fail "successful release retained an orphaned build directory"
+assert_file "$success/releases/operator-data/marker" 'keep me'
+[ -L "$success/releases/build-external-link" ] \
+  || fail "successful release removed a build-prefixed symlink"
+assert_file "$success/releases/build-external-link/marker" 'outside stays'
+assert_file "$success/outside-build-target/marker" 'outside stays'
+grep -F 'удаляю остаток прерванной сборки: build-orphaned' "$success/output" >/dev/null \
+  || fail "successful release did not report orphaned build cleanup"
+grep -F 'пропускаю небезопасный остаток сборки:' "$success/output" >/dev/null \
+  || fail "successful release did not report the skipped symlink"
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
