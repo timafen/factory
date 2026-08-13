@@ -5,6 +5,8 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 mkdir -p "$temporary/bin"
+mkdir -p "$temporary/systemd/factory-server.service.d"
+printf 'legacy\n' >"$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
 
 cat >"$temporary/bin/systemctl" <<'EOF'
 #!/bin/bash
@@ -14,7 +16,7 @@ if [ "$1" = is-active ]; then
   [ "${FACTORY_BROKER_ACTIVE:-0}" = 1 ]
   exit
 fi
-if [ "$1" = restart ]; then
+if [ "$1" = restart ] && [ "$2" = factory-release-broker.service ]; then
   grep -qx '# broker version 2' "$FACTORY_RELEASE_BROKER_BIN"
 fi
 EOF
@@ -38,7 +40,8 @@ chmod +x "$temporary/broker"
 
 FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
 FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
-FACTORY_RELEASE_BROKER_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
+FACTORY_RELEASE_BROKER_PILOT_DROPIN="$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf" \
+FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
 FACTORY_RELEASE_BROKER_OWNER= \
 FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
 FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
@@ -53,10 +56,13 @@ grep -qx 'User=root' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'Group=factory-release' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'NoNewPrivileges=true' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'StateDirectory=factory/release-broker' "$temporary/systemd/factory-release-broker.service"
-grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
+grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf"
+test ! -e "$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
 grep -qx -- '--system factory-release' "$temporary/groupadd.log"
 grep -qx 'daemon-reload' "$temporary/systemctl.log"
 grep -qx 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
+grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
+test "$(grep -nE 'enable --now factory-release-broker|restart factory-pilot' "$temporary/systemctl.log" | cut -d: -f1 | tr '\n' ' ')" = "3 4 "
 
 cat >"$temporary/broker" <<'EOF'
 #!/bin/sh
@@ -68,7 +74,8 @@ chmod +x "$temporary/broker"
 
 FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
 FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
-FACTORY_RELEASE_BROKER_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
+FACTORY_RELEASE_BROKER_PILOT_DROPIN="$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf" \
+FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
 FACTORY_RELEASE_BROKER_OWNER= \
 FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
 FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
@@ -81,6 +88,7 @@ FACTORY_BROKER_ACTIVE=1 \
 
 grep -qx '# broker version 2' "$temporary/out/factory-release-broker"
 grep -qx 'restart factory-release-broker.service' "$temporary/systemctl.log"
+grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
 if grep -q 'enable --now factory-release-broker.service' "$temporary/systemctl.log"; then
   echo 'active broker was enabled instead of restarted' >&2
   exit 1
