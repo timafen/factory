@@ -4,7 +4,7 @@ Implementation commit: 3090866634059f02a6fc5ae5d2ada869e1662a97 — явный C
 
 ## HEAD
 
-Status: Verified PASS — ready to deliver.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/7276dbb0-e0b-afc197a8-73b`.
 
@@ -12,7 +12,7 @@ Implementation commit: 3090866634059f02a6fc5ae5d2ada869e1662a97 — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` обрабатывает снимок до поиска домашней папки. Обычный запуск и другие режимы по-прежнему загружают обычные defaults и bootstrap.
 
-Evidence: `go test ./...`, `go build ./...` и `go test ./cmd/factory-server` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника.
+Evidence: `go build ./...` и некэшированный `go test ./cmd/factory-server` завершились успешно; subprocess-проверка покрывает четыре формы CLI без `HOME`, автономность снимка и неизменность источника. Полный `go test ./...` не завершился из-за зависших тестов `internal/controlplane` и `internal/worker` вне области изменения.
 
 One next action: передать опубликованную ветку на review.
 
@@ -32,6 +32,15 @@ One next action: передать опубликованную ветку на r
 | Полный набор тестов | `go test ./...` | PASS: все пакеты зелёные |
 | Сборка проекта | `go build ./...` | PASS |
 | Область изменения | pinned `main...candidate` diff | PASS: три ожидаемых файла |
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Явный backup без домашней папки | `go test -count=1 ./cmd/factory-server` | PASS: четыре формы флагов создают снимок без `HOME`, снимок автономен, источник не изменён |
+| Сборка проекта | `go build ./...` | PASS |
+| Полный набор Go | `go test ./...` из чистого архива | Не завершился: зависли тесты `internal/controlplane` и `internal/worker`, не затронутые этой поставкой |
+| Область изменения | pinned `99701704b37e8740db3fdbe38c0193917570da5c...caa7bbd8e6dd54e6e230af612c2a632e20da0e47` | PASS: изменены только `main.go`, его тесты и карточка |
 
 ### 2026-08-13 — Implement
 
