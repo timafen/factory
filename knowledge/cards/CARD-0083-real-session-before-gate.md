@@ -1,18 +1,26 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
+Implementation commit: ceaa9d179ff816edc1c58adc047cb35ef280765f — Node закреплён в доверенной цепочке проверок Gate.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/4c92c207-803-93fc28aa-d9e.
-Implementation commit: be58e8096302044be7e96ee96a9e32aef93ddd08 — Node закреплён абсолютным путём, а release self-test больше не запускает себя рекурсивно.
-What changed: the complete gate chain starts only through validated absolute, root-owned executables; PATH shadowing cannot replace Node, npm, npx, or the gate launcher.
-Evidence: pinned remote comparison `base_sha=8dcb96ede53b14d3834af851252afa29786462c9`, `candidate_sha=ae4f780d1e8e2cf7dbb2c73c6efbe6aeebafedda`; target shell suite PASS.
-Evidence: `just check` passed formatting, vet, vulnerability scan, staticcheck, boundary, and all Go tests; UI checks were not runnable because clean environment lacks `web/node_modules/.bin/eslint` (exit 127).
-One next action: human merges after deciding whether to install UI dependencies and rerun the general check.
+Status: Implemented — awaiting verification.
+Branch: factory/1bb15dcd-e42-03e965a3-f13.
+Implementation commit: ceaa9d179ff816edc1c58adc047cb35ef280765f — Node закреплён в доверенной цепочке проверок Gate.
+What changed: Gate извлекает из проверенного Git-commit полный набор скриптов и зависимостей в root-owned каталог, недоступный рабочему пользователю.
+What changed: UI-проверки запускают Node, npx и npm только абсолютными root-owned путями; подмена через PATH не попадает в цепочку.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `bash ops/test-fx-factory-release.sh` → PASS, включая подмену Gate, каталога и PATH/Node.
+One next action: выполнить независимую проверку перед слиянием.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Безопасный Gate перенесён поверх свежего `main`: исполняемый скрипт и полный набор
+его зависимостей извлекаются по blob из конкретного Git-commit в закрытый root-owned
+каталог. После разрешения конфликтов Node также закреплён абсолютным проверяемым путём.
+`bash -n` и `bash ops/test-fx-factory-release.sh` прошли, включая конкурентную подмену
+каталога, замену Gate и PATH-shadow для `setsid` и Node.
 
 ### 2026-08-12 — Verify
 
