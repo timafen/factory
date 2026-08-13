@@ -2,14 +2,27 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: `factory/597fbc07-bb7-c72e1c7a-5db`.
-Implementation commit: ff076ae565626fec8a3150414307e2c66d231b11 — Review сверяет кандидат от прежнего main через общий merge-base и не блокирует его после продвижения основной ветки.
-What changed: Review и Verify фиксируют свежие SHA remote default branch и кандидата; продвижение main не превращается в ложную инфраструктурную блокировку.
-Evidence: pinned isolated fetch дал `base_sha=b448350413748b951462b5db8e999b59d7f8e278` и `candidate_sha=2636552fa3ca57636a4d329b977b4d531a77327e`; `python3 -m unittest pilot.test_pilot -q` — 235 tests OK (13 skipped). Полный `just check` остановлен вне области на существующем `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`.
-Next action: выполнить human merge в `main`.
+Status: Implemented — ready for verification.
+Branch: `factory/6653f419-f12-0d9287e5-d98`.
+Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot удалены неподдерживаемые rollout-поля, не поддерживаемые схемой сервера.
+What changed: `pilot/config.example.json` больше не передаёт метаданные rollout Review/Verify как runtime-настройки Pilot.
+Evidence: `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` — PASS.
+Next action: проверить поставку относительно свежего `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement: повторная поставка конфигурации Pilot
+
+Implementation commit: 80e51dc165b6dc3f9732c8aacb35a0fcefc097a5 — из примера Pilot удалены неподдерживаемые rollout-поля; коммит уже входит в свежий `main` `48983479beb82b80a75a3e98a658a0b3b1b337e9`.
+Ветка `factory/2a053e4b-d47-5aea2adf-0c3` повторно основана на свежем `main`; устаревшие конфликтующие подтверждения отброшены, append-only история сохранена.
+Целевой schema test, JSON-проверка без `rollout`, `review_revision`, `verify_revision` и `go build ./cmd/factory-server` — PASS.
+Полный `GOMAXPROCS=2 just check` остановлен вне области на существующем `SA4000` в `internal/worker/attempt_lifecycle_test.go:31`.
+
+### 2026-08-12 — Implement: исправление конфликта Pilot
+
+Ветка повторно основана на свежем `main` `33aa4b58d7f949420ba4d86cfc9639038fa0f3c8`; кодовый коммит `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5` уже входит в базу и удаляет неподдерживаемые rollout-метаданные из примера Pilot.
+Целевая проверка `go test ./internal/controlplane -run '^TestPilotConfigExampleMatchesServerSchema$' -count=1` — PASS.
+Полный `just check` прошёл format, vet, vuln, staticcheck и controlplane, но вне области задачи нестабильный `internal/worker.TestIdleWorkerMakesOneClaimPerPollingInterval` завершился по таймауту.
 
 ### 2026-08-12 — Verify
 
@@ -115,3 +128,9 @@ main через их pinned общий merge-base. Продвижение баз
 которые не являются настройкой сервера и отклонялись строгим декодером.
 Проверки PASS при `umask 077`: focused schema test, `go test ./...`,
 `python3 -m unittest pilot.test_pilot`, JSON validation, build и diff check.
+
+### 2026-08-12 — Implement
+
+HEAD карточки приведён к фактической поставке: указаны текущая ветка и кодовый
+коммит `80e51dc165b6dc3f9732c8aacb35a0fcefc097a5`, удаляющий неподдерживаемые
+rollout-поля из примера Pilot. Целевой schema test прошёл успешно.
