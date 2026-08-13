@@ -1013,7 +1013,7 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   await api.dispose();
   await page.goto("/workers");
   await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
-  const workersNavigation = page.getByRole("button", { name: "Workers", exact: true });
+  const workersNavigation = page.getByRole("button", { name: "Исполнители", exact: true });
   await expect(workersNavigation).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
   const offlineRow = page.getByRole("button", { name: /Archive Mac/ });
