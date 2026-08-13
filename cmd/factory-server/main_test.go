@@ -1,15 +1,135 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/owainlewis/factory/internal/controlplane"
 )
+
+func TestBackupCLICreatesSnapshotWithoutHome(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source", "factory.sqlite3")
+	store, err := controlplane.Open(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sourceBefore, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerBefore, err := os.ReadFile(source + ".v2-control-plane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(root, "factory-server")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build factory-server: %v\n%s", err, output)
+	}
+
+	tests := []struct {
+		name string
+		args func(string) []string
+	}{
+		{"single-dash-separated", func(destination string) []string {
+			return []string{"-database", source, "-backup", destination}
+		}},
+		{"double-dash-separated", func(destination string) []string {
+			return []string{"--database", source, "--backup", destination}
+		}},
+		{"single-dash-equals", func(destination string) []string {
+			return []string{"-database=" + source, "-backup=" + destination}
+		}},
+		{"double-dash-equals", func(destination string) []string {
+			return []string{"--database=" + source, "--backup=" + destination}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			destination := filepath.Join(root, test.name+".sqlite3")
+			command := exec.Command(binary, test.args(destination)...)
+			command.Env = serverEnvironmentWithoutHome(filepath.Join(root, "missing-config.toml"))
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("backup CLI: %v\n%s", err, output)
+			}
+			if want := "created Factory database backup at " + destination; !strings.Contains(string(output), want) {
+				t.Fatalf("backup output = %q, want it to contain %q", output, want)
+			}
+			for _, path := range []string{destination, destination + ".v2-control-plane"} {
+				if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+					t.Fatalf("backup file %s = %#v, %v", path, info, err)
+				}
+			}
+			for _, suffix := range []string{"-wal", "-shm"} {
+				if _, err := os.Lstat(destination + suffix); !os.IsNotExist(err) {
+					t.Fatalf("standalone backup has unexpected %s sidecar: %v", suffix, err)
+				}
+			}
+			for path, before := range map[string][]byte{
+				source:                       sourceBefore,
+				source + ".v2-control-plane": markerBefore,
+			} {
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(after, before) {
+					t.Fatalf("backup changed source file %s", path)
+				}
+			}
+		})
+	}
+}
+
+func serverEnvironmentWithoutHome(configPath string) []string {
+	excluded := map[string]bool{
+		"HOME": true, "FACTORY_DATA_HOME": true, "FACTORY_V2_DATA_HOME": true,
+		"FACTORY_SERVER_CONFIG": true,
+	}
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !excluded[name] {
+			environment = append(environment, entry)
+		}
+	}
+	return append(environment, "FACTORY_SERVER_CONFIG="+configPath)
+}
+
+func TestBackupWithExplicitDatabaseHonorsFlagGrammar(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"separated values", []string{"-database", "source", "-backup", "destination"}, true},
+		{"equals values", []string{"--database=source", "--backup=destination"}, true},
+		{"database text is another flag value", []string{"-listen", "-database", "-backup", "destination"}, false},
+		{"flags after positional argument", []string{"-backup", "destination", "positional", "-database", "source"}, false},
+		{"unknown flag", []string{"-unknown", "-database", "source", "-backup", "destination"}, false},
+		{"repeated flags", []string{"-database", "first", "-database", "second", "-backup", "first", "-backup", "second"}, true},
+		{"empty final backup", []string{"-database", "source", "-backup", "destination", "-backup="}, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := backupWithExplicitDatabase(test.args); got != test.want {
+				t.Fatalf("backupWithExplicitDatabase(%q) = %v, want %v", test.args, got, test.want)
+			}
+		})
+	}
+}
 
 func TestBackupModeRejectsMissingSourceWithoutCreatingState(t *testing.T) {
 	root := t.TempDir()

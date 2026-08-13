@@ -35,21 +35,28 @@ func main() {
 }
 
 func run() (returnErr error) {
-	defaultDatabase, dataRoot, err := defaultDatabasePath()
-	if err != nil {
-		return err
-	}
-	bootstrap, err := loadServerBootstrapConfig(dataRoot)
-	if err != nil {
-		return err
-	}
+	explicitBackup := backupWithExplicitDatabase(os.Args[1:])
+	var defaultDatabase, dataRoot string
+	var bootstrap serverBootstrapConfig
 	defaultListen := "127.0.0.1:7337"
-	if bootstrap.Listen != "" {
-		defaultListen = bootstrap.Listen
-	}
-	selectedDatabase := defaultDatabase
-	if bootstrap.Database != "" {
-		selectedDatabase = bootstrap.Database
+	selectedDatabase := ""
+	if !explicitBackup {
+		var err error
+		defaultDatabase, dataRoot, err = defaultDatabasePath()
+		if err != nil {
+			return err
+		}
+		bootstrap, err = loadServerBootstrapConfig(dataRoot)
+		if err != nil {
+			return err
+		}
+		if bootstrap.Listen != "" {
+			defaultListen = bootstrap.Listen
+		}
+		selectedDatabase = defaultDatabase
+		if bootstrap.Database != "" {
+			selectedDatabase = bootstrap.Database
+		}
 	}
 	listen := flag.String("listen", defaultListen, "loopback HTTP listen address")
 	database := flag.String("database", selectedDatabase, "Factory SQLite database path")
@@ -70,6 +77,17 @@ func run() (returnErr error) {
 		}
 		fmt.Println(listenAddress.String())
 		return nil
+	}
+	if explicitBackup {
+		rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		handled, err := runRecoveryMode(rootContext, *database, *backup, *restore, os.Stdout)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
 	}
 	databaseExplicit := false
 	flag.Visit(func(value *flag.Flag) {
@@ -286,6 +304,26 @@ func run() (returnErr error) {
 	<-automationsDone
 	logger.Info("server_stopped")
 	return nil
+}
+
+func backupWithExplicitDatabase(args []string) bool {
+	flags := flag.NewFlagSet("factory-server", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.String("listen", "", "")
+	flags.String("database", "", "")
+	backup := flags.String("backup", "", "")
+	flags.String("restore", "", "")
+	flags.Bool("print-listen", false, "")
+	if err := flags.Parse(args); err != nil || *backup == "" {
+		return false
+	}
+	databaseExplicit := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "database" {
+			databaseExplicit = true
+		}
+	})
+	return databaseExplicit
 }
 
 func runRecoveryMode(
