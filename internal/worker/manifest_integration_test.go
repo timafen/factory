@@ -413,6 +413,11 @@ func TestStartupReconciliationClassifiesManifestAndFilesystemState(t *testing.T)
 					t.Fatalf("branch presence = %v; want %v", err == nil, branchShouldRemain)
 				}
 			}
+			if _, err := fixture.store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{
+				LeaseToken: strings.Repeat("l", 43), State: "failed", Error: "test fixture released host slot",
+			}); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }

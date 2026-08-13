@@ -1621,7 +1621,8 @@ func TestIdleWorkerMakesOneClaimPerPollingInterval(t *testing.T) {
 	}
 }
 
-func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
+func TestCodexWorkerPoolFillsHostBudgetAndRefillsReleasedSlot(t *testing.T) {
+	slotBudget := min(10, runtime.NumCPU())
 	var claimMutex sync.Mutex
 	var claimTimes []time.Time
 	var heartbeatMutex sync.Mutex
@@ -1669,8 +1670,8 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 		return claimed && idle
 	})
 
-	tasks := make([]protocol.TaskDetail, 0, 10)
-	for index := range 10 {
+	tasks := make([]protocol.TaskDetail, 0, slotBudget)
+	for index := range slotBudget {
 		tasks = append(tasks, createTask(t, fixture.store, worker, fmt.Sprintf("pool-%02d", index), "barrier", 300))
 	}
 	claimMutex.Lock()
@@ -1680,14 +1681,14 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool {
 		claimMutex.Lock()
 		defer claimMutex.Unlock()
-		return len(claimTimes) >= baselineClaims+10
+		return len(claimTimes) >= baselineClaims+slotBudget
 	})
 	claimMutex.Lock()
-	fillDuration := claimTimes[baselineClaims+9].Sub(claimTimes[baselineClaims])
+	fillDuration := claimTimes[baselineClaims+slotBudget-1].Sub(claimTimes[baselineClaims])
 	claimMutex.Unlock()
 	if fillDuration >= manager.options.PollInterval {
-		t.Fatalf("ten slots filled in %s; successful claims waited for the %s polling interval",
-			fillDuration, manager.options.PollInterval)
+		t.Fatalf("%d host slots filled in %s; successful claims waited for the %s polling interval",
+			slotBudget, fillDuration, manager.options.PollInterval)
 	}
 
 	logDirectory := os.Getenv("FACTORY_TEST_CODEX_LOG")
@@ -1702,9 +1703,9 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 				ready++
 			}
 		}
-		return ready == 10
+		return ready == slotBudget
 	})
-	running := make([]protocol.TaskDetail, 0, 10)
+	running := make([]protocol.TaskDetail, 0, slotBudget)
 	for _, task := range tasks {
 		detail, err := fixture.store.Task(context.Background(), task.Task.ID)
 		if err != nil {
@@ -1717,12 +1718,12 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 			t.Fatalf("unexpected capacity task state: %#v", detail)
 		}
 	}
-	if len(running) != 10 {
+	if len(running) != slotBudget {
 		t.Fatalf("running task count = %d", len(running))
 	}
 	manager.register(managerContext)
 	waitForWorker(t, fixture.store, manager.ID(), func(worker protocol.Worker) bool {
-		return worker.ActiveCount == 10 && worker.Capacity == 10
+		return worker.ActiveCount == slotBudget && worker.Capacity == 10
 	})
 
 	attemptIDs := make(map[string]bool)
@@ -1795,7 +1796,7 @@ func TestCodexWorkerPoolRunsTenAttemptsAndRefillsReleasedSlot(t *testing.T) {
 			t.Fatalf("completed task lost its lease: %#v", completed.Attempts)
 		}
 	}
-	overflowTask := createTask(t, fixture.store, worker, "pool-10", "barrier", 300)
+	overflowTask := createTask(t, fixture.store, worker, fmt.Sprintf("pool-%02d", slotBudget), "barrier", 300)
 	manager.reserveAndClaim(managerContext)
 	overflowRunning := waitForTaskState(t, fixture.store, overflowTask.Task.ID, "running")
 	waitFor(t, 10*time.Second, func() bool {
