@@ -693,7 +693,6 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 		}
 	}
 	if input.State == "succeeded" && !notReady {
-	if input.State == "succeeded" && !notReady {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO visual_captures(work_id,phase,status,updated_at)
 			SELECT target.work_id,'after','pending',?

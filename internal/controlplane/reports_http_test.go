@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -46,7 +47,10 @@ func TestDailyReportDownloadSelectsTimezoneAndVerifiesSHA256(t *testing.T) {
 }
 
 func TestDailyReportDownloadReturnsServerErrorWhenDatabaseFails(t *testing.T) {
-	store := newTestStore(t)
+	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "controlplane.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.db.Close(); err != nil {
 		t.Fatal(err)
 	}
