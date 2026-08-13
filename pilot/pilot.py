@@ -2550,6 +2550,15 @@ def save_promises(base, text):
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def pinned_review_range(base_sha, candidate_sha):
+    """Build the only revision range allowed to define Review's scope."""
+    if not GIT_SHA.fullmatch(str(base_sha or "")):
+        raise ValueError("invalid pinned review base")
+    if not GIT_SHA.fullmatch(str(candidate_sha or "")):
+        raise ValueError("invalid pinned review candidate")
+    return str(base_sha) + "..." + str(candidate_sha)
+
+
 def _remote_url(repo_identity):
     """Return the canonical read-only URL without looking at a worker checkout."""
     if str(repo_identity or "").startswith(("file://", "http://", "https://", "ssh://")):
@@ -2613,6 +2622,7 @@ def fresh_branch_snapshot(repo_identity, branch):
             base_sha, candidate_sha = base_sha.strip(), candidate_sha.strip()
             if not GIT_SHA.fullmatch(base_sha) or not GIT_SHA.fullmatch(candidate_sha):
                 return {"state": "blocked", "reason": "remote returned an invalid commit SHA"}
+            review_range = pinned_review_range(base_sha, candidate_sha)
             # A published candidate can legitimately have been cut before the
             # default branch advanced.  It is still reviewable from their
             # shared merge-base; only genuinely unrelated histories block it.
@@ -2622,7 +2632,7 @@ def fresh_branch_snapshot(repo_identity, branch):
             merge_base_sha = merge_base_sha.strip()
             if not GIT_SHA.fullmatch(merge_base_sha):
                 return {"state": "blocked", "reason": "cannot pin shared merge base"}
-            rc, out = _git(work, "diff", "--name-only", base_sha + "..." + candidate_sha)
+            rc, out = _git(work, "diff", "--name-only", review_range)
             if rc:
                 return {"state": "blocked", "reason": "cannot calculate pinned delivery scope: " + out[:180]}
             rc, ahead = _git(work, "rev-list", "--count", merge_base_sha + ".." + candidate_sha)

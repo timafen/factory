@@ -494,6 +494,21 @@ class DeliveryAreaTests(unittest.TestCase):
 
 
 class FreshDefaultBranchSnapshotTests(unittest.TestCase):
+    def test_review_range_requires_two_pinned_full_shas(self):
+        base = "a" * 40
+        candidate = "b" * 40
+
+        self.assertEqual(
+            pilot.pinned_review_range(base, candidate),
+            base + "..." + candidate,
+        )
+        for invalid_base, invalid_candidate in (("main", candidate),
+                                                  (base, "HEAD"),
+                                                  (base.upper(), candidate)):
+            with self.subTest(invalid_base=invalid_base, invalid_candidate=invalid_candidate):
+                with self.assertRaises(ValueError):
+                    pilot.pinned_review_range(invalid_base, invalid_candidate)
+
     def git(self, cwd, *args):
         rc, out = pilot._git(cwd, *args)
         self.assertEqual(rc, 0, out)
