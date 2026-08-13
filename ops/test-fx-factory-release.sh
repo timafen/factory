@@ -146,7 +146,7 @@ GATE
   : >"$case_dir/handshake-events"
   : >"$case_dir/spoof-events"
 
-cat >"$case_dir/bin/git" <<'EOF'
+  cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
 printf 'untrusted-git-invoked\n' >>"$TEST_SPOOF_EVENTS"
 case "$*" in
@@ -231,6 +231,15 @@ RELEASE_GATE
   *'log -1 --pretty=%s'*) echo 'Merge pull request #123 from factory/readable-release' ;;
   *'log -1 --pretty=%B'*) printf 'Merge pull request #123 from factory/readable-release\n\nПроверочный релиз (#123)\n' ;;
 esac
+EOF
+  cat >"$case_dir/trusted/git" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = git-error ]; then
+  for argument in "$@"; do
+    [ "$argument" != diff-tree ] || exit 66
+  done
+fi
+exec /usr/bin/git "$@"
 EOF
   cat >"$case_dir/bin/npm" <<'EOF'
 #!/bin/bash
@@ -667,6 +676,7 @@ EOF
     -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
     -e "s|^TRUSTED_SUDO=.*$|TRUSTED_SUDO=$case_dir/trusted/sudo|" \
+    -e "s|^TRUSTED_GIT=.*$|TRUSTED_GIT=$case_dir/trusted/git|" \
     -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=$case_dir/trusted/node|" \
     -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
@@ -828,6 +838,109 @@ run_crash_cleanup() {
   done
 }
 
+commit_fixture_change() {
+  local case_dir=$1 kind=$2 repo="$1/repo"
+  local -a paths
+  case "$kind" in
+    docs)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ с пробелом в имени\n' >"$repo/knowledge/release notes.md"
+      paths=('knowledge/release notes.md')
+      ;;
+    docs-whitespace)
+      mkdir -p "$repo/knowledge"
+      printf 'Неверный Markdown  \n' >"$repo/knowledge/broken.md"
+      paths=(knowledge/broken.md)
+      ;;
+    go)
+      printf 'package fixture\n' >"$repo/fixture.go"
+      paths=(fixture.go)
+      ;;
+    mixed)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/guide.md"
+      printf 'package fixture\n' >"$repo/fixture.go"
+      paths=(knowledge/guide.md fixture.go)
+      ;;
+    mode)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/executable.md"
+      chmod +x "$repo/knowledge/executable.md"
+      paths=(knowledge/executable.md)
+      ;;
+    symlink)
+      ln -s /dev/null "$repo/guide.md"
+      paths=(guide.md)
+      ;;
+    rename)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/old.md"
+      /usr/bin/git -C "$repo" add -- knowledge/old.md && /usr/bin/git -C "$repo" commit -qm 'Базовый документ'
+      /usr/bin/git -C "$repo" mv knowledge/old.md knowledge/new.md
+      paths=(knowledge/new.md)
+      ;;
+    copy)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/original.md"
+      /usr/bin/git -C "$repo" add -- knowledge/original.md && /usr/bin/git -C "$repo" commit -qm 'Базовый документ'
+      cp "$repo/knowledge/original.md" "$repo/knowledge/copy.md"
+      paths=(knowledge/copy.md)
+      ;;
+    merge)
+      /usr/bin/git -C "$repo" checkout -qb documentation-branch
+      mkdir -p "$repo/knowledge"
+      printf 'Документ из ветки\n' >"$repo/knowledge/branch.md"
+      /usr/bin/git -C "$repo" add -- knowledge/branch.md
+      /usr/bin/git -C "$repo" commit -qm 'Документ в ветке'
+      /usr/bin/git -C "$repo" checkout -q main
+      printf 'Документ из основной ветки\n' >"$repo/knowledge/main.md"
+      /usr/bin/git -C "$repo" add -- knowledge/main.md
+      /usr/bin/git -C "$repo" commit -qm 'Документ в основной ветке'
+      /usr/bin/git -C "$repo" merge --no-ff -qm 'Слить документы' documentation-branch
+      return
+      ;;
+    root)
+      /usr/bin/git -C "$repo" checkout --orphan documentation-root
+      /usr/bin/git -C "$repo" rm -rf --cached . >/dev/null
+      /usr/bin/git -C "$repo" add -f web ops pilot intake
+      /usr/bin/git -C "$repo" commit -qm 'Документ без родителя'
+      /usr/bin/git -C "$repo" branch -M main
+      return
+      ;;
+    empty)
+      /usr/bin/git -C "$repo" commit --allow-empty -qm 'Пустое изменение'
+      return
+      ;;
+    submodule)
+      submodule_sha=$(/usr/bin/git -C "$repo" rev-parse HEAD)
+      /usr/bin/git -C "$repo" update-index --add --cacheinfo "160000,$submodule_sha,modules/fixture"
+      /usr/bin/git -C "$repo" commit -qm 'Добавить подмодуль'
+      return
+      ;;
+    git-error)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ для ошибки Git\n' >"$repo/knowledge/git-error.md"
+      paths=(knowledge/git-error.md)
+      ;;
+    newline)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ с переводом строки в имени\n' >"$repo/knowledge/"$'line\nbreak.md'
+      paths=($'knowledge/line\nbreak.md')
+      ;;
+  esac
+  /usr/bin/git -C "$repo" add -- "${paths[@]}"
+  /usr/bin/git -C "$repo" commit -qm "Проверка $kind"
+}
+
+assert_full_gate() {
+  local case_dir=$1
+  grep -F 'npm ci --no-audit --no-fund --silent' "$case_dir/gates" >/dev/null \
+    || fail "${case_dir##*/} unexpectedly skipped npm ci"
+  for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' 'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+    grep -Fx "$gate" "$case_dir/gates" >/dev/null || fail "${case_dir##*/} did not run $gate"
+  done
+}
+
 if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
   run_crash_cleanup
   echo "PASS: crash-cleanup scenarios recovered every journal phase"
@@ -879,6 +992,59 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+docs_only="$temporary/docs-only"
+make_fixture "$docs_only" parallel-success
+commit_fixture_change "$docs_only" docs
+run_release "$docs_only" parallel-success \
+  || { cat "$docs_only/output" >&2; fail "Markdown-only release failed"; }
+grep -F 'документное изменение: проверяю Markdown лёгкими воротами' "$docs_only/output" >/dev/null \
+  || { cat "$docs_only/output" >&2; fail "Markdown-only release did not report the light gate"; }
+! grep -F 'npm ci --no-audit --no-fund --silent' "$docs_only/gates" >/dev/null 2>&1 \
+  || fail "Markdown-only release ran npm ci"
+for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' 'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  ! grep -Fx "$gate" "$docs_only/gates" >/dev/null 2>&1 || fail "Markdown-only release ran $gate"
+done
+grep -F 'npx vite build' "$docs_only/gates" >/dev/null || fail "Markdown-only release skipped the existing build"
+grep -F 'выкачено:' "$docs_only/output" >/dev/null || fail "Markdown-only release did not deploy"
+
+for kind in go mixed mode symlink rename copy; do
+  full_gate="$temporary/full-gate-$kind"
+  make_fixture "$full_gate" parallel-success
+  commit_fixture_change "$full_gate" "$kind"
+  run_release "$full_gate" parallel-success \
+    || { cat "$full_gate/output" >&2; fail "$kind fixture release failed"; }
+  assert_full_gate "$full_gate"
+done
+
+for kind in merge root empty submodule newline; do
+  full_gate="$temporary/fail-closed-$kind"
+  make_fixture "$full_gate" parallel-success
+  commit_fixture_change "$full_gate" "$kind"
+  run_release "$full_gate" parallel-success \
+    || { cat "$full_gate/output" >&2; fail "$kind fixture release failed"; }
+  assert_full_gate "$full_gate"
+done
+
+git_error="$temporary/fail-closed-git-error"
+make_fixture "$git_error" parallel-success
+commit_fixture_change "$git_error" git-error
+run_release "$git_error" git-error \
+  || { cat "$git_error/output" >&2; fail "Git error fixture release failed"; }
+assert_full_gate "$git_error"
+
+bad_markdown="$temporary/docs-whitespace"
+make_fixture "$bad_markdown" parallel-success
+commit_fixture_change "$bad_markdown" docs-whitespace
+set +e
+run_release "$bad_markdown" parallel-success
+bad_markdown_status=$?
+set -e
+[ "$bad_markdown_status" -ne 0 ] || fail "bad Markdown unexpectedly deployed"
+grep -F 'Markdown не прошёл git diff --check' "$bad_markdown/output" >/dev/null \
+  || fail "bad Markdown did not stop at diff check"
+[ ! -s "$bad_markdown/gates" ] || fail "bad Markdown started a build or heavy gate"
+[ ! -s "$bad_markdown/events" ] || fail "bad Markdown mutated services"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup
