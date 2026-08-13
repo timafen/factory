@@ -26,6 +26,7 @@ LAUNCHER=$LIBEXEC/factory-browser-sandbox
 HELPER=$LIBEXEC/factory-browser-isolated
 CONFIG=$LIBEXEC/factory-browser.conf
 STATE=$LIBEXEC/factory-browser-install.state
+RUNTIME=$LIBEXEC/browser-runtime
 SUDOERS=${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}
 APPARMOR=${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}
 DATA_HOME=${FACTORY_DATA_HOME:-/opt/factory-data}
@@ -48,10 +49,9 @@ rollback() {
     # The replacement profile may already be active when the live smoke fails.
     # Remove it before restoring the previous on-disk profile.
     apparmor_parser -R "$APPARMOR" >/dev/null 2>&1 || true
-    for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$SUDOERS" "$APPARMOR"; do
+    for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$RUNTIME" "$SUDOERS" "$APPARMOR"; do
       name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
-      rm -f -- "$target"
-      rm -f -- "$target.new"
+      rm -rf -- "$target" "$target.new"
       [ ! -e "$backup/$name" ] && [ ! -L "$backup/$name" ] || cp -a -- "$backup/$name" "$target"
     done
     if [ -f "$APPARMOR" ]; then
@@ -77,6 +77,8 @@ FACTORY_HOME=$(getent passwd "$FACTORY_USER" | cut -d: -f6)
 
 [ -f "$PAYLOAD/web/package.json" ]
 [ -f "$PAYLOAD/web/package-lock.json" ]
+[ -f "$PAYLOAD/web/report/capture.mjs" ]
+[ -f "$PAYLOAD/web/report/render.mjs" ]
 [ -x "$PAYLOAD/ops/factory-browser-sandbox" ]
 [ -x "$PAYLOAD/ops/factory-browser-isolated" ]
 [ -x "$PAYLOAD/ops/test-browser-sandbox.sh" ]
@@ -140,7 +142,7 @@ install -d -o root -g root -m 755 "$LIBEXEC"
 install -d -o root -g root -m 755 "$(dirname "$SUDOERS")"
 install -d -o root -g root -m 755 "$(dirname "$APPARMOR")"
 backup=$(mktemp -d "$LIBEXEC/.factory-browser-backup.XXXXXX")
-for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR"; do
+for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$RUNTIME" "$SUDOERS" "$APPARMOR"; do
   if [ -e "$target" ] || [ -L "$target" ]; then
     name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
     cp -a -- "$target" "$backup/$name"
@@ -150,6 +152,12 @@ changed=1
 
 install -o root -g root -m 755 "$PAYLOAD/ops/factory-browser-sandbox" "$LAUNCHER.new"
 install -o root -g root -m 755 "$PAYLOAD/ops/factory-browser-isolated" "$HELPER.new"
+rm -rf -- "$RUNTIME.new"
+install -d -o root -g root -m 755 "$RUNTIME.new" "$RUNTIME.new/node_modules"
+install -o root -g root -m 644 "$PAYLOAD/web/package.json" "$RUNTIME.new/package.json"
+cp -a -- "$PAYLOAD/web/node_modules/playwright" "$RUNTIME.new/node_modules/playwright"
+cp -a -- "$PAYLOAD/web/node_modules/playwright-core" "$RUNTIME.new/node_modules/playwright-core"
+chown -R root:root "$RUNTIME.new"
 {
   printf 'FACTORY_BROWSER_EXECUTABLE=%q\n' "$browser"
   printf 'FACTORY_BROWSER_USER=%q\n' "$FACTORY_USER"
@@ -180,10 +188,16 @@ apparmor_parser -Q "$APPARMOR.new" >/dev/null
 mv -f -- "$LAUNCHER.new" "$LAUNCHER"
 mv -f -- "$HELPER.new" "$HELPER"
 mv -f -- "$CONFIG.new" "$CONFIG"
+rm -rf -- "$RUNTIME"
+mv -f -- "$RUNTIME.new" "$RUNTIME"
 mv -f -- "$SUDOERS.new" "$SUDOERS"
 mv -f -- "$APPARMOR.new" "$APPARMOR"
 step "разрешаю user namespace только установленному Chromium"
 apparmor_parser -r "$APPARMOR" >/dev/null
+
+step "проверяю установленный Playwright runtime"
+sudo -H -u "$FACTORY_USER" env FACTORY_BROWSER_RUNTIME="$RUNTIME" node -e \
+  'const {createRequire}=require("node:module");const p=require("node:path");const {chromium}=createRequire(p.join(process.env.FACTORY_BROWSER_RUNTIME,"package.json"))("playwright");if(!chromium||typeof chromium.launch!=="function")process.exit(2)'
 
 step "запускаю живую проверку Chromium sandbox и сетевого allowlist"
 smoke_output=$backup/browser-smoke.log

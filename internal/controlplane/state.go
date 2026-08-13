@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
@@ -126,6 +127,11 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 		  ON wr.worker_id = ? AND wr.repository_id = t.repository_id
 		WHERE e.required_runtime = ?
 		  AND e.state = 'queued'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM visual_captures vc
+		      WHERE vc.work_id = t.work_id AND vc.phase = 'before'
+		        AND vc.status IN ('pending', 'running', 'missing')
+		  )
 		  AND wr.advertised = 1
 		  AND wr.retained_count + (
 		      SELECT COUNT(*)
@@ -668,6 +674,20 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 		WHERE id = ? AND state IN ('preparing', 'running')
 	`, executionState, retryIncrement, now, lease.executionID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
+	}
+	if input.State == "succeeded" && !notReady {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO visual_captures(work_id,phase,status,updated_at)
+			SELECT target.work_id,'after','pending',?
+			FROM executions execution
+			JOIN tasks task ON task.id=execution.task_id
+			JOIN task_visual_targets target ON target.work_id=task.work_id
+			WHERE execution.id=? AND (target.after_workflow_title='' OR target.after_workflow_title=task.workflow_title)
+			ON CONFLICT(work_id,phase) DO NOTHING
+		`, time.UnixMilli(now).UTC().Format(time.RFC3339Nano), lease.executionID)
+		if err != nil {
+			return protocol.Attempt{}, unavailable(err)
+		}
 	}
 	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now, "terminal"); err != nil {
 		return protocol.Attempt{}, unavailable(err)

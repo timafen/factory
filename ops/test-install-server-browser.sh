@@ -16,11 +16,13 @@ share="$temporary/share"
 libexec="$temporary/libexec"
 test_bin="$temporary/bin"
 factory_home="$temporary/factory-home"
-mkdir -p "$share/ops" "$share/web" "$test_bin" "$factory_home"
+mkdir -p "$share/ops" "$share/web/report" "$test_bin" "$factory_home"
 cp "$INSTALLER" "$share/ops/install-server-browser.sh"
 cp "$SCRIPT_DIR/factory-browser-sandbox" "$share/ops/factory-browser-sandbox"
 cp "$SCRIPT_DIR/factory-browser-isolated" "$share/ops/factory-browser-isolated"
 cp "$SCRIPT_DIR/test-browser-sandbox.sh" "$share/ops/test-browser-sandbox.sh"
+cp "$SCRIPT_DIR/../web/report/capture.mjs" "$share/web/report/capture.mjs"
+cp "$SCRIPT_DIR/../web/report/render.mjs" "$share/web/report/render.mjs"
 cat >"$share/ops/test-systemd-browser-firewall.sh" <<'SH'
 #!/bin/bash
 printf 'bpf-probe=pass\n' >>"$TEST_BROWSER_EVENTS"
@@ -29,6 +31,7 @@ SH
 printf '{"name":"factory-browser-install-test"}\n' >"$share/web/package.json"
 printf '{"lockfileVersion":3}\n' >"$share/web/package-lock.json"
 mkdir -p "$share/web/node_modules/playwright" \
+  "$share/web/node_modules/playwright-core" \
   "$factory_home/.cache/ms-playwright/chromium-1234/chrome-linux64"
 cat >"$share/web/node_modules/playwright/index.js" <<'JS'
 const fs = require("node:fs");
@@ -91,6 +94,13 @@ exports.chromium = {
           },
           async screenshot(options) {
             fs.writeFileSync(options.path, "screenshot");
+          },
+          async route(pattern) {
+            fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `route=${pattern}\n`);
+          },
+          async setContent() {},
+          async pdf(options) {
+            fs.writeFileSync(options.path, "%PDF-installed-runtime");
           },
           async close() {
             fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `page-close=${pageId}\n`);
@@ -324,6 +334,9 @@ grep -Fx 'chromium-args=--from-playwright' "$temporary/events" >/dev/null \
   || fail "Playwright не запустил Chromium через изолированный launcher"
 cmp -s "$share/ops/factory-browser-sandbox" "$libexec/factory-browser-sandbox" \
   || fail "browser launcher не установлен"
+[ -f "$libexec/browser-runtime/package.json" ] \
+  && [ -f "$libexec/browser-runtime/node_modules/playwright/index.js" ] \
+  || fail "Playwright runtime не установлен в стабильный каталог"
 grep -Fx 'bpf-probe=pass' "$temporary/events" >/dev/null \
   || fail "installer не проверил поддержку systemd BPF firewall"
 grep -F 'IPAddressDeny=any' "$temporary/events" >/dev/null \
@@ -385,6 +398,13 @@ readiness_marker="$FACTORY_DATA_HOME/pilot/browser-readiness.json"
 [ -f "$readiness_marker" ] || fail "успешный sandbox smoke не создал browser readiness marker"
 grep -E '^\{"passed_at":"[0-9TZ:-]+","browser_fingerprint":"[a-f0-9]{64}"\}$' \
   "$readiness_marker" >/dev/null || fail "browser readiness marker содержит лишние или неверные поля"
+runtime_pdf="$temporary/installed-runtime.pdf"
+TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  PATH="$test_bin:$PATH" FACTORY_BROWSER_RUNTIME="$libexec/browser-runtime" \
+  FACTORY_BROWSER_LAUNCHER="$libexec/factory-browser-sandbox" \
+  node "$share/web/report/render.mjs" "$runtime_pdf" <<<'<h1>runtime</h1>' \
+  || fail "PDF renderer не запустился на установленном Chromium runtime"
+grep -q '^%PDF-' "$runtime_pdf" || fail "установленный runtime не создал PDF"
 
 # A second identical release still proves the browser works, but must not
 # download it or reinstall its system dependencies.
@@ -675,8 +695,9 @@ for unsafe_argument in \
 done
 
 rollback="$temporary/rollback"
-mkdir -p "$rollback/libexec" "$rollback/release"
+mkdir -p "$rollback/libexec/browser-runtime" "$rollback/release"
 printf 'previous launcher\n' >"$rollback/release/factory-browser-sandbox"
+printf 'previous runtime\n' >"$rollback/libexec/browser-runtime/version"
 ln -s "$rollback/release/factory-browser-sandbox" "$rollback/libexec/factory-browser-sandbox"
 status=0
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
@@ -693,6 +714,8 @@ grep -Fx 'previous launcher' "$rollback/libexec/factory-browser-sandbox" >/dev/n
   || fail "безопасный откат не сохранил прежний launcher"
 [ ! -e "$rollback/libexec/factory-browser-isolated" ] \
   || fail "ошибка smoke оставила новый root helper"
+grep -Fx 'previous runtime' "$rollback/libexec/browser-runtime/version" >/dev/null \
+  || fail "безопасный откат не вернул предыдущий Playwright runtime"
 [ ! -e "$rollback/libexec/factory-browser.conf" ] \
   || fail "ошибка smoke оставила новую browser config"
 [ ! -e "$rollback/sudoers/factory-browser" ] \
