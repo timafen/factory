@@ -4994,6 +4994,19 @@ class PlanTerminologyTest(unittest.TestCase):
         self.assertEqual(migrated["kind"], "idea")
         self.assertTrue(migrated["key"].startswith("idea|"))
 
+    def test_repeated_terminal_finding_keeps_project_source_and_notifies_once(self):
+        report = "НАХОДКА: Починить таймаут сборки — очередь зависает"
+
+        pilot.collect_ideas(report, "repo-7", "Работа выпуска · задача task-9")
+        pilot.collect_ideas(report, "repo-7", "Работа выпуска · задача task-9")
+
+        findings = pilot.ideas_all()
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["repo"], "repo-7")
+        self.assertEqual(findings[0]["source"],
+                         "Работа выпуска · задача task-9")
+        pilot.notify.assert_called_once()
+
 
 class PlanAutostartTest(unittest.TestCase):
     def setUp(self):
@@ -5023,23 +5036,28 @@ class PlanAutostartTest(unittest.TestCase):
             {"id": "pipeline", "title": "[auto] [1/1 Triage] Work",
              "request_key": "regular-task", "state": "succeeded"},
         ]
-        detail = {
-            "task": {"repository_id": "repo-1"},
-            "workflow": {"title": "Factory Patrol"},
-            "attempts": [{"result": "НАХОДКА: Offline worker - stale worktrees"}],
-        }
+        def detail(path):
+            task_id = path.rsplit("/", 1)[-1]
+            return {
+                "task": {"repository_id": "repo-1"},
+                "workflow": {"title": "Factory Patrol"},
+                "attempts": [{"result":
+                              "НАХОДКА: Offline worker - stale worktrees"}],
+                "id": task_id,
+            }
         state = {}
 
-        with mock.patch.object(pilot, "api", return_value=detail) as api, \
+        with mock.patch.object(pilot, "api", side_effect=detail) as api, \
                 mock.patch.object(pilot, "collect_ideas", return_value=1) as collect:
-            self.assertEqual(pilot.collect_automation_findings(state, tasks), 1)
+            self.assertEqual(pilot.collect_automation_findings(state, tasks), 2)
             self.assertEqual(pilot.collect_automation_findings(state, tasks), 0)
 
-        api.assert_called_once_with("/tasks/automation-ok")
-        collect.assert_called_once_with(
-            "НАХОДКА: Offline worker - stale worktrees",
-            "repo-1",
-            "Automation: Factory Patrol",
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(collect.call_count, 2)
+        self.assertEqual(
+            {call.args[2] for call in collect.call_args_list},
+            {"Automation: Factory Patrol · задача automation-ok",
+             "Automation: Factory Patrol · задача automation-failed"},
         )
         self.assertEqual(
             state["automation_results_processed"],
@@ -5957,9 +5975,11 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.question_dir = os.path.join(self.temporary.name, "questions")
         self.conf_path = os.path.join(self.temporary.name, "config.json")
+        self.retry_path = os.path.join(self.temporary.name, "technical-retries.json")
         self.patches = (
             mock.patch.object(pilot, "QUESTION_DIR", self.question_dir),
             mock.patch.object(pilot, "CONF_PATH", self.conf_path),
+            mock.patch.object(pilot, "TECHNICAL_RETRIES_PATH", self.retry_path),
         )
         for patcher in self.patches:
             patcher.start()
@@ -6128,6 +6148,28 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
         self.assertEqual(verdict["decision"], "wait")
         self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
+
+    def test_classifier_failure_is_durable_technical_retry_not_owner_question(self):
+        with mock.patch.object(pilot, "brain", side_effect=TimeoutError("secret")):
+            verdict = pilot.orchestrator_answer(
+                {"auto_answer": True}, "Triage", "Работа", "таймаут",
+                "Как исправить среду?", "НАХОДКА: Починить очередь")
+        self.assertEqual(verdict["decision"], "technical_retry")
+        self.assertNotIn("secret", verdict["reason"])
+
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "write_question") as write_question, \
+                mock.patch.object(pilot, "notify") as notify:
+            self.assertFalse(pilot.route_question(
+                self.conf, "failed-classifier", "Triage", "Specification",
+                "Работа", "repo-id", "таймаут", "Как исправить среду?", [],
+                "НАХОДКА: Починить очередь"))
+
+        write_question.assert_not_called()
+        notify.assert_not_called()
+        retry = pilot.load(self.retry_path, {})["failed-classifier"]
+        self.assertEqual(retry["repository_id"], "repo-id")
+        self.assertIn("TimeoutError", retry["reason"])
 
     def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
         self.conf["stages"] = [
