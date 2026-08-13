@@ -2,16 +2,22 @@
 
 ## HEAD
 
-- Implementation commit: 345aface075ed562ee970b21544b4672869228d9 — одноразовая утилита и разведение исторических дублей номеров карточек.
+- Implementation commit: 19cbdceb1dea07723ca387eb07a0ea01d2080bec — одноразовая утилита и разведение исторических дублей номеров карточек.
 - Status: Implemented — awaiting review.
-- Branch: `factory/13285b85-081-0b0922cf-67c`.
-- Head commit: `61628e7` (проверенный снимок дополнительного сценария патруля).
+- Branch: `factory/c60402b7-393-9d08efb8-7d0`.
 - Specification: `knowledge/specs/internal-factory-pipeline-patrol.md`.
 - What changed: патруль по-прежнему обрабатывает только канонические автоматические задачи; добавлена защита от произвольного заголовка, который не создаёт ни остановку, ни новый этап.
 - Evidence: `python3 -m unittest pilot.test_pilot.PipelineWatchTests` → 7 tests OK; `python3 -m unittest pilot.test_pilot` → 36 tests OK; `git diff --check` → OK.
 - One next action: проверить и влить поставку в `main`.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Исправлена ссылка HEAD после переноса карточки: вместо недоступного коммита
+указан реальный коммит этой ветки с утилитой и целевыми тестами разведения
+исторических дублей. Проверка `git merge-base --is-ancestor` подтверждает,
+что реализация является предком ветки и меняет файлы вне `knowledge/cards/`.
 
 ### 2026-08-09 — Implement
 
