@@ -869,6 +869,13 @@ commit_fixture_change() {
       /usr/bin/git -C "$repo" mv knowledge/old.md knowledge/new.md
       paths=(knowledge/old.md knowledge/new.md)
       ;;
+    copy)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ\n' >"$repo/knowledge/original.md"
+      /usr/bin/git -C "$repo" add -- knowledge/original.md && /usr/bin/git -C "$repo" commit -qm 'Базовый документ'
+      cp "$repo/knowledge/original.md" "$repo/knowledge/copy.md"
+      paths=(knowledge/copy.md)
+      ;;
     merge)
       /usr/bin/git -C "$repo" checkout -qb documentation-branch
       mkdir -p "$repo/knowledge"
@@ -1010,7 +1017,7 @@ done
 grep -F 'npx vite build' "$docs_only/gates" >/dev/null || fail "Markdown-only release skipped the existing build"
 grep -F 'выкачено:' "$docs_only/output" >/dev/null || fail "Markdown-only release did not deploy"
 
-for kind in go mixed mode symlink rename; do
+for kind in go mixed mode symlink rename copy; do
   full_gate="$temporary/full-gate-$kind"
   make_fixture "$full_gate" parallel-success
   commit_fixture_change "$full_gate" "$kind"
