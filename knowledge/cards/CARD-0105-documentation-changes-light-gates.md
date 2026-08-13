@@ -1,13 +1,18 @@
-Implementation commit: 76d16c5191dcc8c44a001ffb71dbbaebf183f573 — текущий защищённый выпуск фиксирует Gate в доверенных Git-объектах и всегда запускает полный набор проверок; облегчение документного пути ещё не реализовано.
+Implementation commit: 32f901785a5c70f3a448292b6bd96423f1da35aa — Markdown-only кандидаты после доверенного checkout проходят `git diff --check`, а все сомнительные изменения сохраняют полный Gate.
 
 # CARD-0105 — Документные изменения проходят лёгкие ворота
 
 ## HEAD
 
-- Status: Specification ready — implementation not started.
-- Branch: `factory/582fc43b-7d6-1deacb08-914`.
-- Owner outcome: изменения только обычных Markdown-файлов не ждут неизменившиеся
-  UI/Go тесты, а любой сомнительный diff автоматически получает полный Gate.
+- Status: Implemented — ready for verification.
+- Branch: `factory/6cde39c6-851-9e21a67b-306`.
+- Implementation commit: `32f901785a5c70f3a448292b6bd96423f1da35aa`.
+- What changed: raw NUL-delimited diff допускает только непустые обычные `.md`
+  и запускает `git diff --check`; mode, symlink, rename, смешанные и кодовые
+  изменения продолжают идти через полный UI+Go+release Gate.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` →
+  PASS; `bash ops/test-fx-factory-release.sh` → PASS.
+- Next action: проверить изменения независимым review перед слиянием.
 
 ## Контракт реализации
 
@@ -31,3 +36,12 @@ Implementation commit: 76d16c5191dcc8c44a001ffb71dbbaebf183f573 — текущи
 - `ops/test-fx-factory-release.sh`
 
 Спецификация: `knowledge/specs/documentation-changes-light-gates.md`.
+
+## LOG
+
+### 2026-08-12 — Implement
+
+Добавлен fail-closed классификатор raw NUL-delimited diff после доверенного
+checkout. Markdown-only fixture подтверждает лёгкие ворота и поставку; fixtures
+для Go, mixed, mode, symlink и rename подтверждают полный Gate, а whitespace
+останавливает выпуск до сборки и мутаций. `bash ops/test-fx-factory-release.sh` — PASS.
