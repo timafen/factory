@@ -112,7 +112,7 @@
 
 ## Карточка
 
-`knowledge/cards/CARD-0043-overview-project-products.md`
+`knowledge/cards/CARD-0119-overview-project-products.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py

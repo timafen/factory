@@ -174,7 +174,7 @@ SDK в Factory не добавляется.
 
 ## Card
 
-`knowledge/cards/CARD-0038-sandbox-ebay-owner-consent.md`
+`knowledge/cards/CARD-0115-sandbox-ebay-owner-consent.md`
 
 ## Проверяемые обещания
 
