@@ -52,7 +52,10 @@ type PIDDeliveryExecutor interface {
 	ExecuteDeliveryWithPID(context.Context, string, string, string, func(int) bool) string
 }
 
-type FXExecutor struct{ Executable string }
+type FXExecutor struct {
+	Executable               string
+	FactoryReleaseExecutable string
+}
 
 func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
 	return e.ExecuteDelivery(ctx, adapter, sha, "")
@@ -63,11 +66,7 @@ func (e FXExecutor) ExecuteDelivery(ctx context.Context, adapter, sha, operation
 }
 
 func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, operationID string, started func(int) bool) string {
-	executable := e.Executable
-	if executable == "" {
-		executable = "/usr/local/bin/fx"
-	}
-	args, ok := invocation(adapter, sha)
+	executable, args, ok := e.invocation(adapter, sha)
 	if !ok {
 		return "failed"
 	}
@@ -99,15 +98,37 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 	return "rollback_failed"
 }
 
+func (e FXExecutor) invocation(adapter, sha string) (string, []string, bool) {
+	if !commitSHAPattern.MatchString(sha) {
+		return "", nil, false
+	}
+	if adapter == "fx-factory-release" || adapter == "fx-factory-rollback" {
+		executable := e.FactoryReleaseExecutable
+		if executable == "" {
+			executable = "/usr/local/lib/fx-factory-release"
+		}
+		if adapter == "fx-factory-release" {
+			return executable, []string{sha}, true
+		}
+		return executable, []string{"--rollback"}, true
+	}
+	executable := e.Executable
+	if executable == "" {
+		executable = "/usr/local/bin/fx"
+	}
+	args, ok := invocation(adapter, sha)
+	return executable, args, ok
+}
+
 func invocation(adapter, sha string) ([]string, bool) {
 	switch adapter {
 	case "fx-factory-release":
 		if commitSHAPattern.MatchString(sha) {
-			return []string{"factory", "release", sha}, true
+			return []string{sha}, true
 		}
 	case "fx-factory-rollback":
 		if commitSHAPattern.MatchString(sha) {
-			return []string{"factory", "rollback"}, true
+			return []string{"--rollback"}, true
 		}
 	case "tarser-staging-deploy-release":
 		if commitSHAPattern.MatchString(sha) {

@@ -173,18 +173,20 @@ func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
 }
 
 func TestFXExecutorMapsEveryAdapterToFixedArgv(t *testing.T) {
+	executor := FXExecutor{}
 	for adapter, want := range map[string]string{
-		"fx-factory-release":            "factory release " + testSHA,
-		"fx-factory-rollback":           "factory rollback",
-		"tarser-staging-deploy-release": "staging release " + testSHA,
-		"tarser-staging-auto-rollback":  "staging rollback",
+		"fx-factory-release":            "/usr/local/lib/fx-factory-release " + testSHA,
+		"fx-factory-rollback":           "/usr/local/lib/fx-factory-release --rollback",
+		"tarser-staging-deploy-release": "/usr/local/bin/fx staging release " + testSHA,
+		"tarser-staging-auto-rollback":  "/usr/local/bin/fx staging rollback",
 	} {
-		args, ok := invocation(adapter, testSHA)
-		if !ok || strings.Join(args, " ") != want {
-			t.Fatalf("adapter %q argv=%q allowed=%v", adapter, args, ok)
+		executable, args, ok := executor.invocation(adapter, testSHA)
+		got := strings.TrimSpace(executable + " " + strings.Join(args, " "))
+		if !ok || got != want {
+			t.Fatalf("adapter %q invocation=%q allowed=%v", adapter, got, ok)
 		}
 	}
-	if _, ok := invocation("anything", testSHA); ok {
+	if _, _, ok := executor.invocation("anything", testSHA); ok {
 		t.Fatal("unknown adapter was allowed")
 	}
 }
@@ -194,7 +196,7 @@ func TestFXExecutorRecognizesFactoryAutomaticRollback(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 6\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if status := (FXExecutor{Executable: executable}).Execute(context.Background(), "fx-factory-release", testSHA); status != "release_failed_rolled_back" {
+	if status := (FXExecutor{FactoryReleaseExecutable: executable}).Execute(context.Background(), "fx-factory-release", testSHA); status != "release_failed_rolled_back" {
 		t.Fatalf("status=%q, want release_failed_rolled_back", status)
 	}
 }

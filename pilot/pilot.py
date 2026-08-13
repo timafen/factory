@@ -6629,7 +6629,9 @@ def release_train_block(state, tasks, now=None):
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime(retry_at))
 
             terminal = [generation for generation in generations.values()
-                        if isinstance(generation, dict) and generation.get("phase") in ("completed", "failed")]
+                        if isinstance(generation, dict)
+                        and generation is not current
+                        and generation.get("phase") in ("completed", "failed")]
             if terminal:
                 previous = max(terminal, key=lambda generation: generation.get("sequence", -1))
                 item["previous"] = {
@@ -6762,6 +6764,21 @@ def _complete_generation(conf, state, generation):
         "generation_id": generation["id"], "status": "pending", "waits": list(generation["waits"].values())})
 
 
+def _fail_generation(state, target, generation, category, now):
+    """Persist one owner-safe event for a terminal train failure."""
+    generation["phase"] = "failed"
+    generation["failure_category"] = category
+    generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    event_id = generation["id"] + ":failed"
+    titles = [no_bare_hashes(str(wait.get("base") or "Работа из выпуска"))
+              for wait in generation.get("waits", {}).values() if isinstance(wait, dict)]
+    _delivery_state(state)["outbox"].setdefault(event_id, {
+        "id": event_id, "kind": "failed", "status": "pending",
+        "target": DELIVERY_TARGET_TITLES.get(target.get("id"), "Проект"),
+        "titles": titles, "category": category, "at": generation["finished_at"],
+    })
+
+
 def dispatch_delivery_outbox(conf, state):
     durable = _delivery_state(state)
     for item in durable["outbox"].values():
@@ -6769,12 +6786,20 @@ def dispatch_delivery_outbox(conf, state):
             continue
         # Journal first: local owner history is deduplicated even if the
         # process dies while the best-effort push transport is in flight.
-        _delivery_record_once(DELIVERY_OUTBOX_PATH, {"id": item["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        record = {"id": item["id"], "at": item.get("at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        if item.get("kind") == "failed":
+            record.update({key: item.get(key) for key in ("target", "titles", "category")})
+        _delivery_record_once(DELIVERY_OUTBOX_PATH, record)
         item["status"] = "journaled"
         save(STATE_PATH, state)
-        wait = item["waits"][0] if item["waits"] else {}
-        notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
-               click=wait.get("link") or f"{UI_BASE}/work", journal_id=item["id"])
+        if item.get("kind") == "failed":
+            names = " · ".join(item.get("titles") or []) or "названия работ недоступны"
+            notify(conf, "Выпуск не прошёл", f"{item.get('target', 'Проект')}: {names}",
+                   tags="warning", click=f"{UI_BASE}/", journal_id=item["id"])
+        else:
+            wait = item["waits"][0] if item["waits"] else {}
+            notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
+                   click=wait.get("link") or f"{UI_BASE}/work", journal_id=item["id"])
         item["status"] = "sent"
         save(STATE_PATH, state)
 
@@ -6822,14 +6847,10 @@ def poll_delivery_state(conf, state, now=None):
                 generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
                 save(STATE_PATH, state)
             elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
-                generation["phase"] = "failed"
-                generation["finished_at"] = time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                _fail_generation(state, target, generation, status, current_time)
                 save(STATE_PATH, state)
             elif response is None and generation["phase"] in ("launching", "running"):
-                generation["phase"] = "failed"  # status is authoritative; unknown fails closed
-                generation["finished_at"] = time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                _fail_generation(state, target, generation, "broker_status_unknown", current_time)
                 save(STATE_PATH, state)
         save(STATE_PATH, state)
         current = target.get("current_generation")

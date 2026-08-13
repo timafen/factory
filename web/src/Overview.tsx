@@ -141,6 +141,7 @@ function ReleaseTrainPanel({ snapshot }: { snapshot?: ReleaseTrainSnapshot | nul
         {train.previous && <div style={{ fontSize: 13 }}>
           Прошлый состав: {train.previous.state === "succeeded" ? "успешно" : "ошибка"}
           {train.previous.finished_at ? ` · ${new Date(train.previous.finished_at).toLocaleString("ru-RU")}` : " · время неизвестно"}
+          {train.previous.passengers.length > 0 ? ` · ${train.previous.passengers.map((p) => p.title).join(" · ")}` : ""}
         </div>}
         {train.next.retry_at && <div style={{ fontSize: 13 }}>Следующая попытка: {new Date(train.next.retry_at).toLocaleString("ru-RU")}</div>}
         {train.next.requested && <div style={{ fontSize: 13 }}>
