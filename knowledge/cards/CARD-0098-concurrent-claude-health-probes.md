@@ -1,19 +1,19 @@
 # CARD-0098 — Конкурентные Claude health-probe ждут занятый probe
 
+Implementation commit: b083860744997c99646b43a831a991e6df515d02 — health-check ограниченно ждёт совпадающую команду, не ослабляя общий неблокирующий запуск.
+
 ## HEAD
 
-- Status: Specification ready — awaiting Implement.
-- Branch: `factory/ef417a92-60f-4ef9bb7a-219`.
+- Status: Implemented and targeted tests PASS — awaiting Verify.
+- Branch: `factory/9eee6045-e93-89a5e39d-2d3`.
+- Implementation commit: b083860744997c99646b43a831a991e6df515d02 — health-check ограниченно ждёт совпадающую команду, не ослабляя общий неблокирующий запуск.
 - Specification: `knowledge/specs/concurrent-claude-health-probes.md`.
-- Owner impact: исправные Claude-службы с общим `cwd=/opt/factory` не будут
-  становиться `unhealthy` только из-за совпавших version/auth probes.
-- Safety boundary: общий `runCommand` сохраняет немедленный
-  `ErrCommandAlreadyRunning`; ограниченное ожидание разрешено только внутри
-  health-check и делит его прежний timeout с выполняемой командой.
-- Evidence required: конкурентный тест двух Claude health-check, отдельные
-  проверки настоящей ошибки, timeout и прежней семантики CARD-0061.
-- Next action: реализовать точный scope спецификации в `health.go` и
-  `health_test.go`, затем записать сюда полный implementation commit.
+- What changed: все короткие command-probe в `checkHealth` повторяют только
+  занятый идентичный запуск и делят ожидание с прежним timeout проверки.
+- What changed: общий `runCommand` и остальные вызывающие стороны не менялись.
+- Evidence: обязательные 4 целевых теста с `-count=10` → PASS; `go vet
+  ./internal/worker` и `git diff --check` → PASS.
+- One next action: Verify выполняет один полный `go test ./... -count=1`.
 
 ## LOG
 
@@ -33,3 +33,11 @@ CARD-0061 ввела глобальный неблокирующий `flock` п�
 подтвердить два здоровых конкурентных Claude check, отсутствие второго процесса,
 настоящую CLI-ошибку, ограниченный timeout и неизменный немедленный возврат
 `ErrCommandAlreadyRunning` из общего `runCommand`.
+
+### 2026-08-12 — Implement
+
+`checkHealth` получил локальное context-aware ожидание только для
+`ErrCommandAlreadyRunning`: конкурентные Claude probes теперь проходят
+последовательно в рамках прежнего timeout, а общая дедупликация команд остаётся
+неблокирующей. Четыре обязательных теста прошли десять раз подряд; отдельно
+успешны `go vet ./internal/worker` и `git diff --check`.
