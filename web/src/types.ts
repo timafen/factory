@@ -162,6 +162,7 @@ export interface Task {
   timeout_seconds: number;
   state: TaskState;
   created_at: string;
+  is_patrol?: boolean;
 }
 
 export interface TaskPage {

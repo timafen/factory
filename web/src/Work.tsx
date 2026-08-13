@@ -118,7 +118,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     const id = t.work_id?.trim() || base;
     // The API excludes Patrol occurrences. Keep this durable work metadata
     // guard so a stale/cached task page cannot put them back into any section.
-    if ((works[id] ?? works[base])?.origin === "patrol") continue;
+    if (t.is_patrol || (works[id] ?? works[base])?.origin === "patrol") continue;
     const v = verdicts[t.id];
     const g = map.get(id) ?? {
       id, base, items: [], latest: t,
