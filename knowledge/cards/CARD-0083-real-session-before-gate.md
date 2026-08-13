@@ -2,15 +2,22 @@
 
 ## HEAD
 
-Status: READY FOR REVIEW: чистый host bootstrap выполним, а cgroup удаляется только после остановки всех Gate-процессов.
-Branch: factory/b795a128-396-e4ee8365-bfc.
-Implementation commit: c1e976a6f0e85b2355962094774caf632ff6bd19 — добавлены полный root-bootstrap, TERM/KILL cleanup и проверка атомарного отката.
-What changed: `ops/README.md` даёт точные root-команды создания защищённого `/run/factory-release-gate/bootstrap-*`, live probe и проверки marker.
-What changed: cleanup ограниченно ждёт после TERM, затем посылает KILL через helper, повторно проверяет пустоту cgroup и только потом удаляет её.
-Evidence: shell release/bootstrap/helper/installer tests → PASS (root live probe → SKIP без root); Go tests/build и 160 UI tests/build → PASS.
-One next action: выполнить root-процедуру из `ops/README.md` на новом cgroup v2-хосте и проверить созданный marker.
+Status: READY FOR REVIEW: root bootstrap проверяет доверенность всей цепочки каталогов до записи.
+Branch: factory/c9a80d7c-bca-bb0af44b-32c.
+Implementation commit: a150c199a2a398bdb7670b86428fb9f7bfa30887 — добавлены preflight owner/mode цепочки target-каталогов и регрессия writable parent.
+What changed: `ops/install-factory-control.sh` до первого `mkdir`, `mktemp` или `mv` проверяет цепочку bootstrap-назначений; отсутствующие каталоги создаются root:root с 0755.
+What changed: небезопасный owner, group/world write, symlink или неканонический путь останавливает bootstrap без записи.
+Evidence: целевые shell-тесты → PASS/SKIP по root-only cgroup probe; `bash -n`, `git diff --check` → PASS.
+One next action: выполнить root bootstrap и живой cgroup probe на целевом cgroup v2-хосте.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Ветка пересобрана от свежего `origin/main`; root bootstrap теперь сначала
+проверяет owner/mode и каноничность всей цепочки target-каталогов, затем создаёт
+отсутствующие каталоги как root:root 0755. Добавлена регрессия на writable parent;
+целевые ops-проверки, syntax и `git diff --check` прошли, root-only probe skipped.
 
 ### 2026-08-12 — Implement
 
