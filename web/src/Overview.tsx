@@ -38,7 +38,18 @@ type Dash = {
   recent_done?: RecentDone[];
   projects?: ProductProject[];
   janitor?: string;
+  release_train?: ReleaseTrainSnapshot | null;
 };
+
+type ReleasePassenger = { title: string };
+type ReleaseTrain = {
+  target: string; state: "idle" | "waiting" | "running" | "succeeded" | "failed";
+  generation?: number; gate?: string; started_at?: string; elapsed_seconds?: number;
+  passengers: ReleasePassenger[];
+  next: { requested: boolean; passengers: ReleasePassenger[]; retry_at?: string };
+  previous?: { state: "succeeded" | "failed"; finished_at?: string; passengers: ReleasePassenger[] };
+};
+type ReleaseTrainSnapshot = { updated_at: string; trains: ReleaseTrain[] };
 
 type EfficiencyDistribution = { sample: number; median: number | null; p90: number | null };
 type EfficiencyRate = { count: number; total: number; rate: number | null };
@@ -100,6 +111,45 @@ export function productState(project: ProductProject) {
   if (project.provider_status !== "configured") return "Стенд не настроен";
   if (project.environments.some((environment) => environment.status !== "available")) return "Сведения о выпуске недоступны";
   return "Данные доступны";
+}
+
+function ReleaseTrainPanel({ snapshot }: { snapshot?: ReleaseTrainSnapshot | null }) {
+  const trains = snapshot?.trains;
+  const stateText = (state: ReleaseTrain["state"]) => ({
+    idle: "свободен", waiting: "ожидает выпуска", running: "выполняется",
+    succeeded: "успешно выпущен", failed: "выпуск не прошёл",
+  })[state];
+  const duration = (seconds?: number) => seconds == null
+    ? "длительность неизвестна"
+    : `идёт ${Math.floor(seconds / 60)} мин`;
+  return <section style={card} aria-label="Поезд выпуска">
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+      <Server size={16} color="#8ec5ff" /><strong>Поезд выпуска</strong>
+    </div>
+    {!Array.isArray(trains) || trains.length === 0 ? (
+      <div style={{ fontSize: 13, color: muted }}>Сведения о выпуске недоступны.</div>
+    ) : [...trains].sort((a, b) => a.target.localeCompare(b.target)).map((train) => (
+      <article key={train.target} style={{ padding: "10px 0", borderTop: "1px solid #1d2430" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+          <strong>{train.target}</strong><span>{stateText(train.state)}</span>
+          {train.generation != null && <span style={{ color: muted }}>состав № {train.generation}</span>}
+        </div>
+        {train.gate && <div style={{ fontSize: 13, color: muted }}>Шаг: {train.gate}</div>}
+        {(train.state === "waiting" || train.state === "running") &&
+          <div style={{ fontSize: 13, color: muted }}>{duration(train.elapsed_seconds)}</div>}
+        {train.passengers.length > 0 && <div style={{ fontSize: 13 }}>Едет: {train.passengers.map((p) => p.title).join(" · ")}</div>}
+        {train.previous && <div style={{ fontSize: 13 }}>
+          Прошлый состав: {train.previous.state === "succeeded" ? "успешно" : "ошибка"}
+          {train.previous.finished_at ? ` · ${new Date(train.previous.finished_at).toLocaleString("ru-RU")}` : " · время неизвестно"}
+        </div>}
+        {train.next.retry_at && <div style={{ fontSize: 13 }}>Следующая попытка: {new Date(train.next.retry_at).toLocaleString("ru-RU")}</div>}
+        {train.next.requested && <div style={{ fontSize: 13 }}>
+          Следующий состав сядет в ближайший выпуск после текущего
+          {train.next.passengers.length > 0 ? `: ${train.next.passengers.map((p) => p.title).join(" · ")}` : "."}
+        </div>}
+      </article>
+    ))}
+  </section>;
 }
 
 type ActiveTask = {
@@ -460,6 +510,8 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           </div>
         )}
       </section>
+
+      <ReleaseTrainPanel snapshot={d.release_train} />
 
       <section style={card} aria-labelledby="active-work-title">
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>

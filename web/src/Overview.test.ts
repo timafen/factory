@@ -75,6 +75,53 @@ describe("Overview active work", () => {
   });
 });
 
+describe("Overview release train", () => {
+  const dashboard = (release_train?: unknown) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard" ? { release_train }
+        : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+  };
+
+  it("keeps the section visible when durable release data is unavailable", async () => {
+    dashboard();
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Поезд выпуска" });
+    expect(within(section).getByText("Сведения о выпуске недоступны.")).toBeVisible();
+  });
+
+  it.each([
+    ["idle", "свободен"], ["waiting", "ожидает выпуска"],
+    ["running", "выполняется"], ["succeeded", "успешно выпущен"],
+    ["failed", "выпуск не прошёл"],
+  ])("shows the public %s state in Russian", async (state, expected) => {
+    dashboard({ updated_at: "2026-08-12T12:00:00Z", trains: [{
+      target: "Factory", state, generation: 4, gate: "выполняется",
+      passengers: [{ title: "Витрина" }], next: { requested: false, passengers: [] },
+    }] });
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Поезд выпуска" });
+    expect(await within(section).findByText(expected)).toBeVisible();
+    expect(within(section).getByText("Едет: Витрина")).toBeVisible();
+    expect(within(section).getByText("состав № 4")).toBeVisible();
+  });
+
+  it("shows N+1 after the current train without inventing its start time", async () => {
+    dashboard({ updated_at: "2026-08-12T12:00:00Z", trains: [{
+      target: "Factory", state: "running", generation: 8, gate: "выполняется",
+      elapsed_seconds: 125, passengers: [{ title: "Текущий заказ" }],
+      next: { requested: true, passengers: [{ title: "Следующий заказ" }] },
+    }] });
+    render(createElement(Overview, {}));
+    const section = await screen.findByRole("region", { name: "Поезд выпуска" });
+    expect(within(section).getByText("идёт 2 мин")).toBeVisible();
+    expect(within(section).getByText(/Следующий состав сядет в ближайший выпуск после текущего: Следующий заказ/)).toBeVisible();
+    expect(within(section).queryByText(/Следующая попытка:/)).not.toBeInTheDocument();
+  });
+});
+
 describe("Overview recent work", () => {
   it("shows human pipeline titles, proof and an honest failed result without IDs", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
