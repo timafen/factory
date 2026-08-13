@@ -4,16 +4,19 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
 
 ## HEAD
 
-- Status: Implement — complete, проверено, готово к вливанию.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/db86ddee-ec7-d45dcede-582`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
-- Evidence: `bash -n` и `bash ops/test-fx-factory-release.sh` — PASS;
-  `FACTORY_BUILD_DIR=/tmp/card-0097-build just build` — PASS.
-- Known baseline: на свежем `origin/main` `just check` воспроизводит SA4000 в
-  `internal/worker/attempt_lifecycle_test.go:31`; это вне области работы.
-- One next action: влить проверенное изменение в main.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` — PASS;
+  `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` — PASS.
+  Fixture удалил реальный `build-orphaned`, сохранил обычную папку, symlink и
+  его внешний target, а также подтвердил публикацию, rollback и signal-cleanup.
+- Known baseline: общий `just check` в чистой копии дошёл до `staticcheck`, но
+  среда прервала запуск после автоматической смены Go toolchain; целевой fixture
+  и синтаксис прошли полностью.
+- One next action: человеку проверить итог общего `just check` в CI и влить в main.
 
 ## LOG
 
@@ -38,8 +41,11 @@ release-каталога пропускаются. Fixture подтвержда�
 
 ### 2026-08-12 — Verify
 
-Проверен diff от свежего `origin/main`: изменения ограничены release-очисткой,
-её fixture и документацией. `bash -n`, полный целевой fixture и сборка трёх
-бинарников прошли. В отдельной свежей копии `origin/main` `just check`
-воспроизводит SA4000 в `internal/worker/attempt_lifecycle_test.go:31`, поэтому
-это подтверждённый базовый долг вне CARD-0097.
+Проверен закреплённый diff от `main` `f2d9cce8f9038c566e3f2caf6df925d6d3c1bba2`
+до кандидата `e2d99ab2fe2bba9230db17620ede204db2bb6e2f`: изменения ограничены
+release-очисткой, fixture и документацией. `bash -n` и полный release fixture
+с увеличенным лимитом 60 секунд завершились успешно; он удалил только реальный
+`build-orphaned`, сохранил нерелизный каталог, symlink и внешний target, и
+выполнил прежние publish/rollback/signal-сценарии. Чистый `just check` дошёл до
+`staticcheck`, но был прерван средой после загрузки Go 1.25, поэтому общий итог
+нужно подтвердить в CI до merge.
