@@ -1,18 +1,32 @@
 # HEAD карточки отражает включённую проверку Gate
 
-Implementation commit: 68a02e81646a1beb330b5ce183a234c2881542bb — закреплена автоматическая передача успешной Verify в main и staging.
+Implementation commit: c45866c19725b53227f078215e1b7d1f85b7fd37 — закреплена автоматическая передача успешной Verify в main и staging.
 
 ## HEAD
 
-Status: Implemented + Tested — awaiting automatic Review.
+Status: Verified PASS — automatic merge to main and staging follows.
 Branch: factory/a462914e-4de-88600a80-c62
-Implementation commit: 68a02e81646a1beb330b5ce183a234c2881542bb — регрессионный тест маршрутизации Verify.
+Implementation commit: c45866c19725b53227f078215e1b7d1f85b7fd37 — регрессионный тест маршрутизации Verify.
 What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
 What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
-Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS.
-One next action: автоматическому Review проверить опубликованный candidate.
+Evidence: целевой Verify-тест PASS; закреплённый diff чист; известные общие сбои воспроизводятся на base или проходят отдельно.
+One next action: оркестратору автоматически слить candidate в `main` и развернуть staging.
 
 ## LOG
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| CARD-0083 больше не ожидает ручного merge | `grep -n '^Status:\\|^Branch:\\|^One next action:' knowledge/cards/CARD-0083-real-session-before-gate.md` | PASS: статус `Verified PASS — merged into main`, ветка `main`, следующий шаг не предлагает merge. |
+| PASS Verify автоматически ведёт в main и staging | `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v`; проверка текста в `pilot/pilot.py` | PASS: 1 тест; main и staging автоматические, решение человека оставлено только для production. |
+| Implementation commit пригоден для аудита | `cat-file`; `merge-base --is-ancestor`; `diff-tree` для `c45866c19725b53227f078215e1b7d1f85b7fd37` | PASS: коммит существует, является предком candidate, отличается от tip и меняет `pilot/test_pilot.py`. |
+| Полный набор проекта | `timeout 1800s just check` | НАХОДКА вне области: vet и govulncheck PASS; известный `SA4000` в `internal/worker/attempt_lifecycle_test.go:31` остановил staticcheck. |
+| Смежный Python-suite | `timeout 900s python3 -m unittest pilot.test_pilot -v`; тот же suite на base; отдельный delivery-тест | PASS для области: 239 PASS, 13 skipped; два restart-сбоя воспроизводятся на base, третий нестабильный delivery-тест отдельно PASS. |
+| Чистота поставки | pinned `git diff --check`; `git status --short` | PASS: пробельных ошибок и посторонних файлов нет до записи Verify. |
+
+Pinned verify: base `ef34865e324d6ec469c56492b90999655d5dfb88`, candidate
+`40041f4578f3db753fba4170fedc6d9ccf703289`.
 
 ### 2026-08-13 — Implement
 
