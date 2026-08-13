@@ -1,12 +1,12 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 2bad5a4e8bf9c35358a56c242602817d407a602b — cgroup helper ограничен и безопасно установлен до Gate поверх свежего main.
+Implementation commit: c77ba85f5d33fa1be7caa853343940a7f46176f8 — cgroup helper и актуальный release lifecycle согласованы после rebase.
 
 ## HEAD
 
 Status: Verified PASS — awaiting human merge.
 Branch: factory/6b7a29cf-7a0-04fb7336-ad4.
-Implementation commit: 2bad5a4e8bf9c35358a56c242602817d407a602b — cgroup helper ограничен и безопасно установлен до Gate поверх свежего main.
+Implementation commit: c77ba85f5d33fa1be7caa853343940a7f46176f8 — cgroup helper и актуальный release lifecycle согласованы после rebase.
 What changed: bootstrap проверяет owner/mode/hash и цепочки каталогов, атомарно ставит control tools и создаёт marker только после cgroup v2 probe.
 What changed: release проверяет marker/helper до Gate, прикрепляет session к cgroup до первой команды и добивает отделившиеся процессы при cleanup.
 Evidence: pinned база `76d16c5191dcc8c44a001ffb71dbbaebf183f573`; целевые ops-тесты, Go tests/race, release/build и security checks → PASS; root-live → SKIP без sudo.
@@ -109,6 +109,6 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | --- | --- | --- |
 | Helper не выходит из выделенного cgroup root | `bash ops/test-factory-gate-cgroup.sh` | PASS: traversal отвергнут до доступа к parent `cgroup.kill`. |
 | Control tools ставятся атомарно из доверенного bootstrap | `bash ops/test-install-factory-control.sh` | PASS: writable parent и altered helper отвергнуты, failpoint сохраняет прежнюю пару. |
-| Gate закрыт до проверки helper, attach происходит до первой команды | `bash ops/test-fx-factory-release.sh` | PASS до rebase: marker/owner/mode/hash, attach ordering, cleanup, recovery и rollback проверены; после rebase целевой повтор обязателен. |
+| Gate закрыт до проверки helper, attach происходит до первой команды | `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` | PASS после rebase: marker/owner/mode/hash, attach ordering, cleanup, recovery, snapshot fallback и rollback проверены. |
 | Bootstrap проверяет цепочку, откат и one-shot marker | `bash ops/test-factory-cgroup-bootstrap.sh` | SKIP root-live при UID 994 без `sudo`; pinned SHA совпал, хост использует `cgroup2fs`. |
 | Полный набор незатронутой платформы | `just test`, `just test-worker-race`, build/release/launcher/vet/vuln/boundary | PASS; UI typecheck и staticcheck имеют два подтверждённых сбоя в неизменённых файлах. |
