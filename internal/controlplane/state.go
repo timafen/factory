@@ -663,11 +663,20 @@ func (s *Store) CompleteAttempt(ctx context.Context, attemptID string, input pro
 	`, attemptState, nullString(input.Result), nullString(input.Error), now, attemptID); err != nil {
 		return protocol.Attempt{}, unavailable(err)
 	}
-	if _, err := tx.ExecContext(ctx, `
+	executionResult, err := tx.ExecContext(ctx, `
 		UPDATE executions SET state = ?, retry_count = retry_count + ?, updated_at = ?
 		WHERE id = ? AND state IN ('preparing', 'running')
-	`, executionState, retryIncrement, now, lease.executionID); err != nil {
+	`, executionState, retryIncrement, now, lease.executionID)
+	if err != nil {
 		return protocol.Attempt{}, unavailable(err)
+	}
+	if input.State == "failed" {
+		changed, _ := executionResult.RowsAffected()
+		if changed == 1 {
+			if err := retryFailedScheduleAutomation(ctx, tx, lease.executionID, now); err != nil {
+				return protocol.Attempt{}, unavailable(err)
+			}
+		}
 	}
 	if _, err := reconcileWorkerCapacity(ctx, tx, lease.workerID, now, "terminal"); err != nil {
 		return protocol.Attempt{}, unavailable(err)
@@ -890,11 +899,17 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 		}
 		changed, _ := result.RowsAffected()
 		if changed == 1 {
-			if _, err := tx.ExecContext(ctx, `
+			executionResult, err := tx.ExecContext(ctx, `
 				UPDATE executions SET state = 'failed', updated_at = ?
 				WHERE id = ? AND state IN ('preparing', 'running')
-				`, now, value.ExecutionID); err != nil {
+				`, now, value.ExecutionID)
+			if err != nil {
 				return nil, unavailable(err)
+			}
+			if changed, _ := executionResult.RowsAffected(); changed == 1 {
+				if err := retryFailedScheduleAutomation(ctx, tx, value.ExecutionID, now); err != nil {
+					return nil, unavailable(err)
+				}
 			}
 		}
 	}
@@ -923,4 +938,45 @@ func (s *Store) SweepExpired(ctx context.Context) ([]ExpiredLease, error) {
 		return nil, unavailable(err)
 	}
 	return values, nil
+}
+
+// retryFailedScheduleAutomation gives an admitted schedule run exactly one durable retry.
+// It deliberately keeps the frozen worker and repository reservation: a retry must not
+// silently change where an Automation runs.
+func retryFailedScheduleAutomation(ctx context.Context, tx *sql.Tx, executionID string, now int64) error {
+	var eligible int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM executions e
+		JOIN tasks t ON t.id = e.task_id
+		JOIN automation_occurrences o ON o.task_id = t.id AND o.state = 'dispatched'
+		JOIN automation_schedule_occurrences so ON so.occurrence_id = o.id
+		JOIN automations a ON a.id = o.automation_id AND a.enabled = 1 AND a.trigger_type = 'schedule'
+		JOIN workflows w ON w.id = a.workflow_id AND w.enabled = 1
+		JOIN repositories r ON r.id = a.repository_id AND r.enabled = 1
+		JOIN workers worker ON worker.id = e.assigned_worker_id
+		JOIN worker_repositories wr ON wr.worker_id = worker.id AND wr.repository_id = t.repository_id AND wr.advertised = 1
+		WHERE e.id = ? AND e.state = 'failed' AND e.retry_count = 0
+		  AND e.cancellation_requested = 0 AND so.kind IN ('scheduled', 'run_now')
+		  AND worker.health = 'healthy' AND worker.last_heartbeat >= ?
+		  AND worker.runtime = e.required_runtime
+	`, executionID, now-protocol.WorkerOnlineWindow.Milliseconds()).Scan(&eligible)
+	if err != nil {
+		return err
+	}
+	if eligible == 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE automation_occurrences SET diagnostic = 'retry_skipped', updated_at = ? WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)`, now, executionID)
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE executions SET state = 'queued', retry_count = 1, cancellation_requested = 0, updated_at = ?
+		WHERE id = ? AND state = 'failed' AND retry_count = 0 AND cancellation_requested = 0
+	`, now, executionID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 1 {
+		_, err = tx.ExecContext(ctx, `UPDATE automation_occurrences SET diagnostic = 'retry_queued', updated_at = ? WHERE task_id = (SELECT task_id FROM executions WHERE id = ?)`, now, executionID)
+	}
+	return err
 }

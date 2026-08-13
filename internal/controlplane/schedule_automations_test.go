@@ -369,6 +369,54 @@ func TestScheduleRunNowConcurrentReplayDisableAndCursorIsolation(t *testing.T) {
 	}
 }
 
+func TestScheduleAutomationFailedExecutionRetriesOnceAndIsIdempotent(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, true)
+	enableAutomation(t, store, detail.Automation.ID)
+	if _, err := store.RunAutomationNow(context.Background(), detail.Automation.ID, protocol.RunAutomationRequest{RequestKey: "retry-once"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Automation(context.Background(), detail.Automation.ID)
+	if err != nil || len(before.Occurrences) != 1 || before.Occurrences[0].Task == nil {
+		t.Fatalf("dispatched run = %#v, error %v", before.Occurrences, err)
+	}
+	taskID := before.Occurrences[0].Task.ID
+	claim, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "retry-first", LeaseToken: fmt.Sprintf("%064x", 1)})
+	if err != nil || claim == nil {
+		t.Fatalf("first claim = %#v, error %v", claim, err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 1), State: "failed", Error: "temporary"}); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var retries, attempts int
+	if err := store.db.QueryRow(`SELECT state, retry_count FROM executions WHERE id = ?`, claim.Execution.ID).Scan(&state, &retries); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE execution_id = ?`, claim.Execution.ID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" || retries != 1 || attempts != 1 {
+		t.Fatalf("first failure = state %q retries %d attempts %d", state, retries, attempts)
+	}
+	second, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "retry-second", LeaseToken: fmt.Sprintf("%064x", 2)})
+	if err != nil || second == nil || second.Execution.ID != claim.Execution.ID || second.Task.ID != taskID || second.Attempt.AttemptNumber != 2 {
+		t.Fatalf("second claim = %#v, error %v", second, err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), second.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 2), State: "failed", Error: "permanent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT state, retry_count FROM executions WHERE id = ?`, claim.Execution.ID).Scan(&state, &retries); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || retries != 1 {
+		t.Fatalf("second failure = state %q retries %d", state, retries)
+	}
+}
+
 func TestInvalidStoredScheduleDegradesOnlyItsAutomation(t *testing.T) {
 	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
 	store, detail := createScheduleAutomationFixture(t, &now, true)
