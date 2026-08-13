@@ -1,17 +1,24 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — ошибка настоящего forked gate проходит через launcher, поддельный успех игнорируется.
+Implementation commit: d320c994ce672b4f6434105cb50badb9287c43e7 — проверка закрепляет ожидание статуса Gate за форкающим launcher.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/e35e268f-1d3-934fca68-3f2.
-Implementation commit: 13c8e8e0a04854c17c352eb8128eb85bb16fd04d — регрессия проверяет ошибку настоящего forked gate за launcher.
-What changed: fixture подделывает успешный файловый result, пока настоящий forked gate завершается ошибкой; добавлен отдельный bounded-запуск сценария.
-Evidence: pinned candidate `2be97a66737caee20ee1a7390d1ba68f38a9f606` прошёл целевой forged-gate сценарий: release сохранил ошибку настоящего gate и не запускал установку; полный `just check` остановился на существующем `SA4000` вне области.
-One next action: выполнить human merge ветки `factory/e35e268f-1d3-934fca68-3f2`.
+Status: Implemented and verified.
+Branch: factory/80c250e3-e3d-30a97909-840.
+Implementation commit: d320c994ce672b4f6434105cb50badb9287c43e7 — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
+What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS.
+One next action: влить ветку в main.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После конфликтов с main проверка форкающего launcher дополнена явным контрактом
+`--fork --wait`: релиз ждёт kernel exit status обеих Gate-групп, а не ранний успех
+родительского launcher. Shell-suite подтвердил отказ с code 5 без установки и сборки.
 
 ### 2026-08-12 — Implement
 
