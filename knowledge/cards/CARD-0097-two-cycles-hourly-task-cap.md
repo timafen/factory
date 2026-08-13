@@ -1,17 +1,27 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: a4cf5e79bca46aa6db16f2eec511279aa64401c2 — спецификация запускает существующую проверку Pilot для почасового лимита.
+Implementation commit: 75410ad75705be54e1f4271e468c42a0aac8c015 — Pilot ждёт следующей допустимой попытки, а лимит проверен конкурентно.
 
 ## HEAD
 
 - Status: Implement + Test — готово.
-- Branch: `factory/2e9d307b-319-24ad6653-a51`.
-- Implementation commit: `a4cf5e79bca46aa6db16f2eec511279aa64401c2` — команда в спецификации запускает существующий класс Pilot.
-- What changed: обе ссылки на несуществующий `HourlyTaskCapTests` заменены на `PlanAutostartTest`; код лимита не изменён.
-- Evidence: целевая Go-команда и `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS; 17 тестов Pilot.
+- Branch: `factory/d329a8f9-09f-c8e8d9e4-835`.
+- Implementation commit: `75410ad75705be54e1f4271e468c42a0aac8c015` — Pilot не вызывает создание до сохранённого срока, а control plane проверен при гонке.
+- What changed: сохраняется `hourly_cap_retry_at`; следующий цикл пропускается, а после срока задача создаётся.
+- What changed: добавлен `TestCreateTaskHourlyTaskCapConcurrent` с двумя горутинами и пределом в 10 задач.
+- Evidence: `go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap(ReplayAndWindow|Concurrent)$'` → PASS.
+- Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS (17 тестов).
 - Next action: Передать ветку на Verify.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После ответа владельца Pilot сохраняет полный час до следующей попытки и не
+вызывает `create_task` в следующем цикле до этого срока. Добавлен настоящий
+конкурентный тест с двумя горутинами: при девяти уже созданных задачах проходит
+ровно одна попытка, а в окне остаётся не более десяти. Целевые Go- и Pilot-
+тесты прошли.
 
 ### 2026-08-12 — Implement
 
