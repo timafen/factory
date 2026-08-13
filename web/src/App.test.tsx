@@ -70,6 +70,28 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Получить ключи продавца" })).toBeVisible();
   });
 
+  it("opens the separate solutions history without replacing the answer queue", async () => {
+    window.history.replaceState({}, "", "/solutions");
+    const fetch = mockControlPlane();
+    const fixtureImplementation = fetch.getMockImplementation();
+    fetch.mockImplementation((input, init) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path === "/api/v1/questions") return Promise.resolve(Response.json({ questions: [] }));
+      return fixtureImplementation!(input, init);
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    expect(await screen.findByText("История решений пока пуста.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Решения" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /Нужен ответ/ })).not.toHaveAttribute("aria-current");
+    expect(fetch).toHaveBeenCalledWith("/api/v1/questions");
+
+    await user.click(screen.getByRole("button", { name: /Нужен ответ/ }));
+    expect(screen.getByRole("button", { name: /Нужен ответ/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Решения" })).not.toHaveAttribute("aria-current");
+  });
+
   it("marks only exact navigation destinations as the current page", async () => {
     mockControlPlane();
     const user = userEvent.setup();

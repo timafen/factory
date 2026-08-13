@@ -169,6 +169,25 @@ export interface TaskPage {
   next_cursor: string | null;
 }
 
+/** Вопрос владельцу, сохранённый конвейером и выданный публичным API. */
+export interface OwnerQuestion {
+  id: string;
+  task_id: string;
+  stage: string;
+  resume_stage: string;
+  title: string;
+  situation?: string;
+  question?: string;
+  options?: string[];
+  repository_id?: string;
+  status: string;
+  answer?: string;
+  answered_by?: string;
+  asked_at?: string;
+  answered_at?: string;
+  escalation_reason?: string;
+}
+
 export interface Execution {
   id: string;
   task_id: string;

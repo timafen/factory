@@ -23,12 +23,14 @@ import { Settings } from "./Settings";
 import { Dialog } from "./Dialog";
 import { SandboxKeys } from "./SandboxKeys";
 import { ProjectsView } from "./Projects";
+import { SolutionsView } from "./Solutions";
 
 type Route =
   | { page: "overview" }
   | { page: "say" }
   | { page: "epics" }
   | { page: "answer" }
+  | { page: "solutions" }
   | { page: "access" }
   | { page: "sandboxKeys" }
   | { page: "work" }
@@ -67,6 +69,7 @@ function readRoute(): Route {
   if (parts[0] === "say") return { page: "say" };
   if (parts[0] === "epics") return { page: "epics" };
   if (parts[0] === "answer") return { page: "answer" };
+  if (parts[0] === "solutions") return { page: "solutions" };
   if (parts[0] === "access") return { page: "access" };
   if (parts[0] === "sandbox-keys") return { page: "sandboxKeys" };
   return { page: "overview" };
@@ -90,6 +93,7 @@ function routePath(route: Route): string {
   if (route.page === "say") return "/say";
   if (route.page === "epics") return "/epics";
   if (route.page === "answer") return "/answer";
+  if (route.page === "solutions") return "/solutions";
   if (route.page === "access") return "/access";
   if (route.page === "sandboxKeys") return "/sandbox-keys";
   return route.page === "work" ? "/work" : "/";
@@ -244,6 +248,13 @@ export function App() {
               </span>
             )}
           </button>
+          <button
+            className={`nav-item ${route.page === "solutions" ? "active" : ""}`}
+            aria-current={route.page === "solutions" ? "page" : undefined}
+            onClick={() => navigate({ page: "solutions" })}
+          >
+            <BookOpenText size={17} /> Решения
+          </button>
           <a className="nav-item" href="/intake/plan">
             <Lightbulb size={17} /> План
           </a>
@@ -353,6 +364,7 @@ export function App() {
             {route.page === "say" && "Say"}
             {route.page === "epics" && "Epics"}
             {route.page === "answer" && "Нужен ответ"}
+            {route.page === "solutions" && "Решения"}
             {route.page === "work" && "Работа"}
             {route.page === "workers" && "Исполнители"}
             {route.page === "task" && "Task detail"}
@@ -379,6 +391,7 @@ export function App() {
           {route.page === "say" && <SayView />}
           {route.page === "epics" && <EpicsView onTask={(id) => navigate({ page: "task", id })} onAnswer={() => navigate({ page: "answer" })} />}
           {route.page === "answer" && <AnswerView onTask={(id) => navigate({ page: "task", id })} />}
+          {route.page === "solutions" && <SolutionsView />}
           {route.page === "access" && <AccessView />}
           {route.page === "sandboxKeys" && <SandboxKeys />}
           {route.page === "overview" && <Overview onNav={(p) => navigate({ page: p } as Route)} />}
