@@ -4,8 +4,8 @@
 
 - Status: Verified PASS — awaiting human merge. Две диагностики `staticcheck`
   приняты владельцем как отдельный базовый технический долг.
-- Branch: `factory/0ce1a2f4-025-f95cb48e-f89`.
-- Head commit: `95fe2f3` (проверенная UI-поставка от свежего `origin/main`).
+- Branch: `factory/8684d98d-6af-e4306d12-543`.
+Implementation commit: 3496d375d0afe1d5e594dd4173a01fc1a8b3ace3 — восстановлены зелёные общие проверки UI.
 - What changed: восемь ESLint-ошибок и семь предупреждений Fast Refresh больше
   не блокируют UI; стартовая загрузка `Access.tsx` разрешена точечно.
 - Evidence: после `cd web && npm ci` успешно прошли `just ui-check` (9 файлов,
@@ -32,6 +32,12 @@
 ГОТОВО-КОГДА: команда just ui-check
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+После одноразового разведения исторических номеров карточка закреплена за
+устойчивым коммитом реализации `3496d375d0afe1d5e594dd4173a01fc1a8b3ace3`:
+он является предком текущей ветки и изменяет семь заявленных UI-файлов.
 
 ### 2026-08-09 — Implement
 
