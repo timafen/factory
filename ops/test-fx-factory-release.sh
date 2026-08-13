@@ -50,6 +50,23 @@ assert_no_fixture_processes() {
   fi
 }
 
+start_gate_directory_attack() {
+  local case_dir=$1
+  (
+    for ((i = 0; i < 500; i++)); do
+      for target in "$case_dir/releases"/trusted-gate-*; do
+        [ -d "$target" ] || continue
+        /bin/rm -rf -- "$target"
+        mkdir -p "$target/ops"
+        printf '#!/bin/bash\nexit 0\n' >"$target/ops/test-fx-factory-release.sh"
+      done
+      /bin/sleep 0.005
+    done
+  ) &
+  trusted_gate_attack_pid=$!
+  : >"$case_dir/trusted-gate-attack-started"
+}
+
 make_fixture() {
   case_dir=$1 mode=$2
   mkdir -p "$case_dir/bin" "$case_dir/install" "$case_dir/releases" "$case_dir/repo/web" \
@@ -100,7 +117,7 @@ PY
 #!/bin/bash
 echo "bash ops/test-fx-factory-release.sh" >>"$TEST_GATES"
 case "$TEST_MODE" in
-  release-test-fail|forked-gate-fail|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
+  release-test-fail|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
 esac
 exit 0
 GATE
@@ -127,6 +144,7 @@ GATE
   : >"$case_dir/worker.toml"
   : >"$case_dir/gate-children"
   : >"$case_dir/handshake-events"
+  : >"$case_dir/spoof-events"
 
 cat >"$case_dir/bin/git" <<'EOF'
 #!/bin/bash
@@ -175,7 +193,7 @@ if [ "$TEST_MODE" = gate-result-spoof ]; then
   exit 1
 fi
 case "$TEST_MODE" in
-  release-test-fail|forked-gate-fail|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
+  release-test-fail|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|trusted-gate-tamper) exit 1 ;;
 esac
 exit 0
 RELEASE_GATE
@@ -720,6 +738,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
     /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
 }
 
@@ -730,13 +749,15 @@ run_driver() {
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" FACTORY_FX_BIN="$case_dir/install/fx" \
     FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" FACTORY_BRAIN_LIVE="$case_dir/live" \
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
-    /bin/bash "$RELEASE" "$@"
+    /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
+    /bin/bash "$case_dir/fx-factory-release-under-test" "$@"
 }
 
 start_release() {
@@ -763,6 +784,7 @@ start_release() {
     FACTORY_BRAIN_LIVE="$case_dir/live" \
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" \
     FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" \
     FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
@@ -779,9 +801,38 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
-    env --default-signal=INT /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1 &
+    env --default-signal=INT /usr/bin/timeout --foreground --signal=TERM --kill-after=2s \
+      "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" /bin/bash "$case_dir/fx-factory-release-under-test" main \
+      >"$case_dir/output" 2>&1 &
   release_pid=$!
 }
+
+run_crash_cleanup() {
+  local crash_phase crashed status current_after_recovery
+  for crash_phase in prepared old-stopped pair-installed services-started; do
+    crashed="$temporary/crash-$crash_phase"
+    make_fixture "$crashed" parallel-success
+    set +e
+    FACTORY_RELEASE_CRASH_AFTER_PHASE="$crash_phase" run_release "$crashed" parallel-success
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail "crash hook $crash_phase unexpectedly committed"
+    [ "$status" -ne 124 ] || fail "crash cleanup $crash_phase exceeded ${FACTORY_RELEASE_TEST_TIMEOUT:-30}s"
+    assert_file "$crashed/releases/transaction" "phase=$crash_phase"
+    : >"$crashed/events"
+    FACTORY_RELEASE_CRASH_AFTER_PHASE= run_release "$crashed" parallel-success \
+      || { cat "$crashed/output" >&2; fail "restart did not recover phase $crash_phase"; }
+    [ ! -e "$crashed/releases/transaction" ] || fail "recovery left journal for $crash_phase"
+    current_after_recovery=$(readlink -f "$crashed/releases/current")
+    [ -f "$current_after_recovery/manifest.json" ] || fail "recovery did not reach a committed generation"
+  done
+}
+
+if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
+  run_crash_cleanup
+  echo "PASS: crash-cleanup scenarios recovered every journal phase"
+  exit 0
+fi
 
 success="$temporary/success"
 make_fixture "$success" parallel-success
@@ -854,17 +905,17 @@ assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
 assert_no_fixture_processes "$forked_success"
 
 # A PATH-provided Node must not be able to turn either UI command into success.
-path_shadow="$temporary/path-shadow-chain"
-make_fixture "$path_shadow" parallel-success
-run_release "$path_shadow" parallel-success \
-  || { cat "$path_shadow/output" >&2; fail "PATH-shadowed gate did not complete"; }
-! grep -Fx 'path-setsid-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+path_shadow_success="$temporary/path-shadow-success"
+make_fixture "$path_shadow_success" parallel-success
+run_release "$path_shadow_success" parallel-success \
+  || { cat "$path_shadow_success/output" >&2; fail "PATH-shadowed gate did not complete"; }
+! grep -Fx 'path-setsid-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
   || fail "PATH shadow entered the trusted gate chain"
-! grep -Fx 'path-node-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+! grep -Fx 'path-node-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
   || fail "PATH node entered the trusted gate chain"
-! grep -Fx 'untrusted-git-invoked' "$path_shadow/spoof-events" >/dev/null 2>&1 \
+! grep -Fx 'untrusted-git-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
   || fail "PATH git entered the trusted source chain"
-assert_no_fixture_processes "$path_shadow"
+assert_no_fixture_processes "$path_shadow_success"
 
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
@@ -892,22 +943,7 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   assert_no_fixture_processes "$failed"
 done
 
-for crash_phase in prepared old-stopped pair-installed services-started; do
-  crashed="$temporary/crash-$crash_phase"
-  make_fixture "$crashed" parallel-success
-  set +e
-  FACTORY_RELEASE_CRASH_AFTER_PHASE="$crash_phase" run_release "$crashed" parallel-success
-  status=$?
-  set -e
-  [ "$status" -ne 0 ] || fail "crash hook $crash_phase unexpectedly committed"
-  assert_file "$crashed/releases/transaction" "phase=$crash_phase"
-  : >"$crashed/events"
-  run_release "$crashed" parallel-success \
-    || { cat "$crashed/output" >&2; fail "restart did not recover phase $crash_phase"; }
-  [ ! -e "$crashed/releases/transaction" ] || fail "recovery left journal for $crash_phase"
-  current_after_recovery=$(readlink -f "$crashed/releases/current")
-  [ -f "$current_after_recovery/manifest.json" ] || fail "recovery did not reach a committed generation"
-done
+run_crash_cleanup
 
 build_failed="$temporary/worker-build-fail"
 make_fixture "$build_failed" worker-build-fail
@@ -937,8 +973,10 @@ grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
 
 extracted_gate="$temporary/trusted-gate-real-race"
 make_fixture "$extracted_gate" trusted-gate-real-race
+start_gate_directory_attack "$extracted_gate"
 run_release "$extracted_gate" trusted-gate-real-race \
   || { cat "$extracted_gate/output" >&2; fail "the extracted trusted gate did not run"; }
+wait "$trusted_gate_attack_pid" || true
 grep -Fx 'real-extracted-gate-after-handshake' "$extracted_gate/handshake-events" >/dev/null \
   || fail "the real extracted gate did not run after a verified handshake"
 [ -e "$extracted_gate/trusted-gate-attack-started" ] \
