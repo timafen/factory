@@ -6119,6 +6119,9 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         "health": pipeline_health(tasks),
         "janitor": _sh("tail -1 /var/log/factory-janitor.log 2>/dev/null")[:160],
     }
+    release_train = release_train_block(load(STATE_PATH, {}), tasks, now)
+    if release_train is not None:
+        data["release_train"] = release_train
     save(DASH_PATH, data)
 
 
@@ -6564,6 +6567,82 @@ DELIVERY_OUTBOX_PATH = f"{HOME}/pilot/delivery-outbox.jsonl"
 DELIVERY_BROKER_SOCKET = "/run/factory/project-release-broker.sock"
 DELIVERY_RETRY_DELAY = 60
 DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
+DELIVERY_TARGET_TITLES = {"factory": "Factory", "tarser-staging": "Tarser staging"}
+
+
+def release_train_block(state, tasks, now=None):
+    """Build the public, read-only release view from durable V2 state."""
+    durable = state.get(DELIVERY_STATE_KEY) if isinstance(state, dict) else None
+    targets = durable.get("targets") if isinstance(durable, dict) and durable.get("version") == 2 else None
+    if not isinstance(targets, dict) or not targets:
+        return None
+    task_titles = {}
+    for task in tasks if isinstance(tasks, list) else []:
+        task_id = task.get("id") if isinstance(task, dict) else None
+        if not task_id:
+            continue
+        parsed = pipeline_title(task)
+        task_titles[task_id] = (parsed[0] if parsed else str(task.get("title") or "").strip())
+
+    def passengers(waits):
+        if not isinstance(waits, dict):
+            return []
+        return [{"title": task_titles.get(task_id) or "Работа из выпуска (название недоступно)"}
+                for task_id in waits]
+
+    def public_time(value):
+        return value if isinstance(value, str) and receipt_epoch(value) is not None else None
+
+    current_time = time.time() if now is None else now
+    trains = []
+    for target_key, target in targets.items():
+        if target_key not in DELIVERY_TARGET_TITLES or not isinstance(target, dict):
+            return None
+        generations = target.get("generations")
+        if not isinstance(generations, dict):
+            return None
+        current_id = target.get("current_generation")
+        current = generations.get(current_id) if current_id else None
+        if current_id and (not isinstance(current, dict) or current.get("phase") not in DELIVERY_PHASES):
+            return None
+        item = {"target": DELIVERY_TARGET_TITLES[target_key], "state": "idle",
+                "passengers": [], "next": {"requested": False, "passengers": []}}
+        if current:
+            phase = current["phase"]
+            item["state"] = {"reserved": "waiting", "launching": "running", "running": "running",
+                             "completed": "succeeded", "failed": "failed"}[phase]
+            if isinstance(current.get("sequence"), int):
+                item["generation"] = current["sequence"]
+            item["gate"] = {"reserved": "ожидает broker", "launching": "запускается",
+                            "running": "выполняется", "completed": "принят",
+                            "failed": "не прошёл"}[phase]
+            item["passengers"] = passengers(current.get("waits"))
+            started = public_time(current.get("started_at") or current.get("reserved_at"))
+            if started and phase in ("reserved", "launching", "running"):
+                item["started_at"] = started
+                item["elapsed_seconds"] = max(0, int(current_time - receipt_epoch(started)))
+            requested = bool(target.get("next_requested")) and phase != "reserved"
+            item["next"] = {"requested": requested,
+                            "passengers": passengers(target.get("next_waits")) if requested else []}
+            retry_at = current.get("next_retry_at")
+            if phase == "reserved" and isinstance(retry_at, (int, float)):
+                item["next"]["retry_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(retry_at))
+
+            terminal = [generation for generation in generations.values()
+                        if isinstance(generation, dict) and generation.get("phase") in ("completed", "failed")]
+            if terminal:
+                previous = max(terminal, key=lambda generation: generation.get("sequence", -1))
+                item["previous"] = {
+                    "state": "succeeded" if previous["phase"] == "completed" else "failed",
+                    "passengers": passengers(previous.get("waits")),
+                }
+                finished = public_time(previous.get("finished_at"))
+                if finished:
+                    item["previous"]["finished_at"] = finished
+        trains.append(item)
+    return {"updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time)),
+            "trains": sorted(trains, key=lambda train: train["target"])}
 
 
 def retry_pending_factory_deploy(_conf, _state):
@@ -6593,7 +6672,7 @@ def _delivery_target(repo_identity):
     return "", ""
 
 
-def _delivery_generation(state, repo_identity, commit_sha, wait):
+def _delivery_generation(state, repo_identity, commit_sha, wait, now=None):
     durable = _delivery_state(state)
     target_key, adapter = _delivery_target(repo_identity)
     if not target_key or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha or ""):
@@ -6622,7 +6701,9 @@ def _delivery_generation(state, repo_identity, commit_sha, wait):
     gid = f"{target_key}-{sequence}-{uuid.uuid4().hex}"
     generation = {"id": gid, "sequence": sequence, "phase": "reserved",
         "adapter": adapter, "commit_sha": commit_sha, "waits": {wait["task_id"]: wait},
-        "merge_receipts": [wait["merge_receipt"]]}
+        "merge_receipts": [wait["merge_receipt"]],
+        "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(
+            time.time() if now is None else now))}
     target["current_generation"] = gid
     target["generations"][gid] = generation
     return generation
@@ -6723,6 +6804,8 @@ def poll_delivery_state(conf, state, now=None):
             status = (response or {}).get("status")
             if status in ("launching", "running"):
                 generation["phase"] = status
+                generation.setdefault("started_at", time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time)))
                 # The broker has durably accepted this boundary; persist the
                 # matching Pilot phase before a process can disappear.
                 save(STATE_PATH, state)
@@ -6731,6 +6814,8 @@ def poll_delivery_state(conf, state, now=None):
                 # A restart from this exact point only finishes the local
                 # transaction and never POSTs a second physical release.
                 generation["phase"] = "completed"
+                generation["finished_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
                 save(STATE_PATH, state)
                 _complete_generation(conf, state, generation)
             elif status == "locked":
@@ -6739,9 +6824,13 @@ def poll_delivery_state(conf, state, now=None):
                 save(STATE_PATH, state)
             elif status in ("failed", "rollback_failed", "release_failed_rolled_back"):
                 generation["phase"] = "failed"
+                generation["finished_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
                 save(STATE_PATH, state)
             elif response is None and generation["phase"] in ("launching", "running"):
                 generation["phase"] = "failed"  # status is authoritative; unknown fails closed
+                generation["finished_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
                 save(STATE_PATH, state)
         save(STATE_PATH, state)
         current = target.get("current_generation")
@@ -6756,7 +6845,8 @@ def poll_delivery_state(conf, state, now=None):
             target["generations"][gid] = {"id": gid, "sequence": sequence, "phase": "reserved",
                 "adapter": source.get("adapter", active["adapter"]),
                 "commit_sha": source.get("commit_sha", active["commit_sha"]), "waits": pending,
-                "merge_receipts": [w["merge_receipt"] for w in pending.values()]}
+                "merge_receipts": [w["merge_receipt"] for w in pending.values()],
+                "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))}
             target["current_generation"] = gid
         # This also makes a just-created N+1 survive before its first POST.
         save(STATE_PATH, state)
@@ -6767,7 +6857,7 @@ def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None
     """Create/join a generation; it never launches raw release commands."""
     state = state if state is not None else {}
     wait = wait or {"task_id": "manual-" + uuid.uuid4().hex, "base": "", "merge_receipt": {}}
-    generation = _delivery_generation(state, repo_identity, commit_sha, wait)
+    generation = _delivery_generation(state, repo_identity, commit_sha, wait, now)
     if generation:
         save(STATE_PATH, state)
     return generation

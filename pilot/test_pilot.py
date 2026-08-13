@@ -229,6 +229,78 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
 
 
+class ReleaseTrainDashboardTests(unittest.TestCase):
+    def block(self, target, tasks=None, now=120):
+        state = {pilot.DELIVERY_STATE_KEY: {"version": 2, "targets": {"factory": target}}}
+        return pilot.release_train_block(state, tasks or [], now)
+
+    def target(self, generation=None, **extra):
+        generations = {generation["id"]: generation} if generation else {}
+        return {"id": "factory", "current_generation": generation["id"] if generation else None,
+                "generations": generations, **extra}
+
+    def test_unavailable_and_idle_are_distinct(self):
+        self.assertIsNone(pilot.release_train_block({}, [], 120))
+        self.assertEqual(self.block(self.target()), {"updated_at": "1970-01-01T00:02:00Z", "trains": [{
+            "target": "Factory", "state": "idle", "passengers": [],
+            "next": {"requested": False, "passengers": []},
+        }]})
+
+    def test_reserved_exposes_public_sequence_passengers_and_real_retry_only(self):
+        generation = {"id": "private-generation", "sequence": 7, "phase": "reserved",
+                      "commit_sha": "secret-sha", "reserved_at": "1970-01-01T00:01:00Z",
+                      "next_retry_at": 180, "waits": {"known": {}, "gone": {}}}
+        train = self.block(self.target(generation), [{"id": "known", "title": "[auto] [5/5 Verify] Каталог"}])["trains"][0]
+        self.assertEqual(train, {
+            "target": "Factory", "state": "waiting", "generation": 7,
+            "gate": "ожидает broker", "started_at": "1970-01-01T00:01:00Z",
+            "elapsed_seconds": 60,
+            "passengers": [{"title": "Каталог"}, {"title": "Работа из выпуска (название недоступно)"}],
+            "next": {"requested": False, "passengers": [], "retry_at": "1970-01-01T00:03:00Z"},
+        })
+        self.assertNotIn("commit_sha", str(train))
+        self.assertNotIn("private-generation", str(train))
+
+    def test_running_keeps_next_train_separate_without_inventing_a_date(self):
+        generation = {"id": "g1", "sequence": 1, "phase": "running",
+                      "started_at": "1970-01-01T00:01:30Z", "waits": {"current": {}}}
+        train = self.block(self.target(generation, next_requested=True,
+                           next_waits={"next": {}}), [
+                               {"id": "current", "title": "Текущий пассажир"},
+                               {"id": "next", "title": "Следующий пассажир"}])["trains"][0]
+        self.assertEqual(train["state"], "running")
+        self.assertEqual(train["elapsed_seconds"], 30)
+        self.assertEqual(train["next"], {"requested": True,
+                                         "passengers": [{"title": "Следующий пассажир"}]})
+
+    def test_terminal_results_remain_distinct_and_use_durable_finish_time(self):
+        for phase, state in (("completed", "succeeded"), ("failed", "failed")):
+            with self.subTest(phase=phase):
+                generation = {"id": "g1", "sequence": 1, "phase": phase,
+                              "finished_at": "1970-01-01T00:01:50Z", "waits": {"work": {}}}
+                train = self.block(self.target(generation), [{"id": "work", "title": "Оплата"}])["trains"][0]
+                self.assertEqual(train["state"], state)
+                self.assertEqual(train["previous"], {"state": state,
+                    "finished_at": "1970-01-01T00:01:50Z",
+                    "passengers": [{"title": "Оплата"}]})
+
+    def test_new_delivery_transitions_record_projection_timestamps(self):
+        state = {}
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", os.path.join(temporary.name, "receipts")), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", os.path.join(temporary.name, "outbox")), \
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "mark_final"), mock.patch.object(pilot, "notify"):
+            generation = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
+                "a" * 40, {"task_id": "work", "merge_receipt": {}}, now=60)
+            self.assertEqual(generation["reserved_at"], "1970-01-01T00:01:00Z")
+            pilot.poll_delivery_state({}, state, now=120)
+        self.assertEqual(generation["finished_at"], "1970-01-01T00:02:00Z")
+
+
 class DeliveryAreaTests(unittest.TestCase):
     def test_stage_report_extends_delivery_area(self):
         known = {"Счётчик": ["repo::pilot/pilot.py"]}
