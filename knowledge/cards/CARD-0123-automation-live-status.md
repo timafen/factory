@@ -1,4 +1,4 @@
-Implementation commit: 61e6aa4335024c7bcc45268cb05731e2ad656635 — единый живой статус control-plane и host-автоматик на экране «Автоматизация»
+Implementation commit: 54b9a2fa31b097579bee1dfb49d5eb3e4c2a2a4e — единый живой статус control-plane и host-автоматик на экране «Автоматизация»
 
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
@@ -8,7 +8,7 @@ Status: Implemented
 
 Branch: `factory/a80d06c8-2f1-584ce472-4a9`
 
-Implementation commit: `61e6aa4335024c7bcc45268cb05731e2ad656635`
+Implementation commit: `54b9a2fa31b097579bee1dfb49d5eb3e4c2a2a4e`
 
 What changed: pilot атомарно сохраняет минимальный allowlist-снимок host-служб. Новый read-only endpoint объединяет его с durable Automation, а `/automations` показывает назначение, состояние и последнюю активность каждой строки, сохраняя `no_data` при отказах.
 
