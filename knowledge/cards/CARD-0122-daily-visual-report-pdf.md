@@ -4,14 +4,14 @@ Implementation commit: 22ca069ba4e13595f19dc0ce0f1bc3a26089bbb6 — ежедне
 
 ## HEAD
 
-- Status: PASS — блокирующая утечка Basic Auth исправлена, выката не было.
+- Status: BLOCKED — браузерный E2E не запускается: обязательная проверка report runtime завершает Go-сервер до старта.
 - Branch: `factory/bdc398e9-c14-fa2bde2b-9df`
 - Implementation commit: `22ca069ba4e13595f19dc0ce0f1bc3a26089bbb6`
 - What changed: восстановлена полная реализация ежедневного PDF со снимками «до/после» и сравнительными метриками.
 - What changed: оба capture-скрипта ограничивают credentials origin `https://factory.timafen.com`; чужой challenge не получает `Authorization`.
-- Evidence: `go test -timeout 5m ./...` → PASS; `npm test` → 16 файлов, 174 теста PASS.
-- Evidence: capture security tests, installer, lint, typecheck и production build → PASS; 2 живых Chromium-сценария пропущены без launcher.
-- One next action: повторить Review исправления Basic Auth.
+- Evidence: `go test -timeout 5m ./...` → PASS; `npm test` → 16 файлов, 174 теста PASS; Node report tests → 4 PASS, 2 SKIP без launcher.
+- Evidence: installer, lint, typecheck, tooling, launcher и production build → PASS; `npm run test:browser` → FAIL до Playwright из-за отсутствующего обязательного browser runtime.
+- One next action: снабдить browser E2E fixture тестовым report runtime/launcher и повторить `npm run test:browser` вместе с живыми Chromium-сценариями отчёта.
 
 ## LOG
 
@@ -55,3 +55,16 @@ Implementation commit: 22ca069ba4e13595f19dc0ce0f1bc3a26089bbb6 — ежедне
 ### 2026-08-13 — Implement
 
 Работа заново собрана от свежего `main` без посторонних файлов. В обоих capture-скриптах Basic Auth ограничен точным Factory-origin; автоматический redirect/challenge-тест подтвердил, что чужой HTTP-origin не получает `Authorization`. Полные Go- и UI-наборы, installer, lint, typecheck и production build прошли; два сценария живого Chromium пропущены из-за отсутствующего launcher.
+
+### 2026-08-13 — Verify
+
+Pinned comparison: `d98c9b10c72add76401f216a770da0994f73fe5f...1dc38179fd91a4459bf34dc474a7c3f47cecd7d5`.
+
+| Критерий | Команда / проверка | Результат |
+|---|---|---|
+| Ежедневный PDF, снимки «до/после», метрики и повторная сборка | `go test -timeout 5m ./...`; `node --test report/report.test.mjs` | PASS: все Go-пакеты зелёные; Node 4 PASS, renderer/capture с настоящим Chromium — 2 SKIP без launcher. |
+| UI отчётов и API скачивания | `just ui-check`; Go-тесты report API | PASS: lint/typecheck, 16 файлов и 174 UI-теста; выбор timezone и SHA-256 целостность покрыты. |
+| Sandbox, allowlist и production-сборка | `ops/test-install-server-browser.sh`; `just build`; tooling/launcher suites | PASS: installer проверил firewall, sandbox, allowlist и rollback; три бинарника собраны. |
+| Смежный browser E2E | `npm run test:browser` | BLOCKED: новый startup-check завершил Go-сервер из-за отсутствующего `/usr/local/libexec/factory/browser-runtime/package.json`; Playwright не стартовал. |
+| Живой `/reports` | HTTP-проверка production/staging | BLOCKED: production отвечает 401 без доступных credentials, staging — 404; launcher и `sudo -n` недоступны. |
+| Общая статика | `just check` | Базовый долг вне diff: SA4000 в `internal/worker/attempt_lifecycle_test.go:31`; остальные независимые части набора запущены отдельно и прошли. |
