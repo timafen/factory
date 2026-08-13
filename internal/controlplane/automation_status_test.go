@@ -13,13 +13,14 @@ import (
 
 func TestAutomationStatusCombinesDurableAndAllowlistedHostRows(t *testing.T) {
 	store, durable := createAutomationFixture(t, false)
-	stamp := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	stamp := time.Now().UTC().Add(-time.Minute)
 	snapshot := struct {
 		Automations []protocol.AutomationStatus `json:"automations"`
+		ObservedAt  *time.Time                  `json:"observed_at"`
 	}{Automations: []protocol.AutomationStatus{
 		{Source: "host", ID: "factory-pilot", Status: "running", DataStatus: "ok", LastActivityAt: &stamp},
 		{Source: "host", ID: "not-allowlisted", Status: "running", DataStatus: "ok", LastActivityAt: &stamp},
-	}}
+	}, ObservedAt: &stamp}
 	body, _ := json.Marshal(snapshot)
 	path := filepath.Join(t.TempDir(), "automation-status.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
@@ -49,6 +50,36 @@ func TestAutomationStatusCombinesDurableAndAllowlistedHostRows(t *testing.T) {
 		if seen[id].DataStatus != "no_data" || seen[id].Status != "unknown" {
 			t.Fatalf("%s must remain visible as no_data: %#v", id, seen[id])
 		}
+	}
+}
+
+func TestAutomationStatusExpiredSnapshotKeepsHostRowsAsNoData(t *testing.T) {
+	store := newTestStore(t)
+	stamp := time.Now().UTC().Add(-automationStatusSnapshotTTL - time.Second)
+	body, _ := json.Marshal(struct {
+		Automations []protocol.AutomationStatus `json:"automations"`
+		ObservedAt  *time.Time                  `json:"observed_at"`
+	}{Automations: []protocol.AutomationStatus{{Source: "host", ID: "factory-pilot", Status: "active", DataStatus: "ok", LastActivityAt: &stamp}}, ObservedAt: &stamp})
+	path := filepath.Join(t.TempDir(), "automation-status.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.AutomationStatuses(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Source == "host" && (item.DataStatus != "no_data" || item.Status != "unknown" || item.LastActivityAt != nil) {
+			t.Fatalf("expired snapshot must not look live: %#v", item)
+		}
+	}
+}
+
+func TestAutomationStatusPathUsesConfiguredDataHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", home)
+	if got, want := automationStatusPath(), filepath.Join(home, "pilot", "automation-status.json"); got != want {
+		t.Fatalf("automationStatusPath() = %q, want %q", got, want)
 	}
 }
 

@@ -6857,6 +6857,26 @@ class AutomationStatusSnapshotTests(unittest.TestCase):
         self.assertEqual("ok", rows[0]["data_status"])
         self.assertTrue(all(row["data_status"] == "no_data" for row in rows[1:]))
 
+    def test_snapshot_uses_completed_pilot_cycle_and_converts_local_systemd_time(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+
+        def fake_run(_argv, **_kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=(
+                "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 CDT\n"))
+
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"),
+                                          "2026-08-13T16:00:00Z")
+            with open(target, encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertIn("observed_at", snapshot)
+        self.assertEqual("2026-08-13T16:00:00Z", snapshot["automations"][0]["last_activity_at"])
+        self.assertEqual("2026-08-13T15:00:00Z", snapshot["automations"][1]["last_activity_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

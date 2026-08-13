@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+const automationStatusSnapshotTTL = 5 * time.Minute
 
 var hostAutomationInventory = []protocol.AutomationStatus{
 	{Source: "host", ID: "factory-pilot", Category: "pilot", Title: "Factory pilot", Purpose: "Управляет циклом Фабрики"},
@@ -19,9 +22,9 @@ var hostAutomationInventory = []protocol.AutomationStatus{
 }
 
 func automationStatusPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	home := os.Getenv("FACTORY_DATA_HOME")
+	if home == "" {
+		home = "/opt/factory-data"
 	}
 	return filepath.Join(home, "pilot", "automation-status.json")
 }
@@ -57,11 +60,12 @@ func (s *Store) AutomationStatuses(ctx context.Context, snapshotPath string) ([]
 	body, readErr := os.ReadFile(snapshotPath)
 	var snapshot struct {
 		Automations []protocol.AutomationStatus `json:"automations"`
+		ObservedAt  *time.Time                  `json:"observed_at"`
 	}
 	if readErr == nil {
 		readErr = json.Unmarshal(body, &snapshot)
 	}
-	if readErr == nil {
+	if readErr == nil && snapshot.ObservedAt != nil && time.Since(*snapshot.ObservedAt) <= automationStatusSnapshotTTL {
 		for _, item := range snapshot.Automations {
 			if item.Source == "host" {
 				host[item.ID] = item
