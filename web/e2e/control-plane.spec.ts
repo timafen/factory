@@ -651,6 +651,11 @@ test("shows project readiness card", async ({ page }) => {
     ["secrets", "Секреты"], ["browser", "Браузерный доступ"],
   ].map(([key, title]) => ({ key, title, state: "ready", reason: `${title} подтверждено` }));
   await page.goto("/");
+  const activeServiceWorker = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    return registration.active?.scriptURL ?? null;
+  });
+  expect(activeServiceWorker).toMatch(/\/sw\.js$/);
   const dashboard = await page.evaluate(async () => {
     const response = await fetch("/api/v1/dashboard");
     if (!response.ok) throw new Error(`dashboard returned ${response.status}`);
