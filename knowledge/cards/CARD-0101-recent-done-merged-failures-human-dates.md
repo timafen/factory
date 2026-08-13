@@ -17,7 +17,7 @@ Implementation commit: e43462307fcd7c25003eecfe693fd21a9dfe8ba7 — исходн
 
 ## Проверка
 
-`python3 -m unittest -v pilot.test_pilot.RecentDoneTest`
+`python3 -m unittest -v pilot.test_pilot.RecentDoneTest.test_separates_merged_and_failed_with_independent_limits`
 
 ## Связь со спецификацией
 
