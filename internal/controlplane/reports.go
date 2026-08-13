@@ -89,7 +89,9 @@ func (service *DailyReportService) createPreviousDay(ctx context.Context) error 
 		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
 		return err
 	}
-	service.loadCaptureImages(works)
+	if !service.loadCaptureImages(works) {
+		return service.store.deferDailyReport(ctx, date, service.location.String(), token)
+	}
 	metricsJSON, err := json.Marshal(report.Metrics)
 	if err != nil {
 		service.store.failDailyReport(ctx, date, service.location.String(), token, err)
@@ -164,6 +166,21 @@ func (s *Store) claimDailyReport(ctx context.Context, date, timezone string) (st
 
 func (s *Store) failDailyReport(ctx context.Context, date, timezone, token string, cause error) {
 	_, _ = s.db.ExecContext(ctx, `UPDATE daily_reports SET status='error',error=?,updated_at=? WHERE report_date=? AND timezone=? AND status='running' AND claim_token=?`, cause.Error(), s.now().UTC().Format(time.RFC3339Nano), date, timezone, token)
+}
+
+func (s *Store) deferDailyReport(ctx context.Context, date, timezone, token string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE daily_reports SET status='pending',claim_token='',error='waiting for required captures',updated_at=? WHERE report_date=? AND timezone=? AND status='running' AND claim_token=?`, s.now().UTC().Format(time.RFC3339Nano), date, timezone, token)
+	if err != nil {
+		return unavailable(err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return unavailable(err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("daily report claim expired")
+	}
+	return nil
 }
 
 func (s *Store) dailyReportData(ctx context.Context, date string, location *time.Location) (protocol.DailyReport, []reportVisualWork, error) {
@@ -252,11 +269,16 @@ func (s *Store) dailyReportMetrics(ctx context.Context, start, end time.Time) (m
 	return metric, nil
 }
 
-func (service *DailyReportService) loadCaptureImages(works []reportVisualWork) {
+func (service *DailyReportService) loadCaptureImages(works []reportVisualWork) bool {
+	ready := true
 	for index := range works {
 		works[index].BeforeImage = service.captureDataURL(works[index].Before)
 		works[index].AfterImage = service.captureDataURL(works[index].After)
+		if works[index].BeforeImage == "" || works[index].AfterImage == "" {
+			ready = false
+		}
 	}
+	return ready
 }
 
 func (service *DailyReportService) captureDataURL(capture protocol.VisualCapture) string {

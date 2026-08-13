@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +83,99 @@ func TestDailyReportServiceAutomaticallyRetriesWithoutDuplicates(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(root, published))
 	if err != nil || !strings.HasPrefix(string(content), "%PDF-") {
 		t.Fatalf("published PDF=%q, err=%v", content, err)
+	}
+}
+
+type sequentialPNGWriter struct{ calls int }
+
+func (writer *sequentialPNGWriter) Capture(_ context.Context, _ protocol.VisualTarget, output string) error {
+	writer.calls++
+	return os.WriteFile(output, append([]byte("\x89PNG\r\n\x1a\n"), []byte(fmt.Sprintf("capture-%d", writer.calls))...), 0o600)
+}
+
+type documentReportRenderer struct{ calls int }
+
+func (renderer *documentReportRenderer) Render(_ context.Context, document, output string) error {
+	renderer.calls++
+	return os.WriteFile(output, append([]byte("%PDF-1.7\n"), []byte(document)...), 0o600)
+}
+
+func TestDailyReportWaitsForStartupCapturesAndBuildsAfterRestart(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	worker := registerTestWorker(t, store, workerA, 1, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/report-startup-race"})
+	task := createTestTask(t, store, "report-startup-race", workerA, worker.Repositories[0].ID)
+	if _, err := store.db.Exec(`INSERT INTO task_visual_targets(work_id,url,state_text,viewport_width,viewport_height,created_at) VALUES(?,?,?,?,?,?)`, task.Task.WorkID, "https://example.test/listings", "Готово", 1280, 720, now.AddDate(0, 0, -1).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"before", "after"} {
+		if _, err := store.db.Exec(`INSERT INTO visual_captures(work_id,phase,status,updated_at) VALUES(?,?, 'pending',?)`, task.Task.WorkID, phase, now.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	firstRenderer := &documentReportRenderer{}
+	firstService := &DailyReportService{store: store, logger: logger, renderer: firstRenderer, root: root, location: time.UTC, checkEvery: 5 * time.Millisecond}
+	firstContext, stopFirst := context.WithCancel(context.Background())
+	firstDone := make(chan struct{})
+	go func() { defer close(firstDone); firstService.Run(firstContext) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		var status, reason string
+		_ = store.db.QueryRow(`SELECT status,error FROM daily_reports WHERE report_date='2026-08-12' AND timezone='UTC'`).Scan(&status, &reason)
+		if status == "pending" && reason == "waiting for required captures" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("report did not wait for startup captures: status=%q reason=%q", status, reason)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stopFirst()
+	<-firstDone
+	if firstRenderer.calls != 0 {
+		t.Fatalf("report rendered before captures were ready: calls=%d", firstRenderer.calls)
+	}
+
+	restartedRenderer := &documentReportRenderer{}
+	restartedService := &DailyReportService{store: store, logger: logger, renderer: restartedRenderer, root: root, location: time.UTC, checkEvery: 5 * time.Millisecond}
+	restartedContext, stopRestarted := context.WithCancel(context.Background())
+	restartedDone := make(chan struct{})
+	go func() { defer close(restartedDone); restartedService.Run(restartedContext) }()
+	capturer := &sequentialPNGWriter{}
+	captureService := &VisualCaptureService{store: store, logger: logger, capturer: capturer, root: root, captureTimeout: time.Second}
+	captureService.runOnce(context.Background())
+
+	var published string
+	deadline = time.Now().Add(time.Second)
+	for {
+		var status string
+		_ = store.db.QueryRow(`SELECT status,pdf_path FROM daily_reports WHERE report_date='2026-08-12' AND timezone='UTC'`).Scan(&status, &published)
+		if status == "ready" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("report did not rebuild after captures appeared: status=%q capture calls=%d", status, capturer.calls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stopRestarted()
+	<-restartedDone
+	content, err := os.ReadFile(filepath.Join(root, published))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range []string{"capture-1", "capture-2"} {
+		encoded := base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), []byte(capture)...))
+		if !strings.Contains(string(content), encoded) {
+			t.Fatalf("published PDF does not contain %s capture", capture)
+		}
+	}
+	if restartedRenderer.calls != 1 {
+		t.Fatalf("renderer calls after restart=%d, want 1", restartedRenderer.calls)
 	}
 }
 
