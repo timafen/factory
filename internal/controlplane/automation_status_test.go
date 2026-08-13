@@ -1,0 +1,69 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/owainlewis/factory/internal/protocol"
+)
+
+func TestAutomationStatusCombinesDurableAndAllowlistedHostRows(t *testing.T) {
+	store, durable := createAutomationFixture(t, false)
+	stamp := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	snapshot := struct {
+		Automations []protocol.AutomationStatus `json:"automations"`
+	}{Automations: []protocol.AutomationStatus{
+		{Source: "host", ID: "factory-pilot", Status: "running", DataStatus: "ok", LastActivityAt: &stamp},
+		{Source: "host", ID: "not-allowlisted", Status: "running", DataStatus: "ok", LastActivityAt: &stamp},
+	}}
+	body, _ := json.Marshal(snapshot)
+	path := filepath.Join(t.TempDir(), "automation-status.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.AutomationStatuses(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("got %d rows, want durable plus four host rows", len(items))
+	}
+	seen := map[string]protocol.AutomationStatus{}
+	for _, item := range items {
+		seen[item.ID] = item
+	}
+	if seen[durable.Automation.ID].Category != "automation" {
+		t.Fatalf("durable Automation missing: %#v", seen)
+	}
+	if seen["factory-pilot"].Status != "running" {
+		t.Fatalf("pilot status = %#v", seen["factory-pilot"])
+	}
+	if _, ok := seen["not-allowlisted"]; ok {
+		t.Fatal("non-allowlisted unit leaked")
+	}
+	for _, id := range []string{"factory-release-broker", "factory-intake", "factory-janitor"} {
+		if seen[id].DataStatus != "no_data" || seen[id].Status != "unknown" {
+			t.Fatalf("%s must remain visible as no_data: %#v", id, seen[id])
+		}
+	}
+}
+
+func TestAutomationStatusUnavailableSnapshotKeepsHostRows(t *testing.T) {
+	store := newTestStore(t)
+	items, err := store.AutomationStatuses(context.Background(), filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(hostAutomationInventory) {
+		t.Fatalf("got %d host rows", len(items))
+	}
+	for _, item := range items {
+		if item.DataStatus != "no_data" || item.LastActivityAt != nil {
+			t.Fatalf("bad fallback: %#v", item)
+		}
+	}
+}

@@ -6834,5 +6834,29 @@ class EpicCompletionReceiptTests(unittest.TestCase):
         launch.assert_called_once_with(self.conf, mock.ANY, 1, {}, {})
 
 
+class AutomationStatusSnapshotTests(unittest.TestCase):
+    def test_allowlist_and_partial_failure_remain_visible(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+
+        def fake_run(argv, **_kwargs):
+            if "factory-pilot.service" in argv:
+                return types.SimpleNamespace(returncode=0, stdout=(
+                    "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 UTC\n"))
+            return types.SimpleNamespace(returncode=1, stdout="")
+
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"))
+            with open(target, encoding="utf-8") as handle:
+                rows = json.load(handle)["automations"]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual(["factory-pilot", "factory-release-broker", "factory-intake", "factory-janitor"],
+                         [row["id"] for row in rows])
+        self.assertEqual("ok", rows[0]["data_status"])
+        self.assertTrue(all(row["data_status"] == "no_data" for row in rows[1:]))
+
+
 if __name__ == "__main__":
     unittest.main()

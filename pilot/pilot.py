@@ -5499,7 +5499,48 @@ def detect_limits(conf, tasks, workers_by_id):
 
 
 DASH_PATH = f"{HOME}/pilot/dashboard.json"
+AUTOMATION_STATUS_PATH = f"{HOME}/pilot/automation-status.json"
+AUTOMATION_STATUS_UNITS = (
+    ("factory-pilot", "pilot"),
+    ("factory-release-broker", "release_broker"),
+    ("factory-intake", "release"),
+)
 _dash_slow = {"at": 0, "data": {}}
+
+
+def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log"):
+    """Write a minimal allowlisted host snapshot; one failed unit stays visible."""
+    run = run or subprocess.run
+    rows = []
+    for unit, category in AUTOMATION_STATUS_UNITS:
+        row = {"source": "host", "id": unit, "category": category,
+               "status": "unknown", "data_status": "no_data"}
+        try:
+            result = run(["systemctl", "show", f"{unit}.service",
+                          "--property=ActiveState", "--property=ActiveEnterTimestamp"],
+                         capture_output=True, text=True, timeout=5, check=False)
+            fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+            timestamp = fields.get("ActiveEnterTimestamp", "").strip()
+            parsed = datetime.datetime.strptime(timestamp, "%a %Y-%m-%d %H:%M:%S %Z") if timestamp else None
+            if result.returncode == 0 and fields.get("ActiveState") and parsed:
+                row.update(status=fields["ActiveState"], data_status="ok",
+                           last_activity_at=parsed.replace(tzinfo=datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+        except Exception:
+            pass
+        rows.append(row)
+    janitor = {"source": "host", "id": "factory-janitor", "category": "janitor",
+               "status": "unknown", "data_status": "no_data"}
+    try:
+        with open(janitor_log, encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()[-100:]
+        matches = [re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})", line) for line in lines]
+        stamps = [match.group(0) for match in matches if match]
+        if stamps:
+            janitor.update(status="completed", data_status="ok", last_activity_at=stamps[-1])
+    except (OSError, UnicodeError):
+        pass
+    rows.append(janitor)
+    save(AUTOMATION_STATUS_PATH, {"automations": rows})
 
 PROJECT_READINESS_CHECKS = (
     ("repository", "Репозиторий"),
@@ -7130,6 +7171,10 @@ def cycle(conf, state):
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
+    try:
+        write_automation_status()
+    except Exception as e:
+        log("automation_status_error", repr(e))
 
     # Настоящие проценты подписок — в файл и в уведомления на 80/95.
     try:
