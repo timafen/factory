@@ -1,18 +1,26 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: ceaa9d179ff816edc1c58adc047cb35ef280765f — Node закреплён в доверенной цепочке проверок Gate.
+Implementation commit: 084724917e38e5c30a75cffa75b20320dfde23c0 — Gate получает commit доверенным Git, а snapshot умеет fallback через свежий server.
 
 ## HEAD
 
 Status: Implemented — awaiting verification.
-Branch: factory/1bb15dcd-e42-03e965a3-f13.
-Implementation commit: ceaa9d179ff816edc1c58adc047cb35ef280765f — Node закреплён в доверенной цепочке проверок Gate.
-What changed: Gate извлекает из проверенного Git-commit полный набор скриптов и зависимостей в root-owned каталог, недоступный рабочему пользователю.
-What changed: UI-проверки запускают Node, npx и npm только абсолютными root-owned путями; подмена через PATH не попадает в цепочку.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `bash ops/test-fx-factory-release.sh` → PASS, включая подмену Gate, каталога и PATH/Node.
-One next action: выполнить независимую проверку перед слиянием.
+Branch: factory/25336488-816-35e6ae85-cd2.
+Implementation commit: 084724917e38e5c30a75cffa75b20320dfde23c0 — Gate получает commit доверенным Git, а snapshot умеет fallback через свежий server.
+What changed: clone, checkout, SHA и subject выполняются `/usr/bin/git`; Gate извлекается только из закреплённого commit.
+What changed: отказ установленного server при новой схеме запускает backup свежесобранным server; добавлена целевая фикстура.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `git diff --check` → PASS; полный shell-suite не завершён из-за crash-cleanup сценария.
+One next action: повторить полный shell-suite в чистой среде и проверить fallback.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+После ревью clone/checkout, определение commit и subject переведены с `as_user git`
+на root-owned `/usr/bin/git`, поэтому подменённый PATH-Git не участвует до проверки
+объекта. Возвращён fallback snapshot через свежесобранный server, когда установленный
+server не знает новую схему; фикстура проверяет оба сценария. `bash -n` и `git diff --check`
+прошли; полный shell-suite остановился на существующем crash-cleanup разделе.
 
 ### 2026-08-12 — Implement
 
