@@ -75,6 +75,18 @@ class RenumberHistoricalCardsTests(unittest.TestCase):
             )
         self.assertTrue((self.root / "knowledge/cards/CARD-0001-alpha.md").exists())
 
+    def test_bare_card_filename_participates_in_duplicate_detection(self):
+        bare = self.root / "knowledge/cards/CARD-0002.md"
+        bare.write_text("status in bare card\n", encoding="utf-8")
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "knowledge/cards/CARD-0002.md -> knowledge/cards/CARD-0005.md",
+            result.stdout,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 
-CARD_RE = re.compile(r"^(CARD-(\d{4}))-.+\.md$")
+CARD_RE = re.compile(r"^(CARD-(\d{4}))(?:-.+)?\.md$")
 
 
 def card_files(root: Path) -> list[Path]:
