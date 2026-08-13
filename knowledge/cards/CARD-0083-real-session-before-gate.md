@@ -2,15 +2,25 @@
 
 ## HEAD
 
-Status: READY FOR REVIEW: первая установка на чистом хосте оформлена как ручное действие root; Gate остаётся закрыт до живого bootstrap marker.
-Branch: factory/b7045add-70d-5f739684-e56.
-Implementation commit: e5b9e546f004efdf852b06f60ca876d5df3c72ae — cgroup Gate сохранён при перебазировке на усиленный trusted handshake.
-What changed: `ops/README.md` требует root checkout, ручную сверку detached `origin/main` и запуск install-скрипта до первого `fx`.
-What changed: root-fixture installer-теста живёт в защищённом `/run`, начинает без helper и доказывает, что установка не запускает `fx`.
-Evidence: `bash -n ops/install-factory-control.sh ops/test-install-factory-control.sh` и `bash ops/test-install-factory-control.sh` → PASS.
-One next action: root на целевом хосте выполняет процедуру из `ops/README.md`, затем запускает живой `fx factory cgroup-helper-bootstrap` для marker.
+Status: READY FOR REVIEW: чистый host bootstrap выполним, а cgroup удаляется только после остановки всех Gate-процессов.
+Branch: factory/b795a128-396-e4ee8365-bfc.
+Implementation commit: c1e976a6f0e85b2355962094774caf632ff6bd19 — добавлены полный root-bootstrap, TERM/KILL cleanup и проверка атомарного отката.
+What changed: `ops/README.md` даёт точные root-команды создания защищённого `/run/factory-release-gate/bootstrap-*`, live probe и проверки marker.
+What changed: cleanup ограниченно ждёт после TERM, затем посылает KILL через helper, повторно проверяет пустоту cgroup и только потом удаляет её.
+Evidence: shell release/bootstrap/helper/installer tests → PASS (root live probe → SKIP без root); Go tests/build и 160 UI tests/build → PASS.
+One next action: выполнить root-процедуру из `ops/README.md` на новом cgroup v2-хосте и проверить созданный marker.
 
 ## LOG
+
+### 2026-08-12 — Implement
+
+Закрыты замечания повторного review: инструкция теперь содержит выполнимую с
+нуля подготовку защищённого source-каталога и проверку marker; cleanup после
+TERM ограниченно ждёт, добивает отделившийся TERM-устойчивый процесс через
+cgroup helper, повторно проверяет пустоту и лишь затем удаляет группу. Возвращён
+failpoint-тест отката между заменами installer. Release, helper и installer
+shell-тесты, Go tests/build и 160 UI tests/build прошли; root live probe на
+непривилегированном worker ожидаемо завершился SKIP.
 
 ### 2026-08-12 — Implement
 
