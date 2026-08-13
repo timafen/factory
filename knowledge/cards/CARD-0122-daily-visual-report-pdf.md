@@ -1,18 +1,26 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 270854f9d720299b94411f78f6fb310cabf48d17 — снимки PDF ограничены изолированным Chromium и разрешёнными хостами, а сбои URL, recovery mode и БД обработаны безопасно
+Implementation commit: 7fa837290acb91b1eb424b7fc81931eb0ec8396a — ежедневный PDF и его проверка ошибки БД готовы к Review
 
 ## HEAD
 
-- Status: BLOCKED: новый тест ошибки БД детерминированно падает при повторном закрытии хранилища
-- Branch: `factory/28591ece-f5d-5baef51e-932`
-- Implementation commit: `270854f9d720299b94411f78f6fb310cabf48d17`
+- Status: IMPLEMENTED / VERIFY PASS
+- Branch: `factory/e90e2bce-f51-76fd19d6-72d`
+- Implementation commit: `7fa837290acb91b1eb424b7fc81931eb0ec8396a`
 - What changed: ежедневный PDF сохраняет проверенные снимки и метрики «до/после»; Chromium запускается только через изолирующий launcher с sandbox и allowlist.
-- What changed: malformed URL отклоняется без panic, recovery mode не создаёт report storage, ошибка чтения БД возвращает 5xx.
-- Evidence: web test/lint/typecheck/build и Node PDF → PASS; `go test ./internal/controlplane -run '^TestDailyReportDownloadReturnsServerErrorWhenDatabaseFails$' -count=5` → FAIL 5/5 в `t.Cleanup` (`sql: database is closed`).
-- One next action: сделать cleanup идемпотентным в тесте ошибки БД и вернуть ветку на Verify.
+- What changed: тест ошибки БД владеет своим хранилищем, поэтому проверяет HTTP 5xx без ложного сбоя повторного cleanup.
+- Evidence: регрессия закрытой БД 5/5, Node PDF 2/2, web 179/179, полный `go test -timeout 5m ./...`, lint/typecheck/build и browser shell → PASS.
+- One next action: провести Review поставки и слить ветку при PASS.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Устранено последнее блокирующее падение: тест ошибки БД открывает отдельное
+хранилище и после намеренного закрытия проверяет именно ответ 5xx. После rebase
+state-машина сохранила и retry автоматизаций, и постановку снимка `after`;
+`web/dist` пересобран. Регрессия прошла 5/5, полный Go-набор и 179 web-тестов,
+Node PDF, browser shell, lint, typecheck и production build завершились успешно.
 
 ### 2026-08-13 — Verify
 
