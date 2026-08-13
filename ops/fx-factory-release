@@ -965,15 +965,21 @@ printf 'services.tsv\t-\t600\t\n' >>"$inventory"
 
 step "создаю и повторно проверяю SQLite online snapshot"
 snapshot="$stage/database.sqlite3"
-"$SERVER_BIN" -database "$DATABASE" -backup "$snapshot" \
+# Снимок делает рабочий пользователь: сервер требует, чтобы снимал хозяин базы
+# (root им не является). Пишет в свою папку сборки, готовое перекладывает root.
+snapshot_build="$work/database.sqlite3"
+as_user "$SERVER_BIN" -database "$DATABASE" -backup "$snapshot_build" \
   || {
     fail "текущий server не знает новую схему — создаю snapshot свежесобранным server"
-    rm -f -- "$snapshot" "$snapshot-wal" "$snapshot-shm" "$snapshot.v2-control-plane"
-    "$work/factory-server" -database "$DATABASE" -backup "$snapshot" \
+    as_user rm -f -- "$snapshot_build" "$snapshot_build-wal" "$snapshot_build-shm" "$snapshot_build.v2-control-plane"
+    as_user "$work/factory-server" -database "$DATABASE" -backup "$snapshot_build" \
       || { fail "собранный server также не смог создать проверенный snapshot"; cleanup; exit 4; }
   }
-[ -f "$snapshot" ] && [ ! -e "$snapshot-wal" ] && [ ! -e "$snapshot-shm" ] \
+[ -f "$snapshot_build" ] && [ ! -e "$snapshot_build-wal" ] && [ ! -e "$snapshot_build-shm" ] \
   || { fail "snapshot не является standalone SQLite"; cleanup; exit 4; }
+mv -- "$snapshot_build" "$snapshot" \
+  && mv -- "$snapshot_build.v2-control-plane" "$snapshot.v2-control-plane" \
+  || { fail "не смог переложить snapshot в поколение"; cleanup; exit 4; }
 chmod 600 "$snapshot" "$snapshot.v2-control-plane"
 ledger=$(database_ledger "$snapshot") || { cleanup; exit 4; }
 schema_digest=$(python3 - "$snapshot" <<'PY'
