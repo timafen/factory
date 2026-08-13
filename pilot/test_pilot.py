@@ -2892,6 +2892,46 @@ class ClosedWorkLifecycleTests(unittest.TestCase):
             "Закрытая работа", current, [self.old, current]), "")
 
 
+class DeadEndSnapshotTests(unittest.TestCase):
+    def test_all_tasks_reads_every_page_and_snapshot_is_idempotent(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        snapshot_path = os.path.join(temporary.name, "dead_end_snapshot.json")
+        works_path = os.path.join(temporary.name, "works.json")
+        status_path = os.path.join(temporary.name, "work_status.json")
+        config_path = os.path.join(temporary.name, "config.json")
+        pilot.save(works_path, {})
+        pilot.save(status_path, {})
+        pilot.save(config_path, {})
+        first = [{"id": f"task-{i}", "work_id": f"work-{i}",
+                  "title": f"[auto] [1/1] Work {i}", "state": "failed"}
+                 for i in range(100)]
+        second = first[-1:] + [{"id": f"task-{i}", "work_id": f"work-{i}",
+                                "title": f"[auto] [1/1] Work {i}", "state": "failed"}
+                               for i in range(100, 102)]
+        calls = []
+        def fake_api(path, body=None):
+            calls.append(path)
+            if "cursor=" in path:
+                return {"tasks": second}
+            return {"tasks": first, "next_cursor": "page-2"}
+        with mock.patch.object(pilot, "api", side_effect=fake_api), \
+                mock.patch.object(pilot, "WORKS_PATH", works_path), \
+                mock.patch.object(pilot, "DEAD_END_SNAPSHOT_PATH", snapshot_path), \
+                mock.patch.object(pilot, "CONF_PATH", config_path), \
+                mock.patch.object(pilot, "HOME", temporary.name):
+            tasks = pilot.all_tasks(page_limit=100)
+            first_snapshot = pilot.write_dead_end_snapshot(tasks)
+            second_snapshot = pilot.write_dead_end_snapshot(tasks)
+        self.assertEqual(len(tasks), 103)
+        self.assertEqual(calls, ["/tasks?limit=100", "/tasks?limit=100&cursor=page-2"])
+        self.assertEqual(first_snapshot["count"], 102)
+        self.assertEqual(first_snapshot["reported_count"], 74)
+        self.assertEqual(first_snapshot["missing"][0]["reason"], "missing_immutable_snapshot")
+        self.assertEqual(first_snapshot["digest"], second_snapshot["digest"])
+        self.assertEqual(first_snapshot["captured_at"], second_snapshot["captured_at"])
+
+
 class WorkOriginAttributionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -2953,6 +2993,7 @@ class WorkArchiveCleanupTests(unittest.TestCase):
         self.now = 1_786_320_000
         self.works = {}
         self.statuses = {}
+        self.snapshot = {}
         self.saved = []
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -3000,6 +3041,8 @@ class WorkArchiveCleanupTests(unittest.TestCase):
             return self.works
         if path.endswith("/pilot/work_status.json"):
             return self.statuses
+        if path == pilot.DEAD_END_SNAPSHOT_PATH:
+            return self.snapshot
         return default
 
     def save(self, path, value):
@@ -3008,6 +3051,8 @@ class WorkArchiveCleanupTests(unittest.TestCase):
             self.works = value
         elif path.endswith("/pilot/work_status.json"):
             self.statuses = value
+        elif path == pilot.DEAD_END_SNAPSHOT_PATH:
+            self.snapshot = value
 
     def run_cleanup(self, tasks, questions=None, stopped=None):
         conf = {

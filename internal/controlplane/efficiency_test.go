@@ -60,6 +60,9 @@ func TestEfficiencyUsesMergedProductWorkAndHonestDenominators(t *testing.T) {
 		map[string]any{"id": "factory-7", "at": now.Add(-30 * time.Minute).Format(time.RFC3339), "kind": "failed_release", "rollback": true},
 		map[string]any{"id": "factory-7", "at": now.Add(-29 * time.Minute).Format(time.RFC3339), "kind": "failed_release", "rollback": true},
 	})
+	if err := os.WriteFile(filepath.Join(home, "pilot", "dead_end_snapshot.json"), []byte(`{"digest":"fixture-dead-end","entries":[{"task_id":"task-dead-end","decision":"included"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	summary, err := store.Efficiency(context.Background())
 	if err != nil {
