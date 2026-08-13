@@ -4,13 +4,13 @@ Implementation commit: 0369e427f480be3aca2e390ebb4b972c3c62c901 — закреп
 
 ## HEAD
 
-Status: Implemented + Tested — awaiting automatic Review.
+Status: Verified PASS — awaiting automatic merge into main and staging.
 Branch: factory/8fafbd33-c41-07307038-01c
 Implementation commit: 0369e427f480be3aca2e390ebb4b972c3c62c901 — регрессионный тест маршрутизации Verify.
 What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
 What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
-Evidence: `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v` → PASS; `git diff --check` → PASS. Полный `just check` остановлен внешним SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
-One next action: автоматическому Review проверить опубликованный candidate; после APPROVE Verify сама передаст его в `main` и staging.
+Evidence: закреплённое сравнение `b6ae79be…...65a62cf2…` содержит только три заявленных файла; целевая Verify-регрессия PASS; `git diff --check` PASS. Полный `just check` остановлен внешним SA4000 в `internal/worker/attempt_lifecycle_test.go:31`.
+One next action: оркестратору автоматически слить candidate в `main` и развернуть staging.
 
 ## LOG
 
@@ -63,3 +63,17 @@ Candidate опубликован для повторного автоматич�
 После пересборки от свежего `origin/main` HEAD карточки приведён к фактической
 ветке candidate, а стабильная строка реализации указывает на кодовый коммит
 этой ветки. Целевой регрессионный тест Verify и `git diff --check` прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Verify не обещает ручное слияние | `python3 -m unittest pilot.test_pilot.VerifyDecisionGuideTests -v`; проверка prompt в `pilot/pilot.py` | PASS: успешная Verify автоматически ведёт в `main` и staging; решение человека требуется только для production. |
+| Реализационный коммит стабилен | `cat-file`; `merge-base --is-ancestor`; `diff-tree` для `0369e427…` | PASS: коммит существует, входит в candidate и меняет `pilot/test_pilot.py`. |
+| Область поставки закреплена | isolated bare fetch; `git diff --name-only b6ae79be…...65a62cf2…` | PASS: изменены только CARD-0083, CARD-0119 и `pilot/test_pilot.py`. |
+| Полный набор проекта | `timeout 1800s just check` | НАХОДКА вне области: vet и govulncheck PASS; известный SA4000 в `internal/worker/attempt_lifecycle_test.go:31` остановил staticcheck. |
+| Смежная Python-регрессия | `python3 -m unittest pilot.test_pilot -v` | НАХОДКА вне области: 255 запусков, 13 skipped, две известные restart-проверки `CorrectionProvenanceStormTests` FAIL; остальные 240 PASS. |
+| Чистота поставки | pinned `git diff --check`; `git status --short` | PASS: пробельных ошибок и посторонних файлов нет. |
+
+Pinned verify: base `b6ae79bec2477c8322d7575735b2cfa39ce56577`, candidate
+`65a62cf2d5afd0bc8bffe9e58034bbbf35716b86`.
