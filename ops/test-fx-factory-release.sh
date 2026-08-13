@@ -869,6 +869,47 @@ commit_fixture_change() {
       /usr/bin/git -C "$repo" mv knowledge/old.md knowledge/new.md
       paths=(knowledge/old.md knowledge/new.md)
       ;;
+    merge)
+      /usr/bin/git -C "$repo" checkout -qb documentation-branch
+      mkdir -p "$repo/knowledge"
+      printf 'Документ из ветки\n' >"$repo/knowledge/branch.md"
+      /usr/bin/git -C "$repo" add -- knowledge/branch.md
+      /usr/bin/git -C "$repo" commit -qm 'Документ в ветке'
+      /usr/bin/git -C "$repo" checkout -q main
+      printf 'Документ из основной ветки\n' >"$repo/knowledge/main.md"
+      /usr/bin/git -C "$repo" add -- knowledge/main.md
+      /usr/bin/git -C "$repo" commit -qm 'Документ в основной ветке'
+      /usr/bin/git -C "$repo" merge --no-ff -qm 'Слить документы' documentation-branch
+      return
+      ;;
+    root)
+      /usr/bin/git -C "$repo" checkout --orphan documentation-root
+      /usr/bin/git -C "$repo" rm -rf --cached . >/dev/null
+      /usr/bin/git -C "$repo" add -f web ops pilot intake
+      /usr/bin/git -C "$repo" commit -qm 'Документ без родителя'
+      /usr/bin/git -C "$repo" branch -M main
+      return
+      ;;
+    empty)
+      /usr/bin/git -C "$repo" commit --allow-empty -qm 'Пустое изменение'
+      return
+      ;;
+    submodule)
+      submodule_sha=$(/usr/bin/git -C "$repo" rev-parse HEAD)
+      /usr/bin/git -C "$repo" update-index --add --cacheinfo "160000,$submodule_sha,modules/fixture"
+      /usr/bin/git -C "$repo" commit -qm 'Добавить подмодуль'
+      return
+      ;;
+    git-error)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ для ошибки Git\n' >"$repo/knowledge/git-error.md"
+      paths=(knowledge/git-error.md)
+      ;;
+    newline)
+      mkdir -p "$repo/knowledge"
+      printf 'Документ с переводом строки в имени\n' >"$repo/knowledge/"$'line\nbreak.md'
+      paths=($'knowledge/line\nbreak.md')
+      ;;
   esac
   /usr/bin/git -C "$repo" add -- "${paths[@]}"
   /usr/bin/git -C "$repo" commit -qm "Проверка $kind"
@@ -881,6 +922,25 @@ assert_full_gate() {
   for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' 'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
     grep -Fx "$gate" "$case_dir/gates" >/dev/null || fail "${case_dir##*/} did not run $gate"
   done
+}
+
+# Make only the classifier's diff-tree lose its checked-out tree object.  The
+# source repository remains intact, so clone and checkout have already passed;
+# this proves a Git error falls back to the full Gate.
+break_cloned_tree_object() {
+  local case_dir=$1 repo="$case_dir/repo" tree object
+  tree=$(/usr/bin/git -C "$repo" rev-parse HEAD^{tree})
+  object="${tree:0:2}/${tree:2}"
+  (
+    for ((i = 0; i < 500; i++)); do
+      for clone in "$case_dir/releases"/build-*/src; do
+        [ -d "$clone/.git" ] || continue
+        rm -f -- "$clone/.git/objects/$object"
+      done
+      /bin/sleep 0.005
+    done
+  ) &
+  broken_tree_pid=$!
 }
 
 if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
@@ -958,6 +1018,24 @@ for kind in go mixed mode symlink rename; do
     || { cat "$full_gate/output" >&2; fail "$kind fixture release failed"; }
   assert_full_gate "$full_gate"
 done
+
+for kind in merge root empty submodule newline; do
+  full_gate="$temporary/fail-closed-$kind"
+  make_fixture "$full_gate" parallel-success
+  commit_fixture_change "$full_gate" "$kind"
+  run_release "$full_gate" parallel-success \
+    || { cat "$full_gate/output" >&2; fail "$kind fixture release failed"; }
+  assert_full_gate "$full_gate"
+done
+
+git_error="$temporary/fail-closed-git-error"
+make_fixture "$git_error" parallel-success
+commit_fixture_change "$git_error" git-error
+break_cloned_tree_object "$git_error"
+run_release "$git_error" parallel-success \
+  || { cat "$git_error/output" >&2; fail "Git error fixture release failed"; }
+wait "$broken_tree_pid"
+assert_full_gate "$git_error"
 
 bad_markdown="$temporary/docs-whitespace"
 make_fixture "$bad_markdown" parallel-success
