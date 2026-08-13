@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Status: Implemented and tested — awaiting human merge.
+Status: Verified PASS — awaiting human merge.
 
 Branch: `factory/eac8c5c9-297-d0771bdc-319`.
 
@@ -10,7 +10,7 @@ Implementation commit: 633abb73257d9315d1e8600eb4fea144a773daa8 — явный C
 
 What changed: `factory-server -database SOURCE -backup DEST` теперь сразу использует явно заданные пути. Обычный запуск, restore и backup без явной базы сохраняют прежнюю подготовку defaults.
 
-Evidence: целевой subprocess-тест, полный `go test -count=1 -timeout 5m ./...` и `go build ./...` завершились успешно. Кандидат `ba97a673ba75e18a65c05cf02dfe20b6cd78b52b` опубликован без изменений в утверждённой ветке review и подтверждён через `git ls-remote`.
+Evidence: pinned-кандидат `97c295653dd3122c0b69904280625ff292f30c73` собран с чистым Go-кэшем; полный набор и целевые subprocess-проверки прошли. Четыре формы CLI создали автономные снимки без `HOME`, не изменив исходную базу.
 
 One next action: человеку выполнить merge этой ветки в `main`.
 
@@ -55,3 +55,14 @@ One next action: человеку выполнить merge этой ветки �
 | Смежные default/bootstrap и ошибка отсутствующего источника сохранены | целевой набор тестов `TestBackupModeRejectsMissingSourceWithoutCreatingState`, `TestDefaultDatabasePath…`, `TestServerBootstrapConfig…` | PASS |
 | Полный набор и сборка | `go test -count=1 -timeout 5m ./...`; `go build ./...` | PASS; PASS |
 | Область изменений | `git diff --name-only 99701704b37e8740db3fdbe38c0193917570da5c...cd7744ca50a7200d4709e0b41a74fffc86fa451a` | Только `cmd/factory-server/main.go`, `cmd/factory-server/main_test.go`, эта карточка |
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Кандидат закреплён относительно свежей удалённой базы | `git ls-remote --symref origin HEAD`; изолированный bare-fetch `99701704b37e8740db3fdbe38c0193917570da5c...97c295653dd3122c0b69904280625ff292f30c73` | PASS: default ref — `refs/heads/main`; обе полные SHA совпали с remote |
+| Явные source и backup не требуют домашнюю папку во всех поддержанных формах CLI | `go test -count=1 -v ./cmd/factory-server -run '^(TestBackupCLICreatesSnapshotWithoutHome|TestBackupWithExplicitDatabaseHonorsFlagGrammar|…)$'` | PASS: `-flag value`, `--flag value`, `-flag=value`, `--flag=value` прошли без `HOME`, data-home переменных и доступного bootstrap-файла |
+| Снимок автономен, источник не изменяется | `TestBackupCLICreatesSnapshotWithoutHome` | PASS: backup и marker — обычные файлы без WAL/SHM; source и marker после четырёх запусков побайтово равны исходным |
+| Смежные default/bootstrap и ошибка отсутствующего source сохранены | `TestBackupModeRejectsMissingSourceWithoutCreatingState`, `TestDefaultDatabasePath…`, `TestServerBootstrapConfig…` | PASS: все восемь целевых верхнеуровневых тестов и их подслучаи прошли |
+| Чистая сборка и полный набор | новый `GOCACHE`; `go build ./...`; новый `GOCACHE`; `go test -count=1 -timeout 5m ./...` | PASS: exit 0 за 48.30 с; exit 0 за 232.94 с, все пакеты зелёные |
+| Граница и чистота поставки | pinned `git diff --name-status`, `git diff --check`, поиск debug-маркеров, `git status --short` | PASS: только `main.go`, `main_test.go` и CARD-0124; whitespace/debug/stray-файлов нет |
