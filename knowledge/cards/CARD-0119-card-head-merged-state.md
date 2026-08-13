@@ -5,7 +5,7 @@ Implementation commit: 7bbf29548b5d85ce4415b3990c0caf0144970a6f — закреп
 ## HEAD
 
 Status: Implemented + Tested — awaiting automatic Review.
-Branch: factory/2f83f6a4-837-6f550712-be1.
+Branch: factory/b1001d28-118-5cab237d-301.
 Implementation commit: 7bbf29548b5d85ce4415b3990c0caf0144970a6f — регрессионный тест маршрутизации Verify.
 What changed: HEAD CARD-0083 отражает уже состоявшееся включение Gate в `main`.
 What changed: тест закрепляет автоматическую отправку успешной Verify в `main` и staging без ожидания ручного merge.
@@ -52,3 +52,8 @@ Pinned verify: base `cd5c93b488fe6f7694f59d1e6b8d5e5abd58af91`, candidate
 HEAD снова описывает текущую стадию честно: опубликованный candidate ожидает
 автоматический Review, а не ручное слияние. После APPROVE Verify передаст
 изменение в `main` и staging автоматически; решение человека нужно только для production.
+
+### 2026-08-13 — Implement
+
+Candidate опубликован для повторного автоматического Review после переноса на
+свежий `main`; HEAD указывает его фактическое имя вместо рабочей ветки.
