@@ -1,18 +1,25 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 7fa837290acb91b1eb424b7fc81931eb0ec8396a — ежедневный PDF и его проверка ошибки БД готовы к Review
+Implementation commit: d7af2d63d66e6b2f52e6e8994467d6a45292751b — PDF-рендерер использует обязательный изолированный Chromium launcher
 
 ## HEAD
 
 - Status: IMPLEMENTED / VERIFY PASS
-- Branch: `factory/e90e2bce-f51-76fd19d6-72d`
-- Implementation commit: `7fa837290acb91b1eb424b7fc81931eb0ec8396a`
-- What changed: ежедневный PDF сохраняет проверенные снимки и метрики «до/после»; Chromium запускается только через изолирующий launcher с sandbox и allowlist.
-- What changed: тест ошибки БД владеет своим хранилищем, поэтому проверяет HTTP 5xx без ложного сбоя повторного cleanup.
-- Evidence: регрессия закрытой БД 5/5, Node PDF 2/2, web 179/179, полный `go test -timeout 5m ./...`, lint/typecheck/build и browser shell → PASS.
+- Branch: `factory/99462fd3-c5e-4eceb84d-531`
+- Implementation commit: `d7af2d63d66e6b2f52e6e8994467d6a45292751b`
+- What changed: production и web PDF-renderer требуют абсолютный `FACTORY_BROWSER_LAUNCHER`, передают его в `executablePath` и включают `chromiumSandbox`.
+- What changed: production renderer корректно читает stdin; поведенческие тесты проверяют отказ при отсутствии или недоступности изолированного launcher.
+- Evidence: `node --test web/report/report.test.mjs` 4/4, `go test ./internal/controlplane/...`, lint, typecheck, build и production smoke `%PDF-` → PASS.
 - One next action: провести Review поставки и слить ветку при PASS.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+После замечания Review production PDF renderer больше не запускает Chromium без изоляции:
+абсолютный `FACTORY_BROWSER_LAUNCHER` обязателен, sandbox включён, недоступный launcher
+завершает рендер ошибкой. Добавлен прямой поведенческий тест production-скрипта и исправлено
+чтение stdin; 4 Node-теста, Go-контрольный пакет, lint, typecheck, build и smoke `%PDF-` прошли.
 
 ### 2026-08-13 — Implement
 
