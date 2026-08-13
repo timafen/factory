@@ -5,11 +5,11 @@ Implementation commit: 232c46a11d83b75512b70f9a69d3f923602b1267 — Tasks API с
 ## HEAD
 
 - Status: Implemented, awaiting Review
-- Branch: `factory/50900d82-810-6fad25a8-6e0`
+- Branch: `factory/00762e4a-125-d3e36cea-038`
 - Implementation commit: `232c46a11d83b75512b70f9a69d3f923602b1267`
-- What changed: Tasks API вычисляет `is_patrol` из durable schedule Automation; Work отбрасывает этот признак при объединении свежей и кешированной истории.
-- Evidence: `go test ./internal/controlplane/...` → PASS; `npm test -- --run src/Work.test.ts` → 16/16 PASS; `git diff --check` → PASS.
-- Next action: повторить Review на свежей ветке.
+- What changed: Tasks API вычисляет `is_patrol` из durable schedule Automation; Work отбрасывает его из свежей и кешированной истории. DOM-типы e2e восстановили сборку.
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit` → PASS; `npm run build` → PASS; целевой Playwright schedule Automation → 1/1 PASS.
+- Next action: провести Review поставки.
 
 ## LOG
 
@@ -34,3 +34,7 @@ Implementation commit: 232c46a11d83b75512b70f9a69d3f923602b1267 — Tasks API с
 ## Проверка
 
 Целевая проверка: `cd web && npm test -- --run src/Work.test.ts src/Automations.test.tsx`.
+
+### 2026-08-12 — Implement
+
+Подключены DOM-типы для Playwright e2e и зафиксирован актуальный web bundle. Typecheck и build пршли; целевой schedule Automation прошёл 1/1. Полный Playwright остановился на несвязанном устаревшем expectation заголовка Work.
