@@ -2,14 +2,22 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Review
-Branch: factory/6df906ce-7fd-7be1f1d2-5c4
+Status: Specified — актуализированы воспроизводимые доказательства
+Branch: factory/5b3cb290-b1f-a1426329-e5d
 Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
-What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: целевой lifecycle-тест, `just staticcheck`, полный `just test` и `just build` завершились успешно; browser suite не запускался, поскольку текущая контейнерная политика его блокирует.
-One next action: выполнить независимый Review опубликованного кандидата.
+What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось. В этой документационной поставке уточнены применимые к текущей базе доказательства.
+Evidence: на актуальной базе `go test ./internal/worker -run '^TestLeaseRenewal'` и `just staticcheck` завершились с кодом 0. Browser suite не является доказательством этой Go-тестовой правки.
+One next action: выполнить Review опубликованной спецификации и карточки.
 
 ## LOG
+
+### 2026-08-14 — Specification
+
+Актуализированы доказательства для уже существующей реализации
+`52ddd4e509ff1fdbd94068344995f9bbd2481fa1`: на текущей базе целевой lifecycle
+тест и полный `just staticcheck` завершились успешно. Спецификация фиксирует
+границы: меняются только документы, а обязательная повторяемая проверка —
+`just staticcheck`; browser suite не относится к этой правке.
 
 ### 2026-08-13 — Implement
 
