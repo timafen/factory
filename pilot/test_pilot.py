@@ -6888,7 +6888,11 @@ pilot.save(pilot.STATE_PATH, state)
         state = self._read_json(paths["state"])
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         generation = target["generations"][target["current_generation"]]
-        self.assertEqual(generation["phase"], "running")
+        # Both accepted broker states are durable and non-terminal.  Under
+        # load the physical command can finish before the broker's launching
+        # record advances to running; neither state may create completion
+        # receipts, which is the invariant exercised below.
+        self.assertIn(generation["phase"], ("launching", "running"))
         self.assertFalse(os.path.exists(paths["receipts"]))
         self.assertFalse(os.path.exists(paths["outbox"]))
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
