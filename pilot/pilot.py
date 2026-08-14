@@ -2923,6 +2923,10 @@ def branch_report(repo_identity, branch):
 IMPLEMENTATION_COMMIT_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?Implementation commit:\s*`?([0-9a-f]{40})`?\s*[—-]\s*\S",
     re.M)
+CARD_IMPLEMENTED_STATUS_LINE = re.compile(
+    r"^\s*(?:[-*]\s*)?Status:\s*Implemented(?:\s+[—-].*)?\s*$",
+    re.I | re.M)
+CARD_HEAD_SECTION = re.compile(r"^## HEAD\s*$([\s\S]*?)(?=^## |\Z)", re.M)
 CARD_LINE = re.compile(r"^Card:\s*(CARD-\d{4,})\s*$", re.M)
 SPECIFICATION_HEAD_LINE = re.compile(r"^HEAD:\s*([0-9a-f]{40})\s*$", re.M)
 CARD_FILE_NUMBER = re.compile(r"^CARD-(\d+)\b")
@@ -3017,6 +3021,12 @@ def implementation_commit_gate(repo_identity, branch, files):
             body = base64.b64decode(data["content"]).decode("utf-8")
         except (ValueError, UnicodeDecodeError, TypeError):
             return {"back": True, "note": f"Машинная проверка: карточка {path} повреждена или не читается как UTF-8."}
+        head = CARD_HEAD_SECTION.search(body)
+        if not head or not CARD_IMPLEMENTED_STATUS_LINE.search(head.group(1)):
+            return {"back": True, "note": (
+                f"Машинная проверка: в опубликованной карточке {path} нет строки "
+                "`Status: Implemented` в HEAD. Верни работу в Implement и обнови "
+                "статус только после успешной реализации и тестов.")}
         match = IMPLEMENTATION_COMMIT_LINE.search(body)
         if not match:
             return {"back": True, "note": (
