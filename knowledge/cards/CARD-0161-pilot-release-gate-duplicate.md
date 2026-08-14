@@ -11,7 +11,7 @@ Duplicate of: CARD-0030
 Related work: CARD-0043
 What changed: зафиксировано, что воспроизведённый сбой уже устранён в текущем
 `main`; повторные разработка и выпуск не нужны.
-Evidence: после rebase на `9929283bf18f09b1b67adf4a2b1b1ac3ba82b25d`
+Evidence: после rebase на `436a0800077d4c614d373d3176f2fc59db5d9e18`
 изменены только два knowledge-файла; `python3 -m unittest -q pilot.test_pilot` —
 291 тест, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — `PASS`, exit
 `0`; `just build` — exit `0`. Полный `just check` подтвердил Go и UI (180/180),
@@ -65,7 +65,7 @@ CARD-0043 отмечена как связанная работа. Канони�
 ### 2026-08-14 — Implement
 
 По разрешению владельца кандидат подготовлен к повторной публикации на свежем
-`origin/main` (`9929283bf18f09b1b67adf4a2b1b1ac3ba82b25d`) без продуктовых изменений:
+`origin/main` (`436a0800077d4c614d373d3176f2fc59db5d9e18`) без продуктовых изменений:
 область по-прежнему состоит только из карточки и спецификации закрытого
 дубликата. Целевые проверки зелёные: Pilot — 291 тест (`OK`, 13 skipped),
 shell-регрессия ворот — `PASS`, сборка — exit `0`. Полный `just check`
