@@ -4,21 +4,22 @@ Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — тесты P
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/5ada57fd-1fa-ef2a3316-015
+Status: Implemented PASS — candidate publication approved, Review pending
+Branch: factory/a4d63ef1-dcf-29e14525-f38
 Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — обязательные ворота тестов Pilot до сборки и установки уже находятся в main
 Duplicate of: CARD-0030
 Related work: CARD-0043
 What changed: зафиксировано, что воспроизведённый сбой уже устранён в текущем
 `main`; повторные разработка и выпуск не нужны.
-Evidence: pinned-сравнение базы `4f9088373195604673aa2b179d9d11b2dcce4946`
-и кандидата `38152e5072bc86c6c3a70d8531851ecf24f515ed` чистое и ограничено двумя
-knowledge-файлами; `just build` и канонический `just check` завершились с кодом
-`0`; после rebase `python3 -m unittest -q pilot.test_pilot` прошёл 289 тестов (`OK`, 13
-skipped); `bash ops/test-fx-factory-release.sh` завершился с кодом `0` и
-подтвердил остановку до сборки, установки и перезапуска служб при красном Pilot.
-One next action: человеку слить документационную ветку; живой привилегированный
-выпуск, если он понадобится, проверять отдельной операционной работой.
+Evidence: после rebase на `9929283bf18f09b1b67adf4a2b1b1ac3ba82b25d`
+изменены только два knowledge-файла; `python3 -m unittest -q pilot.test_pilot` —
+291 тест, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — `PASS`, exit
+`0`; `just build` — exit `0`. Полный `just check` подтвердил Go и UI (180/180),
+но выявил дефект свежего `main` в `scripts/test-build.sh`: тест передаёт
+устаревший `FACTORY_V2_BUILD_DIR`, поэтому ожидаемый временный бинарник не
+создаётся и `test-tooling` завершается с кодом `1`.
+One next action: повторно запустить Review опубликованного кандидата, не сливая
+его и не запуская `fx factory release`.
 
 ## LOG
 
@@ -60,3 +61,15 @@ CARD-0043 отмечена как связанная работа. Канони�
 | Поставка только документирует закрытый дубликат | pinned `git diff --check` и `git diff --name-only` | Ошибок пробелов нет; изменены только эта карточка и `knowledge/specs/pilot-release-gate-duplicate.md`, продуктовый код и общие карточки не затронуты. |
 | Смежное поведение не регрессировало | `just build`; `just check` | Сборка и полный проектный набор прошли с кодом `0`; UI — 180/180, tooling и launcher зелёные. |
 | Живой выпуск для дубликата не выполняется | аудит команд Verify | Привилегированные release-команды не запускались; риск реальных systemd и прав доступа остаётся отдельным операционным риском. |
+
+### 2026-08-14 — Implement
+
+По разрешению владельца кандидат подготовлен к повторной публикации на свежем
+`origin/main` (`9929283bf18f09b1b67adf4a2b1b1ac3ba82b25d`) без продуктовых изменений:
+область по-прежнему состоит только из карточки и спецификации закрытого
+дубликата. Целевые проверки зелёные: Pilot — 291 тест (`OK`, 13 skipped),
+shell-регрессия ворот — `PASS`, сборка — exit `0`. Полный `just check`
+подтвердил Go и UI (180/180), но остановился на существующем рассогласовании
+`scripts/test-build.sh` со свежим `main`: устаревшая переменная
+`FACTORY_V2_BUILD_DIR` больше не управляет каталогом сборки. Живой выпуск и
+слияние в `main` не выполнялись.
