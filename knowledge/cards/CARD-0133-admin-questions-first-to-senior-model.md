@@ -1,4 +1,4 @@
-Implementation commit: 0fbbc0f6e4150d1b29f152b39b512700c50da353 — обычные циклы ограничены, а ошибка fx передаётся старшей модели без повторного admin_action.
+Implementation commit: 6e819132b570dcd71c1b6618d6937ba0294b1cb9 — обычные циклы ограничены, а ошибка fx передаётся старшей модели без повторного admin_action.
 
 # CARD-0133 — Административные вопросы сначала решает старшая модель
 
@@ -6,10 +6,10 @@ Implementation commit: 0fbbc0f6e4150d1b29f152b39b512700c50da353 — обычны
 
 - Статус: Implemented; полный Verify PASS.
 - Ветка: `factory/f8b417b0-53b-e6bb48f7-669`.
-- Implementation commit: `0fbbc0f6e4150d1b29f152b39b512700c50da353` — ограничены обычные loop-rescue и обработан ошибочный результат `fx` без повторного admin_action.
+- Implementation commit: `6e819132b570dcd71c1b6618d6937ba0294b1cb9` — ограничены обычные loop-rescue и обработан ошибочный результат `fx` без повторного admin_action.
 - Что изменено: безопасные admin-вопросы сначала решает старшая модель; ошибка `fx` передаётся ей без повторного запуска команды, а обычные циклы остаются ограниченными.
 - Что проверено: restart/provenance-фикстура снова использует закреплённый SHA Verify; штатные web-зависимости восстановлены через `npm ci`.
-- Evidence: целевые Pilot → PASS: 23/23; полный Pilot → PASS: 267/267 (13 skipped); web → PASS: 179/179, typecheck, lint, build; `go test ./...`, `go build ./...`, `git diff --check` → PASS.
+- Evidence: целевые Pilot → PASS: 29/29; полный Pilot → PASS: 271/271 (13 skipped); web → PASS: 180/180, typecheck, lint, build; `go test ./...`, `go build ./...`, `git diff --check` → PASS.
 - Следующее действие: влить опубликованную ветку в `main`.
 
 ## LOG
@@ -57,3 +57,15 @@ restart/provenance-сбоями вне admin-маршрута; web test/typechec
 Штатные web-инструменты восстановлены командой `npm ci`. Полный Verify прошёл:
 Pilot 267/267 (13 skipped), web 179/179 вместе с typecheck/lint/build,
 `go test ./...`, `go build ./...` и `git diff --check` — PASS.
+
+### 2026-08-13 — Implement
+
+После финального rebase на `origin/main` (`14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`)
+implementation commit получил SHA `6e819132b570dcd71c1b6618d6937ba0294b1cb9`,
+а исправление restart/provenance-фикстуры —
+`6eb0e4771ca3eedc76301f1795f24dea9fd2ec4b`. Rebase прошёл без конфликтов;
+полный Verify повторён на свежей базе из-за пересечения изменений Pilot и web.
+Новые тесты адаптивного polling выявили двойное чтение часов в одном цикле;
+коммит `ea24abb2fea481ba02b8a721903ef7302ceb2f7b` передаёт один timestamp в
+automation status и polling hint. Итоговый Verify: Pilot 271/271 (13 skipped),
+web 180/180 плюс typecheck/lint/build, полные Go-тесты и сборка — PASS.
