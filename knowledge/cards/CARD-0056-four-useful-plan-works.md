@@ -2,12 +2,12 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/4b0b9669-f74-dc8ae490-3c82-45dd-9ed6-fea53e851ae9`.
-- Implementation commit: 84a04b59080a917dad71dee565199a21028d2536 — закреплён лимит четырёх работ и выбор свободного настроенного воркера.
+- Status: Delivered — duplicate specification closed.
+- Branch: `main`.
+- Implementation commit: 65488feda62869eb13c21a96e340c78900c5af88 — закреплён лимит четырёх работ и выбор свободного настроенного воркера.
 - What changed: автоплан явно использует лимит четыре по умолчанию; объединённый тест проверяет запуск четвёртой работы и остановку на четвёртой.
-- Evidence: `just test` → все Go-пакеты прошли; `just vet` → OK; `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → 15 tests OK. `just ui-check` не прошёл по двум существующим тестам `App.test.tsx`, вне области изменения.
-- One next action: передать ветку на человеческое слияние с учётом известной нестабильности UI-проверок.
+- Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → 20 tests OK; лимит четырёх и свободная маршрутизация подтверждены. Нестабильности UI-проверок вне области.
+- One next action: нет — задача закрыта как дубликат поставленной работы.
 
 ## LOG
 
@@ -29,3 +29,10 @@
 | Смежные серверные регрессии | `just test`; `just vet` | Все Go-пакеты и статическая проверка прошли. |
 
 `just ui-check` завершился с двумя ошибками в неизменённом `web/src/App.test.tsx`: тайм-аут сценария Workflow и нестабильное значение поля при фоновом опросе. Изменение не затрагивает UI.
+
+### 2026-08-14 — Specification duplicate closure
+
+Владелец подтвердил закрытие как дубликата уже поставленной реализации.
+Повторных изменений в `pilot/` и следующих стадий не требуется; целевой
+`PlanAutostartTest` подтверждает 20 успешных тестов. Известные нестабильности
+UI-набора остаются вне этой работы.
