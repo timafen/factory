@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Review
+Status: Implemented — awaiting independent Review; повторный сигнал закрыт как дубликат
 Branch: factory/6df906ce-7fd-7be1f1d2-5c4
 Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
@@ -10,6 +10,15 @@ Evidence: целевой lifecycle-тест, `just staticcheck`, полный `j
 One next action: выполнить независимый Review опубликованного кандидата.
 
 ## LOG
+
+### 2026-08-14 — Specification дубликата
+
+Владелец подтвердил, что повторный сигнал `SA4000` закрывается как дубликат
+CARD-0126 и PR #214. Новая реализация и новый этап исправления не требуются:
+коммит `52ddd4e509ff1fdbd94068344995f9bbd2481fa1` уже устранил самосравнение, а
+`just staticcheck` является обязательной проверкой результата. Независимый
+Review исходной карточки продолжается отдельно и не удерживает дубликат
+открытым.
 
 ### 2026-08-13 — Implement
 
