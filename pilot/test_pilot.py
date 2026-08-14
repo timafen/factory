@@ -435,6 +435,8 @@ class DeliveryAreaTests(unittest.TestCase):
         with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": ["web/src/Browser.tsx"], "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
                 mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
             result = pilot.review_gate({}, "Браузер после ожидания", "browser", "file:///tmp/repo",
                                        active_tasks=live)
@@ -674,6 +676,67 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertTrue(result["back"])
         self.assertIn("Поставка пуста", result["note"])
         self.assertIn("a" * 40 + "..." + "b" * 40, result["note"])
+
+    def test_stale_delivery_rebuilds_only_promised_paths_from_artifact(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        works = os.path.join(temporary.name, "works.json")
+        promises = os.path.join(temporary.name, "promises.json")
+        base, source, clean = "Отставшая поставка", "factory/implementation", "factory/implementation-clean"
+        promised = ["pilot/pilot.py", "pilot/test_pilot.py", "internal/controlplane/promises_http.go", "internal/controlplane/http_test.go"]
+        pilot.save(works, {base: {"run_generation": "g", "implementation_artifact": {
+            "branch": source, "head": "c" * 40, "generation": "g"}}})
+        pilot.save(promises, {base: {"files": promised, "commands": ["python3 -m unittest"]}})
+        stale = {"state": "ok", "base_advanced": True, "files": ["knowledge/cards/CARD-0163-x.md"],
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40}
+        source_snapshot = {"state": "ok", "candidate_sha": "c" * 40, "files": promised}
+        rebuilt_snapshot = {"state": "ok", "candidate_sha": "d" * 40, "files": promised}
+        with mock.patch.object(pilot, "WORKS_PATH", works), \
+                mock.patch.object(pilot, "PROMISES_PATH", promises), \
+                mock.patch.object(pilot, "fresh_branch_snapshot", side_effect=[stale, source_snapshot, rebuilt_snapshot]), \
+                mock.patch.object(pilot, "rebuild_clean_branch", return_value=clean) as rebuild, \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]):
+            result = pilot.review_gate({}, base, "factory/old-delivery", "github.com/acme/repo")
+        self.assertFalse(result["back"])
+        self.assertEqual(result["branch"], clean)
+        self.assertEqual(result["head"], "d" * 40)
+        rebuild.assert_called_once_with("github.com/acme/repo", source, sorted(promised), base, area_repo="")
+        self.assertEqual(pilot.load(promises, {})[base]["delivery_status"], "пересобрана и заново закреплена")
+
+    def test_stale_delivery_without_verified_source_keeps_safe_return(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        promises = os.path.join(temporary.name, "promises.json")
+        base = "Отставшая поставка"
+        pilot.save(promises, {base: {"files": ["pilot/pilot.py"]}})
+        stale = {"state": "ok", "base_advanced": True, "files": ["knowledge/cards/CARD-0163-x.md"],
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40}
+        with mock.patch.object(pilot, "PROMISES_PATH", promises), \
+                mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]):
+            result = pilot.review_gate({}, base, "factory/old-delivery", "github.com/acme/repo")
+        self.assertTrue(result["back"])
+        self.assertIn("нет обещанных файлов", result["note"])
+
+    def test_stale_delivery_refetch_failure_blocks_without_rebuild(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        works, promises = os.path.join(temporary.name, "works.json"), os.path.join(temporary.name, "promises.json")
+        base = "Отставшая поставка"
+        pilot.save(works, {base: {"run_generation": "g", "implementation_artifact": {
+            "branch": "factory/source", "head": "c" * 40, "generation": "g"}}})
+        pilot.save(promises, {base: {"files": ["pilot/pilot.py"]}})
+        stale = {"state": "ok", "base_advanced": True, "files": ["knowledge/cards/CARD-0163-x.md"], "base_sha": "a" * 40, "candidate_sha": "b" * 40}
+        with mock.patch.object(pilot, "WORKS_PATH", works), \
+                mock.patch.object(pilot, "PROMISES_PATH", promises), \
+                mock.patch.object(pilot, "fresh_branch_snapshot", side_effect=[stale, {"state": "blocked", "reason": "fetch failed"}]), \
+                mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
+            result = pilot.review_gate({}, base, "factory/old-delivery", "github.com/acme/repo")
+        self.assertTrue(result["blocked"])
+        self.assertIn("review infrastructure", result["note"])
+        rebuild.assert_not_called()
 
     def test_verify_gate_refreshes_snapshot_and_blocks_before_merge(self):
         snapshot = {
