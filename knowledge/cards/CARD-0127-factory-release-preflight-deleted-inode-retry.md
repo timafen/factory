@@ -1,5 +1,3 @@
-Implementation commit: 250281be25d38f8552c619f93b6d58d595a04f92 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
-
 # CARD-0127: Повтор предполётной проверки deleted-inode
 
 ## HEAD
