@@ -1892,6 +1892,9 @@ def run_full_cycle(fixture):
         stack.enter_context(mock.patch.object(
             pilot, "selected_delivery", return_value=("factory/correction", "a" * 40)))
         stack.enter_context(mock.patch.object(
+            pilot, "verify_gate", return_value={
+                "ok": True, "snapshot": {"candidate_sha": "a" * 40}}))
+        stack.enter_context(mock.patch.object(
             pilot, "pushed_branch", return_value="factory/correction"))
         stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
         stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
