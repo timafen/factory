@@ -4549,7 +4549,13 @@ INFRA_SIGNS = re.compile(
     r"connection reset|temporary failure in name resolution", re.I)
 
 TRY_NONE = ("none", "нет", "-", "n/a")
-PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
+PROOF_LINE = re.compile(r"^\s*(?:ДОКАЗАТЕЛЬСТВО|ПРОВЕРКА):\s*(.+?)\s*$", re.M)
+# Результаты задач могут содержать внутренние идентификаторы. Не выносим их
+# на экран даже если исполнитель поместил их в строку доказательства.
+SERVICE_DETAIL = re.compile(
+    r"(?:task|work|operation|request|trace|run)[_-]?id\s*[:=#]?\s*[\w-]+|"
+    r"(?:candidate|base)[_-]?sha\s*[:=#]?\s*[\w-]+|"
+    r"\bpid\s*[:=#]?\s*\d+\b|\b[0-9a-f]{7,40}\b", re.I)
 # служебные страницы: человек там результата не увидит
 TRY_USELESS = ("/health", "/login", "/admin/login", "/work", "/answer",
                "/settings", "/workers", "/epics")
@@ -4578,7 +4584,12 @@ def proof_of(result):
     m = None
     for m in PROOF_LINE.finditer(result or ""):
         pass
-    return (cut(m.group(1), 300) if m else "")
+    if not m:
+        return ""
+    proof = m.group(1).strip()
+    if not proof or SERVICE_DETAIL.search(proof):
+        return ""
+    return cut(proof, 300)
 
 
 def _is_bare_root(u):
@@ -6296,54 +6307,26 @@ def recent_done_block(tasks, n=5):
         if old is None or at >= old[0]:
             latest[title] = (at, task, stage)
 
-    out = []
+    merged, failed = [], []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
         if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
-        elif state == "succeeded":
-            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
-        else:
-            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
+            merged.append({"title": title[:120], "at": at, "stage": stage})
+            continue
+        if state not in ("failed", "cancelled"):
+            continue
+        reason = "причина не указана"
         try:
             attempts = api(f"/tasks/{task['id']}").get("attempts") or []
-            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
-            if proof:
-                detail += " Проверено: " + proof
+            result = (attempts[-1].get("result") if attempts else "") or ""
+            reason = proof_of(result) or reason
         except Exception:
             pass
-        out.append({"title": title[:120], "detail": detail[:180], "at": at,
-                    "status": status})
-        if len(out) >= n:
-            return out
+        failed.append({"title": title[:120], "at": at, "stage": stage,
+                       "reason": reason[:180]})
 
-    if out:
-        return out
-
-    # Before structured task history exists, show old real notifications but
-    # never revive the service noise that prompted this view's redesign.
-    try:
-        with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
-            lines = stream.readlines()[-400:]
-        for line in reversed(lines):
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
-            if r.get("title") != "Задача выполнена":
-                continue
-            body = (r.get("message") or "").split(chr(10))
-            title = body[0].strip()
-            if not title or is_service_work(title) or title in latest:
-                continue
-            out.append({"title": title[:120],
-                        "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or "", "status": "legacy"})
-            if len(out) >= n:
-                break
-    except Exception:
-        pass
-    return out
+    # Separate limits ensure a burst of fresh failures cannot hide delivered work.
+    return {"merged": merged[:n], "failed": failed[:n]}
 
 
 def limits_view():
