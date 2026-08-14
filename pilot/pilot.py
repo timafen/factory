@@ -8107,12 +8107,14 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         state = load(STATE_PATH, {"processed": []})
         hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
+            poll_chosen_at = None
             try:
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 failures = 0
                 try:
+                    poll_chosen_at = clock_fn()
                     write_automation_status(pilot_completed_at=datetime.datetime.fromtimestamp(
-                        clock_fn(), datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+                        poll_chosen_at, datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
                 except Exception as e:
                     log("automation_status_error", repr(e))
             except Exception as e:
@@ -8131,7 +8133,9 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 "epic_starts_processed", [])[-PROCESSED_RETENTION:]
             state["poll_terminal_seen"] = state.get(
                 "poll_terminal_seen", [])[-PROCESSED_RETENTION:]
-            record_poll_hint(state, hint, clock_fn())
+            record_poll_hint(
+                state, hint,
+                poll_chosen_at if poll_chosen_at is not None else clock_fn())
             save(STATE_PATH, state)
         elif conf:
             hint = {"seconds": max(float(conf.get("poll_seconds", 30)), 1),
