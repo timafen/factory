@@ -84,7 +84,7 @@
   границу watermark, отсутствие timestamp, lifecycle block/stop,
   failed/cancelled и финальный Verify.
 - Обязательная целевая команда:
-  `python3 -m unittest -q pilot.test_pilot.PilotCycleTests.test_restart_recovers_processed_success_with_missing_next_stage`.
+  `python3 -m unittest -q pilot.test_pilot.AdaptivePollingTests.test_restart_recovers_processed_success_with_missing_next_stage`.
 - Соседние проверки: terminal backlog/cursor, закрытая работа после restart и
   `live_or_done_at`; затем `git diff --check`.
 - Полный `python3 -m unittest -q pilot.test_pilot` оставить этапу Verify. Его
@@ -113,4 +113,4 @@
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.PilotCycleTests.test_restart_recovers_processed_success_with_missing_next_stage
+ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.AdaptivePollingTests.test_restart_recovers_processed_success_with_missing_next_stage

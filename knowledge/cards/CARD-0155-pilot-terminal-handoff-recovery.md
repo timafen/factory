@@ -14,7 +14,7 @@ Implementation commit: dd3d7951e1afea8402849c72caf30c8aa4ba315c — опреде
   failed/cancelled или финальной работы.
 - Implementation scope: `pilot/pilot.py`, `pilot/test_pilot.py`.
 - Required proof:
-  `python3 -m unittest -q pilot.test_pilot.PilotCycleTests.test_restart_recovers_processed_success_with_missing_next_stage`.
+  `python3 -m unittest -q pilot.test_pilot.AdaptivePollingTests.test_restart_recovers_processed_success_with_missing_next_stage`.
 - Specification: `knowledge/specs/pilot-terminal-handoff-recovery.md`.
 - Next action: реализовать recovery и restart-regression без изменений UI,
   API/schema, release и независимых state machines.
