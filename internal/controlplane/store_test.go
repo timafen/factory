@@ -93,6 +93,13 @@ func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.
 	}
 }
 
+func TestOpenSerializesSQLiteAccessThroughOneConnection(t *testing.T) {
+	store := newTestStore(t)
+	if maximum := store.db.Stats().MaxOpenConnections; maximum != 1 {
+		t.Fatalf("maximum SQLite connections = %d; want 1", maximum)
+	}
+}
+
 func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	store := newTestStore(t)
 	repository := protocol.RepositoryRegistration{
