@@ -5,17 +5,21 @@ Implementation commit: ef5728919a2542ad293f3f5731529a64c5d09f34 — добавл
 ## HEAD
 
 Status: Implement — готово к проверке
-Branch: factory/7bda4a13-6fb-a211739d-182
+Branch: factory/fdc19e80-7c6-d8a9e288-3e5
 What changed: архивная terminal-попытка сохраняет state/result/error в истории после подтверждения вытеснения.
 What changed: readiness, варианты репозитория и route снова допускают задачу при освобождённом retained capacity.
 Evidence: `go test ./internal/controlplane -run 'Test(RoutedTaskExcludesWorkersWithoutRepositoryCapacity|TerminalAttemptReservesRetainedHeadroomUntilRegistration|ArchivedEvictedAttemptDoesNotConsumeRepositoryCapacity)$'` → PASS.
-Next action: проверить изменение на этапе Verify.
+Next action: пройти Verify на свежем main.
 
 ## LOG
 
 ### 2026-08-14 — Implement
 
 Добавлен тест архивной вытесненной попытки: запись остаётся в API-истории, подтверждается без изменения retained_count и не препятствует route следующей задачи. Целевой набор controlplane прошёл.
+
+### 2026-08-14 — Implement transfer
+
+Готовая реализация опубликована в требуемой ветке; карточка привязана к ней. Целевые проверки controlplane прошли.
 
 ### 2026-08-14 — Specification
 
