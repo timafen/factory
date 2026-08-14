@@ -25,9 +25,10 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — ожидает слияния человеком. Branch: `factory/8c403f0f-741-e39c1023-e85`. Head commit: будет указан в завершающем коммите Verify.
-What changed: UI-тесты `App.test.tsx` сверены с переименованными экранами и элементами управления; дифф от точки ветвления содержит только этот тест и карточку.
-Evidence: после чистого `npm ci` пройдены `npx vitest run src/App.test.tsx` (60/60) и `npx tsc -p tsconfig.app.json --noEmit`; полный `npm test` — 93/94, единственное известное падение в неизменённом `src/Settings.test.tsx` ожидает старый набор `notify_groups` без ключа `escalate`.
+Status: Verified PASS — ожидает слияния человеком. Branch: `factory/4b04fa27-3ac-d982d099-993`.
+Implementation commit: 428a7fb5bdc18d12f920286e15154dbb7c1ff37b — исправлены две фикстуры `AdaptivePollingTests`, а Python-тесты Pilot включены в обязательные параллельные CI-ворота.
+What changed: `dashboard_slow` изолирован в обеих адаптивных фикстурах; отдельный job выполняет `python3 -m unittest pilot.test_pilot`, а итоговый `check` требует его успеха вместе с Linux и macOS.
+Evidence: `AdaptivePollingTests` — 24/24, полный Pilot — 286/286 (13 skipped), UI — 180/180; tooling, release, launcher, format, vet, vuln, staticcheck, boundary и Go suite прошли. Неизменённый browser-тест экрана Work завершился 5 PASS, 1 FAIL и 16 not run из-за отсутствующего заголовка «Работа агентов»; затронутые файлы к browser/UI не относятся.
 One next action: влить ветку в `main`.
 
 ## LOG
@@ -183,3 +184,12 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 На ветке `factory/4b04fa27-3ac-d982d099-993` исправлены фикстуры AdaptivePollingTests и добавлен параллельный обязательный CI-job `python3 -m unittest pilot.test_pilot`.
 Доказательство: 24/24 AdaptivePollingTests и полный набор Pilot 286/286 (13 skipped) — PASS; `git diff --check` — PASS.
 Открытый риск: живой стенд не затрагивался; изменение относится только к тестам и CI.
+
+### 2026-08-14 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Две красные проверки `AdaptivePollingTests` исправлены | `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` | PASS: 24/24. |
+| Полный набор Pilot обязателен и зелёный | `python3 -m unittest pilot.test_pilot`; проверка `pilot` и `needs: [linux, macos, pilot]` в `ci.yml` | PASS: 286/286, 13 skipped; итоговый job требует `PILOT_RESULT=success`. |
+| Смежные и общие проверки | Linux CI-команды в чистой изолированной копии | PASS: UI 180/180, embedded assets без diff, tooling/build/release/launcher, format/vet/vuln/staticcheck/boundary и Go suite; browser: 5 PASS, 1 неизменённый FAIL, 16 not run. |
+| Состав и чистота | pinned `051316a3c410aeb1e1d9c0e44ab7753fdc4ae76a...ea2d7c492bfa9f6dc3ef378da2c51252f5af386e`; `git diff --check`; `git status --short` | PASS: только `.github/workflows/ci.yml`, `pilot/test_pilot.py` и эта карточка; пробельных ошибок и посторонних файлов нет. |
