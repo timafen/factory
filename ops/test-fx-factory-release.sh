@@ -598,12 +598,26 @@ exec "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ]; then
+  case "$*" in
+    '-q is-active factory-worker.service') exit 0 ;;
+    'show -p MainPID --value factory-worker.service') echo 4242; exit 0 ;;
+  esac
+fi
 case "$*" in
   '-q is-active '*|'-q is-enabled '*) exit 1 ;;
   'show '*) exit 1 ;;
 esac
 echo "$1 $2" >>"$TEST_EVENTS"
 exit 0
+EOF
+  cat >"$case_dir/bin/readlink" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ] && [ "${1:-}" = /proc/4242/exe ]; then
+  echo '/fixture/factory-worker (deleted)'
+  exit 0
+fi
+exec /bin/readlink "$@"
 EOF
   cat >"$case_dir/bin/broker-systemctl" <<'EOF'
 #!/bin/bash
@@ -885,6 +899,24 @@ if [ "${FACTORY_TEST_ONLY:-}" = forged-gate-result ]; then
     || fail "forged result scenario did not inject a fake successful status"
   assert_no_fixture_processes "$forged_gate_result"
   echo "PASS: real forked gate error won over forged success; install was not started"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ]; then
+  deleted_inode="$temporary/deleted-inode"
+  make_fixture "$deleted_inode" deleted-inode
+  set +e
+  run_release "$deleted_inode" deleted-inode
+  status=$?
+  set -e
+  [ "$status" -eq 4 ] || fail "deleted-inode returned $status instead of preflight error 4"
+  grep -F 'процесс factory-worker.service использует deleted-inode' "$deleted_inode/output" >/dev/null \
+    || fail "deleted-inode refusal did not name the affected unit"
+  [ ! -s "$deleted_inode/events" ] || fail "deleted-inode mutated services before refusal"
+  [ ! -e "$deleted_inode/releases/transaction" ] || fail "deleted-inode created a release journal"
+  [ ! -e "$deleted_inode/releases/current" ] || fail "deleted-inode changed current generation"
+  assert_no_fixture_processes "$deleted_inode"
+  echo "PASS: deleted-inode preflight names the unit and stops before mutation"
   exit 0
 fi
 
