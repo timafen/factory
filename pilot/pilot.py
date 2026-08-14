@@ -4549,7 +4549,13 @@ INFRA_SIGNS = re.compile(
     r"connection reset|temporary failure in name resolution", re.I)
 
 TRY_NONE = ("none", "нет", "-", "n/a")
-PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)
+PROOF_LINE = re.compile(r"^\s*(?:ДОКАЗАТЕЛЬСТВО|ПРОВЕРКА):\s*(.+?)\s*$", re.M)
+# Результаты задач могут содержать внутренние идентификаторы. Не выносим их
+# на экран даже если исполнитель поместил их в строку доказательства.
+SERVICE_DETAIL = re.compile(
+    r"(?:task|work|operation|request|trace|run)[_-]?id\s*[:=#]?\s*[\w-]+|"
+    r"(?:candidate|base)[_-]?sha\s*[:=#]?\s*[\w-]+|"
+    r"\bpid\s*[:=#]?\s*\d+\b|\b[0-9a-f]{40}\b", re.I)
 # служебные страницы: человек там результата не увидит
 TRY_USELESS = ("/health", "/login", "/admin/login", "/work", "/answer",
                "/settings", "/workers", "/epics")
@@ -4578,7 +4584,12 @@ def proof_of(result):
     m = None
     for m in PROOF_LINE.finditer(result or ""):
         pass
-    return (cut(m.group(1), 300) if m else "")
+    if not m:
+        return ""
+    proof = m.group(1).strip()
+    if not proof or SERVICE_DETAIL.search(proof):
+        return ""
+    return cut(proof, 300)
 
 
 def _is_bare_root(u):
@@ -6218,7 +6229,7 @@ def recent_done_block(tasks, n=5):
         try:
             attempts = api(f"/tasks/{task['id']}").get("attempts") or []
             result = (attempts[-1].get("result") if attempts else "") or ""
-            reason = proof_of(result) or cut(result.strip(), 180) or reason
+            reason = proof_of(result) or reason
         except Exception:
             pass
         failed.append({"title": title[:120], "at": at, "stage": stage,

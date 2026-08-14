@@ -6482,6 +6482,23 @@ class RecentDoneTest(unittest.TestCase):
         self.assertEqual(recent["failed"][0]["stage"], "Review")
         self.assertIn("причина видна.", recent["failed"][0]["reason"])
 
+    def test_hides_service_identifiers_when_failure_result_is_not_safe(self):
+        task = {"id": "failed-task", "title": "[auto] [4/5 Review] Оплата картой",
+                "state": "failed", "updated_at": "2026-08-10T12:00:00Z"}
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        result = ("ДОКАЗАТЕЛЬСТВО: task_id=failed-task, commit "
+                  "6f6796592a8edd6867efda512a8f6b472b1fbd66, PID=412")
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH",
+                               os.path.join(temporary.name, "receipts.jsonl")), \
+                mock.patch.object(pilot, "api",
+                                  return_value={"attempts": [{"result": result}]}):
+            recent = pilot.recent_done_block([task])
+
+        reason = recent["failed"][0]["reason"]
+        self.assertEqual(reason, "причина не указана")
+        self.assertNotRegex(reason, r"task_id|6f679659|PID|412")
+
     def test_reads_every_task_page(self):
         pages = [
             {"tasks": [{"id": "new"}], "next_cursor": "older"},
