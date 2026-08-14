@@ -36,6 +36,9 @@ test("renderer refuses an unavailable isolated launcher", async () => {
 test("production renderer refuses to run without the isolated launcher", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "factory-report-"));
   const script = fileURLToPath(new URL("../../internal/controlplane/report_scripts/render.mjs", import.meta.url));
+  const source = await readFile(script, "utf8");
+  assert.match(source, /FACTORY_BROWSER_PAYLOAD/);
+  assert.match(source, /browser-runtime\/current/);
   const result = spawnSync(process.execPath, [script, path.join(dir, "daily.pdf")], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     input: "<h1>Ежедневный отчёт</h1>",
