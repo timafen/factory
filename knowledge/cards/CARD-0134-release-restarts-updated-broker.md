@@ -4,12 +4,12 @@ Implementation commit: a7eac7c6d396b9131640ce2740f44a6c30d5304e — locked retry
 
 ## HEAD
 
-- Status: Implemented — ready for verification
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/4fa8a575-978-0c8c0cea-9c6`
 - Implementation commit: `a7eac7c6d396b9131640ce2740f44a6c30d5304e`
-- What changed: во время draining повтор существующей операции возвращает сохранённый статус, а locked retry получает 503 до запуска executor.
-- Evidence: `go test ./internal/releasebroker -count=1`; целевой `-race` тест; `./ops/test-fx-factory-release.sh` → PASS.
-- One next action: выполнить полную проверку перед merge.
+- What changed: обновивший свой executable broker после durable commit переходит в draining, отклоняет новые и locked retry операции и запрашивает restart.
+- Evidence: полный Go-набор и UI 180/180; целевые restart/draining проверки с `-race`; release fixture и сборка трёх бинарников прошли.
+- One next action: выполнить human merge в `main`.
 
 ## LOG
 
@@ -40,3 +40,16 @@ Implementation commit: a7eac7c6d396b9131640ce2740f44a6c30d5304e — locked retry
 ### 2026-08-13 — Implement
 
 Проверка draining перенесена перед обработкой locked retry: повтор с новым SHA получает 503, сохранённая операция не меняется и executor не запускается. Конкурентный регрессионный тест, полный пакет broker, целевой `-race` и release fixture прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Обновивший executable выпуск перезапускает broker после durable commit | `go test -race ./internal/releasebroker ./cmd/factory-release-broker -run 'TestBroker(RestartsUpdatedExecutableAfterDurableCommit\|PersistenceFailurePreventsRestart)\|TestInstalledBrokerExecutableMatchesProductionUnit' -count=1` | PASS: restart вызывается после committed marker и terminal record; ошибка persistence блокирует restart; production path совпадает |
+| Переходный draining не принимает новую операцию | целевой `-race` тест `TestBrokerRejectsNewOperationWhileRestartingUpdatedExecutable` | PASS: конкурентный POST получает 503 до executor |
+| Locked retry во время draining безопасно отклоняется | целевой `-race` тест `TestBrokerDrainingRejectsConcurrentLockedRetryWithoutLaunchingExecutor` | PASS: 503, сохранённая операция неизменна, executor не вызван |
+| Необновлённый/неопределимый executable не перезапускается | целевой `-race` тест `TestBrokerDoesNotRestartUnchangedOrUncertainExecutable` | PASS: ложный restart отсутствует |
+| Полный release flow и смежные проверки | `./ops/test-fx-factory-release.sh`; `just test-launcher`; `just ui-check` | PASS: fixture; launcher; UI 180/180 |
+| Общая Go-регрессия и сборка | `just check` до известного baseline-сбоя installer; `FACTORY_BUILD_DIR=/tmp/factory-verify-build-qmzk4f just build` | PASS: все Go-пакеты; собраны server, worker и release-broker |
+
+Baseline-находка вне области поставки: `ops/install-project-release-broker.sh` требует `NoNewPrivileges=true`, а неизменённый `ops/systemd/factory-release-broker.service` содержит `false`, поэтому общий `test-tooling` красный. Миграций и обязательных ручных шагов нет; фактическую смену PID под systemd на стенде эта проверка не выполняла.
