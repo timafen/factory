@@ -1,20 +1,20 @@
-Implementation commit: f8b5c4dc4c06349fde33468197f77c322c3cc6a6 — единый экран всех автоматик Фабрики с живым безопасным статусом
+Implementation commit: a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5 — будущая активность host-автоматик не показывается как живая
 
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
+Status: Implemented — awaiting Review
 
-Branch: `factory/0a889f49-635-e5804601-452`
+Branch: `factory/e1e2e639-7c6-9053286a-150`
 
-Implementation commit: `f8b5c4dc4c06349fde33468197f77c322c3cc6a6`
+Implementation commit: `a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5`
 
-What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Частичный отказ сохраняет строку с честным `no_data`, а действия остаются только у durable Automation.
+What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Будущие timestamps systemd и janitor отклоняются, поэтому ложной «живой» активности нет.
 
-Evidence: целевой Go-тест → PASS; Python snapshot tests → 3 PASS; UI → 64 PASS; `npm run typecheck`, `npm run lint`, `npm run build` и `go build ./...` → PASS.
+Evidence: Python snapshot tests → 4 PASS; `go test ./internal/controlplane` и `go build ./...` → PASS; UI → 180 PASS, typecheck, lint и build → PASS.
 
-One next action: выполнить human merge этой проверенной ветки.
+One next action: Review проверяет каноническую поставку перед merge.
 
 ## LOG
 
@@ -51,3 +51,9 @@ One next action: выполнить human merge этой проверенной 
 Реализация заново собрана от свежего `origin/main` без посторонних файлов: единый read-only endpoint и экран показывают все штатные автоматики, их назначение, состояние и последнюю активность; ошибки host-источников не скрывают строки и не создают ложное здоровье.
 
 Проверено: `go test ./internal/controlplane -run 'TestAutomationStatus'`, 3 Python snapshot-теста и 64 UI-теста прошли; `go build ./...`, typecheck, lint и production build успешны.
+
+### 2026-08-13 — Implement
+
+Каноническая поставка перенесена на свежий `main`. Будущие timestamps systemd и janitor теперь остаются `no_data`, а не создают ложное впечатление работающей автоматики; добавлен общий регрессионный тест для обоих источников.
+
+Проверено: `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests pilot.test_pilot.AreaLockArbitrationTests` → 7 PASS; `go test ./internal/controlplane` и `go build ./...` → PASS; web UI → 180 PASS, typecheck, lint и build → PASS после `npm ci`.
