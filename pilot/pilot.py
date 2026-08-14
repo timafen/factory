@@ -2274,11 +2274,13 @@ def is_plan_repository_error(error):
 
 def explain_bad_plan_repository(conf, candidate, detail=""):
     reason = "Не запущено автоматически: у карточки указан несуществующий проект. Выберите проект заново."
+    already_explained = candidate.get("state") == "new" and candidate.get("reason") == reason
     set_idea(candidate["id"], state="new", reason=reason)
     log("PLAN skip " + repr(candidate.get("title", "")[:70])
         + ": invalid repository " + repr(detail[:180]))
-    notify(conf, "Не взял из Плана", candidate.get("title", ""),
-           body=reason, tags="warning", click=UI_BASE + "/intake/plan")
+    if not already_explained:
+        notify(conf, "Не взял из Плана", candidate.get("title", ""),
+               body=reason, tags="warning", click=UI_BASE + "/intake/plan")
 
 
 def active_auto_works(tasks):
@@ -2296,29 +2298,68 @@ def active_auto_works(tasks):
 
 
 def autostart_plan(conf, tasks, workflows, workers):
-    """Start at most one top planned card when the pipeline has a free slot."""
+    """Start one suitable Plan card when the pipeline has a free slot.
+
+    Explicitly planned cards keep priority.  With automatic planning enabled
+    (the default), a new card is promoted just before its first task is
+    created.  That durable transition gives retries a stable generation while
+    leaving Triage responsible for semantic decisions about the proposal.
+    """
     if len(active_auto_works(tasks)) >= int(
             conf.get("max_parallel_works", MAX_PARALLEL_WORKS)):
         return None
-    planned = sorted((i for i in ideas_all() if i.get("state") == "planned"),
-                     key=lambda i: (int(i.get("order") or 0), i.get("created") or ""))
-    if not planned:
+    states = ("planned", "new") if conf.get("auto_plan", True) else ("planned",)
+    candidates = sorted(
+        (i for i in ideas_all() if i.get("state") in states),
+        key=lambda i: (
+            0 if i.get("state") == "planned" else 1,
+            int(i.get("order") or 0),
+            i.get("created") or "",
+        ),
+    )
+    if not candidates:
         return None
     stage_name, nstages = first_stage(conf)
     workflow = workflows.get(stage_name) or {}
     if not stage_name or not workflow.get("enabled"):
         return None
-    for rec in planned:
+    for rec in candidates:
         if is_stopped(conf, rec.get("title") or ""):
             log("PLAN paused " + repr(rec.get("title", "")[:70]))
             continue
+        if rec.get("state") == "new":
+            live = next((task for task in tasks or []
+                         if task.get("state") in PLAN_ACTIVE_STATES
+                         and _same_work(task.get("title"), rec.get("title"))), None)
+            if live:
+                reason = "Не запущено повторно: эта работа уже идёт."
+                set_idea(rec["id"], state="in_work", task_id=live.get("id", ""),
+                         reason=reason)
+                log("PLAN linked existing " + repr(rec.get("title", "")[:70]))
+                continue
+            closed_reason = work_lifecycle_block(rec.get("title") or "", tasks=tasks)
+            if closed_reason:
+                reason = "Не запущено повторно: " + closed_reason
+                set_idea(rec["id"], state="rejected", reason=reason)
+                log("PLAN rejected " + repr(rec.get("title", "")[:70])
+                    + ": " + closed_reason)
+                continue
         if not rec.get("repo"):
             reason = "Не запущено автоматически: сначала выберите проект."
+            already_explained = rec.get("state") == "new" and rec.get("reason") == reason
             set_idea(rec["id"], state="new", reason=reason)
             log("PLAN skip " + repr(rec.get("title", "")[:70]) + ": no repository")
-            notify(conf, "Не взял из Плана", rec.get("title", ""),
-                   body=reason, tags="warning", click=UI_BASE + "/intake/plan")
+            if not already_explained:
+                notify(conf, "Не взял из Плана", rec.get("title", ""),
+                       body=reason, tags="warning", click=UI_BASE + "/intake/plan")
             continue
+
+        if rec.get("state") == "new":
+            generation = str(uuid.uuid4())
+            set_idea(rec["id"], state="planned", task_id="", reason="",
+                     run_generation=generation)
+            rec = dict(rec, state="planned", task_id="", reason="",
+                       run_generation=generation)
 
         title = f"[auto] [1/{nstages} {stage_name}] {rec['title']}"[:200]
         source = rec.get("source") or "не указан"
@@ -2365,8 +2406,29 @@ def autostart_plan(conf, tasks, workflows, workers):
         set_idea(rec["id"], **updates)
         note_work(rec["title"], rec.get("origin") or ORIGIN_OWNER, stage_name)
         notify(conf, "Взял из Плана", rec["title"], tags="robot", click=UI_BASE + "/work")
+        created_task = dict((created or {}).get("task") or {})
+        created_task.setdefault("id", task_id)
+        created_task.setdefault("title", title)
+        created_task.setdefault("state", "created")
+        created_task.setdefault("work_id", task_id)
+        if not any(task.get("id") == task_id for task in tasks or []):
+            tasks.append(created_task)
+        worker["active_count"] = int(worker.get("active_count") or 0) + 1
         return task_id
     return None
+
+
+def replenish_plan(conf, tasks, workflows, workers):
+    """Fill every free work slot from Plan in the same Pilot cycle."""
+    limit = int(conf.get("max_parallel_works", MAX_PARALLEL_WORKS))
+    started = []
+    free_slots = max(0, limit - len(active_auto_works(tasks)))
+    for _ in range(free_slots):
+        task_id = autostart_plan(conf, tasks, workflows, workers)
+        if not task_id:
+            break
+        started.append(task_id)
+    return started
 
 
 # --------------------------------------------------------- сторож конвейера ---
@@ -8072,7 +8134,11 @@ def cycle(conf, state):
     # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
     try:
         fresh_tasks = api("/tasks?limit=100").get("tasks") or []
-        autostart_plan(conf, fresh_tasks, workflows, workers)
+        # Use the authoritative post-handoff snapshot for every admission in
+        # this replenishment pass.  create_task appends each accepted task to
+        # this same list, so the configured ceiling remains exact.
+        conf["_active_work_tasks"] = fresh_tasks
+        replenish_plan(conf, fresh_tasks, workflows, workers)
     except Exception as e:
         log("plan_autostart_error", repr(e))
 
