@@ -2,14 +2,21 @@
 
 ## HEAD
 
-Status: Specified — актуализированы воспроизводимые доказательства
-Branch: factory/5b3cb290-b1f-a1426329-e5d
-Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
-What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось. В этой документационной поставке уточнены применимые к текущей базе доказательства.
-Evidence: на актуальной базе `go test ./internal/worker -run '^TestLeaseRenewal'` и `just staticcheck` завершились с кодом 0. Browser suite не является доказательством этой Go-тестовой правки.
-One next action: выполнить Review опубликованной спецификации и карточки.
+Status: Implemented — доказательства актуализированы
+Branch: factory/9d5bdffd-368-bee991b0-257
+Implementation commit: d1d3e849d4a4e3d9fb023cf8a364e5b270070a2c — закреплено воспроизводимое доказательство CARD-0126
+What changed: спецификация фиксирует фактический успешный запуск целевого lifecycle-теста и `staticcheck`. Поведение worker и UI не менялись.
+Evidence: `go test ./internal/worker -run '^TestLeaseRenewal'` → код 0; `just staticcheck` → код 0.
+One next action: выполнить Review опубликованной поставки.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Заново выполнены целевой lifecycle-тест worker и полный `just staticcheck`:
+обе команды завершились с кодом 0. Результат закреплён отдельным commit
+реализации `d1d3e849d4a4e3d9fb023cf8a364e5b270070a2c`; product code и UI не
+менялись.
 
 ### 2026-08-14 — Specification
 
