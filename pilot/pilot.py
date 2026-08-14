@@ -461,6 +461,18 @@ TRIAGE_AGENT_RULES = """
 """
 
 
+VERIFY_AGENT_OVERRIDE = """
+ФИНАЛЬНАЯ ПРОВЕРКА — ТОЛЬКО ЧТЕНИЕ.
+Этот этап проверяет ровно тот снимок ветки, который уже прошёл Review. Поэтому
+здесь запрещено изменять любые файлы, обновлять карточку знаний, создавать
+коммиты, перебазировать или отправлять ветку. Это правило имеет приоритет над
+инструкциями workflow и общими пунктами 3 и 6 о сдаче и карточке. Доказательства
+Verify оставь только в отчёте; BRANCH и HEAD должны указывать на проверенный
+неизменённый снимок. Тесты и сборку запускать можно, но их побочные файлы не
+коммить. Иначе Verify сам меняет поставку после Review и создаёт бесконечный круг.
+"""
+
+
 def notification_channel(conf):
     """Return the configured owner notification URL for local workers."""
     server = str((conf or {}).get("ntfy_server") or "").strip().rstrip("/")
@@ -472,6 +484,11 @@ def notification_channel(conf):
 
 def agent_rules(conf=None, stage=""):
     rules = TRIAGE_AGENT_RULES if str(stage).strip() == "Triage" else AGENT_RULES
+    if str(stage).strip() == "Verify":
+        rules = rules.replace(
+            "=== КОНЕЦ ПРАВИЛ ===",
+            VERIFY_AGENT_OVERRIDE.strip() + "\n=== КОНЕЦ ПРАВИЛ ===",
+        )
     channel = notification_channel(conf)
     if not channel:
         return rules
