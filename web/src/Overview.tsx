@@ -35,7 +35,7 @@ type Dash = {
   };
   limits?: Record<string, { state?: string; manual_off?: boolean; resets_at?: string; used_percent?: number }>;
   access?: Record<string, { enabled?: boolean } | boolean>;
-  recent_done?: RecentDone[];
+  recent_done?: RecentDoneSnapshot | RecentDone[];
   projects?: ProductProject[];
   janitor?: string;
   release_train?: ReleaseTrainSnapshot | null;
@@ -140,10 +140,10 @@ function ReleaseTrainPanel({ snapshot }: { snapshot?: ReleaseTrainSnapshot | nul
         {train.passengers.length > 0 && <div style={{ fontSize: 13 }}>Едет: {train.passengers.map((p) => p.title).join(" · ")}</div>}
         {train.previous && <div style={{ fontSize: 13 }}>
           Прошлый состав: {train.previous.state === "succeeded" ? "успешно" : "ошибка"}
-          {train.previous.finished_at ? ` · ${new Date(train.previous.finished_at).toLocaleString("ru-RU")}` : " · время неизвестно"}
+          {train.previous.finished_at ? ` · ${formatRecentDate(train.previous.finished_at)}` : " · время неизвестно"}
           {train.previous.passengers.length > 0 ? ` · ${train.previous.passengers.map((p) => p.title).join(" · ")}` : ""}
         </div>}
-        {train.next.retry_at && <div style={{ fontSize: 13 }}>Следующая попытка: {new Date(train.next.retry_at).toLocaleString("ru-RU")}</div>}
+        {train.next.retry_at && <div style={{ fontSize: 13 }}>Следующая попытка: {formatRecentDate(train.next.retry_at)}</div>}
         {train.next.requested && <div style={{ fontSize: 13 }}>
           Следующий состав сядет в ближайший выпуск после текущего
           {train.next.passengers.length > 0 ? `: ${train.next.passengers.map((p) => p.title).join(" · ")}` : "."}
@@ -162,8 +162,26 @@ type ActiveTask = {
 type WorkMeta = { origin?: string };
 export type RecentDone = {
   title: string; detail?: string; at?: string;
-  status?: "merged" | "passed" | "failed" | "legacy";
+  status?: "merged" | "failed";
 };
+export type RecentDoneSnapshot = { merged?: RecentDone[]; failed?: RecentDone[] };
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatRecentDate(value: string | undefined, now = new Date()): string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) return "дата неизвестна";
+  const parts = value.slice(0, 10).split("-").map(Number);
+  const check = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  if (check.getUTCFullYear() !== parts[0] || check.getUTCMonth() !== parts[1] - 1 || check.getUTCDate() !== parts[2]) return "дата неизвестна";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "дата неизвестна";
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const delta = Math.round((today.getTime() - day.getTime()) / 86400000);
+  const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (delta === 0) return `сегодня ${time}`;
+  if (delta === 1) return `вчера ${time}`;
+  return `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()} ${time}`;
+}
 type OverviewWork = {
   id: string;
   title: string;
@@ -317,7 +335,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
   const handoffTargetStatus = handoffTarget
     ? stageHandoffTargetStatus(current.completed_works, summary.minimum_sample, handoffTarget.met)
     : null;
-  const previousDates = `${new Date(previous.started_at).toLocaleDateString("ru-RU")}–${new Date(previous.ended_at).toLocaleDateString("ru-RU")}`;
+  const previousDates = `${formatRecentDate(previous.started_at)}–${formatRecentDate(previous.ended_at)}`;
   return (
     <section style={card} aria-label="Эффективность Factory">
       <div className="efficiency-heading">
@@ -378,7 +396,7 @@ function EfficiencyPanel({ summary }: { summary: EfficiencySummary }) {
         <div className="efficiency-sources">
           <strong>Что вошло:</strong> {current.product_stage_tasks} завершённых продуктовых этапов (ранее {previous.product_stage_tasks}). Служебные отдельно: патруль {current.excluded.patrol}, по расписанию {current.excluded.scheduled}, helper {current.excluded.helper}, прочие {current.excluded.other} (всего {current.excluded.total}; ранее {previous.excluded.total}).
           <br />Throughput считается по записям успешного слияния, не по состоянию «агент закончил». Доли времени имеют один знаменатель: {formatSeconds(current.time_shares[0]?.denominator_seconds ?? 0)} секунд от создания первой стадии до слияния по {current.completed_works} работам. Категории получают время только при наличии указанных временных меток; остаток остаётся unclassified. Порог красного сигнала — строго больше {Math.round(current.unclassified_threshold * 100)}%. Предыдущий сопоставимый период: {previousDates}.
-          <br />First-pass считается только среди влитых работ, которые дошли до соответствующей проверки. Круг — наибольшее число повторов Разработки, Ревью или Проверки; автовосстановление — повтор того же этапа после ошибки или отмены. Окончательный тупик — работа без слияния и живого продолжения, которая не менялась хотя бы 10 минут.{summary.release_observation_started_at ? ` Журнал неуспешных выпусков ведётся с ${new Date(summary.release_observation_started_at).toLocaleString("ru-RU")}; более ранние инциденты в число не входят.` : " Период наблюдения выпусков неизвестен — нули по выпускам нельзя считать подтверждённым отсутствием инцидентов."}
+          <br />First-pass считается только среди влитых работ, которые дошли до соответствующей проверки. Круг — наибольшее число повторов Разработки, Ревью или Проверки; автовосстановление — повтор того же этапа после ошибки или отмены. Окончательный тупик — работа без слияния и живого продолжения, которая не менялась хотя бы 10 минут.{summary.release_observation_started_at ? ` Журнал неуспешных выпусков ведётся с ${formatRecentDate(summary.release_observation_started_at)}; более ранние инциденты в число не входят.` : " Период наблюдения выпусков неизвестен — нули по выпускам нельзя считать подтверждённым отсутствием инцидентов."}
         </div>
       </details>
     </section>
@@ -405,10 +423,10 @@ function ProductCapacityPanel({ summary }: { summary: ProductCapacitySummary }) 
         <button type="button" aria-pressed={window === "7d"} onClick={() => setWindow("7d")}>7 дней</button>
       </div>
     </div>
-    {period.low_data && <div className="efficiency-verdict"><Pill text="данных мало" tone="muted" /><span>наблюдение началось {period.observation_from ? new Date(period.observation_from).toLocaleString("ru-RU") : "сейчас"}; историю не восстанавливали.</span></div>}
+    {period.low_data && <div className="efficiency-verdict"><Pill text="данных мало" tone="muted" /><span>наблюдение началось {period.observation_from ? formatRecentDate(period.observation_from) : "сейчас"}; историю не восстанавливали.</span></div>}
     <div className="efficiency-primary">
       <div><strong>{period.average_busy == null ? "—" : `${period.average_busy.toFixed(1)} / ${summary.capacity}`}</strong><span>средняя занятость</span><small>сэмплов: {period.samples}</small></div>
-      <div><strong>{period.queue_p90 == null ? "—" : period.queue_p90}</strong><span>очередь в 90% замеров</span><small>{period.queue_p90 == null ? "данных нет" : `не больше ${period.queue_p90} продуктовых работ`}</small></div>
+      <div><strong>{period.queue_p90 == null ? "—" : period.queue_p90}</strong><span>обычная длина очереди</span><small>{period.queue_p90 == null ? "данных нет" : `очередь обычно не длиннее ${period.queue_p90} продуктовых работ`}</small></div>
       <div><strong>{period.active_time.map((item) => `${item.active}: ${percentage(item.share)}`).join(" · ")}</strong><span>доля времени 0–4</span><small>в каждом числе — активных работ : доля</small></div>
     </div>
     <details className="efficiency-details"><summary>Показать причины недозагрузки</summary>
@@ -471,12 +489,19 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
         ? { text: "Работа в очереди, ждём исполнителя", tone: "muted" as const, icon: <Loader2 size={22} /> }
         : { text: "Фабрика свободна", tone: "muted" as const, icon: <CheckCircle2 size={22} /> };
 
+  const recent = Array.isArray(d.recent_done) ? { merged: [], failed: [] } : (d.recent_done ?? {});
+  const merged = recent.merged ?? [];
+  const failed = recent.failed ?? [];
+  const recentGroups: { heading: string; items: RecentDone[]; kind: "merged" | "failed" }[] = [
+    { heading: "Влито в main", items: merged, kind: "merged" },
+    { heading: "Провалы", items: failed, kind: "failed" },
+  ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0, fontSize: 22 }}>Обзор</h1>
         <span style={{ fontSize: 12, color: muted }}>
-          {d.updated_at ? `снимок ${new Date(d.updated_at).toLocaleTimeString("ru-RU")}` : ""}
+          {d.updated_at ? `снимок ${formatRecentDate(d.updated_at)}` : ""}
         </span>
         <span style={{ flex: 1 }} />
         <button className="button" onClick={() => void pull()} title="Обновить">
@@ -547,17 +572,19 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       {efficiency && <EfficiencyPanel summary={efficiency} />}
       {capacity && <ProductCapacityPanel summary={capacity} />}
 
-      {(d.recent_done ?? []).length > 0 && (
+      {(merged.length + failed.length) > 0 && (
         <section style={card} aria-label="Сделано недавно">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <CheckCircle2 size={16} color="#7ee2a8" /><strong>Сделано недавно</strong>
           </div>
-          {(d.recent_done ?? []).map((r, i) => (
+          {recentGroups.map(({ heading, items, kind }) => items.length > 0 && <div key={heading}>
+            <strong style={{ fontSize: 12, color: muted }}>{heading}</strong>
+            {items.map((r, i) => (
             <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10,
                                   padding: "7px 0",
                                   borderTop: i ? "1px solid #1d2430" : "none" }}>
-              <span style={{ color: r.status === "failed" ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
-                {r.status === "failed" ? "!" : "✓"}
+              <span style={{ color: kind === "failed" ? "#ff9d9d" : "#7ee2a8", fontSize: 13, flex: "none" }}>
+                {kind === "failed" ? "!" : "✓"}
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
@@ -565,9 +592,10 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
                 {r.detail && <div style={{ fontSize: 12, color: muted, overflow: "hidden",
                               textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.detail}</div>}
               </div>
-              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{(r.at || "").slice(5, 16)}</span>
+              <span style={{ fontSize: 11.5, color: muted, flex: "none" }}>{formatRecentDate(r.at)}</span>
             </div>
-          ))}
+            ))}
+          </div>)}
         </section>
       )}
 

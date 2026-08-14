@@ -2590,8 +2590,16 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
-		       t.work_id, t.parent_task_id, t.correction_kind
+		       t.work_id, t.parent_task_id, t.correction_kind,
+		       CASE WHEN COUNT(a.id) > 0 THEN 1 ELSE 0 END,
+		       CASE WHEN SUM(CASE WHEN a.trigger_type = 'schedule' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END,
+		       COALESCE(GROUP_CONCAT(a.name, ' '), ''), COALESCE(GROUP_CONCAT(a.context, ' '), '')
 		FROM tasks t JOIN executions e ON e.task_id = t.id
+		LEFT JOIN automation_occurrences o ON o.task_id = t.id
+		LEFT JOIN automations a ON a.id = o.automation_id
+		GROUP BY t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
+		         e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		         t.work_id, t.parent_task_id, t.correction_kind
 	`
 	args := make([]any, 0, 3)
 	if request.Cursor != nil {
@@ -2632,19 +2640,27 @@ func scanTask(row scanner, detail bool) (protocol.Task, error) {
 	var task protocol.Task
 	var created int64
 	var workID, parentTaskID, correctionKind sql.NullString
+	var automationName, automationText string
+	var automationLinked, scheduled int
 	var err error
 	if detail {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.Description, &task.RepositoryID,
 			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
-			&workID, &parentTaskID, &correctionKind)
+			&workID, &parentTaskID, &correctionKind, &automationLinked, &scheduled,
+			&automationName, &automationText)
 	} else {
 		err = row.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
 			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
-			&workID, &parentTaskID, &correctionKind)
+			&workID, &parentTaskID, &correctionKind, &automationLinked, &scheduled,
+			&automationName, &automationText)
 	}
 	task.WorkID = workID.String
 	task.ParentTaskID = parentTaskID.String
 	task.CorrectionKind = correctionKind.String
+	task.WorkClass = string(classifyWork(workClassificationFacts{
+		title: task.Title, automationLinked: automationLinked != 0, scheduled: scheduled != 0,
+		automationName: automationName, automationText: automationText,
+	}))
 	task.CreatedAt = fromMillis(created)
 	if task.State == "preparing" {
 		task.State = "running"
@@ -2681,8 +2697,17 @@ func (s *Store) Task(ctx context.Context, id string) (protocol.TaskDetail, error
 	row := s.db.QueryRowContext(ctx, `
 		SELECT t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
-		       t.work_id, t.parent_task_id, t.correction_kind
-		FROM tasks t JOIN executions e ON e.task_id = t.id WHERE t.id = ?
+		       t.work_id, t.parent_task_id, t.correction_kind,
+		       CASE WHEN COUNT(a.id) > 0 THEN 1 ELSE 0 END,
+		       CASE WHEN SUM(CASE WHEN a.trigger_type = 'schedule' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END,
+		       COALESCE(GROUP_CONCAT(a.name, ' '), ''), COALESCE(GROUP_CONCAT(a.context, ' '), '')
+		FROM tasks t JOIN executions e ON e.task_id = t.id
+		LEFT JOIN automation_occurrences o ON o.task_id = t.id
+		LEFT JOIN automations a ON a.id = o.automation_id
+		WHERE t.id = ?
+		GROUP BY t.id, t.request_key, t.title, t.description, t.repository_id, t.timeout_seconds,
+		         e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		         t.work_id, t.parent_task_id, t.correction_kind
 	`, id)
 	task, err := scanTask(row, true)
 	if errors.Is(err, sql.ErrNoRows) {

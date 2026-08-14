@@ -8433,10 +8433,42 @@ pilot.save(pilot.STATE_PATH, state)
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_separates_merged_and_failed_with_independent_limits(self):
+        tasks = []
+        for i in range(4):
+            tasks.append({"id": f"merged-{i}", "title": f"[auto] [5/5 Verify] Влитая {i}",
+                          "work_class": "product", "state": "succeeded",
+                          "updated_at": f"2026-08-10T09:0{i}:00Z"})
+        for i in range(6):
+            tasks.append({"id": f"failed-{i}", "title": f"[auto] [4/5 Review] Провал {i}",
+                          "work_class": "product", "state": "failed",
+                          "updated_at": f"2026-08-10T10:0{i}:00Z"})
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
+            for i in range(4):
+                stream.write(json.dumps({"task_id": f"merged-{i}"}) + "\n")
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+        self.assertEqual(len(recent["merged"]), 4)
+        self.assertEqual(len(recent["failed"]), 5)
+
+    def test_server_class_is_required_and_title_does_not_filter_product_work(self):
+        tasks = [{"id": "patrol-title", "title": "[auto] [5/5 Verify] Патруль пользователя",
+                  "work_class": "product", "state": "failed", "updated_at": "2026-08-10T10:00:00Z"},
+                 {"id": "patrol-auto", "title": "[auto] [5/5 Verify] Патруль Factory",
+                  "work_class": "patrol", "state": "failed", "updated_at": "2026-08-10T11:00:00Z"}]
+        with mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Патруль пользователя"])
+
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
             "id": "triage",
             "title": "[auto] [1/5 Triage] Оплата картой",
+            "work_class": "product",
             "state": "succeeded",
             "updated_at": "2026-08-10T14:00:00Z",
         }
@@ -8450,18 +8482,22 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api") as api:
             recent = pilot.recent_done_block([task])
 
-        self.assertEqual(recent, [])
+        self.assertEqual(recent, {"merged": [], "failed": []})
         api.assert_not_called()
 
     def test_excludes_successful_progress_and_unmerged_verify(self):
         tasks = [
             {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T14:00:00Z"},
             {"id": "unmerged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T13:00:00Z"},
             {"id": "merged", "title": "[auto] [5/5 Verify] Поиск товаров",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T12:00:00Z"},
             {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "work_class": "product",
              "state": "failed", "updated_at": "2026-08-10T11:00:00Z"},
         ]
         temporary = tempfile.TemporaryDirectory()
@@ -8474,20 +8510,22 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent],
-                         ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
+        self.assertEqual([item["title"] for item in recent["merged"]], ["Поиск товаров"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
             {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",
+             "work_class": "service",
              "state": "succeeded", "updated_at": f"2026-08-10T10:0{i}:00Z"}
             for i, name in enumerate(("Smoke check", "Helper cleanup", "Debug probe",
                                        "Idempotency final", "Идемпотентный финал"))
         ] + [
             {"id": "merged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T11:00:00Z"},
             {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "work_class": "product",
              "state": "failed", "updated_at": "2026-08-10T12:00:00Z"},
         ]
         temporary = tempfile.TemporaryDirectory()
@@ -8503,11 +8541,11 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
-        self.assertEqual(recent[0]["status"], "failed")
-        self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "delivered")
-        self.assertIn("Выпуск принят", recent[1]["detail"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
+        self.assertEqual(recent["failed"][0]["status"], "failed")
+        self.assertIn("Этап", recent["failed"][0]["detail"])
+        self.assertEqual(recent["merged"][0]["status"], "merged")
+        self.assertIn("Выпуск принят", recent["merged"][0]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
@@ -8521,8 +8559,7 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block([], n=3)
 
-        self.assertEqual([item["title"] for item in recent], ["Старый настоящий результат"])
-        self.assertEqual(recent[0]["status"], "legacy")
+        self.assertEqual(recent, {"merged": [], "failed": []})
 
     def test_reads_every_task_page(self):
         pages = [
