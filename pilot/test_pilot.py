@@ -6863,7 +6863,6 @@ class AreaLockArbitrationTests(unittest.TestCase):
             {"state": "queued", "created_at": "2026-08-13T09:00:00Z",
              "title": "[auto] [2/5 Specification] Младшая работа"},
         ]
-        # Дальше прошедшая по конвейеру работа проходит, младшая ждёт её.
         self.assertEqual(self._busy(tasks, "Старшая работа"), "")
         self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
 
@@ -6876,6 +6875,89 @@ class AreaLockArbitrationTests(unittest.TestCase):
         ]
         self.assertEqual(self._busy(tasks, "Старшая работа"), "")
         self.assertEqual(self._busy(tasks, "Младшая работа"), "Старшая работа")
+
+
+class AutomationStatusSnapshotTests(unittest.TestCase):
+    def test_allowlist_and_partial_failure_remain_visible(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+
+        def fake_run(argv, **_kwargs):
+            if "factory-pilot.service" in argv:
+                return types.SimpleNamespace(returncode=0, stdout=(
+                    "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 UTC\n"))
+            return types.SimpleNamespace(returncode=1, stdout="")
+
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"))
+            with open(target, encoding="utf-8") as handle:
+                rows = json.load(handle)["automations"]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual(["factory-pilot", "factory-release-broker", "factory-intake", "factory-janitor"],
+                         [row["id"] for row in rows])
+        self.assertEqual("ok", rows[0]["data_status"])
+        self.assertTrue(all(row["data_status"] == "no_data" for row in rows[1:]))
+
+    def test_snapshot_uses_completed_pilot_cycle_and_converts_local_systemd_time(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+
+        def fake_run(_argv, **_kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=(
+                "ActiveState=active\nActiveEnterTimestamp=Thu 2026-08-13 10:00:00 CDT\n"))
+
+        try:
+            pilot.write_automation_status(fake_run, os.path.join(_TEST_DATA_HOME.name, "missing.log"),
+                                          "2026-08-13T16:00:00Z")
+            with open(target, encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertIn("observed_at", snapshot)
+        self.assertEqual("2026-08-13T16:00:00Z", snapshot["automations"][0]["last_activity_at"])
+        self.assertEqual("2026-08-13T15:00:00Z", snapshot["automations"][1]["last_activity_at"])
+
+    def test_invalid_janitor_calendar_date_remains_no_data(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        log_path = os.path.join(_TEST_DATA_HOME.name, "janitor-invalid-date.log")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write("completed at 2026-99-99T10:00:00Z\\n")
+
+        try:
+            pilot.write_automation_status(lambda *_args, **_kwargs: types.SimpleNamespace(returncode=1, stdout=""), log_path)
+            with open(target, encoding="utf-8") as handle:
+                janitor = json.load(handle)["automations"][-1]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertEqual("no_data", janitor["data_status"])
+        self.assertNotIn("last_activity_at", janitor)
+
+    def test_future_host_activity_remains_no_data(self):
+        target = os.path.join(_TEST_DATA_HOME.name, "pilot", "automation-status-test.json")
+        log_path = os.path.join(_TEST_DATA_HOME.name, "janitor-future-date.log")
+        old = pilot.AUTOMATION_STATUS_PATH
+        pilot.AUTOMATION_STATUS_PATH = target
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z")
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write(f"completed at {future}\\n")
+
+        def fake_run(_argv, **_kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=(
+                f"ActiveState=active\\nActiveEnterTimestamp={future}\\n"))
+
+        try:
+            pilot.write_automation_status(fake_run, log_path)
+            with open(target, encoding="utf-8") as handle:
+                rows = json.load(handle)["automations"]
+        finally:
+            pilot.AUTOMATION_STATUS_PATH = old
+        self.assertTrue(all(row["data_status"] == "no_data" for row in rows))
 
 
 if __name__ == "__main__":

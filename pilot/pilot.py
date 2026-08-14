@@ -5534,7 +5534,97 @@ def detect_limits(conf, tasks, workers_by_id):
 
 
 DASH_PATH = f"{HOME}/pilot/dashboard.json"
+AUTOMATION_STATUS_PATH = f"{HOME}/pilot/automation-status.json"
+AUTOMATION_STATUS_UNITS = (
+    ("factory-pilot", "pilot"),
+    ("factory-release-broker", "release_broker"),
+    ("factory-intake", "release"),
+)
 _dash_slow = {"at": 0, "data": {}}
+
+
+def parse_systemd_timestamp(timestamp):
+    """Return a UTC ISO timestamp without relabelling a local wall-clock time."""
+    timestamp = timestamp.strip()
+    try:
+        return datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(
+            datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        pass
+    match = re.fullmatch(r"\w{3} (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\S+)", timestamp)
+    if not match:
+        return None
+    offsets = {"UTC": 0, "GMT": 0, "CDT": -5, "CST": -6, "EDT": -4, "EST": -5,
+               "MDT": -6, "MST": -7, "PDT": -7, "PST": -8}
+    offset = offsets.get(match.group(2))
+    if offset is None:
+        return None
+    parsed = datetime.datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+    return parsed.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=offset))).astimezone(
+        datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_automation_timestamp(timestamp):
+    """Return a valid host timestamp normalized to UTC, or None."""
+    try:
+        parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return None
+
+
+def is_future_automation_timestamp(timestamp, now=None):
+    """Reject clock-skewed activity so it cannot be shown as live."""
+    try:
+        parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return True
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc) > now
+    except ValueError:
+        return True
+
+
+def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log", pilot_completed_at=None):
+    """Write a minimal allowlisted host snapshot; one failed unit stays visible."""
+    run = run or subprocess.run
+    rows = []
+    for unit, category in AUTOMATION_STATUS_UNITS:
+        row = {"source": "host", "id": unit, "category": category,
+               "status": "unknown", "data_status": "no_data"}
+        try:
+            result = run(["systemctl", "show", f"{unit}.service",
+                          "--property=ActiveState", "--property=ActiveEnterTimestamp"],
+                         capture_output=True, text=True, timeout=5, check=False)
+            fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+            timestamp = parse_systemd_timestamp(fields.get("ActiveEnterTimestamp", ""))
+            if (result.returncode == 0 and fields.get("ActiveState") and timestamp
+                    and not is_future_automation_timestamp(timestamp)):
+                row.update(status=fields["ActiveState"], data_status="ok",
+                           last_activity_at=timestamp)
+        except Exception:
+            pass
+        rows.append(row)
+    janitor = {"source": "host", "id": "factory-janitor", "category": "janitor",
+               "status": "unknown", "data_status": "no_data"}
+    try:
+        with open(janitor_log, encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()[-100:]
+        matches = [re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})", line) for line in lines]
+        stamps = [parse_automation_timestamp(match.group(0)) for match in matches if match]
+        stamps = [stamp for stamp in stamps if stamp and not is_future_automation_timestamp(stamp)]
+        if stamps:
+            janitor.update(status="completed", data_status="ok", last_activity_at=stamps[-1])
+    except (OSError, UnicodeError):
+        pass
+    rows.append(janitor)
+    if pilot_completed_at is not None:
+        rows[0].update(data_status="ok", last_activity_at=pilot_completed_at,
+                       status="active")
+    save(AUTOMATION_STATUS_PATH, {"observed_at": datetime.datetime.now(
+        datetime.timezone.utc).isoformat().replace("+00:00", "Z"), "automations": rows})
 
 PROJECT_READINESS_CHECKS = (
     ("repository", "Репозиторий"),
@@ -7165,7 +7255,6 @@ def cycle(conf, state):
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
-
     # Настоящие проценты подписок — в файл и в уведомления на 80/95.
     try:
         provider_limits_tick(conf)
@@ -7891,6 +7980,11 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
             try:
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 failures = 0
+                try:
+                    write_automation_status(pilot_completed_at=datetime.datetime.fromtimestamp(
+                        clock_fn(), datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+                except Exception as e:
+                    log("automation_status_error", repr(e))
             except Exception as e:
                 log("cycle_error", repr(e))
                 failures += 1
