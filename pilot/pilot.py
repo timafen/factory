@@ -5575,6 +5575,18 @@ def parse_automation_timestamp(timestamp):
         return None
 
 
+def is_future_automation_timestamp(timestamp, now=None):
+    """Reject clock-skewed activity so it cannot be shown as live."""
+    try:
+        parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return True
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc) > now
+    except ValueError:
+        return True
+
+
 def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log", pilot_completed_at=None):
     """Write a minimal allowlisted host snapshot; one failed unit stays visible."""
     run = run or subprocess.run
@@ -5588,7 +5600,8 @@ def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log"
                          capture_output=True, text=True, timeout=5, check=False)
             fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
             timestamp = parse_systemd_timestamp(fields.get("ActiveEnterTimestamp", ""))
-            if result.returncode == 0 and fields.get("ActiveState") and timestamp:
+            if (result.returncode == 0 and fields.get("ActiveState") and timestamp
+                    and not is_future_automation_timestamp(timestamp)):
                 row.update(status=fields["ActiveState"], data_status="ok",
                            last_activity_at=timestamp)
         except Exception:
@@ -5601,7 +5614,7 @@ def write_automation_status(run=None, janitor_log="/var/log/factory-janitor.log"
             lines = handle.readlines()[-100:]
         matches = [re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})", line) for line in lines]
         stamps = [parse_automation_timestamp(match.group(0)) for match in matches if match]
-        stamps = [stamp for stamp in stamps if stamp]
+        stamps = [stamp for stamp in stamps if stamp and not is_future_automation_timestamp(stamp)]
         if stamps:
             janitor.update(status="completed", data_status="ok", last_activity_at=stamps[-1])
     except (OSError, UnicodeError):
