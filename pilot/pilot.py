@@ -7920,6 +7920,11 @@ def cycle(conf, state):
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
             overlap_wait_decisions[tid] = verdict
             retry_terminal_task(conf, state, tid)
+            # The verdict is cached and no handoff was attempted. Do not let
+            # this cheap overlap wait consume the cycle's terminal budget;
+            # otherwise one blocked late stage monopolizes every fast poll
+            # and starves unrelated ready continuations behind it.
+            terminal_examined = max(terminal_examined - 1, 0)
             continue
         nw = workflows.get(next_stage)
         complexity = verdict.get("next_complexity", "medium")
@@ -8120,6 +8125,7 @@ def cycle(conf, state):
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
                 retry_terminal_task(conf, state, tid)
+                terminal_examined = max(terminal_examined - 1, 0)
                 continue
             if g and g.get("blocked"):
                 # A failed authoritative fetch is an infrastructure verdict,
