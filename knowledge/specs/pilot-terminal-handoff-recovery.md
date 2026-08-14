@@ -111,6 +111,11 @@
 
 `knowledge/cards/CARD-0155-pilot-terminal-handoff-recovery.md`
 
+## Машинно проверяемая сдача
+
+Эти обещания относятся к реализации и её регрессии: после этапа
+Implement + Test указанная команда обязана завершиться кодом 0.
+
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.AdaptivePollingTests.test_restart_recovers_processed_success_with_missing_next_stage
