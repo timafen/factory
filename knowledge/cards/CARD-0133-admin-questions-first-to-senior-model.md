@@ -4,12 +4,12 @@ Implementation commit: 36f2323a9ec2dace4fed2938e838fe38d1b99374 — админи
 
 ## HEAD
 
-- Статус: Implemented and targeted tests PASS — awaiting Review.
-- Ветка: `factory/32a417bb-fe9-a66e4207-bc2`.
+- Статус: Implemented and targeted/full tests PASS — candidate published for Review.
+- Ветка: `factory/46d7ccaa-669-39c2534f-e2e`.
 - Implementation commit: `36f2323a9ec2dace4fed2938e838fe38d1b99374` — admin-вопросы направляются старшей модели до владельца.
 - Изменено: безопасные staging-действия проходят через фиксированный `fx` argv; запрещённые и неуспешные действия эскалируются владельцу, служебный аудит скрыт из owner API.
-- Evidence: `AdminQuestionRoutingTests` — 10/10 PASS; HTTP-регрессия, `py_compile` и Go build — PASS.
-- Следующее действие: Review проверяет опубликованный remote candidate относительно свежего `main`.
+- Evidence: `AdminQuestionRoutingTests` — 10/10 PASS; Pilot 275/275, Go tests/build — PASS.
+- Следующее действие: Review проверяет опубликованный candidate относительно свежего remote `main`.
 
 ## LOG
 
@@ -136,3 +136,10 @@ Pinned diff от удалённой базы `151429d93310549a1bb04182ab688cc828
 CARD-0133. Код-коммит — `36f2323a9ec2dace4fed2938e838fe38d1b99374`.
 Целевые `AdminQuestionRoutingTests` прошли 10/10, HTTP-регрессия, Python
 compilation и Go build также завершились успешно.
+
+### 2026-08-13 — Implement
+
+Заявленный снимок реализации восстановлен и опубликован для повторного Review;
+его diff со свежей удалённой базой содержит только шесть файлов CARD-0133.
+Целевые проверки прошли: Pilot 10/10, HTTP-регрессия PASS; полный Pilot 275/275,
+Go tests и build PASS.
