@@ -6960,5 +6960,29 @@ class AutomationStatusSnapshotTests(unittest.TestCase):
         self.assertTrue(all(row["data_status"] == "no_data" for row in rows))
 
 
+class MergedCommitShaTests(unittest.TestCase):
+    """Поезд получает настоящий пост-squash коммит main, а не head ветки."""
+
+    PULLS = [
+        {"merged_at": None, "head": {"sha": "a" * 40}, "merge_commit_sha": "b" * 40},
+        {"merged_at": "2026-08-14T00:52:00Z", "head": {"sha": "c" * 40},
+         "merge_commit_sha": "d" * 40},
+    ]
+
+    def test_returns_merge_commit_for_matching_merged_head(self):
+        with mock.patch.object(pilot, "gh_json", return_value=self.PULLS):
+            self.assertEqual(pilot._merged_commit_sha("o/r", "br", "c" * 40), "d" * 40)
+
+    def test_unmerged_or_foreign_head_yields_empty(self):
+        with mock.patch.object(pilot, "gh_json", return_value=self.PULLS):
+            self.assertEqual(pilot._merged_commit_sha("o/r", "br", "a" * 40), "")
+        with mock.patch.object(pilot, "gh_json", return_value=None):
+            self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "")
+
+    def test_without_expected_head_takes_any_merged(self):
+        with mock.patch.object(pilot, "gh_json", return_value=self.PULLS):
+            self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "d" * 40)
+
+
 if __name__ == "__main__":
     unittest.main()

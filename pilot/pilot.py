@@ -7048,6 +7048,29 @@ def _verified_merge_result(repo, branch, expected_head):
     )
 
 
+def _merged_commit_sha(repo, branch, expected_head=""):
+    """Настоящий коммит в main после squash-merge этой ветки.
+
+    GitHub при squash пересобирает изменение в НОВЫЙ коммит; head ветки до
+    вливания в main не попадает и после удаления ветки может вовсе исчезнуть.
+    Поезд обязан получать именно merge_commit_sha — иначе выпуск честно
+    отвечает «нет такой точки сборки» (так падали поколения 7–9)."""
+    owner = repo.split("/", 1)[0]
+    head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    pulls = gh_json(["api", f"repos/{repo}/pulls?state=all&head={head}&per_page=100"])
+    if not isinstance(pulls, list):
+        return ""
+    for pull in pulls:
+        if not pull.get("merged_at"):
+            continue
+        if expected_head and (pull.get("head") or {}).get("sha") != expected_head:
+            continue
+        sha = pull.get("merge_commit_sha") or ""
+        if re.fullmatch(r"[0-9a-f]{40}", sha):
+            return sha
+    return ""
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -7112,7 +7135,14 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
-            generation = deploy_after_merge(conf, repo, state, intent.get("commit_sha", ""), wait)
+            # Поезду — коммит, который реально лёг в main после squash,
+            # а не head ветки до вливания (его после merge уже не существует).
+            released_sha = (intent.get("released_sha")
+                            or _merged_commit_sha(repo.split("github.com/")[-1], branch,
+                                                  intent.get("commit_sha", ""))
+                            or intent.get("commit_sha", ""))
+            intent["released_sha"] = released_sha
+            generation = deploy_after_merge(conf, repo, state, released_sha, wait)
             if generation:
                 intent["phase"] = "waiting"; intent["generation_id"] = generation["id"]
                 save(STATE_PATH, state)
