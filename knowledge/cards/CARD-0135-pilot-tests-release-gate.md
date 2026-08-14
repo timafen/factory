@@ -4,14 +4,24 @@ Implementation commit: 89617879b36b92fd05a9169ca04211d4ff28fa29 — полный
 
 ## HEAD
 
-- Status: Implemented — awaiting repeat Review
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/8be4faac-ca4-92b2b913-001`
 - Implementation commit: `89617879b36b92fd05a9169ca04211d4ff28fa29`
 - What changed: полный `pilot.test_pilot` запускается отдельной доверенной группой до UI/Go-сборок; его ошибка останавливает выпуск до установки и перезапуска служб.
-- Evidence: base `65d0d1ef70f71b25751e96e0c4961e897849abcb`; Pilot → 268 OK, 13 skipped; shell-ворота → PASS; `just ui-check` → 180 tests passed; `just build` → три бинарника собраны.
-- One next action: передать опубликованную ветку на независимый Review.
+- Evidence: pinned base `65d0d1ef70f71b25751e96e0c4961e897849abcb`, candidate `dadfe513a6802c5f9ecc44d1f5d337012d715ec0`; Pilot → 268 OK, 13 skipped; release-полигон с лимитом worker 60 секунд → PASS; shell-синтаксис → PASS.
+- One next action: человеку принять решение о слиянии ветки в `main`.
 
 ## LOG
+
+### 2026-08-14 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Pilot обязателен до сборки | `python3 -m unittest pilot.test_pilot`; `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` | 268 успешно, 13 пропущено; отдельная Pilot-группа запускается вместе с UI/Go до сборки |
+| Красный Pilot останавливает выпуск | сценарий `python-test-fail` в release-полигоне | соседние UI/Go-группы остановлены и собраны; build/install и перезапуск служб не выполняются; общий полигон PASS |
+| Изменённые shell-скрипты корректны | `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh`; pinned `git diff --check` | обе проверки PASS |
+| Смежное поведение и полный набор | `just check` | формат, vet, vuln и staticcheck прошли; набор остановился на существующем нестабильном `internal/worker: TestLostClaimAndCompletionResponsesAreIdempotent` (`dropped claim=true completion=false`), вне изменённых файлов |
+| Поставка и карточка согласованы | pinned diff `65d0d1e...dadfe51`; implementation commit `89617879b36b92fd05a9169ca04211d4ff28fa29` | четыре ожидаемых файла; implementation commit существует, является предком кандидата и меняет три файла вне `knowledge/cards/` |
 
 ### 2026-08-14 — Implement
 
