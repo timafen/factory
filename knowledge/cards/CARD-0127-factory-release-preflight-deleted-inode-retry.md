@@ -1,4 +1,4 @@
-Implementation commit: 0b385da2cc220ab6249a29e5c0ce91e6c764fc29 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+Implementation commit: 250281be25d38f8552c619f93b6d58d595a04f92 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
 
 # CARD-0127: Повтор предполётной проверки deleted-inode
 
@@ -6,7 +6,7 @@ Implementation commit: 0b385da2cc220ab6249a29e5c0ce91e6c764fc29 — fixture до
 
 Status: Implemented.
 Branch: factory/af918838-ce0-d6326a25-705.
-Implementation commit: 0b385da2cc220ab6249a29e5c0ce91e6c764fc29 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+Implementation commit: 250281be25d38f8552c619f93b6d58d595a04f92 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
 What changed: `ops/test-fx-factory-release.sh` эмулирует активный `factory-server.service` с `MainPID` и `/proc/<pid>/exe` с суффиксом ` (deleted)`.
 The fixture требует code 4, понятную строку с unit и отсутствие service mutations.
 Evidence: `bash -n ops/test-fx-factory-release.sh ops/fx-factory-release` → PASS; `bash ops/test-fx-factory-release.sh` → PASS.
