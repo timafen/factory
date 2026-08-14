@@ -1529,6 +1529,30 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     return None
 
 
+def restart_recovery_detail(conf, tasks, task, stages):
+    """Return detail only for a safe, still-missing startup handoff."""
+    task_id = task.get("id")
+    recovery_ids = conf.get("_restart_recovery_ids") or ()
+    if task_id not in recovery_ids or task.get("state") != "succeeded":
+        return None
+    watermark = _work_time(conf.get("_restart_recovery_watermark"))
+    finished = _work_time(task.get("finished_at") or task.get("updated_at"))
+    if not watermark or not finished or finished <= watermark:
+        return None
+    base = base_title(task.get("title", ""))
+    if work_lifecycle_block(base, task, tasks) or is_stopped(conf, base):
+        return None
+    detail = api(f"/tasks/{task_id}")
+    workflow = (detail.get("workflow") or {}).get("title")
+    if workflow not in stages or stages.index(workflow) + 1 >= len(stages):
+        return None
+    if live_or_done_at(
+            tasks, task, stages.index(workflow) + 2,
+            since=task.get("created_at")):
+        return None
+    return detail
+
+
 def resume_stage_for(stages, wf, next_stage):
     """Куда возвращать работу после остановки конвейера.
     Ревью и финальная проверка означают доработку — значит назад в разработку,
@@ -7444,8 +7468,11 @@ def cycle(conf, state):
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
             continue
+        recovery_detail = None
         if tid in state["processed"]:
-            continue
+            recovery_detail = restart_recovery_detail(conf, tasks, t, stages)
+            if recovery_detail is None:
+                continue
         if tstate not in ("succeeded", "failed", "cancelled"):
             continue
 
@@ -7464,7 +7491,7 @@ def cycle(conf, state):
         # same deferred handoff can starve every terminal task behind it.
         state["terminal_cursor"] = tid
 
-        detail = api(f"/tasks/{tid}")
+        detail = recovery_detail or api(f"/tasks/{tid}")
         wf = (detail.get("workflow") or {}).get("title")
         state["processed"].append(tid)
 
@@ -7942,6 +7969,14 @@ def cycle(conf, state):
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
         }
+        # The decision and delivery gates above can take long enough for
+        # another Pilot to create the continuation. Re-check the shared
+        # snapshot at the last possible moment before the external write.
+        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        if dup:
+            log(f"skip: '{base}' продолжение появилось перед созданием "
+                f"({dup['id'][:8]} {dup.get('state')})")
+            continue
         try:
             created = create_child_task(body, t, conf)
         except Exception as e:
@@ -7962,6 +7997,25 @@ def cycle(conf, state):
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
+
+    # Recovery goes through the legacy retry mechanism, which removes a
+    # processed id on a temporary handoff failure. Keep the immutable startup
+    # cursor durable, and collapse the temporary duplicate after success.
+    recovery_ids = conf.get("_restart_recovery_ids") or ()
+    if recovery_ids:
+        seen = set()
+        kept = []
+        for task_id in state["processed"]:
+            if task_id in recovery_ids and task_id in seen:
+                continue
+            kept.append(task_id)
+            if task_id in recovery_ids:
+                seen.add(task_id)
+        state["processed"] = kept
+        for task_id in recovery_ids:
+            if task_id not in seen:
+                state["processed"].append(task_id)
+                seen.add(task_id)
 
     # V2 release state was polled before task processing and is the only
     # active delivery mechanism.  Legacy retry flags are audit-only.
@@ -8016,20 +8070,35 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     clock_fn = clock_fn or time.time
     failures = 0
     completed = 0
+    recovery_ids = None
+    recovery_watermark = None
     while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
         state = load(STATE_PATH, {"processed": []})
         hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
+            if recovery_ids is None:
+                recovery_watermark = state.get("terminal_handoff_watermark")
+                recovery_ids = (frozenset(state.get("processed") or [])
+                                if recovery_watermark else frozenset())
+                recovery_watermark = recovery_watermark or ""
+            conf["_restart_recovery_ids"] = recovery_ids
+            conf["_restart_recovery_watermark"] = recovery_watermark
             try:
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
+                cycle_now = clock_fn()
                 failures = 0
+                state["terminal_handoff_watermark"] = (
+                    datetime.datetime.fromtimestamp(
+                        cycle_now, datetime.timezone.utc).isoformat().replace(
+                            "+00:00", "Z"))
                 try:
                     write_automation_status(pilot_completed_at=datetime.datetime.fromtimestamp(
-                        clock_fn(), datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+                        cycle_now, datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
                 except Exception as e:
                     log("automation_status_error", repr(e))
             except Exception as e:
+                cycle_now = clock_fn()
                 log("cycle_error", repr(e))
                 failures += 1
                 hint = error_poll_hint(conf, failures, e)
@@ -8045,7 +8114,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 "epic_starts_processed", [])[-PROCESSED_RETENTION:]
             state["poll_terminal_seen"] = state.get(
                 "poll_terminal_seen", [])[-PROCESSED_RETENTION:]
-            record_poll_hint(state, hint, clock_fn())
+            record_poll_hint(state, hint, cycle_now)
             save(STATE_PATH, state)
         elif conf:
             hint = {"seconds": max(float(conf.get("poll_seconds", 30)), 1),
