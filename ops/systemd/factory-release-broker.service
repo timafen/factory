@@ -14,7 +14,10 @@ UMask=0007
 ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker
 Restart=on-failure
 RestartSec=2
-NoNewPrivileges=true
+# NoNewPrivileges здесь НЕЛЬЗЯ: в сочетании с PrivateTmp/PrivateDevices/Protect*
+# systemd лишает root CAP_SETUID, и выпуск не может понизиться до factory
+# (падали sudo и setpriv: «setresuid failed»). Остальная изоляция сохранена.
+NoNewPrivileges=false
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
