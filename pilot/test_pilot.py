@@ -4096,6 +4096,122 @@ class PlanAutostartTest(unittest.TestCase):
 
         self.assertEqual(result, "fourth-task")
 
+    def test_replenishment_promotes_new_cards_and_fills_every_free_slot(self):
+        cards = [
+            {"id": "one", "title": "One", "repo": "repo-1", "state": "new",
+             "order": 10, "origin": "owner"},
+            {"id": "two", "title": "Two", "repo": "repo-1", "state": "new",
+             "order": 20, "origin": "assistant"},
+            {"id": "three", "title": "Three", "repo": "repo-1", "state": "new",
+             "order": 30, "origin": "worker"},
+        ]
+        conf = {
+            "stages": [{"workflow": "Triage", "workers": {
+                "low": "first", "medium": "second", "high": "third",
+            }}],
+            "max_parallel_works": 3,
+        }
+        workers = {
+            "first": {"id": "worker-1", "online": True, "health": "healthy",
+                      "capacity": 1, "active_count": 0},
+            "second": {"id": "worker-2", "online": True, "health": "healthy",
+                       "capacity": 1, "active_count": 0},
+            "third": {"id": "worker-3", "online": True, "health": "healthy",
+                      "capacity": 1, "active_count": 0},
+        }
+        created = []
+
+        def update_card(idea_id, **fields):
+            card = next(card for card in cards if card["id"] == idea_id)
+            card.update(fields)
+            return card
+
+        def create(body, _conf):
+            task_id = f"task-{len(created) + 1}"
+            created.append(dict(body, id=task_id))
+            return {"task": {"id": task_id, "title": body["title"],
+                             "state": "queued"}}
+
+        with mock.patch.object(pilot, "ideas_all", side_effect=lambda: cards), \
+                mock.patch.object(pilot, "set_idea", side_effect=update_card), \
+                mock.patch.object(pilot, "create_task", side_effect=create), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""), \
+                mock.patch.object(pilot, "load_limits", return_value={}), \
+                mock.patch.object(pilot, "note_work"), \
+                mock.patch.object(pilot, "notify"):
+            tasks = []
+            started = pilot.replenish_plan(conf, tasks, self.workflows, workers)
+
+        self.assertEqual(started, ["task-1", "task-2", "task-3"])
+        self.assertEqual(len(pilot.active_auto_works(tasks)), 3)
+        self.assertEqual([body["worker_id"] for body in created],
+                         ["worker-2", "worker-3", "worker-1"])
+        self.assertTrue(all(card["state"] == "in_work" for card in cards))
+        self.assertTrue(all(card.get("run_generation") for card in cards))
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "next-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "work_lifecycle_block", return_value="")
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_new_duplicate_is_linked_to_live_work_before_next_card_starts(
+            self, _limits, _lifecycle, ideas, create, set_idea,
+            _note_work, _notify):
+        ideas.return_value = [
+            {"id": "duplicate", "title": "Already running", "repo": "repo-1",
+             "state": "new", "order": 1},
+            {"id": "next", "title": "Useful next work", "repo": "repo-1",
+             "state": "new", "order": 2},
+        ]
+        tasks = [{"id": "live-task", "title": "[auto] [2/5 Specification] Already running",
+                  "state": "running"}]
+
+        result = pilot.autostart_plan(self.conf, tasks, self.workflows, self.workers)
+
+        self.assertEqual(result, "next-task")
+        self.assertIn(mock.call("duplicate", state="in_work", task_id="live-task",
+                                reason="Не запущено повторно: эта работа уже идёт."),
+                      set_idea.call_args_list)
+        self.assertEqual(create.call_count, 1)
+
+    @mock.patch.object(pilot, "notify")
+    @mock.patch.object(pilot, "note_work")
+    @mock.patch.object(pilot, "set_idea")
+    @mock.patch.object(pilot, "create_task", return_value={"task": {"id": "next-task"}})
+    @mock.patch.object(pilot, "ideas_all")
+    @mock.patch.object(pilot, "work_lifecycle_block",
+                       side_effect=["работа уже закрыта", ""])
+    @mock.patch.object(pilot, "load_limits", return_value={})
+    def test_closed_new_card_is_rejected_before_next_card_starts(
+            self, _limits, _lifecycle, ideas, create, set_idea,
+            _note_work, _notify):
+        ideas.return_value = [
+            {"id": "closed", "title": "Closed", "repo": "repo-1",
+             "state": "new", "order": 1},
+            {"id": "next", "title": "Next", "repo": "repo-1",
+             "state": "new", "order": 2},
+        ]
+
+        self.assertEqual(pilot.autostart_plan(
+            self.conf, [], self.workflows, self.workers), "next-task")
+        self.assertIn(mock.call("closed", state="rejected",
+                                reason="Не запущено повторно: работа уже закрыта"),
+                      set_idea.call_args_list)
+        create.assert_called_once()
+
+    @mock.patch.object(pilot, "create_task")
+    @mock.patch.object(pilot, "ideas_all")
+    def test_automatic_selection_can_be_disabled_without_blocking_manual_plan(
+            self, ideas, create):
+        ideas.return_value = [{"id": "new", "title": "New", "repo": "repo-1",
+                               "state": "new", "order": 1}]
+
+        self.assertIsNone(pilot.autostart_plan(
+            dict(self.conf, auto_plan=False), [], self.workflows, self.workers))
+        create.assert_not_called()
+
     @mock.patch.object(pilot, "notify")
     @mock.patch.object(pilot, "note_work")
     @mock.patch.object(pilot, "set_idea")
