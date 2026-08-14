@@ -3,7 +3,7 @@ import { occurrenceFinding, occurrenceOutcome } from "./Automations";
 
 describe("automation run findings", () => {
   it("extracts only canonical finding lines and keeps the full result as outcome", () => {
-    const result = "НАХОДКА: просрочен сертификат\\nИтоговая проверка завершена\\nНАХОДКА: нет владельца";
+    const result = "НАХОДКА: просрочен сертификат\r\nИтоговая проверка завершена\nНАХОДКА: нет владельца";
     expect(occurrenceFinding(result)).toEqual(["просрочен сертификат", "нет владельца"]);
     expect(occurrenceOutcome({ result } as never)).toBe(result);
   });

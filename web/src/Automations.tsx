@@ -1146,7 +1146,7 @@ function automationRunState(occurrence: AutomationOccurrence): { style: string; 
 }
 
 export function occurrenceFinding(result: string | undefined): string[] {
-  return (result ?? "").split("\\n")
+  return (result ?? "").split(/\r?\n/)
     .filter((line) => line.startsWith("НАХОДКА:"))
     .map((line) => line.slice("НАХОДКА:".length).trim())
     .filter(Boolean);

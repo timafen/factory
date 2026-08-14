@@ -458,7 +458,7 @@ export function WorkView({
           action={<button className="button button-primary" onClick={onDelegate}><Plus size={16} /> Поставить задачу</button>}
         />
       ) : byStage ? (
-        <StageBoard tasks={tasks ?? []} verdicts={verdicts} workerMap={workerMap} onTask={onTask} />
+        <StageBoard tasks={(tasks ?? []).filter((task) => task.work_class !== "patrol")} verdicts={verdicts} workerMap={workerMap} onTask={onTask} />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
           {SECTIONS.map((sec) => {
