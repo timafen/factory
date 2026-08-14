@@ -1,17 +1,24 @@
-Implementation commit: 83da64f5a12667e696aad3e49fb91b8711074015 — ответ владельца не теряется при сохранении результата admin-проверки.
+Implementation commit: ab56bc6a936663bc00e8fa1faf4951313799181 — admin-вопросы маршрутизируются старшей модели, а получение HEAD ветки выполняется безопасно.
 
 # CARD-0133 — Административные вопросы сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Implemented and full verification PASS.
-- Ветка: `factory/ca162a59-289-0edf5c51-c29`.
-- Implementation commit: `83da64f5a12667e696aad3e49fb91b8711074015` — admin-вопросы сначала решает старшая модель, а ответ владельца защищён от перезаписи.
-- Изменено: ветки успешного `fx` для `wait` и эскалации сохраняют через атомарное слияние под блокировкой; добавлена детерминированная регрессия owner POST.
-- Evidence: `AdminQuestionRoutingTests` — 11/11 PASS; `python3 -m unittest pilot.test_pilot` — 276 PASS (13 skipped); `go test ./...`, `go build ./...` — PASS.
+- Статус: Implemented; targeted verification PASS.
+- Ветка: `factory/cd1f9641-609-73d76ed7-5c8`.
+- Implementation commit: `ab56bc6a936663bc00e8fa1faf4951313799181` — admin-вопросы сначала решает старшая модель, а имя ветки проверяется до безопасного argv-вызова.
+- Изменено: служебный admin-аудит скрыт от owner API до эскалации; добавлена регрессия на вредоносное имя ветки.
+- Evidence: `BranchHeadSecurityTests` и `AdminQuestionRoutingTests` — 13/13 PASS; HTTP Go-тест и `py_compile` — PASS.
 - Следующее действие: Review проверяет опубликованный remote candidate относительно свежего `main`.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Поставка заново собрана от актуального `origin/main` без файлов release-broker.
+Разрешённые admin-вопросы остаются у старшей модели, а `branch_head` принимает
+только `factory/...` и вызывает `fx` через фиксированный argv. Целевые Python и
+Go-проверки прошли; тест на shell-инъекцию подтверждает отсутствие вызова.
 
 ### 2026-08-13 — Implement
 
