@@ -6,7 +6,7 @@ Implementation commit: 4c45eb2cb2241260ec70e01561f7eb56821173ed — безопа
 
 - Статус: Implement + Test PASS — awaiting review.
 - Ветка: `factory/db65d668-f41-da4172ad-aa3`.
-- Implementation commit: `0a0b5a98ae9ab59454d958cf84d3c751e321753d` — после исчерпания повторов обычный ответ оркестратора не возобновляет конвейер.
+- Implementation commit: `8397698ec960c1c9b66aa464ef0c1935b03a2a25` — после исчерпания повторов обычный ответ оркестратора не возобновляет конвейер.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
 - Что изменено: восстановлен лимит `max_loop_rescues`; после него допустимо
   только безопасное `admin_action`, а обычный ответ эскалируется владельцу.
