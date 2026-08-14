@@ -1,12 +1,12 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: cda1adf1271d053650279e2f69b179333a01bf93 — browser runtime поставляется штатным релизом вместе с ежедневным PDF
+Implementation commit: f12da75c843c1c723acd39efa39fb1dbab9731ba — browser runtime поставляется штатным релизом вместе с ежедневным PDF
 
 ## HEAD
 
 - Status: IMPLEMENTED — browser runtime поставляется штатным релизом до остановки служб.
 - Branch: `factory/f054ab9c-bf6-c968f71c-945`
-- Implementation commit: `cda1adf1271d053650279e2f69b179333a01bf93` — browser payload и renderer после удаления checkout
+- Implementation commit: `f12da75c843c1c723acd39efa39fb1dbab9731ba` — browser payload и renderer после удаления checkout
 - What changed: release создаёт постоянное поколение payload, запускает pinned installer и публикует `current`; renderer ищет playwright в стабильном runtime root.
 - Evidence: `node --test web/report/report.test.mjs` PASS (4/4); `go test ./internal/controlplane -run 'DailyReport|VisualReport'` PASS; installer fixture PASS до повторного зависания окружения.
 - One next action: завершить полный release fixture на чистом хосте и подтвердить живой PDF smoke.
