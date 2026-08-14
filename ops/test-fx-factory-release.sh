@@ -915,6 +915,14 @@ PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 ! grep -Fx 'stop factory-release-broker.service' "$success/events" >/dev/null \
   || fail "release stopped its parent broker before terminal persistence"
+# The release driver must leave its parent alive.  The broker owns the late
+# restart and compares the running inode with the newly installed executable.
+grep -F 'WithBrokerRestart(' "$SCRIPT_DIR/../cmd/factory-release-broker/main.go" >/dev/null \
+  || fail "broker restart policy is not wired in production"
+grep -F '"/proc/self/exe"' "$SCRIPT_DIR/../internal/releasebroker/broker.go" >/dev/null \
+  || fail "broker restart policy does not inspect the running executable"
+! grep -E 'restart[[:space:]]+factory-release-broker\.service' "$case_dir/fx-factory-release-under-test" >/dev/null \
+  || fail "release driver restarts its parent before terminal persistence"
 assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
 assert_before "$success/events" 'stop factory-server.service' 'start factory-server.service'
 assert_before "$success/events" 'start factory-server.service' 'start factory-worker.service'
