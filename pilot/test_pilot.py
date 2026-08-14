@@ -5416,6 +5416,16 @@ class AdaptivePollingTests(unittest.TestCase):
         ])
         self.assertIn("hidden-triage", state["processed"])
 
+    def test_terminal_handoff_history_keeps_second_page_without_replaying_archive(self):
+        tasks = [{"id": f"task-{number}"} for number in range(350)]
+
+        bounded = pilot.recent_terminal_handoff_history(tasks)
+
+        self.assertEqual(len(bounded), 200)
+        self.assertEqual(bounded[100]["id"], "task-100")
+        self.assertEqual(bounded[-1]["id"], "task-199")
+        self.assertNotIn("task-200", {task["id"] for task in bounded})
+
     def test_restart_recovery_skips_unavailable_ids_individually(self):
         conf = {
             "_restart_recovery_ids": frozenset(("gone", "broken", "available")),

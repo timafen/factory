@@ -54,6 +54,7 @@ ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
 MAX_TERMINAL_TASKS_PER_CYCLE = 1
+TERMINAL_HANDOFF_HISTORY_LIMIT = 200
 MERGE_CONFLICT_RE = re.compile(
     r"merge conflict|has merge conflicts|not mergeable|cannot be cleanly created",
     re.I,
@@ -1590,6 +1591,21 @@ def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
         reverse=True,
     )
     return urgent + rest
+
+
+def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT):
+    """Keep the live handoff scan bounded to the newest task-list window.
+
+    ``all_tasks()`` is still used as the source of truth for duplicate and
+    lifecycle checks.  Treating every never-recorded archival task as a new
+    handoff, however, makes a newly upgraded Pilot replay years of history
+    before it reaches a completion that only just fell beyond page one.
+    """
+    try:
+        limit = max(int(limit), 1)
+    except (TypeError, ValueError):
+        limit = TERMINAL_HANDOFF_HISTORY_LIMIT
+    return list((tasks or [])[:limit])
 
 
 def live_or_done_at(tasks, base, stage_no, since=None):
@@ -7738,7 +7754,11 @@ def cycle(conf, state):
         1,
     )
     handoff_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
-    terminal_tasks = list(handoff_tasks)
+    terminal_tasks = recent_terminal_handoff_history(
+        handoff_tasks,
+        conf.get("terminal_handoff_history_limit",
+                 TERMINAL_HANDOFF_HISTORY_LIMIT),
+    )
     terminal_cursor = state.get("terminal_cursor")
     cursor_index = next((index for index, task in enumerate(terminal_tasks)
                          if task.get("id") == terminal_cursor), None)
