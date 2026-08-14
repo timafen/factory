@@ -2237,6 +2237,65 @@ else:
         self.assertIs(
             pilot.live_or_done_at(tasks, other, 1), other)
 
+    def test_archived_attempt_does_not_spend_current_retry_limit(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        receipt = {
+            "task_id": old["id"], "closed": "2026-08-11T20:02:00Z",
+            "closed_reason": "Попытку заменила более новая попытка этой работы.",
+        }
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину", "archived_attempts": [receipt],
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 1)
+        self.assertEqual(
+            pilot.load(self.works_path, {})[self.root["id"]]["archived_attempts"],
+            [receipt])
+
+    def test_unarchived_terminal_attempt_still_spends_retry_limit(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину",
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 2)
+
+    def test_archive_isolated_between_identically_titled_work_ids(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        pilot.save(self.works_path, {"other-work": {
+            "base_title": "Исправить корзину",
+            "archived_attempts": [{"task_id": old["id"]}],
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 2)
+
+    def test_missing_or_malformed_work_archive_keeps_attempt_count(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        tasks = [old, current]
+
+        self.assertEqual(
+            pilot.stage_attempts(tasks, "Implement + Test", current), 2)
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину", "archived_attempts": 42,
+        }})
+        self.assertEqual(
+            pilot.stage_attempts(tasks, "Implement + Test", current), 2)
+
     @mock.patch.object(pilot, "load_questions", return_value=[{
         "task_id": "waiting-work", "status": "open",
     }])
