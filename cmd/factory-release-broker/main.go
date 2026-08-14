@@ -54,7 +54,10 @@ func run() error {
 
 	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{
 		Executable: *fxExecutable, FactoryReleaseExecutable: *factoryReleaseExecutable,
-	})
+	}, releasebroker.WithBrokerRestart(
+		"/usr/local/bin/factory-release-broker",
+		"factory-release-broker.service",
+	))
 	if err != nil {
 		return fmt.Errorf("prepare durable state: %w", err)
 	}
