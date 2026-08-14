@@ -4,12 +4,12 @@ Implementation commit: 36f2323a9ec2dace4fed2938e838fe38d1b99374 — админи
 
 ## HEAD
 
-- Статус: Implemented and targeted tests PASS — awaiting Review.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/32a417bb-fe9-a66e4207-bc2`.
 - Implementation commit: `36f2323a9ec2dace4fed2938e838fe38d1b99374` — admin-вопросы направляются старшей модели до владельца.
 - Изменено: безопасные staging-действия проходят через фиксированный `fx` argv; запрещённые и неуспешные действия эскалируются владельцу, служебный аудит скрыт из owner API.
-- Evidence: `AdminQuestionRoutingTests` — 10/10 PASS; HTTP-регрессия, `py_compile` и Go build — PASS.
-- Следующее действие: Review проверяет опубликованный remote candidate относительно свежего `main`.
+- Evidence: `AdminQuestionRoutingTests` — 10/10 PASS, полный Pilot — 275/275; HTTP-фильтр, полный Go/UI набор, race, release и launcher PASS. `test-tooling` и browser E2E имеют только внешние к поставке сбои, описанные в Verify LOG.
+- Следующее действие: Human merge проверенного кандидата после учёта двух внешних тестовых ограничений окружения.
 
 ## LOG
 
@@ -136,3 +136,15 @@ Pinned diff от удалённой базы `151429d93310549a1bb04182ab688cc828
 CARD-0133. Код-коммит — `36f2323a9ec2dace4fed2938e838fe38d1b99374`.
 Целевые `AdminQuestionRoutingTests` прошли 10/10, HTTP-регрессия, Python
 compilation и Go build также завершились успешно.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Разрешённый admin-вопрос сначала обрабатывает старшая модель фиксированным `fx` argv | `python3 -m unittest -q pilot.test_pilot.AdminQuestionRoutingTests` | 10/10 PASS; проверены точный `sudo -n /usr/local/bin/fx staging ...`, успешное решение без owner-вопроса и безопасные staging-аргументы. |
+| Ошибки, неизвестные и опасные действия не исполняются автоматически и эскалируются владельцу | Тот же тестовый класс | PASS: отказ `fx`, неизвестный verb, prod/secret/irreversible scopes, `migrate`, sandbox без `--dry-run` и `--force` не вызывают команду; причина сохраняется для владельца. |
+| Старые owner-вопросы сохраняются, служебный admin-аудит скрыт из API | `go test ./internal/controlplane -run '^TestListQuestionsHidesPythonMockRepresentations$' -count=1` | PASS; открытый owner-вопрос остаётся видимым, служебная admin-запись не возвращается. |
+| Полный набор регрессий | `python3 -m unittest -q pilot.test_pilot`; CI-команды из `Justfile` (`ui-check`, `ui-build 0`, Go test/vet/vuln/staticcheck, boundary, release, launcher, race, browser) | Pilot 275 тестов PASS; UI 180 тестов, Go, release, launcher, race и статические проверки PASS. `test-tooling` остановился на существующем ожидании `NoNewPrivileges=true` против `false` в неизменённом `ops/systemd/factory-release-broker.service`; browser E2E остановился на `sudo` sandbox при системном `NoNewPrivileges`. |
+| Состав поставки и карточка | Pinned `git diff --check 44cc7889f7fd2c81efc8f2b3582f15d0d24e8d63...0174802da766a732124f7abf7e307984e62b8ff1`; проверка implementation commit | PASS: ровно шесть ожидаемых файлов; `36f2323a9ec2dace4fed2938e838fe38d1b99374` — предок кандидата, меняет код вне `knowledge/cards/`. |
+
+Примечание для merge: два красных шага не относятся к шести файлам кандидата. Первая причина воспроизводится старым тестом release-broker, вторая — ограничением `sudo` текущего стенда; менять `ops` или browser sandbox в рамках этой карточки не следует.
