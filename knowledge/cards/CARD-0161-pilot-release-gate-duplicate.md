@@ -4,20 +4,16 @@ Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — тесты P
 
 ## HEAD
 
-Status: Implemented PASS — candidate publication approved, Review pending
-Branch: factory/a4d63ef1-dcf-29e14525-f38
+Status: Implemented PASS — candidate ready for repeated Review
+Branch: factory/e0dbe971-359-fd087571-bd6
 Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — обязательные ворота тестов Pilot до сборки и установки уже находятся в main
 Duplicate of: CARD-0030
 Related work: CARD-0043
 What changed: зафиксировано, что воспроизведённый сбой уже устранён в текущем
 `main`; повторные разработка и выпуск не нужны.
-Evidence: после rebase на `436a0800077d4c614d373d3176f2fc59db5d9e18`
-изменены только два knowledge-файла; `python3 -m unittest -q pilot.test_pilot` —
-291 тест, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — `PASS`, exit
-`0`; `just build` — exit `0`. Полный `just check` подтвердил Go и UI (180/180),
-но выявил дефект свежего `main` в `scripts/test-build.sh`: тест передаёт
-устаревший `FACTORY_V2_BUILD_DIR`, поэтому ожидаемый временный бинарник не
-создаётся и `test-tooling` завершается с кодом `1`.
+Evidence: rebase на `54cb8ae8a8b01e45f3c62a1ce9fb500833018507`; область —
+только карточка и спецификация. `python3 -m unittest -q pilot.test_pilot` —
+296 тестов, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — exit `0`.
 One next action: повторно запустить Review опубликованного кандидата, не сливая
 его и не запуская `fx factory release`.
 
@@ -73,3 +69,12 @@ shell-регрессия ворот — `PASS`, сборка — exit `0`. По�
 `scripts/test-build.sh` со свежим `main`: устаревшая переменная
 `FACTORY_V2_BUILD_DIR` больше не управляет каталогом сборки. Живой выпуск и
 слияние в `main` не выполнялись.
+
+### 2026-08-14 — Implement
+
+Кандидат повторно перебазирован на `54cb8ae8a8b01e45f3c62a1ce9fb500833018507`
+и готов к повторному Review после восстановления доступа проверяющей системы.
+Новая разработка не требовалась: канонические ворота уже в `main`.
+`python3 -m unittest -q pilot.test_pilot` — 296 тестов, `OK` (13 skipped);
+`bash ops/test-fx-factory-release.sh` завершился с кодом 0. Живой выпуск не
+запускался.
