@@ -1,4 +1,4 @@
-Implementation commit: fcf119a395a9af99ce58f6502d4b239ae2295a8f — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
+Implementation commit: c0cda710ef33c884ace560cdc6451411a1cd2a36 — экранная проверка durable reservation следует фактическому статусу ожидания исполнителя.
 
 # CARD-0116 — Резервирование отвеченной тяжёлой работы
 
@@ -6,12 +6,14 @@ Implementation commit: fcf119a395a9af99ce58f6502d4b239ae2295a8f — durable rese
 
 Status: IMPLEMENTED — готово к повторной проверке выпуска.
 Branch: `factory/e8691177-e88-17abb425-6e4`.
-Implementation commit: fcf119a395a9af99ce58f6502d4b239ae2295a8f — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
+Implementation commit: c0cda710ef33c884ace560cdc6451411a1cd2a36 — экранная проверка durable reservation следует фактическому статусу ожидания исполнителя.
 What changed: ответ на тяжёлый этап сохраняет резерв в вопросе, переживает
 рестарт и получает первый безопасный слот; новые тяжёлые старты ждут.
 What changed: backend-проверки подтверждают восстановление из файлов, FIFO
 нескольких ответов, блокировку конкурирующего запуска и снятие резерва.
-Evidence: `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` → OK (8 tests).
+What changed: проверка экрана работы использует видимое название раздела
+«Ожидают исполнителя» для отвеченной тяжёлой работы.
+Evidence: backend (8), экран работы (8), lint и build → OK.
 Next action: Review повторно проверяет поставку перед Verify; в `main` не вливать до PASS.
 
 ## LOG
@@ -36,3 +38,10 @@ Next action: Review повторно проверяет поставку пер�
   и снятие резерва после запуска продолжения.
 - `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` завершился OK
   (8 tests).
+
+### 2026-08-14 — Implement
+
+- Экранная проверка резерва синхронизирована с видимым владельцу разделом
+  «Ожидают исполнителя», а не с устаревшим названием очереди.
+- `npm --prefix web test -- src/WorkView.test.tsx` завершился OK (8 tests);
+  `npm --prefix web run lint` и `npm --prefix web run build` завершились OK.
