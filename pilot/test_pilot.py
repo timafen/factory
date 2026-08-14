@@ -4814,6 +4814,352 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
 
 class AdaptivePollingTests(unittest.TestCase):
+    def _restart_handoff_fixture(self, create_effects, cycles,
+                                 area_busy_effect="", restart_after_first=False,
+                                 shared_task_store=None, stale_snapshot=False,
+                                 request_log=None):
+        conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "poll_seconds": 30,
+            "_restart_recovery_ids": frozenset(("triage-done",)),
+            "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
+        }
+        state = {"processed": ["triage-done"]}
+        tasks = [{
+            "id": "triage-done",
+            "title": "[auto] [1/2 Triage] Восстановить передачу",
+            "state": "succeeded",
+            "created_at": "2026-08-10T09:00:00Z",
+            "repository_id": "repo-id",
+        }]
+        created = []
+        task_store = shared_task_store if shared_task_store is not None else {}
+        initial_tasks = list(tasks)
+        effects = iter(create_effects)
+
+        def fake_api(path, body=None):
+            if request_log is not None:
+                request_log.append(path)
+            if path == "/tasks?limit=100":
+                return {"tasks": list(initial_tasks if stale_snapshot else tasks)}
+            if path == "/tasks/triage-done":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "execution": {"updated_at": "2026-08-10T10:01:00Z"},
+                    "attempts": [{"result": "READY"}],
+                }
+            if path == "/tasks" and body is not None:
+                existing = task_store.get(body["request_key"])
+                if existing:
+                    return {"task": existing}
+                effect = next(effects)
+                if isinstance(effect, Exception):
+                    raise effect
+                child = {
+                    "id": f"spec-{len(created)}", "title": body["title"],
+                    "state": "created", "created_at": "2026-08-10T11:00:00Z",
+                    "repository_id": "repo-id",
+                }
+                created.append(child)
+                tasks.append(child)
+                task_store[body["request_key"]] = child
+                return {"task": child}
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 2, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {"id": "rev-spec", "title": "Specification"},
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "autostart_plan", "area_extend", "collect_ideas", "all_tasks",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "area_busy", side_effect=area_busy_effect
+                if callable(area_busy_effect) or isinstance(area_busy_effect, list)
+                else None, return_value=area_busy_effect))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+            for cycle_number in range(cycles):
+                pilot.cycle(conf, state)
+                if restart_after_first and cycle_number == 0:
+                    state["terminal_handoff_watermark"] = (
+                        conf["_restart_recovery_watermark"]
+                        if conf.get("_restart_recovery_retry")
+                        else "2026-08-10T12:00:00Z")
+                    state_path = os.path.join(
+                        _TEST_DATA_HOME.name,
+                        f"restart-recovery-state-{uuid.uuid4()}.json")
+                    pilot.save(state_path, state)
+                    state = pilot.load(state_path, {})
+                    conf = {key: value for key, value in conf.items()
+                            if key != "_restart_recovery_retry"}
+                    conf["_restart_recovery_ids"] = frozenset(state["processed"])
+                    conf["_restart_recovery_watermark"] = state[
+                        "terminal_handoff_watermark"]
+
+        return state, tasks, created, decide
+
+    def test_restart_recovers_processed_success_with_missing_next_stage(self):
+        state, tasks, created, decide = self._restart_handoff_fixture([None], 2)
+
+        # A second process receives the same durable startup boundary. The
+        # already-created Specification must suppress both decision and create.
+        conf = {
+            "_restart_recovery_ids": frozenset(("triage-done",)),
+            "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
+        }
+        with mock.patch.object(pilot, "api") as api, \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+            detail = pilot.restart_recovery_detail(
+                conf, tasks, tasks[0], ["Triage", "Specification"])
+
+        self.assertIsNone(detail)
+        api.assert_called_once_with("/tasks/triage-done")
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(state["processed"], ["triage-done"])
+
+    def test_restart_recovery_is_consumed_after_first_cycle(self):
+        requests = []
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [None], 2, request_log=requests)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(requests.count("/tasks/triage-done"), 1)
+        self.assertEqual(state["processed"], ["triage-done"])
+
+    def test_restart_recovery_retries_temporary_create_failure(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture([
+            pilot.ParallelWorkLimit("busy"), None,
+        ], 2)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 2)
+        self.assertEqual(state["processed"], ["triage-done"])
+
+    def test_restart_recovery_loads_saved_id_beyond_first_hundred_tasks(self):
+        conf = {
+            "_restart_recovery_ids": frozenset(("old-terminal",)),
+            "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
+        }
+        tasks = [{"id": f"new-{number}"} for number in range(100)]
+        detail = {
+            "task": {
+                "id": "old-terminal",
+                "title": "[auto] [1/2 Triage] Старая работа",
+                "state": "succeeded", "created_at": "2026-08-10T09:00:00Z",
+            },
+            "workflow": {"title": "Triage"},
+            "execution": {"updated_at": "2026-08-10T10:01:00Z"},
+        }
+        with mock.patch.object(pilot, "api", return_value=detail) as api, \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+            details = pilot.load_restart_recovery_tasks(conf, tasks)
+            recovered = tasks[-1]
+            self.assertIs(pilot.restart_recovery_detail(
+                conf, tasks, recovered, ["Triage", "Specification"],
+                details["old-terminal"]), detail)
+
+        self.assertEqual(len(tasks), 101)
+        api.assert_called_once_with("/tasks/old-terminal")
+
+    def test_restart_recovery_skips_unavailable_ids_individually(self):
+        conf = {
+            "_restart_recovery_ids": frozenset(("gone", "broken", "available")),
+            "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
+        }
+        tasks = []
+        available_detail = {
+            "task": {
+                "id": "available",
+                "title": "[auto] [1/2 Triage] Доступная старая работа",
+                "state": "succeeded",
+            },
+        }
+
+        def fake_api(path):
+            if path == "/tasks/gone":
+                raise urllib.error.HTTPError(
+                    path, 404, "not found", {}, io.BytesIO(b"gone"))
+            if path == "/tasks/broken":
+                raise RuntimeError("temporary detail failure")
+            if path == "/tasks/available":
+                return available_detail
+            raise AssertionError(path)
+
+        with mock.patch.object(pilot, "api", side_effect=fake_api):
+            details = pilot.load_restart_recovery_tasks(conf, tasks)
+
+        self.assertEqual(set(details), {"available"})
+        self.assertEqual([task["id"] for task in tasks], ["available"])
+
+    def test_two_pilots_replay_one_atomic_continuation_request(self):
+        # Both processes see the same stale task page.  The storage-backed
+        # request key must return the first child to the second process.
+        task_store = {}
+        first = self._restart_handoff_fixture(
+            [None], 1, shared_task_store=task_store, stale_snapshot=True)
+        second = self._restart_handoff_fixture(
+            [None], 1, shared_task_store=task_store, stale_snapshot=True)
+
+        self.assertEqual(len(task_store), 1)
+        self.assertEqual(len(first[2]), 1)
+        self.assertEqual(second[2], [])
+        self.assertEqual(next(iter(task_store)), pilot.continuation_request_key(
+            "triage-done", "rev-spec"))
+
+    def test_restart_recovery_survives_area_wait_and_second_restart(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [None], 2, area_busy_effect=["другая работа", ""],
+            restart_after_first=True)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(state["processed"], ["triage-done"])
+
+    def test_restart_recovery_rejects_unsafe_or_completed_candidates(self):
+        source = {
+            "id": "done", "title": "[auto] [1/2 Triage] Работа",
+            "state": "succeeded", "created_at": "2026-08-10T09:00:00Z",
+        }
+        conf = {
+            "_restart_recovery_ids": frozenset(("done",)),
+            "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
+        }
+        detail = {"workflow": {"title": "Triage"}}
+        tails = [dict(
+            source, id=f"tail-{task_state}",
+            title="[auto] [2/2 Specification] Работа", state=task_state,
+            created_at="2026-08-10T10:02:00Z",
+        ) for task_state in ("created", "queued", "preparing", "running", "succeeded")]
+
+        for tail in tails:
+            with self.subTest(tail=tail["state"]), \
+                    mock.patch.object(pilot, "api", return_value=detail), \
+                    mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+                self.assertIsNone(pilot.restart_recovery_detail(
+                    conf, [source, tail], source, ["Triage", "Specification"]))
+
+        rejected = (
+            (dict(source, state="failed"), conf, detail, ""),
+            (dict(source, state="cancelled"), conf, detail, ""),
+            (source, conf, dict(detail, execution={}), ""),
+            (source, dict(conf, _restart_recovery_watermark=""), detail, ""),
+            (source, conf, {"workflow": {"title": "Unknown"}}, ""),
+            (source, conf, {"workflow": {"title": "Specification"}}, ""),
+            (source, conf, detail, "archived"),
+        )
+        for task, candidate_conf, candidate_detail, blocked in rejected:
+            with self.subTest(task=task.get("state"), blocked=blocked,
+                              workflow=candidate_detail["workflow"]["title"]), \
+                    mock.patch.object(pilot, "api", return_value=candidate_detail), \
+                    mock.patch.object(
+                        pilot, "work_lifecycle_block", return_value=blocked):
+                self.assertIsNone(pilot.restart_recovery_detail(
+                    candidate_conf, [task], task, ["Triage", "Specification"]))
+
+        with mock.patch.object(pilot, "api", return_value=detail), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+            self.assertIsNone(pilot.restart_recovery_detail(
+                dict(conf, stopped_pipelines=["Работа"]), [source], source,
+                ["Triage", "Specification"]))
+
+        with mock.patch.object(pilot, "api", return_value={
+                "workflow": {"title": "Triage"},
+                "attempts": [{"completed_at": "2026-08-10T10:01:00Z"}],
+        }), mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+            self.assertIsNotNone(pilot.restart_recovery_detail(
+                conf, [source], source, ["Triage", "Specification"]))
+
+    def test_loop_moves_recovery_watermark_only_after_success(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {
+            "processed": ["done"],
+            "terminal_handoff_watermark": "2026-08-10T10:00:00Z",
+        }
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        recovery_seen = []
+
+        def fake_cycle(cycle_conf, _state):
+            recovery_seen.append(cycle_conf.get("_restart_recovery_ids"))
+            if len(recovery_seen) == 1:
+                return {"seconds": 30, "reason": "idle"}
+            raise RuntimeError("boom")
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=2, sleep_fn=lambda _seconds: None,
+                           clock_fn=iter((100.0, 200.0)).__next__)
+
+        self.assertEqual(
+            state["terminal_handoff_watermark"], "1970-01-01T00:01:40Z")
+        self.assertEqual(recovery_seen,
+                         [frozenset(("done",)), None])
+
+    def test_loop_keeps_recovery_watermark_when_handoff_is_pending(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {
+            "processed": ["done"],
+            "terminal_handoff_watermark": "2026-08-10T10:00:00Z",
+        }
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def pending_cycle(cycle_conf, _state):
+            cycle_conf["_restart_recovery_retry"] = True
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=pending_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertEqual(
+            state["terminal_handoff_watermark"], "2026-08-10T10:00:00Z")
+
     def test_loop_retains_more_than_two_thousand_terminal_task_ids(self):
         conf = {"enabled": True, "poll_seconds": 30}
         ids = [f"terminal-{number}" for number in range(2501)]
