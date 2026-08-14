@@ -4,22 +4,25 @@ Implementation commit: 4c45eb2cb2241260ec70e01561f7eb56821173ed — безопа
 
 ## HEAD
 
-- Статус: Verified PASS — awaiting human merge.
-- Ветка: `factory/e2494eb3-891-3602c116-dba`.
-- Implementation commit: `4c45eb2cb2241260ec70e01561f7eb56821173ed` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
+- Статус: Implement + Test PASS — awaiting review.
+- Ветка: `factory/db65d668-f41-da4172ad-aa3`.
+- Implementation commit: `0a0b5a98ae9ab59454d958cf84d3c751e321753d` — после исчерпания повторов обычный ответ оркестратора не возобновляет конвейер.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
-- Что изменено: старшая модель сама выполняет разрешённые staging-проверки;
-  API скрывает завершённый admin-аудит от владельца.
-- Что изменено: `manage migrate`, sandbox без `--dry-run` и любой `--force`
-  эскалируются владельцу до исполнения; `collectstatic` остаётся разрешённым.
-- Evidence: свежий remote `main` `62f6b0a1651ecf0aee7c8052994682c7fb08c36f` →
-  candidate `7a99c3514e4fcfd468c92468a7ff8989dd63b157`; целевые Python 8/8,
-  `go test ./internal/controlplane`, полный `go test -timeout 5m ./...` и
-  `just build` → PASS.
-- `git diff --check` → PASS; UI не менялся, отдельная UI-проверка не требуется.
-- Следующее действие: человек проверяет поставку и вливает её в `main`.
+- Что изменено: восстановлен лимит `max_loop_rescues`; после него допустимо
+  только безопасное `admin_action`, а обычный ответ эскалируется владельцу.
+- Evidence: `python3 -m unittest pilot.test_pilot.DiagnosisRepairTests.test_exhausted_loop_rescue_stops_after_ordinary_orchestrator_answer` → PASS;
+  `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → PASS (8/8).
+- `git diff --check` → PASS; UI не менялся.
+- Следующее действие: провести повторный Review поставки.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Восстановлен стоп-кран `max_loop_rescues`: исчерпанный лимит больше не позволяет
+обычному ответу оркестратора возобновить работу. Допустимая staging-проверка
+сохраняется, но следующий обычный ответ направляется владельцу. Целевые проверки:
+регрессия остановки и `AdminQuestionRoutingTests` (8/8) — PASS.
 
 ### 2026-08-13 — Verify
 
