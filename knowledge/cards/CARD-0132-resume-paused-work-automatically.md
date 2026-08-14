@@ -1,16 +1,16 @@
 # CARD-0132 — Снятая с паузы работа продолжает то же поколение
 
-Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — успешный этап после денежной паузы создаёт ровно одного преемника в том же поколении.
+Implementation commit: d90c11854190edb4b277824c5c0a6e9e2fcfdd44 — успешный этап после денежной паузы создаёт ровно одного преемника в том же поколении.
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/79e00653-120-9e6c085e-092`.
-- Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — пауза больше не поглощает успешный переход, а повторная попытка идемпотентна.
+- Status: Implemented — ready for pinned Review.
+- Branch: `factory/1e98c05b-a29-1e7c912a-65e`.
+- Implementation commit: d90c11854190edb4b277824c5c0a6e9e2fcfdd44 — пауза больше не поглощает успешный переход, а повторная попытка идемпотентна.
 - What changed: terminal handoff during a pause remains unprocessed; after resume it preserves `work_id`, `parent_task_id`, and a deterministic request key.
 - What changed: the ordinary cycle and the stall watcher reuse an already-created successor after a lost API response.
-- Evidence: 13 `PipelineWatchTests` PASS, включая снятие паузы и потерянный ответ API; Go gates, release, race и UI unit (178/178) PASS. Полный Pilot сохраняет два падения `CorrectionProvenanceStormTests`; browser E2E остановился после 5 PASS из-за известного сбоя `/work`, вне области поставки.
-- One next action: влить ветку в `main` после просмотра evidence Verify.
+- Evidence: 19 целевых тестов `PipelineWatchTests` и `ClosedWorkLifecycleTests` PASS; `py_compile` PASS; `just build` собрал три бинарника.
+- One next action: закрепить свежие SHA `main` и этой ветки и провести Review.
 
 ## LOG
 
@@ -37,3 +37,7 @@ Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — успешн
 | Полный проектный набор не получил регрессию | `just check`; `just test-release`; `just test-worker-race`; `npm ci` + UI lint/typecheck/unit/browser | Go/release/race и UI lint/typecheck/178 unit PASS; browser 5 PASS, затем известный `/work` timeout, 15 тестов не запущены |
 
 Закреплённое сравнение: база `ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5`, кандидат `b581c605d82f5ada0afba2ce53eb0c578da53a8f`. Полный Pilot: 256 тестов, 2 прежних падения `CorrectionProvenanceStormTests`; изменений в `pilot` их стек не затрагивает.
+
+### 2026-08-13 — Implement (повторная публикация)
+
+Реализация повторно опубликована от свежего `origin/main` под доступной веткой. После снятия паузы успешный terminal-этап остаётся необработанным до создания одного преемника того же `work_id`; обычный цикл и сторож делят детерминированный ключ и находят уже созданный этап после потерянного ответа. Прошли 19 целевых тестов, `py_compile` и сборка трёх операторских бинарников.
