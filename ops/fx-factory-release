@@ -52,6 +52,7 @@ INTAKE_SERVICE="${FACTORY_INTAKE_SERVICE:-factory-intake.service}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
+SERVER_HEALTH_DELAY="${FACTORY_RELEASE_SERVER_HEALTH_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
 FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
@@ -295,6 +296,7 @@ rollback_to_generation() { # generation, owner-facing reason
 case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
   *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
 esac
+case "$SERVER_HEALTH_DELAY" in ''|*[!0-9]*) fail "некорректная задержка health-check сервера"; exit 4 ;; esac
 
 validate_trusted_executable() { # validate_trusted_executable <absolute path>
   local executable=$1 owner mode
@@ -1104,7 +1106,7 @@ write_journal old-stopped "$generation_path" "$old_generation" || rollback "jour
 install_generation "$generation_path" || rollback "полный комплект не установлен" 4
 write_journal pair-installed "$generation_path" "$old_generation" || rollback "journal не записан" 4
 systemctl start "$SERVER_SERVICE" || rollback "сервер не стартовал" 6
-sleep 5
+sleep "$SERVER_HEALTH_DELAY"
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$API/api/v1/dashboard" || echo 000)
 [ "$code" = 200 ] || rollback "health нового сервера: HTTP $code" 6
 worker_id=''

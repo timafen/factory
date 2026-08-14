@@ -786,6 +786,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    FACTORY_RELEASE_SERVER_HEALTH_DELAY=0 \
     /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
     /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
 }
@@ -849,6 +850,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    FACTORY_RELEASE_SERVER_HEALTH_DELAY=0 \
     env --default-signal=INT /usr/bin/timeout --foreground --signal=TERM --kill-after=2s \
       "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" /bin/bash "$case_dir/fx-factory-release-under-test" main \
       >"$case_dir/output" 2>&1 &
