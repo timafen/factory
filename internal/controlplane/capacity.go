@@ -188,9 +188,12 @@ func hasOpenOwnerQuestion() bool {
 			continue
 		}
 		var question struct {
-			Status string `json:"status"`
+			Status    string `json:"status"`
+			Authority string `json:"authority"`
+			OwnerOnly bool   `json:"owner_only"`
 		}
-		if json.Unmarshal(data, &question) == nil && question.Status == "open" {
+		if json.Unmarshal(data, &question) == nil && question.Status == "open" &&
+			(question.Authority != "admin" || question.OwnerOnly) {
 			return true
 		}
 	}

@@ -5,12 +5,40 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/owainlewis/factory/internal/protocol"
 )
+
+func TestHasOpenOwnerQuestionExcludesUnelevatedAdminAudits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", home)
+	directory := filepath.Join(home, "pilot", "questions")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"admin-running.json": `{"status":"open","authority":"admin"}`,
+		"admin-failed.json":  `{"status":"open","authority":"admin","admin_result":"failed"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hasOpenOwnerQuestion() {
+		t.Fatal("unelevated admin audits were treated as an owner question")
+	}
+	if err := os.WriteFile(filepath.Join(directory, "admin-escalated.json"), []byte(`{"status":"open","authority":"admin","owner_only":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasOpenOwnerQuestion() {
+		t.Fatal("explicit admin escalation was not treated as an owner question")
+	}
+}
 
 func TestProductCapacityStartsSamplingWithoutInventingHistory(t *testing.T) {
 	store := newTestStore(t)
