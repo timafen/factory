@@ -115,6 +115,7 @@ PY
   /usr/bin/git -C "$FIXTURE_TREE" archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
   /bin/cp "$RELEASE" "$case_dir/repo/ops/fx-factory-release"
   /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
+  /bin/cp "$SCRIPT_DIR/../pilot/test_pilot.py" "$case_dir/repo/pilot/test_pilot.py"
   if [ "$mode" = trusted-gate-real-race ]; then
     /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
   else
@@ -131,7 +132,8 @@ GATE
   /usr/bin/git -C "$case_dir/repo" init -q
   /usr/bin/git -C "$case_dir/repo" config user.name fixture
   /usr/bin/git -C "$case_dir/repo" config user.email fixture@example.invalid
-  /usr/bin/git -C "$case_dir/repo" add -f web ops pilot intake
+  /usr/bin/git -C "$case_dir/repo" add -f web ops pilot intake go.mod go.sum \
+    cmd/factory-release-broker internal/releasebroker
   /usr/bin/git -C "$case_dir/repo" commit -qm 'Проверочный релиз'
   /usr/bin/git -C "$case_dir/repo" branch -M main
   printf '{"name":"old","sha":"old-release-sha"}\n' >"$case_dir/current.json"
@@ -281,6 +283,11 @@ case "$TEST_MODE:${1:-}" in
     : >"$TEST_UI_STARTED"
     wait_for_file "$TEST_GO_RUNNING"
     ;;
+  python-test-fail:tsc)
+    : >"$TEST_UI_RUNNING"
+    trap 'echo ui-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+    while :; do /bin/sleep 0.01; done
+    ;;
   signal-forked-gates:tsc)
     assert_gate_handshake ui-checks.session
     (
@@ -337,6 +344,11 @@ if [ "${1:-}" = test ]; then
     ui-test-fail)
       : >"$TEST_GO_STARTED"
       wait_for_file "$TEST_UI_STARTED"
+      : >"$TEST_GO_RUNNING"
+      trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
+      while :; do /bin/sleep 0.01; done
+      ;;
+    python-test-fail)
       : >"$TEST_GO_RUNNING"
       trap 'echo go-stopped >>"$TEST_GATE_CHILDREN"; exit 143' HUP INT TERM
       while :; do /bin/sleep 0.01; done
@@ -418,6 +430,21 @@ WORKER
 esac
 [ -z "$commit" ] || /bin/sed -i "s/1234567890abcdef/$commit/g" "$output"
 chmod +x "$output"
+EOF
+  cat >"$case_dir/bin/python3" <<'EOF'
+#!/bin/bash
+echo "python3 $*" >>"$TEST_GATES"
+if [ "$*" = '-m unittest pilot.test_pilot' ] && [ "$TEST_MODE" = python-test-fail ]; then
+  for marker in "$TEST_UI_RUNNING" "$TEST_GO_RUNNING"; do
+    for ((i = 0; i < 500; i++)); do
+      [ -e "$marker" ] && break
+      /bin/sleep 0.01
+    done
+    [ -e "$marker" ] || exit 9
+  done
+  exit 1
+fi
+exec /usr/bin/python3 "$@"
 EOF
   cat >"$case_dir/bin/bash" <<'EOF'
 #!/bin/bash
@@ -683,6 +710,7 @@ EOF
   /bin/cp "$case_dir/bin/npx" "$case_dir/trusted/npx"
   /bin/cp "$case_dir/bin/npm" "$case_dir/trusted/npm"
   /bin/cp "$case_dir/bin/go" "$case_dir/trusted/go"
+  /bin/cp "$case_dir/bin/python3" "$case_dir/trusted/python3"
   chmod +x "$case_dir/trusted/"*
 
   # Production has immutable root-owned paths. The hermetic copy changes only
@@ -698,6 +726,7 @@ EOF
     -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    -e "s|^TRUSTED_PYTHON=.*$|TRUSTED_PYTHON=$case_dir/trusted/python3|" \
     "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
 
@@ -888,7 +917,8 @@ run_release "$success" parallel-success \
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
-  'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  'go test ./...' 'bash ops/test-fx-factory-release.sh' \
+  'python3 -m unittest pilot.test_pilot'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
@@ -896,6 +926,8 @@ grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/n
   || fail "UI output was not kept separate"
 grep -F 'полный вывод: Go-проверки и сценарий выката' "$success/output" >/dev/null \
   || fail "Go output was not kept separate"
+grep -F 'полный вывод: Pilot-проверки' "$success/output" >/dev/null \
+  || fail "Pilot output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 ! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
@@ -944,8 +976,8 @@ forked_success="$temporary/forked-gates-success"
 make_fixture "$forked_success" forked-gates-success
 run_release "$forked_success" forked-gates-success \
   || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
-[ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 2 ] \
-  || fail "successful fork scenario did not fork both gate sessions"
+[ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 3 ] \
+  || fail "successful fork scenario did not fork all gate sessions"
 ! grep -Fx 'untrusted-git-invoked' "$forked_success/spoof-events" >/dev/null \
   || fail "successful fork scenario invoked untrusted git"
 assert_file "$forked_success/install/factory-server" '#!/bin/bash'
@@ -1003,7 +1035,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail forged-gate-result; do
+for mode in ui-test-fail go-test-fail release-test-fail python-test-fail forged-gate-result; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -1022,6 +1054,10 @@ grep -Fx 'forged-gate-result' "$temporary/forged-gate-result/spoof-events" >/dev
   || fail "forged result scenario did not inject a fake successful status"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
+for sibling in ui go; do
+  grep -Fx "$sibling-stopped" "$temporary/python-test-fail/gate-children" >/dev/null \
+    || fail "a failed Pilot group did not stop and reap the $sibling group"
+done
 
 extracted_gate="$temporary/trusted-gate-real-race"
 make_fixture "$extracted_gate" trusted-gate-real-race
@@ -1068,10 +1104,10 @@ run_release "$forked_failed" forked-gate-fail
 status=$?
 set -e
 [ "$status" -eq 5 ] || fail "forked failing gate returned $status instead of build error 5"
-[ "$(grep -Fxc 'setsid-forked' "$forked_failed/handshake-events")" -eq 2 ] \
-  || fail "failing fork scenario did not fork both gate sessions"
-[ "$(grep -Fxc 'setsid-waits' "$forked_failed/handshake-events")" -eq 2 ] \
-  || fail "forked failure did not keep the launcher waiting for both gate statuses"
+[ "$(grep -Fxc 'setsid-forked' "$forked_failed/handshake-events")" -eq 3 ] \
+  || fail "failing fork scenario did not fork all gate sessions"
+[ "$(grep -Fxc 'setsid-waits' "$forked_failed/handshake-events")" -eq 3 ] \
+  || fail "forked failure did not keep the launcher waiting for all gate statuses"
 grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
   || fail "forked failure did not reach the actual release gate"
 grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \

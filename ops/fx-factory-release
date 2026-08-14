@@ -88,6 +88,7 @@ TRUSTED_NODE=/usr/bin/node
 TRUSTED_NPX=/usr/bin/npx
 TRUSTED_NPM=/usr/bin/npm
 TRUSTED_GO=/usr/bin/go
+TRUSTED_PYTHON=/usr/bin/python3
 TRUSTED_GIT=/usr/bin/git
 TRUSTED_CHMOD=/usr/bin/chmod
 TRUSTED_MKDIR=/usr/bin/mkdir
@@ -308,8 +309,8 @@ validate_trusted_executable() { # validate_trusted_executable <absolute path>
 for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   "$TRUSTED_BASH" "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" \
   "$TRUSTED_SLEEP" "$TRUSTED_OD" "$TRUSTED_PS" "$TRUSTED_AWK" "$TRUSTED_NODE" \
-  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_GIT" "$TRUSTED_CHMOD" \
-  "$TRUSTED_MKDIR"; do
+  "$TRUSTED_NPX" "$TRUSTED_NPM" "$TRUSTED_GO" "$TRUSTED_PYTHON" \
+  "$TRUSTED_GIT" "$TRUSTED_CHMOD" "$TRUSTED_MKDIR"; do
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
@@ -701,7 +702,8 @@ on_test_gate_signal() {
 }
 
 run_parallel_test_gates() {
-  local completed status failed_name completed_index other_index
+  local completed status completed_index i
+  local -a pending_pids
   gate_pids=()
   gate_pgids=()
   gate_ready=()
@@ -735,52 +737,53 @@ run_parallel_test_gates() {
     print_test_gate_logs
     return 1
   fi
-
-  wait -n -p completed "${gate_pids[@]}"
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    failed_name="параллельная группа проверок"
-    if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
-    if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
+  if ! start_test_gate "Pilot-проверки" "$work/pilot-checks.log" "$work/pilot-checks.session" \
+    "$TRUSTED_BASH" -c 'cd "$1" && PATH=/usr/bin:/bin "$2" -m unittest pilot.test_pilot' \
+    "$TRUSTED_BASH" "$work/src" "$TRUSTED_PYTHON"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
     print_test_gate_logs
-    fail "$failed_name завершилась с кодом $status"
     return 1
   fi
 
-  completed_index=1
-  [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
-  if ! wait_for_test_gate_descendants "${gate_pgids[$completed_index]}"; then
-    stop_test_gates
-    wait_for_test_gates
-    trap - HUP INT TERM
-    print_test_gate_logs
-    fail "не смог подтвердить завершение process group ${gate_names[$completed_index]}"
-    return 1
-  fi
-
-  other_index=0
-  [ "$completed_index" = 0 ] && other_index=1
-  wait "${gate_pids[$other_index]}"
-  status=$?
-  if [ "$status" -eq 0 ] \
-    && ! wait_for_test_gate_descendants "${gate_pgids[$other_index]}"; then
-    status=1
-  fi
-  if [ "$status" -ne 0 ]; then
-    stop_test_gates
-    wait_for_test_gates
-    fail "${gate_names[$other_index]} завершилась с кодом $status"
-  fi
+  pending_pids=("${gate_pids[@]}")
+  while [ "${#pending_pids[@]}" -gt 0 ]; do
+    wait -n -p completed "${pending_pids[@]}"
+    status=$?
+    completed_index=-1
+    for i in "${!gate_pids[@]}"; do
+      [ "$completed" != "${gate_pids[$i]}" ] || completed_index=$i
+    done
+    if [ "$completed_index" -lt 0 ]; then
+      stop_test_gates
+      wait_for_test_gates
+      trap - HUP INT TERM
+      print_test_gate_logs
+      fail "не смог определить завершившуюся группу проверок"
+      return 1
+    fi
+    if [ "$status" -eq 0 ] \
+      && ! wait_for_test_gate_descendants "${gate_pgids[$completed_index]}"; then
+      status=1
+    fi
+    if [ "$status" -ne 0 ]; then
+      stop_test_gates
+      wait_for_test_gates
+      trap - HUP INT TERM
+      print_test_gate_logs
+      fail "${gate_names[$completed_index]} завершилась с кодом $status"
+      return 1
+    fi
+    for i in "${!pending_pids[@]}"; do
+      [ "$completed" != "${pending_pids[$i]}" ] || unset 'pending_pids[i]'
+    done
+    pending_pids=("${pending_pids[@]}")
+  done
   trap - HUP INT TERM
   print_test_gate_logs
-  if [ "$status" -eq 0 ]; then
-    test_gates_stopped=1
-    test_gates_reaped=1
-  fi
-  [ "$status" -eq 0 ]
+  test_gates_stopped=1
+  test_gates_reaped=1
 }
 
 step "беру исходники: $ref"
