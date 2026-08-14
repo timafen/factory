@@ -1,6 +1,6 @@
 # CARD-0136 — Доиграть передачу этапа после рестарта Pilot
 
-Implementation commit: aeecda91d609b336d9493d7271451370a357e7e4 — Pilot доигрывает пропущенный handoff после рестарта без дублей.
+Implementation commit: 7c5e0d3008c56a7d198da082e72615b78c1c2e36 — Pilot выполняет startup recovery один раз и изолирует недоступные старые ID.
 
 ## HEAD
 
