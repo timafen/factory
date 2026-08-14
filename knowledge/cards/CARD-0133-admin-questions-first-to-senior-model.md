@@ -10,7 +10,7 @@ Implementation commit: d0658c57b6846c4cb2f14c3ca5bd4ba9b25ececd — admin-воп
 - Что изменено: запись admin-вопроса атомарно скрыта от owner API до запуска fx; добавлена межпроцессная блокировка и регрессия ответа владельца.
 - Проверенная база: удалённый default `refs/heads/main`, SHA `151429d93310549a1bb04182ab688cc828041ed8`.
 - Проверенный кандидат до Verify после rebase: SHA `94cfc63e121a9f49d1542349551be3104b1dddc7`; pinned diff содержит шесть ожидаемых файлов.
-- Evidence: Pilot 272/272 (13 skipped), admin-регрессии 10/10, HTTP-фильтр, web 180/180 с typecheck/lint/build, Go full/race/vet/staticcheck/vuln, сборки, launcher и `git diff --check` → PASS.
+- Evidence: полный suite один раз на первоначальном pinned-кандидате `0501e7e9b315f4bd29c56bd8dc69e9f0b74d8cb0` от базы `14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`: Pilot 272/272 (13 skipped), web 180/180 с typecheck/lint/build, Go full/race/vet/staticcheck/vuln, сборки, launcher и `git diff --check` → PASS; после rebase на свежую базу целевые admin-регрессии 10/10 и HTTP-фильтр → PASS.
 - Findings: tooling и browser не прошли только из-за окружения/старого тестового долга вне поставки: `FACTORY_BUILD_DIR` ломает штатный tooling fixture, broker-тест ждёт `NoNewPrivileges=true` при `false` в базе, Chromium блокирует `sudo` из-за `no new privileges`.
 - Следующее действие: влить опубликованную ветку в `main`.
 
@@ -97,8 +97,14 @@ Pinned remote-проверка: `refs/heads/main` — SHA
 | 5. Старые owner-вопросы работают, admin-аудит скрыт от API, гонка ответа сохранена | `python3 -m unittest pilot.test_pilot` и `go test ./internal/controlplane -run '^TestListQuestionsHidesPythonMockRepresentations$' -count=1` | Python 272/272 (13 skipped), HTTP PASS; admin-запись до эскалации не выдаётся, ответ владельца не перезаписывается. |
 | 6. Точный argv и отсутствие вызова для запрещённого входа доказаны тестом | Целевой класс `AdminQuestionRoutingTests` | 10/10 PASS; разрешённые действия вызываются только через `/usr/local/bin/fx`, запрещённые — ноль вызовов. |
 
-Полный прогон также подтвердил web 180/180, typecheck/lint/build, `go test ./...`,
-worker race, vet, staticcheck, vuln, сборки, release, launcher и whitespace check.
+Полный прогон выполнен один раз на первоначальном pinned-кандидате
+`0501e7e9b315f4bd29c56bd8dc69e9f0b74d8cb0` от базы
+`14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`, до продвижения `main`. После продвижения `main` до
+`151429d93310549a1bb04182ab688cc828041ed8` кандидат перебазирован; на нём
+повторены только `AdminQuestionRoutingTests` (10/10) и HTTP-регрессия — PASS.
+Первоначальный полный прогон подтвердил web 180/180, typecheck/lint/build,
+`go test ./...`, worker race, vet, staticcheck, vuln, сборки, release, launcher
+и whitespace check.
 `just test-tooling` отдельно блокирован унаследованным `FACTORY_BUILD_DIR`, а после
 очистки окружения падает на старом ожидании `NoNewPrivileges=true` против текущего
 `false` в systemd fixture. Browser suite блокирован `sudo`/Chromium из-за
