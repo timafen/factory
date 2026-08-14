@@ -26,6 +26,25 @@ fi
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain: $2"; }
+snapshot_release_state() {
+  local case_dir=$1 snapshot=$2
+  (
+    cd "$case_dir"
+    find install live database releases -printf '%y %m %s %p -> %l\n'
+    printf '%s ' current.json
+    sha256sum current.json
+    printf '%s ' worker.toml
+    sha256sum worker.toml
+    find install live database releases -type f -print0 | sort -z | xargs -0 sha256sum
+  ) | LC_ALL=C sort >"$snapshot"
+}
+assert_release_state_unchanged() {
+  local case_dir=$1 before=$2 after=$3
+  snapshot_release_state "$case_dir" "$after"
+  cmp -s "$before" "$after" || fail "deleted inode refusal changed a release artifact"
+  [ -z "$(find "$case_dir/releases" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+    || fail "deleted inode refusal published a generation"
+}
 wait_for_file() {
   local file=$1 i
   for ((i = 0; i < 500; i++)); do
@@ -1277,11 +1296,14 @@ grep -F 'недостаточно свободного места или inode' 
 
 deleted_inode="$temporary/deleted-inode"
 make_fixture "$deleted_inode" deleted-inode
+deleted_inode_before="$temporary/deleted-inode-before"
+snapshot_release_state "$deleted_inode" "$deleted_inode_before"
 set +e
 run_release "$deleted_inode" deleted-inode
 status=$?
 set -e
 [ "$status" -eq 4 ] || fail "deleted inode was not rejected before release"
+assert_release_state_unchanged "$deleted_inode" "$deleted_inode_before" "$temporary/deleted-inode-after"
 [ ! -s "$deleted_inode/events" ] || fail "deleted inode caused a service mutation"
 grep -F 'процесс factory-server.service использует deleted-inode' "$deleted_inode/output" >/dev/null \
   || fail "deleted inode refusal was not human-readable"
