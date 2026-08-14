@@ -173,3 +173,8 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 Фоновая оболочка явно сбрасывает наследованный ignored SIGINT до запуска тестов; параллельные ворота сохранены.
 Доказательство: `bash -n ops/fx-factory-release && bash -n ops/test-fx-factory-release.sh` и `bash ops/test-fx-factory-release.sh` — PASS; HUP/INT/TERM повторены по 5 раз, `/proc` и `ps` не нашли cmdline/cwd фикстур.
 Открытый риск: привилегированный живой выкат не запускался; семантика процессов покрыта изолированной фикстурой и live-проверкой `ps` после неё.
+
+### 2026-08-14 — Implement: Pilot доигрывает завершения после рестарта
+На ветке `factory/1adc0ddd-022-8b955a6b-6aa` Pilot сохраняет watermark и startup-набор, восстанавливает только свежий отсутствующий хвост и защищает handoff от дублей.
+Доказательство: 13 целевых restart/terminal-проверок, обязательный тест, `py_compile`, `git diff --check` и `just build` — PASS.
+Открытый риск: полный набор `pilot.test_pilot` и live-стенд не запускались на этапе Implement + Test; живой API не менялся.

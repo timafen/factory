@@ -166,6 +166,7 @@ case "$*" in
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx" "$destination/ops/fx"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/fx-factory-release" "$destination/ops/fx-factory-release"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/pilot.py" "$destination/pilot/pilot.py"
+    /bin/cp "$TEST_RELEASE_SOURCE/pilot/test_pilot.py" "$destination/pilot/test_pilot.py"
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/context.md" "$destination/pilot/context.md"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/app.py" "$destination/intake/app.py"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/plan.py" "$destination/intake/plan.py"
@@ -418,6 +419,11 @@ WORKER
 esac
 [ -z "$commit" ] || /bin/sed -i "s/1234567890abcdef/$commit/g" "$output"
 chmod +x "$output"
+EOF
+  cat >"$case_dir/trusted/python3" <<'EOF'
+#!/bin/bash
+echo "python3 $*" >>"$TEST_GATES"
+[ "$TEST_MODE" != pilot-test-fail ]
 EOF
   cat >"$case_dir/bin/bash" <<'EOF'
 #!/bin/bash
@@ -698,6 +704,7 @@ EOF
     -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    -e "s|^TRUSTED_PYTHON=.*$|TRUSTED_PYTHON=$case_dir/trusted/python3|" \
     "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
 
@@ -888,14 +895,15 @@ run_release "$success" parallel-success \
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
-  'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  'go test ./...' 'python3 -m unittest pilot.test_pilot' \
+  'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
-grep -F 'полный вывод: Go-проверки и сценарий выката' "$success/output" >/dev/null \
-  || fail "Go output was not kept separate"
+grep -F 'полный вывод: Go-проверки, тесты пилота и сценарий выката' "$success/output" >/dev/null \
+  || fail "Go and Pilot output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 ! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
@@ -1003,7 +1011,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail forged-gate-result; do
+for mode in ui-test-fail go-test-fail pilot-test-fail release-test-fail forged-gate-result; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -1018,6 +1026,10 @@ for mode in ui-test-fail go-test-fail release-test-fail forged-gate-result; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+grep -Fx 'python3 -m unittest pilot.test_pilot' "$temporary/pilot-test-fail/gates" >/dev/null \
+  || fail "pilot failure scenario did not run the Pilot test suite"
+! grep -Fx 'bash ops/test-fx-factory-release.sh' "$temporary/pilot-test-fail/gates" >/dev/null \
+  || fail "release scenario gate ran after the Pilot test suite failed"
 grep -Fx 'forged-gate-result' "$temporary/forged-gate-result/spoof-events" >/dev/null \
   || fail "forged result scenario did not inject a fake successful status"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
