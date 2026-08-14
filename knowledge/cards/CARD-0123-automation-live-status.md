@@ -1,14 +1,14 @@
-Implementation commit: a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5 — будущая активность host-автоматик не показывается как живая
+Implementation commit: 14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c — экран показывает статусы durable Automation и host-автоматик без ложной активности
 
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
 ## HEAD
 
-Status: Implemented — awaiting Review
+Status: Implemented — duplicate review closed; already in origin/main
 
-Branch: `factory/e1e2e639-7c6-9053286a-150`
+Branch: `main`
 
-Implementation commit: `a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5`
+Implementation commit: `14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`
 
 What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Будущие timestamps systemd и janitor отклоняются, поэтому ложной «живой» активности нет.
 
