@@ -1554,7 +1554,7 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
 
 
 def stage_attempts(tasks, stage, base):
-    """How many times this exact work already went through this exact stage."""
+    """Count this work's stage attempts from the supplied task snapshot only."""
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
@@ -3905,10 +3905,11 @@ def deep_diagnose(conf, base, stage, rounds, tasks, repair_task=None):
     return verdict
 
 
-def diag_sweep(conf, tasks):
+def diag_sweep(conf, tasks, attempt_tasks=None):
     """Обход всех живых работ: у кого кругов больше порога — зовём старшую
     модель разобраться. Один разбор на работу, дальше конвейер идёт по нему."""
     diag_at = int(conf.get("deep_diag_rounds", 5))
+    attempt_tasks = tasks if attempt_tasks is None else attempt_tasks
     seen = set()
     for t in tasks:
         title = t.get("title") or ""
@@ -3930,8 +3931,8 @@ def diag_sweep(conf, tasks):
         # route_question, where a safe repair has enough evidence to start.
         if cap_rescues(base, "DIAG") >= 1:
             continue
-        rounds = max(stage_attempts(tasks, "Implement + Test", base),
-                     stage_attempts(tasks, "Review", base))
+        rounds = max(stage_attempts(attempt_tasks, "Implement + Test", base),
+                     stage_attempts(attempt_tasks, "Review", base))
         if rounds < diag_at:
             continue
         try:
@@ -4588,9 +4589,10 @@ def record_new_works(conf, tasks, max_age_min=180):
                 f"пропущено: {', '.join(skipped)}")
 
 
-def handle_answers(conf, workflows, workers, tasks):
+def handle_answers(conf, workflows, workers, tasks, attempt_tasks=None):
     """An answered question resumes its pipeline from resume_stage."""
     stages = [s["workflow"] for s in conf["stages"]]
+    attempt_tasks = tasks if attempt_tasks is None else attempt_tasks
     applied = 0
     for q in load_questions():
         if q.get("status") not in ("answered", "no_worker") or not q.get("answer"):
@@ -4621,7 +4623,7 @@ def handle_answers(conf, workflows, workers, tasks):
         # не заслужила: третий заход отдаём исполнителю уровнем выше.
         try:
             rounds = stage_attempts(
-                tasks, stage, src_task or base_title(q.get("title", "")))
+                attempt_tasks, stage, src_task or base_title(q.get("title", "")))
         except Exception:
             rounds = 0
         repository_id = q.get("repository_id", "")
@@ -7553,6 +7555,9 @@ def cycle(conf, state):
         state["overlap_wait_decisions"] = overlap_wait_decisions
 
     tasks = api("/tasks?limit=100").get("tasks") or []
+    # This immutable view fixes attempt-limit decisions to the queue observed
+    # at the start of the cycle; ``tasks`` remains mutable for handoffs.
+    attempt_tasks = tuple(tasks)
     # The normal cycle only needs a small current snapshot.  Restart recovery
     # is different: its durable set may include an older task past that page.
     # Read each absent ID authoritatively instead of silently losing its handoff.
@@ -7682,7 +7687,7 @@ def cycle(conf, state):
     # Работа, которая крутится дольше порога, разбирается старшей моделью —
     # независимо от того, задавал ли конвейер вопрос.
     try:
-        diag_sweep(conf, tasks)
+        diag_sweep(conf, tasks, attempt_tasks)
     except Exception as e:
         log("diag_sweep_outer_error", repr(e))
 
@@ -7707,7 +7712,7 @@ def cycle(conf, state):
 
     # Owner answers resume stopped pipelines.
     try:
-        answered = handle_answers(conf, workflows, workers, tasks)
+        answered = handle_answers(conf, workflows, workers, tasks, attempt_tasks)
         activity["answer_applied"] = (
             answered is True or (type(answered) is int and answered > 0))
     except Exception as e:
@@ -7831,7 +7836,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(handoff_tasks, wf, t)
+            done = stage_attempts(attempt_tasks, wf, t)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -7956,7 +7961,7 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
+                    squeeze(result), attempts_so_far=stage_attempts(attempt_tasks, back, t),
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
                 attach_question_work_id(t)
@@ -7978,7 +7983,7 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(handoff_tasks, back, t),
+                           attempts_so_far=stage_attempts(attempt_tasks, back, t),
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
             attach_question_work_id(t)

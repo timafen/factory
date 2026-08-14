@@ -2309,6 +2309,23 @@ else:
         self.assertEqual(pilot.active_auto_works([waiting]), set())
 
 
+class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
+    def test_stage_attempts_uses_passed_task_snapshot(self):
+        first = {
+            "id": "work-a", "work_id": "work-a", "state": "running",
+            "title": "[auto] [1/5 Triage] Изолировать попытки",
+        }
+        other_work = dict(first, id="work-b", work_id="work-b")
+        queued = [first, other_work]
+        snapshot = tuple(queued)
+
+        queued.append(dict(first, id="retry-a"))
+
+        self.assertEqual(pilot.stage_attempts(snapshot, "Triage", first), 1)
+        self.assertEqual(pilot.stage_attempts(tuple(queued), "Triage", first), 2)
+        self.assertEqual(pilot.stage_attempts(tuple(queued), "Triage", other_work), 1)
+
+
 class PipelineWatchTests(unittest.TestCase):
     def setUp(self):
         self.now = 10_000
