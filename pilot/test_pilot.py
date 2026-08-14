@@ -3017,6 +3017,27 @@ class ClosedWorkLifecycleTests(unittest.TestCase):
         self.assertEqual(work["closed_generations"][0]["closed_reason"],
                          "Старое поколение завершено.")
 
+    def test_linked_descendant_survives_when_plan_root_left_task_page(self):
+        pilot.save(pilot.IDEAS_PATH, [{
+            "id": "card", "title": "Долгая работа", "state": "in_work",
+            "task_id": "current-root", "run_generation": "current-run",
+        }])
+        current = {
+            "id": "current-review",
+            "title": "[auto] [4/5 Review] Долгая работа",
+            "state": "succeeded",
+            "created_at": "2026-08-14T20:17:55Z",
+            "work_id": "current-root",
+        }
+        stale = dict(current, id="stale-review", work_id="previous-root")
+
+        self.assertEqual(
+            pilot.work_lifecycle_block("Долгая работа", current, [current]), "")
+        self.assertIn(
+            "до явного повторного запуска",
+            pilot.work_lifecycle_block("Долгая работа", stale, [stale]),
+        )
+
     def test_owner_created_live_task_after_close_is_a_new_generation(self):
         pilot.save(pilot.IDEAS_PATH, [{
             "id": "card", "title": "Закрытая работа", "state": "done",
