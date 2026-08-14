@@ -2597,15 +2597,15 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 		FROM tasks t JOIN executions e ON e.task_id = t.id
 		LEFT JOIN automation_occurrences o ON o.task_id = t.id
 		LEFT JOIN automations a ON a.id = o.automation_id
-		GROUP BY t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
-		         e.assigned_worker_id, e.state, t.read_only, t.created_at,
-		         t.work_id, t.parent_task_id, t.correction_kind
 	`
 	args := make([]any, 0, 3)
 	if request.Cursor != nil {
 		query += ` WHERE (t.created_at < ? OR (t.created_at = ? AND t.id < ?))`
 		args = append(args, request.Cursor.CreatedAtMillis, request.Cursor.CreatedAtMillis, request.Cursor.ID)
 	}
+	query += ` GROUP BY t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
+		         e.assigned_worker_id, e.state, t.read_only, t.created_at,
+		         t.work_id, t.parent_task_id, t.correction_kind`
 	query += ` ORDER BY t.created_at DESC, t.id DESC LIMIT ?`
 	args = append(args, request.Limit+1)
 	rows, err := s.db.QueryContext(ctx, query, args...)
