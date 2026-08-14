@@ -132,7 +132,7 @@
 
 ## Карточка работы
 
-`knowledge/cards/CARD-0116-admin-questions-first-to-senior-model.md`
+`knowledge/cards/CARD-0133-admin-questions-first-to-senior-model.md`
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
