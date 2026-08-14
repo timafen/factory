@@ -4,12 +4,11 @@ Implementation commit: ef5728919a2542ad293f3f5731529a64c5d09f34 — добавл
 
 ## HEAD
 
-Status: Implement — готово к проверке
+Status: Verified PASS — awaiting human merge
 Branch: factory/fdc19e80-7c6-d8a9e288-3e5
-What changed: архивная terminal-попытка сохраняет state/result/error в истории после подтверждения вытеснения.
-What changed: readiness, варианты репозитория и route снова допускают задачу при освобождённом retained capacity.
-Evidence: `go test ./internal/controlplane -run 'Test(RoutedTaskExcludesWorkersWithoutRepositoryCapacity|TerminalAttemptReservesRetainedHeadroomUntilRegistration|ArchivedEvictedAttemptDoesNotConsumeRepositoryCapacity)$'` → PASS.
-Next action: пройти Verify на свежем main.
+Implementation commit: ef5728919a2542ad293f3f5731529a64c5d09f34
+Evidence: полный набор `go test ./...` и целевой regression test прошли; pinned comparison: base `051316a3c410aeb1e1d9c0e44ab7753fdc4ae76a` → candidate `f32d47e19894da49b5de493323c88a015133b603`.
+Next action: human merge candidate into main.
 
 ## LOG
 
@@ -20,6 +19,18 @@ Next action: пройти Verify на свежем main.
 ### 2026-08-14 — Implement transfer
 
 Готовая реализация опубликована в требуемой ветке; карточка привязана к ней. Целевые проверки controlplane прошли.
+
+### 2026-08-14 — Verify
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Архивная попытка остаётся в истории с terminal-данными | `ArchivedEvictedAttemptDoesNotConsumeRepositoryCapacity` | PASS |
+| Освобождённая capacity допускает следующий claim/route | тот же тест + `RoutedTaskExcludesWorkersWithoutRepositoryCapacity` | PASS |
+| Активные, retained и неподтверждённые terminal-попытки блокируют переполнение | `TerminalAttemptReservesRetainedHeadroomUntilRegistration` | PASS |
+| Claim, route, options и readiness используют единый derived retention use | полный `go test ./...` | PASS |
+| UI, wire-формат и удаление истории не изменены | pinned diff files + `git diff --check` | PASS |
+
+Полный набор: `go test ./...` → PASS (exit 0). Целевой набор с `-count=1` → PASS. Рабочее дерево проверено без отладочных или лишних файлов.
 
 ### 2026-08-14 — Specification
 
