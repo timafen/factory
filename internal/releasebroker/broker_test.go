@@ -226,6 +226,78 @@ func TestBrokerDriverCompletesAfterStoppingAndUpdatingServices(t *testing.T) {
 	}
 }
 
+func TestBrokerRestartsOnlyAfterUpdatedExecutableAndDurableSuccess(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "factory-release-broker")
+	candidate := filepath.Join(dir, "factory-release-broker.candidate")
+	if err := os.WriteFile(executable, []byte("old broker\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidate, []byte("new broker\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(dir, "driver")
+	if err := os.WriteFile(driver, []byte("#!/bin/sh\nmv '"+candidate+"' '"+executable+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	broker, err := NewAt(filepath.Join(dir, "state"), FXExecutor{FactoryReleaseExecutable: driver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan struct{}, 1)
+	if err := broker.RestartWhenExecutableChanges(executable, func() { restarted <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"updated-broker","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForOperationStatus(t, server, "updated-broker", "succeeded")
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("updated executable did not request a broker restart")
+	}
+	recovered, err := NewAt(filepath.Join(dir, "state"), &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, ok := operationSnapshot(recovered, "updated-broker")
+	if !ok || item.Status != "succeeded" {
+		t.Fatalf("restart preceded durable success: %#v, found=%v", item, ok)
+	}
+}
+
+func TestBrokerDoesNotRestartWhenExecutableIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "factory-release-broker")
+	if err := os.WriteFile(executable, []byte("same broker\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	broker, err := NewAt(filepath.Join(dir, "state"), &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan struct{}, 1)
+	if err := broker.RestartWhenExecutableChanges(executable, func() { restarted <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"unchanged-broker","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForOperationStatus(t, server, "unchanged-broker", "succeeded")
+	select {
+	case <-restarted:
+		t.Fatal("unchanged executable requested a broker restart")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestBrokerStatusDoesNotExposeExecutorOutput(t *testing.T) {
 	executor := &recordingExecutor{}
 	server := httptest.NewServer(New(executor).Handler())

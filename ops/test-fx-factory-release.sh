@@ -411,6 +411,9 @@ SERVER
 }
 WORKER
     ;;
+  *factory-release-broker)
+    printf '#!/bin/bash\n# candidate-broker\nexit 0\n' >"$output"
+    ;;
   *) printf '#!/bin/bash\nexit 0\n' >"$output" ;;
 esac
 [ -z "$commit" ] || /bin/sed -i "s/1234567890abcdef/$commit/g" "$output"
@@ -898,6 +901,7 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
 ! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
   || fail "release source chain invoked PATH-provided git"
 assert_file "$success/install/factory-release-broker" '#!/bin/bash'
+assert_file "$success/install/factory-release-broker" '# candidate-broker'
 current_generation=$(readlink -f "$success/releases/current")
 previous_generation=$(readlink -f "$success/releases/previous")
 [ -f "$current_generation/manifest.json" ] && [ -f "$current_generation/manifest.sha256" ] \
