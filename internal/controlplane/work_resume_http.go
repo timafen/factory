@@ -160,7 +160,7 @@ func (a *API) pipelineTasks(ctx context.Context, base string) ([]resumedStageTas
 		       t.work_id, t.parent_task_id, t.correction_kind,
 		       CASE WHEN COUNT(a.id) > 0 THEN 1 ELSE 0 END,
 		       CASE WHEN SUM(CASE WHEN a.trigger_type = 'schedule' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END,
-		       COALESCE(GROUP_CONCAT(a.name, ' '), ''), COALESCE(GROUP_CONCAT(a.context, ' '), '')
+		       COALESCE(GROUP_CONCAT(a.title, ' '), ''), COALESCE(GROUP_CONCAT(a.context, ' '), '')
 		FROM tasks t JOIN executions e ON e.task_id=t.id
 		LEFT JOIN automation_occurrences o ON o.task_id = t.id
 		LEFT JOIN automations a ON a.id = o.automation_id
