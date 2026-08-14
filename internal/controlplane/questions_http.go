@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -52,6 +53,12 @@ func (a *API) listQuestions(w http.ResponseWriter, r *http.Request) {
 		if questionContainsPythonMock(rec) {
 			continue
 		}
+		// Admin records are an audit trail for an action the orchestrator already
+		// attempted.  They are not questions for the owner unless explicitly
+		// escalated after that attempt.
+		if toString(rec["authority"]) == "admin" && rec["owner_only"] != true {
+			continue
+		}
 		delete(rec, "prior_result") // large; not needed by the list UI
 		out = append(out, rec)
 	}
@@ -87,6 +94,26 @@ func toString(v any) string {
 	return s
 }
 
+func lockQuestion(path string) (*os.File, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func unlockQuestion(lock *os.File) {
+	if lock == nil {
+		return
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_ = lock.Close()
+}
+
 type answerRequest struct {
 	Answer string `json:"answer"`
 }
@@ -109,6 +136,12 @@ func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
 	questionsMu.Lock()
 	defer questionsMu.Unlock()
 	path := filepath.Join(questionsDir(), id+".json")
+	lock, err := lockQuestion(path)
+	if err != nil {
+		writeError(w, unavailable(err))
+		return
+	}
+	defer unlockQuestion(lock)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		writeError(w, ErrNotFound)

@@ -23,7 +23,7 @@ import calendar
 import datetime
 import io
 import glob
-import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile
+import json, re, shlex, subprocess, time, urllib.request, urllib.error, urllib.parse, uuid, sys, os, tempfile, fcntl
 
 API = "http://127.0.0.1:7337/api/v1"
 # Production keeps the fixed data root.  Tests and isolated tools may opt into
@@ -1449,7 +1449,7 @@ def repo_brief(repo_key):
 
 
 def orchestrator_answer(conf, stage, base, situation, question, prior_result,
-                        repo_id=""):
+                        repo_id="", action_result=""):
     """The orchestrator has the project context - it answers technical questions
     itself and escalates to the owner only when the decision is genuinely his."""
     if not conf.get("auto_answer", True):
@@ -1471,10 +1471,22 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         "последствиями.\n"
         "Всё остальное (какую среду использовать, как чинить, перезапускать ли "
         "упавший по таймауту этап, где взять сведения о коде) — решай САМ.\n\n"
-        "Если правильное решение — ждать выполнения условия и пока НЕ запускать "
+        "Если для ответа нужна безопасная техническая проверка на staging, можешь "
+        "выбрать admin_action. Это ТОЛЬКО scope staging и один из verb status, "
+        "health, restart, manage, sandbox, env-names, release-info. "
+        "Для manage нельзя выбирать migrate; collectstatic допустим. Для sandbox "
+        "допустим только --dry-run, без создания или перезаписи данных и без --force. "
+        "Никогда не выбирай admin_action для prod, factory, release, rollback, "
+        "секретов, трат, удаления или неизвестных аргументов.\n\n"
+        + ("Уже выполненная admin-операция дала результат:\n" + action_result[:2000]
+           + "\nТеперь верни только answer, wait или escalate; новую admin_action "
+             "выбирать нельзя.\n\n" if action_result else "")
+        + "Если правильное решение — ждать выполнения условия и пока НЕ запускать "
         "следующий этап, выбери отдельное решение wait. Не маскируй паузу текстом "
         "обычного answer.\n\n"
-        'Ответь ТОЛЬКО JSON: {"decision": "answer", "wait" или "escalate", '
+        'Ответь ТОЛЬКО JSON: {"decision": "answer", "wait", "escalate"'
+        + (' или "admin_action"' if not action_result else '')
+        + ', "action": {"scope":"staging", "verb":"health", "args":[]}, '
         '"answer": "<если answer: конкретный исполнимый ответ агенту по-русски, '
         '2-5 предложений, как будто это сказал владелец>", '
         '"reason": "<если wait: почему работу надо оставить на паузе; если '
@@ -1487,11 +1499,40 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
             return v
         if v.get("decision") == "wait" and (v.get("reason") or "").strip():
             return v
+        if not action_result and v.get("decision") == "admin_action" and isinstance(v.get("action"), dict):
+            return v
         return {"decision": "escalate", "answer": "",
                 "reason": v.get("reason", "оркестратор передал решение владельцу")}
     except Exception as e:
         log("orchestrator_answer_error", repr(e))
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
+
+
+def admin_fx_argv(action):
+    """Return the only argv an orchestrator admin intention may execute."""
+    if not isinstance(action, dict) or action.get("scope") != "staging":
+        return None, "разрешены только действия staging"
+    verb = action.get("verb")
+    args = action.get("args", [])
+    if not isinstance(verb, str) or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return None, "неверный формат административного действия"
+    simple = {"status", "health", "env-names", "release-info"}
+    if verb in simple and not args:
+        pass
+    elif verb == "restart" and args in ([], ["gunicorn"], ["worker"], ["notifications"], ["order-reconcile"], ["all"]):
+        pass
+    elif verb == "manage" and args in (["check"], ["showmigrations"], ["collectstatic"]):
+        pass
+    elif (verb == "sandbox" and args
+          and args[0] in ("bootstrap-accounts", "seller-policies", "listings")
+          and "--dry-run" in args[1:]
+          and all(re.fullmatch(
+              r"--(?:tenant-id|account-id|fulfillment-policy-id|payment-policy-id|return-policy-id|listing-count)=[A-Za-z0-9_.-]+|--dry-run|--interactive-bootstrap|--role=seller|--consent-status=[A-Za-z0-9_.-]+",
+              arg) for arg in args[1:])):
+        pass
+    else:
+        return None, "операция или аргументы не входят в безопасный список fx"
+    return ["sudo", "-n", "/usr/local/bin/fx", "staging", verb, *args], ""
 
 
 def stage_attempts(tasks, stage, base):
@@ -3691,24 +3732,91 @@ def diag_sweep(conf, tasks):
 
 def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
                               repo_id, situation, question, options,
-                              prior_result, branch):
+                              prior_result, branch, record=None):
     """Persist an explicit Pilot pause without turning it into a resume answer."""
     if verdict.get("decision") != "wait":
         return False
     reason = str(verdict.get("reason") or "").strip()
-    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                         question, options, prior_result, branch,
-                         status="resolved")
+    # Keep the original admin audit record: replacing it makes a technical
+    # pause indistinguishable from an owner question in the control plane.
+    rec = record if record is not None else write_question(
+        task_id, stage, resume_stage, base, repo_id, situation, question,
+        options, prior_result, branch, status="resolved")
+    rec["status"] = "resolved"
     rec["answer"] = reason
     rec["answered_by"] = "orchestrator"
     rec["machine_action"] = "wait"
     rec["escalation_reason"] = reason
-    save(f"{QUESTION_DIR}/{task_id}.json", rec)
+    save_question(rec)
     pause_pipeline(conf, base)
     log(f"AUTO-WAIT task={task_id} stage={stage}: {reason[:100]}")
     notify(conf, f"Поставил на паузу · {stage}",
            f"{base}\n\n{reason}\n\nСледующий этап не запущен.",
            priority="low", tags="hourglass", click=f"{UI_BASE}/answer")
+    return True
+
+
+def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base, repo_id,
+                         situation, question, options, prior_result, branch):
+    """Execute a permitted admin action; return None for non-admin verdicts."""
+    if verdict.get("decision") != "admin_action":
+        return None
+    action = verdict.get("action") or {}
+    argv, why = admin_fx_argv(action)
+    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
+                         question, options, prior_result, branch,
+                         authority="admin", admin_action=action)
+    if not argv:
+        rec["owner_only"] = True
+        rec["admin_result"] = "denied"
+        rec["escalation_reason"] = why
+        save_question(rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(сам решить не могу: {why})",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return True
+    ok, output = _fixed_command(argv, timeout=60)
+    rec["admin_command"] = argv
+    rec["admin_result"] = "executed" if ok else "failed"
+    rec["admin_output"] = squeeze(output, 2000)
+    if not ok:
+        follow_up = orchestrator_answer(
+            conf, stage, base, situation, question, prior_result, repo_id,
+            action_result="fx завершился с ошибкой:\n" + squeeze(output, 2000))
+        rec["owner_only"] = True
+        reason = str(follow_up.get("reason") or "").strip()
+        rec["escalation_reason"] = "fx отказал или завершился с ошибкой"
+        if reason:
+            rec["escalation_reason"] += ": " + reason
+        save_question(rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(после ошибки fx: "
+               f"{rec['escalation_reason']})",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return True
+    follow_up = orchestrator_answer(
+        conf, stage, base, situation, question, prior_result, repo_id,
+        action_result="fx успешно выполнен:\n" + squeeze(output, 2000))
+    if follow_up.get("decision") == "answer":
+        rec["status"] = "answered"
+        rec["answer"] = follow_up["answer"]
+        rec["answered_by"] = "orchestrator"
+        save_question(rec)
+        notify(conf, f"Решил сам · {stage}",
+               f"{base}\n\nРазрешённая проверка выполнена. {follow_up['answer']}",
+               priority="low", tags="robot", click=f"{UI_BASE}/answer")
+        return False
+    if resolve_orchestrator_wait(
+            conf, follow_up, task_id, stage, resume_stage, base, repo_id,
+            situation, question, options, prior_result, branch, record=rec):
+        return False
+    rec["owner_only"] = True
+    rec["escalation_reason"] = follow_up.get(
+        "reason", "после результата fx нужно решение владельца")
+    save_question(rec)
+    notify(conf, f"Нужен твой ответ · {stage}",
+           f"{base}\n\n❓ {question}\n\n(после проверки: {rec['escalation_reason']})",
+           priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
     return True
 
 
@@ -3745,13 +3853,19 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
-        if cap_rescues(base, "LOOP") >= int(conf.get("max_loop_rescues", 2)):
-            v = {"decision": "owner",
-                 "reason": "orchestrator already broke this loop twice"}
-        else:
-            v = orchestrator_answer(conf, stage, base,
+        used = cap_rescues(base, "LOOP")
+        limit = int(conf.get("max_loop_rescues", 2))
+        v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+        admin_result = resolve_admin_action(
+            conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+            question, options, prior_result, branch)
+        if admin_result is not None:
+            return admin_result
+        if used >= limit:
+            v = {"decision": "owner",
+                 "reason": "orchestrator already broke this loop twice"}
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch):
@@ -3785,7 +3899,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             "не код, а что-то снаружи. Конвейер по этой работе остановлен, "
             "пока ты не решишь."
         ).format(st=resume_stage, n=attempts_so_far)
-        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        save_question(rec)
         log(f"LOOP BREAK task={task_id} base={base!r} rounds={attempts_so_far}")
         notify(conf, "Кручусь по кругу, остановился",
                f"{base}\n\nЭтап «{resume_stage}» прошёл {attempts_so_far} раз(а), "
@@ -3817,6 +3931,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            admin_result = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_result is not None:
+                return admin_result
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3848,6 +3967,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            admin_result = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_result is not None:
+                return admin_result
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3884,6 +4008,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
+    admin_result = resolve_admin_action(
+        conf, verdict, task_id, stage, resume_stage, base, repo_id, situation,
+        question, options, prior_result, branch)
+    if admin_result is not None:
+        return admin_result
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch):
@@ -3902,7 +4031,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                priority="low", tags="robot", click=f"{UI_BASE}/answer")
         return False
     rec["escalation_reason"] = verdict.get("reason", "")
-    save(f"{QUESTION_DIR}/{task_id}.json", rec)
+    save_question(rec)
     log(f"ESCALATED task={task_id} stage={stage}: {verdict.get('reason','')[:100]}")
     notify(conf, f"Нужен твой ответ · {stage}",
            f"{base}\n\n{situation}\n\n❓ {question}\n\n"
@@ -3911,8 +4040,28 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
     return True
 
 
+def save_question(rec):
+    """Persist a question without replacing an answer written by the owner."""
+    task_id = rec.get("id") or rec.get("task_id")
+    path = f"{QUESTION_DIR}/{task_id}.json"
+    lock_path = path + ".lock"
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = load(path, None)
+        if (isinstance(current, dict)
+                and current.get("status") == "answered"
+                and current.get("answered_by") == "owner"):
+            for field in ("answer", "status", "answered_by", "answered_at"):
+                if field in current:
+                    rec[field] = current[field]
+        save(path, rec)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return rec
+
+
 def write_question(task_id, stage, resume_stage, base, repo_id, situation, question,
-                   options, prior_result, branch="", status="open"):
+                   options, prior_result, branch="", status="open", authority=None,
+                   admin_action=None, owner_only=False):
     """Record a pipeline stop that needs the owner. The UI shows these and the
     answer resumes the pipeline."""
     os.makedirs(QUESTION_DIR, exist_ok=True)
@@ -3936,6 +4085,12 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
         "status": status,          # open -> answered -> resolved
         "answer": "",
     }
+    if authority is not None:
+        rec["authority"] = authority
+    if admin_action is not None:
+        rec["admin_action"] = admin_action
+    if owner_only:
+        rec["owner_only"] = True
     save(f"{QUESTION_DIR}/{task_id}.json", rec)
     return rec
 
@@ -5202,16 +5357,9 @@ def day_spent(tasks, codex_day=None):
 
 def branch_head(branch):
     """Вершина рабочей ветки на origin — признак того, что работа движется."""
-    # Ветка приходит из отчёта агента. Допускаем только простые сегменты
-    # служебных веток, чтобы это значение никогда не становилось командой.
-    if not re.fullmatch(
-            r"factory/(?:[A-Za-z0-9][A-Za-z0-9._-]*)(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*",
-            branch or ""):
+    if not branch:
         return ""
-    ok, out = _fixed_command(
-        ["sudo", "-n", "/usr/local/bin/fx", "repo", "head", branch])
-    if not ok:
-        return ""
+    out = _sh("sudo -n /usr/local/bin/fx repo head " + branch)
     m = re.search(r"\b[0-9a-f]{40}\b", out or "")
     return m.group(0) if m else ""
 
@@ -5289,19 +5437,12 @@ def budget_guard(conf, tasks, workers=None):
         ext = int(rec.get("extensions") or 0)
         cap = stage_cap(conf, stage, cx, wname) * (1.5 ** ext)
 
-        # Запоминаем вершину заранее, пока задача ещё укладывается в бюджет.
-        # Иначе первая проверка после перерасхода примет уже существующий
-        # коммит за прогресс этой задачи и подарит ей несколько дорогих кругов.
-        branch = branch_from_history(tasks, base)
-        head = branch_head(branch)
-        if not rec.get("last_head") and head:
-            rec["last_head"] = head
-            changed = True
-
         spent = task_cost_usd(attempts_of(t["id"], False))
         if spent < cap:
             continue
 
+        branch = branch_from_history(tasks, base)
+        head = branch_head(branch)
         moved = bool(head) and head != (rec.get("last_head") or "")
         # credit — списание за прошлые сгоревшие заходы, в которых виновата
         # не работа, а наша собственная поломка.
@@ -8021,12 +8162,14 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         state = load(STATE_PATH, {"processed": []})
         hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
+            poll_chosen_at = None
             try:
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 failures = 0
                 try:
+                    poll_chosen_at = clock_fn()
                     write_automation_status(pilot_completed_at=datetime.datetime.fromtimestamp(
-                        clock_fn(), datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+                        poll_chosen_at, datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
                 except Exception as e:
                     log("automation_status_error", repr(e))
             except Exception as e:
@@ -8045,7 +8188,9 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 "epic_starts_processed", [])[-PROCESSED_RETENTION:]
             state["poll_terminal_seen"] = state.get(
                 "poll_terminal_seen", [])[-PROCESSED_RETENTION:]
-            record_poll_hint(state, hint, clock_fn())
+            record_poll_hint(
+                state, hint,
+                poll_chosen_at if poll_chosen_at is not None else clock_fn())
             save(STATE_PATH, state)
         elif conf:
             hint = {"seconds": max(float(conf.get("poll_seconds", 30)), 1),
