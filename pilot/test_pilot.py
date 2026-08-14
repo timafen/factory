@@ -4744,6 +4744,37 @@ class AnswerEscalationTests(unittest.TestCase):
         create.assert_called_once()
         save.assert_not_called()
 
+    def test_newly_opened_slot_resumes_answer_before_plan(self):
+        conf = {"max_parallel_works": 4}
+        fresh_tasks = [
+            {"id": str(index), "title": f"[auto] [1/5 Triage] Work {index}",
+             "state": "running"}
+            for index in range(3)
+        ]
+        order = []
+
+        def resume(_conf, _workflows, _workers, tasks):
+            order.append("answer")
+            tasks.append({"id": "correction",
+                          "title": "[auto] [3/5 Implement + Test] Correction",
+                          "state": "queued"})
+            return 1
+
+        def plan(_conf, tasks, _workflows, _workers):
+            order.append("plan")
+            self.assertEqual(len(pilot.active_auto_works(tasks)), 4)
+            return []
+
+        with mock.patch.object(
+                pilot, "api", return_value={"tasks": fresh_tasks}), \
+                mock.patch.object(pilot, "handle_answers", side_effect=resume), \
+                mock.patch.object(pilot, "replenish_plan", side_effect=plan):
+            applied = pilot.refill_open_work_slots(conf, {}, {})
+
+        self.assertEqual(applied, 1)
+        self.assertEqual(order, ["answer", "plan"])
+        self.assertIs(conf["_active_work_tasks"], fresh_tasks)
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):

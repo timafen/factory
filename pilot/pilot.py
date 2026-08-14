@@ -4618,6 +4618,18 @@ def handle_answers(conf, workflows, workers, tasks):
     return applied
 
 
+def refill_open_work_slots(conf, workflows, workers):
+    """Give unfinished continuations every newly opened slot before Plan."""
+    tasks = api("/tasks?limit=100").get("tasks") or []
+    # All admissions in this pass share the same authoritative snapshot.
+    # handle_answers/create_task appends successful continuations to it, so
+    # replenish_plan can only use capacity which really remains afterwards.
+    conf["_active_work_tasks"] = tasks
+    answered = handle_answers(conf, workflows, workers, tasks)
+    replenish_plan(conf, tasks, workflows, workers)
+    return answered
+
+
 def decide(conf, stage, next_stage, title, result, repo_id=""):
     """Ask the decision model what to do. Returns dict(action, reason, handoff)."""
     guide = {
@@ -8130,17 +8142,18 @@ def cycle(conf, state):
     # V2 release state was polled before task processing and is the only
     # active delivery mechanism.  Legacy retry flags are audit-only.
 
-    # Продолжения существующих работ имеют приоритет. Пересчитываем занятость
-    # после них, чтобы автоподбор не создал четвёртую работу в этом же цикле.
+    # A terminal handoff may free a slot after the first answer pass. Retry
+    # answered continuations before admitting Plan so a full Plan cannot
+    # starve an unfinished correction forever.
     try:
-        fresh_tasks = api("/tasks?limit=100").get("tasks") or []
-        # Use the authoritative post-handoff snapshot for every admission in
-        # this replenishment pass.  create_task appends each accepted task to
-        # this same list, so the configured ceiling remains exact.
-        conf["_active_work_tasks"] = fresh_tasks
-        replenish_plan(conf, fresh_tasks, workflows, workers)
+        answered = refill_open_work_slots(conf, workflows, workers)
+        activity["answer_applied"] = (
+            activity["answer_applied"]
+            or answered is True
+            or (type(answered) is int and answered > 0)
+        )
     except Exception as e:
-        log("plan_autostart_error", repr(e))
+        log("work_slot_refill_error", repr(e))
 
     hint = next_poll_hint(
         conf, tasks,
