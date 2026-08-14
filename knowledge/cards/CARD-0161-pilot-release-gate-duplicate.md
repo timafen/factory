@@ -4,21 +4,21 @@ Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — тесты P
 
 ## HEAD
 
-Status: Closed — duplicate
+Status: Verified PASS — awaiting human merge
 Branch: factory/5ada57fd-1fa-ef2a3316-015
 Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — обязательные ворота тестов Pilot до сборки и установки уже находятся в main
 Duplicate of: CARD-0030
 Related work: CARD-0043
 What changed: зафиксировано, что воспроизведённый сбой уже устранён в текущем
 `main`; повторные разработка и выпуск не нужны.
-Evidence: реализационный коммит является предком свежего `origin/main`; полный
-набор из переданного отчёта прошёл 284 теста, а повторная команда
-`python3 -m unittest -q pilot.test_pilot` на финальном свежем `main` прошла уже
-286 тестов (`OK`, 13 skipped). `bash ops/test-fx-factory-release.sh` завершился
-с кодом `0` и подтвердил обязательный Python gate и остановку до сборки,
-установки и перезапуска служб при его ошибке.
-One next action: не запускать Implement/Release; живой привилегированный выпуск,
-если он понадобится владельцу, проверять отдельной операционной работой.
+Evidence: pinned-сравнение базы `4f9088373195604673aa2b179d9d11b2dcce4946`
+и кандидата `38152e5072bc86c6c3a70d8531851ecf24f515ed` чистое и ограничено двумя
+knowledge-файлами; `just build` и канонический `just check` завершились с кодом
+`0`; после rebase `python3 -m unittest -q pilot.test_pilot` прошёл 289 тестов (`OK`, 13
+skipped); `bash ops/test-fx-factory-release.sh` завершился с кодом `0` и
+подтвердил остановку до сборки, установки и перезапуска служб при красном Pilot.
+One next action: человеку слить документационную ветку; живой привилегированный
+выпуск, если он понадобится, проверять отдельной операционной работой.
 
 ## LOG
 
@@ -49,3 +49,14 @@ CARD-0043 отмечена как связанная работа. Канони�
 Подтверждено на текущем `main`: `python3 -m unittest -q pilot.test_pilot` —
 286 тестов, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — exit 0.
 Новая разработка и живой привилегированный выпуск не запускались.
+
+### 2026-08-14 — Verify
+
+| Критерий | Команда или проверка | Наблюдаемый результат |
+|---|---|---|
+| Pilot запускается до сборки и установки | чтение `ops/fx-factory-release`; `bash ops/test-fx-factory-release.sh` | Команда `python3 -m unittest pilot.test_pilot` находится в обязательной цепочке до `npx vite build` и `go build`; shell-полигон завершился с кодом `0`. |
+| Красный Pilot останавливает выпуск кодом 5 без мутаций | сценарий `pilot-test-fail` в `bash ops/test-fx-factory-release.sh` | Проверены код `5`, старые бинарники, отсутствие перезапусков, сборки и последующего release-сценария. |
+| Полный Python-набор и оба release-пути исполняемы | `python3 -m unittest -q pilot.test_pilot`; `bash ops/test-fx-factory-release.sh` | На rebased tip 289 тестов: `OK` (13 skipped); успешный и отрицательные shell-сценарии: `PASS`, exit `0`. |
+| Поставка только документирует закрытый дубликат | pinned `git diff --check` и `git diff --name-only` | Ошибок пробелов нет; изменены только эта карточка и `knowledge/specs/pilot-release-gate-duplicate.md`, продуктовый код и общие карточки не затронуты. |
+| Смежное поведение не регрессировало | `just build`; `just check` | Сборка и полный проектный набор прошли с кодом `0`; UI — 180/180, tooling и launcher зелёные. |
+| Живой выпуск для дубликата не выполняется | аудит команд Verify | Привилегированные release-команды не запускались; риск реальных systemd и прав доступа остаётся отдельным операционным риском. |
