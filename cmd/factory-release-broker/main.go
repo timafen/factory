@@ -16,6 +16,8 @@ import (
 	"github.com/owainlewis/factory/internal/releasebroker"
 )
 
+const installedBrokerExecutable = "/opt/factory-data/bin/factory-release-broker"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "factory-release-broker:", err)
@@ -55,7 +57,7 @@ func run() error {
 	broker, err := releasebroker.NewAt(*stateDir, releasebroker.FXExecutor{
 		Executable: *fxExecutable, FactoryReleaseExecutable: *factoryReleaseExecutable,
 	}, releasebroker.WithBrokerRestart(
-		"/usr/local/bin/factory-release-broker",
+		installedBrokerExecutable,
 		"factory-release-broker.service",
 	))
 	if err != nil {
