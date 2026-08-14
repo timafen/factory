@@ -5202,9 +5202,16 @@ def day_spent(tasks, codex_day=None):
 
 def branch_head(branch):
     """Вершина рабочей ветки на origin — признак того, что работа движется."""
-    if not branch:
+    # Ветка приходит из отчёта агента. Допускаем только простые сегменты
+    # служебных веток, чтобы это значение никогда не становилось командой.
+    if not re.fullmatch(
+            r"factory/(?:[A-Za-z0-9][A-Za-z0-9._-]*)(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*",
+            branch or ""):
         return ""
-    out = _sh("sudo -n /usr/local/bin/fx repo head " + branch)
+    ok, out = _fixed_command(
+        ["sudo", "-n", "/usr/local/bin/fx", "repo", "head", branch])
+    if not ok:
+        return ""
     m = re.search(r"\b[0-9a-f]{40}\b", out or "")
     return m.group(0) if m else ""
 

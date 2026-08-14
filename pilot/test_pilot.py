@@ -5387,6 +5387,23 @@ class AdaptivePollingTests(unittest.TestCase):
 
 
 class BudgetGuardTests(unittest.TestCase):
+    def test_branch_head_rejects_malicious_branch_without_running_command(self):
+        """BRANCH из отчёта не может превратиться в запуск команды."""
+        with mock.patch.object(pilot, "_fixed_command") as command:
+            head = pilot.branch_head("factory/valid; touch /tmp/pilot-owned")
+
+        self.assertEqual(head, "")
+        command.assert_not_called()
+
+    def test_branch_head_uses_validated_branch_as_argv(self):
+        expected = "a" * 40
+        with mock.patch.object(pilot, "_fixed_command", return_value=(True, expected)) as command:
+            head = pilot.branch_head("factory/valid-branch")
+
+        self.assertEqual(head, expected)
+        command.assert_called_once_with(
+            ["sudo", "-n", "/usr/local/bin/fx", "repo", "head", "factory/valid-branch"])
+
     def test_unchanged_branch_downgrades_on_first_overrun(self):
         """Первый перерасход не получает продления за старый коммит ветки."""
         task = {
