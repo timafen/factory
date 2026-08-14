@@ -1546,6 +1546,28 @@ def stage_no_of(title):
     return int(m.group(1)) if m else 0
 
 
+def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
+    """Put unfinished late-stage handoffs ahead of early-stage backlog."""
+    processed = set(processed or ())
+    recovery_ids = set(recovery_ids or ())
+    urgent = []
+    rest = []
+    for task in tasks or []:
+        task_id = task.get("id")
+        pending = task_id not in processed or task_id in recovery_ids
+        if pending and task.get("state") in ("succeeded", "failed", "cancelled"):
+            urgent.append(task)
+        else:
+            rest.append(task)
+    # Python's sort is stable: the existing terminal cursor still provides
+    # fairness between tasks on the same stage while later stages move ahead.
+    urgent.sort(
+        key=lambda task: stage_no_of(task.get("title", "")),
+        reverse=True,
+    )
+    return urgent + rest
+
+
 def live_or_done_at(tasks, base, stage_no, since=None):
     """Задача по этой же работе на стадии stage_no или дальше, живая либо успешная.
     Единственный источник правды для защиты от дублей: и при продвижении по
@@ -7629,6 +7651,11 @@ def cycle(conf, state):
     if cursor_index is not None:
         terminal_tasks = (terminal_tasks[cursor_index + 1:]
                           + terminal_tasks[:cursor_index + 1])
+    # A full Plan can leave dozens of completed early stages behind. Continue
+    # work nearest to delivery first; otherwise a fresh Implement/Review/Verify
+    # result waits behind old Triage fragments for many expensive cycles.
+    terminal_tasks = prioritize_terminal_handoffs(
+        terminal_tasks, state.get("processed"), recovery_ids)
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
