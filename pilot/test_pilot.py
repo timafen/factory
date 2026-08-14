@@ -4662,6 +4662,42 @@ class TriageCloseTests(unittest.TestCase):
         close.assert_not_called()
 
 
+class TerminalHandoffPriorityTests(unittest.TestCase):
+    def test_late_existing_work_precedes_new_triage_backlog(self):
+        tasks = [
+            {"id": "triage-new", "title": "[auto] [1/5 Triage] New",
+             "state": "succeeded", "created_at": "2026-08-14T20:10:00Z"},
+            {"id": "spec", "title": "[auto] [2/5 Specification] Existing",
+             "state": "succeeded", "created_at": "2026-08-14T20:09:00Z"},
+            {"id": "implement", "title": "[auto] [3/5 Implement + Test] Existing",
+             "state": "succeeded", "created_at": "2026-08-14T20:08:00Z"},
+            {"id": "live", "title": "[auto] [5/5 Verify] Live",
+             "state": "running", "created_at": "2026-08-14T20:11:00Z"},
+        ]
+
+        ordered = pilot.prioritize_terminal_handoffs(tasks, [])
+
+        self.assertEqual([task["id"] for task in ordered],
+                         ["implement", "spec", "triage-new", "live"])
+
+    def test_processed_task_stays_out_of_urgent_prefix_unless_recovering(self):
+        tasks = [
+            {"id": "processed", "title": "[auto] [5/5 Verify] Old",
+             "state": "succeeded", "created_at": "2026-08-14T20:00:00Z"},
+            {"id": "fresh", "title": "[auto] [1/5 Triage] Fresh",
+             "state": "succeeded", "created_at": "2026-08-14T20:01:00Z"},
+        ]
+
+        ordinary = pilot.prioritize_terminal_handoffs(tasks, ["processed"])
+        recovery = pilot.prioritize_terminal_handoffs(
+            tasks, ["processed"], ["processed"])
+
+        self.assertEqual([task["id"] for task in ordinary],
+                         ["fresh", "processed"])
+        self.assertEqual([task["id"] for task in recovery],
+                         ["processed", "fresh"])
+
+
 class AnswerEscalationTests(unittest.TestCase):
     @mock.patch.object(pilot, "load_limits", return_value={})
     def test_repeated_stage_really_uses_stronger_worker(self, _limits):
