@@ -4,7 +4,7 @@
 
 Status: Implemented
 Branch: factory/08636c0c-7d3-a0e71831-c9e
-Implementation commit: adbe52c3bc17e0d3db59cc4180336cb8bed6dc32 — патрульные задачи скрываются из «Работа», а результаты запусков показываются в «Автоматизациях»
+Implementation commit: 9065718bc8e784d69bd7fe412b4aee4c261f86c6 — патрульные задачи скрываются из «Работа», а результаты запусков показываются в «Автоматизациях»
 What changed: Tasks получают устойчивый `work_class` по фактам scheduled Automation; occurrence проецирует последнюю попытку, включая result/error. UI фильтрует patrol и показывает находки/итог.
 Evidence: targeted controlplane Go tests — PASS; `cd web && npm test -- --run src/Work.test.ts src/Automations.test.tsx` — 17 PASS; typecheck/lint/build — PASS.
 Next action: Verify на стенде открыть `/work` и `/automations/<id>` у патруля с успешным, неуспешным и пустым запуском.
