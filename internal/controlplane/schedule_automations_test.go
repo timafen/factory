@@ -511,6 +511,63 @@ func TestScheduleAutomationFailedExecutionRetriesOnceAndIsIdempotent(t *testing.
 	}
 }
 
+func TestAutomationOccurrenceProjectsAttemptOutputAcrossRetryAndAPI(t *testing.T) {
+	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
+	store, detail := createScheduleAutomationFixture(t, &now, true)
+	enableAutomation(t, store, detail.Automation.ID)
+	if _, err := store.RunAutomationNow(context.Background(), detail.Automation.ID, protocol.RunAutomationRequest{RequestKey: "attempt-output"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.dispatchPendingOccurrences(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.AutomationOccurrences(context.Background(), detail.Automation.ID, 10)
+	if err != nil || len(before) != 1 || before[0].AttemptState != "" || before[0].Result != "" || before[0].Error != "" {
+		t.Fatalf("occurrence without attempt = %#v, error %v", before, err)
+	}
+
+	first, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "attempt-output-first", LeaseToken: fmt.Sprintf("%064x", 81)})
+	if err != nil || first == nil {
+		t.Fatalf("first claim = %#v, error %v", first, err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), first.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 81), State: "failed", Error: "temporary output failure"}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.AutomationOccurrences(context.Background(), detail.Automation.ID, 10)
+	if err != nil || queued[0].Task == nil || queued[0].Task.RetryStatus != "queued" || queued[0].AttemptState != "failed" || queued[0].Error != "temporary output failure" {
+		t.Fatalf("retry attempt projection = %#v, error %v", queued, err)
+	}
+
+	second, err := store.Claim(context.Background(), "schedule-worker", protocol.ClaimRequest{RequestID: "attempt-output-second", LeaseToken: fmt.Sprintf("%064x", 82)})
+	if err != nil || second == nil {
+		t.Fatalf("second claim = %#v, error %v", second, err)
+	}
+	if _, err := store.StartAttempt(context.Background(), second.Attempt.ID, protocol.StartAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 82)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), second.Attempt.ID, protocol.CompleteAttemptRequest{LeaseToken: fmt.Sprintf("%064x", 82), State: "succeeded", Result: "НАХОДКА: сертификат истекает"}); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.AutomationOccurrences(context.Background(), detail.Automation.ID, 10)
+	if err != nil || final[0].Task == nil || final[0].Task.RetryStatus != "succeeded" || final[0].AttemptState != "succeeded" || final[0].Result != "НАХОДКА: сертификат истекает" || final[0].Error != "" {
+		t.Fatalf("final attempt projection = %#v, error %v", final, err)
+	}
+
+	server := httptest.NewServer(NewHandlerWithAutomation(store, slog.Default(), newAutomationService(store, slog.Default(), fakeGitHubIssueLister{})))
+	defer server.Close()
+	response, err := server.Client().Get(server.URL + "/api/v1/automations/" + detail.Automation.ID + "/occurrences?limit=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, response, http.StatusOK)
+	page := decodeResponse[struct {
+		Occurrences []protocol.AutomationOccurrence `json:"occurrences"`
+	}](t, response)
+	if len(page.Occurrences) != 1 || page.Occurrences[0].Result != "НАХОДКА: сертификат истекает" || page.Occurrences[0].AttemptState != "succeeded" {
+		t.Fatalf("HTTP attempt projection = %#v", page)
+	}
+}
+
 func TestScheduleAutomationRetryStaysWithOriginalWorker(t *testing.T) {
 	now := time.Date(2026, 8, 1, 7, 0, 0, 0, time.UTC)
 	store, detail := createScheduleAutomationFixture(t, &now, true)

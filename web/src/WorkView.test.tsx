@@ -164,3 +164,14 @@ it("shows the reason for every repeated Review return", async () => {
   fireEvent.click(screen.getByText("Повторные возвраты"));
   expect(screen.getAllByText("Причина возврата: Нет проверки двойной оплаты")).toHaveLength(2);
 });
+
+it("hides patrols in the by-stage view too", async () => {
+  view([
+    { ...task("patrol", "[auto] [3/5 Implement + Test] Служебный патруль", "running"), work_class: "patrol" },
+    task("ordinary", "[auto] [3/5 Implement + Test] Обычная работа", "running"),
+  ]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Показать по этапам" }));
+  expect(screen.queryByText("Служебный патруль")).not.toBeInTheDocument();
+  expect(screen.getByText("Обычная работа")).toBeVisible();
+});

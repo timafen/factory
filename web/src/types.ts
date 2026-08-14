@@ -162,6 +162,7 @@ export interface Task {
   timeout_seconds: number;
   state: TaskState;
   created_at: string;
+  work_class?: "product" | "patrol" | "scheduled" | "helper" | "service";
 }
 
 export interface TaskPage {
@@ -341,6 +342,9 @@ export interface AutomationOccurrence {
 	timezone?: string;
 	task_request_key: string;
 	task?: AutomationTaskSummary;
+	attempt_state?: string;
+	result?: string;
+	error?: string;
 	task_id_snapshot?: string;
 	diagnostic?: string;
 	created_at: string;

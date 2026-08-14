@@ -2590,8 +2590,12 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	query := `
 		SELECT t.id, t.request_key, t.title, t.repository_id, t.timeout_seconds,
 		       e.assigned_worker_id, e.state, t.read_only, t.created_at,
-		       t.work_id, t.parent_task_id, t.correction_kind
+		       t.work_id, t.parent_task_id, t.correction_kind,
+		       automation.title, automation.context, schedule_trigger.automation_id
 		FROM tasks t JOIN executions e ON e.task_id = t.id
+		LEFT JOIN automation_occurrences occurrence ON occurrence.task_id = t.id
+		LEFT JOIN automations automation ON automation.id = occurrence.automation_id
+		LEFT JOIN automation_schedule_triggers schedule_trigger ON schedule_trigger.automation_id = automation.id
 	`
 	args := make([]any, 0, 3)
 	if request.Cursor != nil {
@@ -2607,10 +2611,24 @@ func (s *Store) Tasks(ctx context.Context, request protocol.TaskPageRequest) (pr
 	defer rows.Close()
 	tasks := make([]protocol.Task, 0, request.Limit+1)
 	for rows.Next() {
-		task, err := scanTask(rows, false)
-		if err != nil {
+		var task protocol.Task
+		var created int64
+		var workID, parentTaskID, correctionKind, automationTitle, automationContext, scheduleAutomationID sql.NullString
+		if err := rows.Scan(&task.ID, &task.RequestKey, &task.Title, &task.RepositoryID,
+			&task.TimeoutSeconds, &task.WorkerID, &task.State, &task.ReadOnly, &created,
+			&workID, &parentTaskID, &correctionKind, &automationTitle, &automationContext, &scheduleAutomationID); err != nil {
 			return protocol.TaskPage{}, unavailable(err)
 		}
+		task.WorkID, task.ParentTaskID, task.CorrectionKind = workID.String, parentTaskID.String, correctionKind.String
+		task.CreatedAt = fromMillis(created)
+		if task.State == "preparing" {
+			task.State = "running"
+		}
+		task.WorkClass = string(classifyWork(workClassificationFacts{
+			title: task.Title, automationLinked: automationTitle.Valid,
+			scheduled: scheduleAutomationID.Valid, automationName: automationTitle.String,
+			automationText: automationContext.String,
+		}))
 		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
