@@ -604,8 +604,10 @@ if [ "$TEST_MODE" = deleted-inode ]; then
       [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ] && exit 0 ;;
     'show -p MainPID --value factory-worker.service')
       [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ] && { echo 4242; exit 0; } ;;
-    '-q is-active factory-server.service') exit 0 ;;
-    'show -p MainPID --value factory-server.service') echo 4242; exit 0 ;;
+    '-q is-active factory-server.service')
+      [ "${FACTORY_TEST_ONLY:-}" != deleted-inode ] && exit 0 ;;
+    'show -p MainPID --value factory-server.service')
+      [ "${FACTORY_TEST_ONLY:-}" != deleted-inode ] && { echo 4242; exit 0; } ;;
   esac
 fi
 case "$*" in
