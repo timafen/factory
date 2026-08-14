@@ -5282,12 +5282,19 @@ def budget_guard(conf, tasks, workers=None):
         ext = int(rec.get("extensions") or 0)
         cap = stage_cap(conf, stage, cx, wname) * (1.5 ** ext)
 
+        # Запоминаем вершину заранее, пока задача ещё укладывается в бюджет.
+        # Иначе первая проверка после перерасхода примет уже существующий
+        # коммит за прогресс этой задачи и подарит ей несколько дорогих кругов.
+        branch = branch_from_history(tasks, base)
+        head = branch_head(branch)
+        if not rec.get("last_head") and head:
+            rec["last_head"] = head
+            changed = True
+
         spent = task_cost_usd(attempts_of(t["id"], False))
         if spent < cap:
             continue
 
-        branch = branch_from_history(tasks, base)
-        head = branch_head(branch)
         moved = bool(head) and head != (rec.get("last_head") or "")
         # credit — списание за прошлые сгоревшие заходы, в которых виновата
         # не работа, а наша собственная поломка.
