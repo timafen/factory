@@ -5125,7 +5125,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         noops = (
             "collect_automation_findings", "cleanup_completed_plan_cards",
-            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "write_dashboard", "dashboard_slow", "provider_limits_tick", "detect_limits",
             "record_new_works", "budget_guard", "handle_epics",
             "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
             "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
@@ -5591,7 +5591,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         noops = (
             "collect_automation_findings", "cleanup_completed_plan_cards",
-            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "write_dashboard", "dashboard_slow", "provider_limits_tick", "detect_limits",
             "record_new_works", "budget_guard", "money_guard", "handle_epics",
             "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
             "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
