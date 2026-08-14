@@ -73,6 +73,29 @@ describe("Overview active work", () => {
     expect(onNav).toHaveBeenCalledWith("work");
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/tasks?limit=200"));
   });
+
+  it("keeps an answered reserved work visible without turning it into an open-question count", async () => {
+    const onNav = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard" ? { now: {
+        questions_count: 0, reserved_answers_count: 1, running_count: 0, queued_count: 0,
+        questions: [{
+          id: "https", title: "Весь HTTPS-набор проходит с реальным service worker",
+          question: "Продолжить?", status: "answered", reserved: true,
+          escalation_reason: "ответ принят, ожидает зарезервированный слот из-за загрузки сервера",
+        }],
+      } } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      return { ok: true, json: async () => body } as Response;
+    }));
+
+    render(createElement(Overview, { onNav }));
+    expect(await screen.findByText("Ответ принят — ожидает зарезервированный слот")).toBeVisible();
+    expect(screen.getByText(/Весь HTTPS-набор проходит с реальным service worker/)).toBeVisible();
+    expect(screen.queryByText(/Ждёт твоего ответа:/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Ответ принят — ожидает зарезервированный слот"));
+    expect(onNav).toHaveBeenCalledWith("answer");
+  });
 });
 
 describe("Overview release train", () => {
