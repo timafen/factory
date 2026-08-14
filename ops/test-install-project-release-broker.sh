@@ -31,6 +31,11 @@ cat >"$temporary/bin/groupadd" <<'EOF'
 printf '%s\n' "$*" >>"$FACTORY_BROKER_GROUPADD_LOG"
 EOF
 chmod +x "$temporary/bin/groupadd"
+cat >"$temporary/bin/sync" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FACTORY_BROKER_SYNC_LOG"
+EOF
+chmod +x "$temporary/bin/sync"
 cat >"$temporary/broker" <<'EOF'
 #!/bin/sh
 # broker version 1
@@ -46,8 +51,10 @@ FACTORY_RELEASE_BROKER_OWNER= \
 FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
 FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
 FACTORY_RELEASE_BROKER_GROUPADD="$temporary/bin/groupadd" \
+FACTORY_RELEASE_BROKER_SYNC="$temporary/bin/sync" \
 FACTORY_BROKER_SYSTEMCTL_LOG="$temporary/systemctl.log" \
 FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
+FACTORY_BROKER_SYNC_LOG="$temporary/sync.log" \
   "$root/ops/install-project-release-broker.sh" \
     "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
 
@@ -63,6 +70,9 @@ grep -qx 'daemon-reload' "$temporary/systemctl.log"
 grep -qx 'enable --now factory-release-broker.service' "$temporary/systemctl.log"
 grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
 test "$(grep -nE 'enable --now factory-release-broker|restart factory-pilot' "$temporary/systemctl.log" | cut -d: -f1 | tr '\n' ' ')" = "3 4 "
+test "$(wc -l <"$temporary/sync.log")" -eq 2
+grep -q -- '-f .*/\.factory-release-broker\.' "$temporary/sync.log"
+grep -q -- "-f $temporary/out $temporary/systemd $temporary/systemd/factory-pilot.service.d" "$temporary/sync.log"
 
 cat >"$temporary/broker" <<'EOF'
 #!/bin/sh
@@ -80,8 +90,10 @@ FACTORY_RELEASE_BROKER_OWNER= \
 FACTORY_RELEASE_BROKER_SYSTEMCTL="$temporary/bin/systemctl" \
 FACTORY_RELEASE_BROKER_GETENT="$temporary/bin/getent" \
 FACTORY_RELEASE_BROKER_GROUPADD="$temporary/bin/groupadd" \
+FACTORY_RELEASE_BROKER_SYNC="$temporary/bin/sync" \
 FACTORY_BROKER_SYSTEMCTL_LOG="$temporary/systemctl.log" \
 FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
+FACTORY_BROKER_SYNC_LOG="$temporary/sync.log" \
 FACTORY_BROKER_ACTIVE=1 \
   "$root/ops/install-project-release-broker.sh" \
     "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
