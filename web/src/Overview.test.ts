@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { cpuLoadExplanation, fetchAllTasks, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
+import { cpuLoadExplanation, fetchAllTasks, formatRecentDate, normalizeProjectReadiness, Overview, overviewWork, productState } from "./Overview";
 import { stageHandoffTargetStatus } from "./efficiency";
 
 describe("cpuLoadExplanation", () => {
@@ -135,22 +135,30 @@ describe("Overview release train", () => {
 });
 
 describe("Overview recent work", () => {
+  it("formats recent dates for people and rejects impossible dates", () => {
+    const now = new Date("2026-08-14T15:30:00");
+    expect(formatRecentDate("2026-08-14T09:05:00Z", now)).toMatch(/^сегодня \d{2}:\d{2}$/);
+    expect(formatRecentDate("2026-08-13T09:05:00Z", now)).toMatch(/^вчера \d{2}:\d{2}$/);
+    expect(formatRecentDate("2025-01-02T09:05:00Z", now)).toMatch(/^02\.01\.2025 \d{2}:\d{2}$/);
+    expect(formatRecentDate("2026-02-30T09:05:00Z", now)).toBe("дата неизвестна");
+  });
   it("shows human pipeline titles, proof and an honest failed result without IDs", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      const body = path === "/api/v1/dashboard" ? { recent_done: [
-        { title: "Витрина товаров", detail: "Влито в main. Проверено: сценарий прошёл.", at: "2026-08-10T12:00:00Z", status: "merged" },
-        { title: "Оплата картой", detail: "Этап «Review» не прошёл; в main не влито.", at: "2026-08-10T11:00:00Z", status: "failed" },
-      ] } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
+      const body = path === "/api/v1/dashboard" ? { recent_done: { merged: [
+        { title: "Витрина товаров", detail: "Выпуск принят и проверен. Проверено: сценарий прошёл.", at: "2026-08-10T12:00:00Z", status: "merged" }], failed: [
+        { title: "Оплата картой", detail: "Этап: Review · Причина: тестовая ошибка", at: "2026-08-10T11:00:00Z", status: "failed" }] } } : path.startsWith("/api/v1/tasks") ? { tasks: [], next_cursor: null } : {};
       return { ok: true, json: async () => body } as Response;
     }));
 
     render(createElement(Overview, {}));
     const section = await screen.findByRole("region", { name: "Сделано недавно" });
     expect(within(section).getByText("Витрина товаров")).toBeVisible();
-    expect(within(section).getByText(/Влито в main. Проверено: сценарий прошёл/)).toBeVisible();
+    expect(within(section).getByText(/Выпуск принят и проверен. Проверено: сценарий прошёл/)).toBeVisible();
+    expect(within(section).getByText("Влито в main")).toBeVisible();
+    expect(within(section).getByText("Провалы")).toBeVisible();
     expect(within(section).getByText("Оплата картой")).toBeVisible();
-    expect(within(section).getByText(/в main не влито/)).toBeVisible();
+    expect(within(section).getByText(/Причина: тестовая ошибка/)).toBeVisible();
     expect(within(section).queryByText(/merged|failed/)).not.toBeInTheDocument();
   });
 });
@@ -296,8 +304,8 @@ describe("Overview product capacity", () => {
     const section = await screen.findByRole("region", { name: "Загрузка четырёх потоков" });
     expect(within(section).getByText("данных мало")).toBeVisible();
     expect(within(section).getByText("0.0 / 4")).toBeVisible();
-    expect(within(section).getByText("очередь в 90% замеров")).toBeVisible();
-    expect(within(section).getByText("не больше 2 продуктовых работ")).toBeVisible();
+    expect(within(section).getByText("обычная длина очереди")).toBeVisible();
+    expect(within(section).getByText("очередь обычно не длиннее 2 продуктовых работ")).toBeVisible();
     expect(section).not.toHaveTextContent(/p90/i);
     fireEvent.click(within(section).getByText("Показать причины недозагрузки"));
     expect(within(section).getByText(/unknown:/)).toBeVisible();
