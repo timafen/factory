@@ -4,15 +4,24 @@ Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт
 
 ## HEAD
 
-- Status: IMPLEMENTED / VERIFY PASS
+- Status: SPECIFIED — ожидает реализацию поставки browser runtime штатным релизом.
 - Branch: `factory/e8d83036-21a-49f5b4f9-956`
 - Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
-- What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
-- What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
-- Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
-- One next action: повторить Review поставки.
+- What changed: зафиксирован следующий дефект поставки: после чистого `fx factory release` PDF renderer не должен зависеть от вручную подготовленных `/opt/factory`, `node_modules`, Chromium или launcher.
+- Evidence: текущий renderer требует абсолютный `FACTORY_BROWSER_LAUNCHER` и `playwright`, а `ops/fx-factory-release` публикует Go/control-plane artifacts без browser payload; критерии и целевой fixture-тест записаны в `knowledge/specs/daily-pdf-clean-standard-release.md`.
+- One next action: реализовать атомарную поставку и rollback pinned browser runtime через штатный release.
 
 ## LOG
+
+### 2026-08-14 — Specification
+
+После triage определён воспроизводимый разрыв: ручная установка
+`ops/install-server-browser.sh` делает PDF работоспособным, однако полный штатный
+release не включает browser payload в generation и после удаления build checkout
+renderer может не найти `playwright`. Спецификация требует чистую fixture без
+`/opt/factory`-зависимостей, установку до остановки служб, readiness/sandbox smoke
+и rollback browser runtime вместе с server. Product code и UI на этом этапе не
+менялись.
 
 ### 2026-08-13 — Implement
 
