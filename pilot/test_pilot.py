@@ -1734,6 +1734,8 @@ class DiagnosisRepairTests(unittest.TestCase):
         for attempts, hard_limit in ((5, 99), (8, 8)):
             with self.subTest(attempts=attempts, hard_limit=hard_limit), \
                     mock.patch.object(pilot, "load_tasks_safe", return_value=[self.task]), \
+                    mock.patch.object(pilot, "all_tasks", return_value=[self.task]), \
+                    mock.patch.object(pilot, "stage_attempts", return_value=attempts), \
                     mock.patch.object(pilot, "deep_diagnose", return_value=verdict), \
                     mock.patch.object(pilot, "write_question") as write_question, \
                     mock.patch.object(pilot, "pause_pipeline") as pause_pipeline, \
@@ -1743,7 +1745,7 @@ class DiagnosisRepairTests(unittest.TestCase):
                          max_work_rounds=hard_limit),
                     "looping-task", "Implement + Test", "Implement + Test",
                     "Починить отчёт", "repo-id", "снова упало", "Что делать?",
-                    [], "", attempts_so_far=attempts, repair_task=self.task)
+                    [], "", repair_task=self.task, reference_task=self.task)
 
             self.assertFalse(escalated)
             write_question.assert_not_called()
@@ -1762,6 +1764,8 @@ class DiagnosisRepairTests(unittest.TestCase):
         conf = dict(self.conf, deep_diag_rounds=99, max_stage_attempts=3,
                     max_work_rounds=8, max_loop_rescues=1)
         with mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                mock.patch.object(pilot, "all_tasks", return_value=[self.task]), \
+                mock.patch.object(pilot, "stage_attempts", side_effect=[8, 9]), \
                 mock.patch.object(pilot, "set_loop_baseline") as set_baseline, \
                 mock.patch.object(pilot, "cap_rescues", side_effect=cap_rescues), \
                 mock.patch.object(pilot, "note_cap_rescue", side_effect=note_cap_rescue), \
@@ -1772,11 +1776,11 @@ class DiagnosisRepairTests(unittest.TestCase):
             first = pilot.route_question(
                 conf, "looping-task", "Review", "Implement + Test",
                 "Починить отчёт", "repo-id", "снова вернулось", "Что делать?",
-                [], "", attempts_so_far=8)
+                [], "", reference_task=self.task, attempt_stage="Review")
             second = pilot.route_question(
                 conf, "looping-task-2", "Review", "Implement + Test",
                 "Починить отчёт", "repo-id", "снова вернулось", "Что делать?",
-                [], "", attempts_so_far=9)
+                [], "", reference_task=self.task, attempt_stage="Review")
 
         self.assertFalse(first)
         self.assertTrue(second)
@@ -5082,13 +5086,16 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         }
 
     def route(self, verdict, task_id="question-id"):
+        task = {"id": task_id, "work_id": "wait-work",
+                "title": "[auto] [1/1 Triage] Новая работа"}
         with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "all_tasks", return_value=[task]), \
                 mock.patch.object(pilot, "notify"), \
                 mock.patch.object(pilot, "load_limits", return_value={}):
             return pilot.route_question(
                 self.conf, task_id, "Triage", "Specification", "Новая работа",
                 "repo-id", "вердикт WAIT", "Что делать дальше?", [],
-                "WAIT до трёх зелёных циклов")
+                "WAIT до трёх зелёных циклов", reference_task=task)
 
     def apply_answers_twice(self):
         created = []
@@ -7599,6 +7606,120 @@ class RecentDoneTest(unittest.TestCase):
             self.assertEqual([task["id"] for task in pilot.all_tasks()], ["new", "old"])
         self.assertEqual(api.call_args_list[0].args[0], "/tasks?limit=200")
         self.assertEqual(api.call_args_list[1].args[0], "/tasks?limit=200&cursor=older")
+
+
+class RouteQuestionCompleteAttemptCountTests(unittest.TestCase):
+    def setUp(self):
+        self.conf = {
+            "max_stage_attempts": 3, "max_work_rounds": 3,
+            "deep_diag_rounds": 99, "max_loop_rescues": 0,
+        }
+        self.current = {
+            "id": "current", "work_id": "work-a",
+            "title": "[auto] [3/5 Implement + Test] Одна работа",
+        }
+
+    def route(self, pages, **kwargs):
+        return pilot.route_question(
+            self.conf, "current", "Implement + Test", "Implement + Test",
+            "Одна работа", "repo", "сбой", "Что делать?", [], "ошибка",
+            reference_task=self.current, state={"processed": ["current"]}, **kwargs)
+
+    def test_second_page_attempts_trigger_full_work_stop(self):
+        fillers = [{"id": f"f-{n}", "work_id": f"other-{n}",
+                    "title": "[auto] [3/5 Implement + Test] Одна работа"}
+                   for n in range(99)]
+        pages = [
+            {"tasks": [self.current, *fillers], "next_cursor": "next"},
+            {"tasks": [
+                {"id": "old-1", "work_id": "work-a", "title": self.current["title"]},
+                {"id": "old-2", "work_id": "work-a", "title": self.current["title"]},
+            ], "next_cursor": ""},
+        ]
+        with mock.patch.object(pilot, "api", side_effect=pages), \
+                mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0), \
+                mock.patch.object(pilot, "orchestrator_answer", return_value={
+                    "decision": "owner", "reason": "нужен владелец"}), \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
+                mock.patch.object(pilot, "set_loop_baseline") as baseline, \
+                mock.patch.object(pilot, "write_question", return_value={}), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "notify"):
+            self.assertTrue(self.route(pages))
+
+        pause.assert_called_once_with(self.conf, "Одна работа")
+        baseline.assert_called_once_with("Одна работа", 3)
+
+    def test_work_id_and_duplicate_pages_do_not_inflate_attempts(self):
+        pages = [
+            {"tasks": [self.current], "next_cursor": "next"},
+            {"tasks": [
+                self.current,
+                {"id": "same-title", "work_id": "work-b", "title": self.current["title"]},
+                {"id": "old", "work_id": "work-a", "title": self.current["title"]},
+            ], "next_cursor": ""},
+        ]
+        with mock.patch.object(pilot, "api", side_effect=pages):
+            tasks = pilot.all_tasks()
+        self.assertEqual(pilot.stage_attempts(tasks, "Implement + Test", self.current), 2)
+
+    def test_incomplete_history_retries_without_external_route_actions(self):
+        state = {"processed": ["current"]}
+        pages = [{"tasks": [self.current], "next_cursor": "again"},
+                 {"tasks": [], "next_cursor": "again"}]
+        with mock.patch.object(pilot, "api", side_effect=pages), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose, \
+                mock.patch.object(pilot, "orchestrator_answer") as answer, \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
+                mock.patch.object(pilot, "write_question") as write, \
+                mock.patch.object(pilot, "notify") as notify:
+            result = pilot.route_question(
+                self.conf, "current", "Implement + Test", "Implement + Test",
+                "Одна работа", "repo", "сбой", "Что делать?", [], "ошибка",
+                reference_task=self.current, state=state)
+
+        self.assertFalse(result)
+        self.assertEqual(state["processed"], [])
+        diagnose.assert_not_called()
+        answer.assert_not_called()
+        pause.assert_not_called()
+        write.assert_not_called()
+        notify.assert_not_called()
+
+    def test_history_api_error_retries_without_external_route_actions(self):
+        state = {"processed": ["current"]}
+        with mock.patch.object(pilot, "api", side_effect=RuntimeError("сеть")), \
+                mock.patch.object(pilot, "deep_diagnose") as diagnose, \
+                mock.patch.object(pilot, "orchestrator_answer") as answer, \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
+                mock.patch.object(pilot, "write_question") as write, \
+                mock.patch.object(pilot, "notify") as notify:
+            result = pilot.route_question(
+                self.conf, "current", "Implement + Test", "Implement + Test",
+                "Одна работа", "repo", "сбой", "Что делать?", [], "ошибка",
+                reference_task=self.current, state=state)
+
+        self.assertFalse(result)
+        self.assertEqual(state["processed"], [])
+        diagnose.assert_not_called()
+        answer.assert_not_called()
+        pause.assert_not_called()
+        write.assert_not_called()
+        notify.assert_not_called()
+
+    def test_technical_zero_does_not_read_history_or_apply_limits(self):
+        with mock.patch.object(pilot, "all_tasks") as history, \
+                mock.patch.object(pilot, "orchestrator_answer", return_value={
+                    "decision": "owner", "reason": "повтори ворота"}), \
+                mock.patch.object(pilot, "write_question", return_value={}), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "notify"):
+            result = pilot.route_question(
+                self.conf, "current", "Review", "Review", "Одна работа", "repo",
+                "ворота недоступны", "Повторить?", [], "", attempts_so_far=0)
+        self.assertTrue(result)
+        history.assert_not_called()
 
 
 class DashboardProjectsTest(unittest.TestCase):

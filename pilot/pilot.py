@@ -65,6 +65,10 @@ class ParallelWorkLimit(RuntimeError):
     """A pipeline handoff must wait until another work slot is free."""
 
 
+class IncompleteTaskHistory(RuntimeError):
+    """A routing threshold cannot be trusted until every task page is read."""
+
+
 def api(path, body=None):
     req = urllib.request.Request(API + path)
     if body is not None:
@@ -75,16 +79,28 @@ def api(path, body=None):
 
 
 def all_tasks():
-    """Read every task page so old real work is not displaced by service runs."""
-    tasks, cursor = [], ""
+    """Read a complete, de-duplicated task history or fail closed."""
+    tasks, cursor, seen_ids, seen_cursors = [], "", set(), set()
     for _ in range(500):
-        path = "/tasks?limit=200" + ("&cursor=" + urllib.parse.quote(cursor) if cursor else "")
+        path = "/tasks?limit=200" + ("&cursor=" + urllib.parse.quote(cursor, safe="") if cursor else "")
         page = api(path)
-        tasks.extend(page.get("tasks") or [])
+        page_tasks = page.get("tasks")
+        if not isinstance(page_tasks, list):
+            raise IncompleteTaskHistory("API вернул неполную страницу списка задач")
+        for task in page_tasks:
+            task_id = (task or {}).get("id")
+            if task_id and task_id in seen_ids:
+                continue
+            if task_id:
+                seen_ids.add(task_id)
+            tasks.append(task)
         cursor = page.get("next_cursor") or ""
         if not cursor:
-            break
-    return tasks
+            return tasks
+        if cursor in seen_cursors:
+            raise IncompleteTaskHistory("API повторил курсор списка задач")
+        seen_cursors.add(cursor)
+    raise IncompleteTaskHistory("API не завершил список задач за защитное число страниц")
 
 
 def load(path, default):
@@ -3635,21 +3651,7 @@ def _fail_diag_repair(conf, base, repair, reason):
 
 def _all_tasks_for_diag_repair():
     """Read every task page before making an irreversible repair decision."""
-    tasks = []
-    cursor = ""
-    seen_cursors = set()
-    while True:
-        path = "/tasks?limit=200"
-        if cursor:
-            path += "&cursor=" + urllib.parse.quote(cursor, safe="")
-        page = api(path)
-        tasks.extend(page.get("tasks") or [])
-        cursor = page.get("next_cursor") or ""
-        if not cursor:
-            return tasks
-        if cursor in seen_cursors:
-            raise RuntimeError("API повторил курсор списка задач")
-        seen_cursors.add(cursor)
+    return all_tasks()
 
 
 def begin_diag_repair(conf, base, stage, verdict, tasks, candidate):
@@ -4003,10 +4005,25 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
 
 
 def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
-                   question, options, prior_result, attempts_so_far=0, branch="",
-                   repair_task=None):
+                   question, options, prior_result, attempts_so_far=None, branch="",
+                   repair_task=None, reference_task=None, attempt_stage=None,
+                   state=None):
     """Try to resolve the question with the orchestrator; escalate if it's the
     owner's call OR if this stage has already been retried too many times."""
+    if attempts_so_far is None:
+        if not reference_task:
+            raise ValueError("route_question требует текущую задачу для подсчёта попыток")
+        try:
+            attempts_so_far = stage_attempts(
+                all_tasks(), attempt_stage or stage, reference_task)
+        except Exception as e:
+            log("route_history_error", repr(e))
+            if state is None:
+                raise IncompleteTaskHistory(str(e)) from e
+            retry_terminal_task(conf, state, task_id)
+            return False
+    elif attempts_so_far != 0:
+        raise ValueError("route_question не принимает непроверенный счётчик попыток")
     cap = conf.get("max_stage_attempts", 3)
     # Порог разбора: столько кругов подряд — и зовём сильную модель разобраться,
     # а владельцу уходит одно человеческое сообщение вместо десяти пушей.
@@ -7860,20 +7877,13 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(handoff_tasks, wf, t)
-            if done >= conf.get("max_stage_attempts", 3):
-                expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
-                        "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
-                        "options_ru": ["Разберись сам и предложи план", "Отмени эту задачу",
-                                       "Пропусти этап", "Покажи подробности"]}
-            else:
-                expl = explain_failure(conf, wf, base, (err or res))
+            expl = explain_failure(conf, wf, base, (err or res))
             route_question(conf, tid, wf, wf, base, rid,
                            expl.get("situation_ru", "Стадия не завершилась."),
                            expl.get("question_ru", "Что делать дальше?"),
                            expl.get("options_ru", []),
                            f"ОШИБКА:\n{squeeze(err, 4000)}\n\nПОСЛЕДНИЙ ВЫВОД:\n{squeeze(res, 8000)}",
-                           attempts_so_far=done, repair_task=t)
+                           repair_task=t, reference_task=t, state=state)
             attach_question_work_id(t)
             log(f"stage_ended state={tstate} task={tid} stage={wf}")
             continue
@@ -7985,7 +7995,7 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
+                    squeeze(result), reference_task=t, attempt_stage=back, state=state,
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
                 attach_question_work_id(t)
@@ -8007,7 +8017,7 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(handoff_tasks, back, t),
+                           reference_task=t, attempt_stage=back, state=state,
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
             attach_question_work_id(t)
