@@ -3669,6 +3669,94 @@ func TestTerminalAttemptReservesRetainedHeadroomUntilRegistration(t *testing.T) 
 	)
 }
 
+func TestArchivedEvictedAttemptDoesNotConsumeRepositoryCapacity(t *testing.T) {
+	store := newTestStore(t)
+	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return fixed }
+	remoteIdentity := "github.com/example/archived-eviction"
+	worker, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: workerA, WorkerVersion: "test", RuntimeVersion: "test", Capacity: 2,
+		Health: "healthy", SourceAccess: []protocol.SourceAccess{{Provider: "github", Hostname: "github.com"}},
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "archive", RemoteIdentity: remoteIdentity, RetainedCount: protocol.MaxRetainedPerRepo - 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := createManagedTestRepository(t, store, remoteIdentity)
+	if repository.ID != worker.Repositories[0].ID {
+		t.Fatalf("managed repository = %s; worker repository = %s", repository.ID, worker.Repositories[0].ID)
+	}
+	first := createTestTask(t, store, "archived-eviction-first", workerA, repository.ID)
+	claim := claimTestTask(t, store, workerA, "archived-eviction-first", tokenA)
+	if claim.Task.ID != first.Task.ID {
+		t.Fatalf("first claim = %s; want %s", claim.Task.ID, first.Task.ID)
+	}
+	if _, err := store.CompleteAttempt(context.Background(), claim.Attempt.ID, protocol.CompleteAttemptRequest{
+		LeaseToken: tokenA, State: "failed", Result: "archived result", Error: "archived error",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: workerA, WorkerVersion: "test", RuntimeVersion: "test", Capacity: 2,
+		ActiveCount: 0, Health: "healthy", CapacityHandoffVersion: 1,
+		SourceAccess: []protocol.SourceAccess{{Provider: "github", Hostname: "github.com"}},
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "archive", RemoteIdentity: remoteIdentity, RetainedCount: protocol.MaxRetainedPerRepo - 1,
+		}},
+		DisposedAttemptIDs: []string{claim.Attempt.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.Task(context.Background(), first.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Attempts) != 1 || detail.Attempts[0].ID != claim.Attempt.ID ||
+		detail.Attempts[0].State != "failed" || detail.Attempts[0].Result != "archived result" ||
+		detail.Attempts[0].Error != "archived error" {
+		t.Fatalf("archived attempt history = %#v", detail.Attempts)
+	}
+	var acknowledged, retainedCount int
+	if err := store.db.QueryRow(`
+		SELECT capacity_acknowledged FROM attempts WHERE id = ?
+	`, claim.Attempt.ID).Scan(&acknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`
+		SELECT retained_count FROM worker_repositories WHERE worker_id = ? AND repository_id = ?
+	`, workerA, repository.ID).Scan(&retainedCount); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged != 1 || retainedCount != protocol.MaxRetainedPerRepo-1 {
+		t.Fatalf("archived capacity = acknowledged %d, retained %d", acknowledged, retainedCount)
+	}
+	option := requireWorkerRepositoryOption(t, store, workerA, repository.ID)
+	if !option.Ready {
+		t.Fatalf("archived repository option = %#v", option)
+	}
+	readiness, err := store.ManagedRepositoryReadiness(context.Background(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readiness.RoutingReady || len(readiness.Workers) != 1 || !readiness.Workers[0].Ready {
+		t.Fatalf("archived repository readiness = %#v", readiness)
+	}
+
+	next, created, err := store.CreateTask(context.Background(), protocol.CreateTaskRequest{
+		RequestKey: "archived-eviction-route", Title: "Route after archival", Description: "capacity is free",
+		Route: &protocol.TaskRoute{RepositoryRemoteIdentity: remoteIdentity,
+			SourceAccess: protocol.SourceAccess{Provider: "github", Hostname: "github.com"}},
+		TimeoutSeconds: 60,
+	})
+	if err != nil || !created || next.Execution.AssignedWorkerID != workerA {
+		t.Fatalf("route after archival = %#v, created %t, err %v", next, created, err)
+	}
+}
+
 func TestRegistrationAcknowledgesSameMillisecondTerminalHandoff(t *testing.T) {
 	store := newTestStore(t)
 	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
