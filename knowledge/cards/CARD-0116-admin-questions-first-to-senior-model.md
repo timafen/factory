@@ -1,23 +1,22 @@
-Implementation commit: 899120cfcbb94156b6002146df40bd56f75ffeb4 — безопасные admin-вопросы решает старшая модель, а необратимые действия заранее эскалируются владельцу.
+Implementation commit: 4c45eb2cb2241260ec70e01561f7eb56821173ed — безопасные admin-вопросы решает старшая модель, а необратимые действия заранее эскалируются владельцу.
 
 # CARD-0116 — Административный вопрос сначала решает старшая модель
 
 ## HEAD
 
 - Статус: Verified PASS — awaiting human merge.
-- Ветка: `factory/2a75e05c-932-084e26a0-22a`.
-- Implementation commit: `899120cfcbb94156b6002146df40bd56f75ffeb4` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
+- Ветка: `factory/e2494eb3-891-3602c116-dba`.
+- Implementation commit: `4c45eb2cb2241260ec70e01561f7eb56821173ed` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
 - Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
 - Что изменено: старшая модель сама выполняет разрешённые staging-проверки;
   API скрывает завершённый admin-аудит от владельца.
 - Что изменено: `manage migrate`, sandbox без `--dry-run` и любой `--force`
   эскалируются владельцу до исполнения; `collectstatic` остаётся разрешённым.
-- Evidence: pinned base `d98c9b10c72add76401f216a770da0994f73fe5f` → candidate
-  `563efd8cb6ccb8178164904cecc7e4056f828e59`; `go test -timeout 5m ./...` → PASS;
-  `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 tests OK.
-  Владелец принял отсутствие UI-зависимостей и незавершённый Pilot-прогон как долг
-  окружения вне изменённой области; повторный круг не требуется. Tree clean and
-  `git diff --check` → PASS.
+- Evidence: свежий remote `main` `62f6b0a1651ecf0aee7c8052994682c7fb08c36f` →
+  candidate `7a99c3514e4fcfd468c92468a7ff8989dd63b157`; целевые Python 8/8,
+  `go test ./internal/controlplane`, полный `go test -timeout 5m ./...` и
+  `just build` → PASS.
+- `git diff --check` → PASS; UI не менялся, отдельная UI-проверка не требуется.
 - Следующее действие: человек проверяет поставку и вливает её в `main`.
 
 ## LOG
@@ -124,3 +123,9 @@ restart/provenance общего набора остались нестабиль
 удалены из автоматического allowlist: они создают owner-вопрос до исполнения;
 `collectstatic` и sandbox `--dry-run` остаются разрешёнными. Маршрутизационные
 Python-тесты (8) и `go test ./internal/controlplane` прошли.
+
+### 2026-08-14 — Implement
+
+Готовая реализация перенесена на `factory/e2494eb3-891-3602c116-dba` и
+перебазирована на свежий `main`. Целевые 8 Python-тестов, полный Go-набор всех
+пакетов и `just build` прошли; итоговый diff содержит шесть файлов задачи.
