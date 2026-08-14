@@ -1,14 +1,17 @@
-Implementation commit: 2137803965b804676380a150bcaa69c75fe386df — admin-вопрос получает authority до fx и сохраняет ответ владельца при гонке.
+Implementation commit: d0658c57b6846c4cb2f14c3ca5bd4ba9b25ececd — admin-вопрос получает authority до fx и сохраняет ответ владельца при гонке.
 
 # CARD-0133 — Административные вопросы сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Implemented; полный Verify PASS.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/a83c24ba-a95-d49f01e6-fb7`.
-- Implementation commit: `2137803965b804676380a150bcaa69c75fe386df` — admin-вопрос получает authority до fx и сохраняет ответ владельца при гонке.
+- Implementation commit: `d0658c57b6846c4cb2f14c3ca5bd4ba9b25ececd` — admin-вопрос получает authority до fx и сохраняет ответ владельца при гонке.
 - Что изменено: запись admin-вопроса атомарно скрыта от owner API до запуска fx; добавлена межпроцессная блокировка и регрессия ответа владельца.
-- Evidence: Pilot 272/272 (13 skipped); web 180/180, typecheck, lint, build; `go test ./...`, `go build ./...`, `git diff --check` → PASS.
+- Проверенная база: удалённый default `refs/heads/main`, SHA `151429d93310549a1bb04182ab688cc828041ed8`.
+- Проверенный кандидат до Verify после rebase: SHA `94cfc63e121a9f49d1542349551be3104b1dddc7`; pinned diff содержит шесть ожидаемых файлов.
+- Evidence: Pilot 272/272 (13 skipped), admin-регрессии 10/10, HTTP-фильтр, web 180/180 с typecheck/lint/build, Go full/race/vet/staticcheck/vuln, сборки, launcher и `git diff --check` → PASS.
+- Findings: tooling и browser не прошли только из-за окружения/старого тестового долга вне поставки: `FACTORY_BUILD_DIR` ломает штатный tooling fixture, broker-тест ждёт `NoNewPrivileges=true` при `false` в базе, Chromium блокирует `sudo` из-за `no new privileges`.
 - Следующее действие: влить опубликованную ветку в `main`.
 
 ## LOG
@@ -74,3 +77,29 @@ implementation commit получил SHA `6e819132b570dcd71c1b6618d6937ba0294b1c
 коммит `ea24abb2fea481ba02b8a721903ef7302ceb2f7b` передаёт один timestamp в
 automation status и polling hint. Итоговый Verify: Pilot 271/271 (13 skipped),
 web 180/180 плюс typecheck/lint/build, полные Go-тесты и сборка — PASS.
+
+### 2026-08-13 — Verify
+
+Pinned remote-проверка: `refs/heads/main` — SHA
+`151429d93310549a1bb04182ab688cc828041ed8`; кандидат после rebase — SHA
+`94cfc63e121a9f49d1542349551be3104b1dddc7`. Сравнение содержит только
+`internal/controlplane/questions_http.go`, `internal/controlplane/questions_http_test.go`,
+`knowledge/cards/CARD-0133-admin-questions-first-to-senior-model.md`,
+`knowledge/specs/admin-questions-first-to-senior-model.md`, `pilot/pilot.py` и
+`pilot/test_pilot.py`; `git diff --check` → PASS.
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| 1. Разрешённый staging-вопрос сначала решает старшая модель и вызывает только фиксированный fx argv | `python3 -m unittest -v pilot.test_pilot.AdminQuestionRoutingTests` | 10/10 PASS; `test_allowed_staging_health...` и обе проверки stage-cap подтверждают `sudo -n /usr/local/bin/fx staging health`. |
+| 2. Успешная проверка и ответ модели закрывают вопрос без owner-эскалации | Та же целевая команда | `test_wait_after_successful_admin_action...` и auto-answer сценарий PASS; запись отвечает orchestrator, owner-уведомление не создаётся. |
+| 3. Отказ fx, неизвестная операция и запретный scope эскалируются без повторной команды | Та же целевая команда | `test_failed_admin_action...`, `test_forbidden_admin_action...` и секретоподобный ввод PASS; второй admin_action не вызывается, причина сохраняется владельцу. |
+| 4. Prod, секреты и необратимые действия не доходят до fx | Та же целевая команда | migrate, sandbox без `--dry-run`, `--force`, prod и logs PASS; `_fixed_command` не вызывается. Разрешённые collectstatic и sandbox dry-run сохраняют точный argv. |
+| 5. Старые owner-вопросы работают, admin-аудит скрыт от API, гонка ответа сохранена | `python3 -m unittest pilot.test_pilot` и `go test ./internal/controlplane -run '^TestListQuestionsHidesPythonMockRepresentations$' -count=1` | Python 272/272 (13 skipped), HTTP PASS; admin-запись до эскалации не выдаётся, ответ владельца не перезаписывается. |
+| 6. Точный argv и отсутствие вызова для запрещённого входа доказаны тестом | Целевой класс `AdminQuestionRoutingTests` | 10/10 PASS; разрешённые действия вызываются только через `/usr/local/bin/fx`, запрещённые — ноль вызовов. |
+
+Полный прогон также подтвердил web 180/180, typecheck/lint/build, `go test ./...`,
+worker race, vet, staticcheck, vuln, сборки, release, launcher и whitespace check.
+`just test-tooling` отдельно блокирован унаследованным `FACTORY_BUILD_DIR`, а после
+очистки окружения падает на старом ожидании `NoNewPrivileges=true` против текущего
+`false` в systemd fixture. Browser suite блокирован `sudo`/Chromium из-за
+`no new privileges`; эти файлы и поведение не входят в поставку CARD-0133.
