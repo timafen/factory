@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -167,7 +168,31 @@ type Broker struct {
 	syncDir         func(string) error
 	mu              sync.Mutex
 	active          string
+	draining        bool
 	items           map[string]*operation
+	brokerReplaced  func() (bool, error)
+	restartBroker   func() error
+}
+
+// WithBrokerRestart asks systemd to replace this process after a Factory
+// release has durably committed an updated broker executable.
+func WithBrokerRestart(installedExecutable, unit string) func(*Broker) {
+	return func(b *Broker) {
+		b.brokerReplaced = func() (bool, error) {
+			running, err := os.Stat("/proc/self/exe")
+			if err != nil {
+				return false, err
+			}
+			installed, err := os.Stat(installedExecutable)
+			if err != nil {
+				return false, err
+			}
+			return !os.SameFile(running, installed), nil
+		}
+		b.restartBroker = func() error {
+			return exec.Command("/usr/bin/systemctl", "restart", unit).Run()
+		}
+	}
 }
 
 func (b *Broker) saveTerminal(item *operation) error {
@@ -181,7 +206,7 @@ func (b *Broker) saveTerminal(item *operation) error {
 // must use NewAt, supplied by the systemd StateDirectory.
 func New(executor Executor) *Broker { return newBroker("", executor) }
 
-func NewAt(stateDir string, executor Executor) (*Broker, error) {
+func NewAt(stateDir string, executor Executor, options ...func(*Broker)) (*Broker, error) {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return nil, errors.New("state directory must be absolute")
 	}
@@ -189,6 +214,9 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		return nil, err
 	}
 	b := newBroker(stateDir, executor)
+	for _, option := range options {
+		option(b)
+	}
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		return nil, err
@@ -405,6 +433,17 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	if existing := b.items[input.OperationID]; existing != nil {
+		if b.draining {
+			if existing.Request != input {
+				b.mu.Unlock()
+				http.Error(w, "broker is restarting", http.StatusServiceUnavailable)
+				return
+			}
+			status := existing.Status
+			b.mu.Unlock()
+			writeJSON(w, http.StatusOK, Response{Status: status})
+			return
+		}
 		// A lock did not accept a release.  Pilot may therefore safely attach a
 		// later merge to the still-reserved generation and retry its same id
 		// with the newest commit snapshot before the next executor launch.  The
@@ -453,6 +492,11 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, Response{Status: status})
 		return
 	}
+	if b.draining {
+		b.mu.Unlock()
+		http.Error(w, "broker is restarting", http.StatusServiceUnavailable)
+		return
+	}
 	if b.active != "" {
 		b.mu.Unlock()
 		http.Error(w, "another privileged operation is running", http.StatusConflict)
@@ -498,15 +542,38 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
+	committed := false
 	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err == nil {
 		if err := b.saveTerminal(&updated); err == nil && b.writeTerminalMarker(item.Request.OperationID, "committed", false) == nil {
 			*item = updated
+			committed = true
 		}
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
 	}
+	// Once a committed Factory release has replaced this executable, reject
+	// every new operation before releasing the mutex.  systemd will replace this
+	// process next; accepting a driver in between would let that restart kill it.
+	restart := false
+	if committed && request.Adapter == "fx-factory-release" && b.brokerReplaced != nil && b.restartBroker != nil {
+		replaced, err := b.brokerReplaced()
+		if err != nil {
+			log.Printf("release broker: cannot determine whether broker changed: %v", err)
+		} else if replaced {
+			b.draining = true
+			restart = true
+		}
+	}
 	b.mu.Unlock()
+	// Restarting earlier would kill the release driver in this broker's cgroup.
+	// A draining broker remains closed until systemd takes over, even if restart
+	// itself reports an error.
+	if restart {
+		if err := b.restartBroker(); err != nil {
+			log.Printf("release broker: cannot restart updated broker: %v", err)
+		}
+	}
 }
 
 // runnerStarted creates the real durable boundaries after the wrapper starts:

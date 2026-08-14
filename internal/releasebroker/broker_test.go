@@ -136,6 +136,158 @@ func waitForBrokerIdle(t *testing.T, broker *Broker) {
 	}
 }
 
+func TestBrokerRestartsUpdatedExecutableAfterDurableCommit(t *testing.T) {
+	for _, terminal := range []string{"succeeded", "release_failed_rolled_back"} {
+		t.Run(terminal, func(t *testing.T) {
+			stateDir := t.TempDir()
+			broker, err := NewAt(stateDir, &sequenceExecutor{statuses: []string{terminal}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			broker.brokerReplaced = func() (bool, error) { return true, nil }
+			restarted := make(chan struct{}, 1)
+			broker.restartBroker = func() error {
+				broker.mu.Lock()
+				active := broker.active
+				broker.mu.Unlock()
+				if active != "" {
+					t.Errorf("restart requested while operation %q is active", active)
+				}
+				data, readErr := os.ReadFile(filepath.Join(stateDir, "restart-release.commit"))
+				if readErr != nil || !strings.Contains(string(data), `"committed"`) {
+					t.Errorf("restart preceded durable committed marker: data=%q err=%v", data, readErr)
+				}
+				var saved operation
+				data, readErr = os.ReadFile(filepath.Join(stateDir, "restart-release.json"))
+				if readErr != nil || json.Unmarshal(data, &saved) != nil || saved.Status != terminal {
+					t.Errorf("restart preceded durable terminal record: data=%q err=%v", data, readErr)
+				}
+				restarted <- struct{}{}
+				return nil
+			}
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"restart-release","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			select {
+			case <-restarted:
+			case <-time.After(time.Second):
+				t.Fatal("updated broker was not restarted")
+			}
+			waitForOperationStatus(t, server, "restart-release", terminal)
+			if got := postStatus(t, server, body); got != http.StatusOK {
+				t.Fatalf("duplicate POST status=%d", got)
+			}
+			select {
+			case <-restarted:
+				t.Fatal("duplicate terminal POST restarted broker again")
+			case <-time.After(20 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestBrokerRejectsNewOperationWhileRestartingUpdatedExecutable(t *testing.T) {
+	broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+	broker.brokerReplaced = func() (bool, error) { return true, nil }
+	restartStarted := make(chan struct{})
+	allowRestart := make(chan struct{})
+	restarted := make(chan struct{})
+	broker.restartBroker = func() error {
+		close(restartStarted)
+		<-allowRestart
+		close(restarted)
+		return nil
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+
+	if got := postStatus(t, server, `{"operation_id":"restart-release","adapter":"fx-factory-release","commit_sha":"`+testSHA+`"}`); got != http.StatusAccepted {
+		t.Fatalf("release POST status=%d", got)
+	}
+	select {
+	case <-restartStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not begin")
+	}
+
+	type postResult struct {
+		status int
+		err    error
+	}
+	status := make(chan postResult, 1)
+	go func() {
+		response, err := server.Client().Post(server.URL+"/v1/operations", "application/json", strings.NewReader(`{"operation_id":"must-not-start","adapter":"fx-factory-release","commit_sha":"`+testSHA+`"}`))
+		if err != nil {
+			status <- postResult{err: err}
+			return
+		}
+		defer response.Body.Close()
+		status <- postResult{status: response.StatusCode}
+	}()
+	select {
+	case got := <-status:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.status != http.StatusServiceUnavailable {
+			t.Errorf("new operation POST status=%d, want %d", got.status, http.StatusServiceUnavailable)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new operation was not rejected while restart was pending")
+	}
+	close(allowRestart)
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not finish")
+	}
+}
+
+func TestBrokerDoesNotRestartUnchangedOrUncertainExecutable(t *testing.T) {
+	for name, replaced := range map[string]func() (bool, error){
+		"unchanged": func() (bool, error) { return false, nil },
+		"uncertain": func() (bool, error) { return false, errors.New("cannot stat executable") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+			broker.brokerReplaced = replaced
+			restarts := 0
+			broker.restartBroker = func() error { restarts++; return nil }
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"no-restart","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			postStatus(t, server, body)
+			waitForOperationStatus(t, server, "no-restart", "succeeded")
+			waitForBrokerIdle(t, broker)
+			if restarts != 0 {
+				t.Fatalf("restart calls=%d", restarts)
+			}
+		})
+	}
+}
+
+func TestBrokerPersistenceFailurePreventsRestart(t *testing.T) {
+	broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+	broker.brokerReplaced = func() (bool, error) { return true, nil }
+	restarts := 0
+	broker.restartBroker = func() error { restarts++; return nil }
+	broker.persistTerminal = func(*operation) error { return errors.New("disk unavailable") }
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"failed-persist","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	postStatus(t, server, body)
+	waitForBrokerIdle(t, broker)
+	if restarts != 0 {
+		t.Fatalf("restart calls=%d", restarts)
+	}
+	if got := operationStatus(t, server, "failed-persist").Status; got == "succeeded" {
+		t.Fatal("published terminal result despite persistence failure")
+	}
+}
+
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
 	executor := &recordingExecutor{done: make(chan struct{})}
 	server := httptest.NewServer(New(executor).Handler())
@@ -706,6 +858,45 @@ func TestLockedOperationRetriesWithNewerSHAOnlyForSameAdapter(t *testing.T) {
 	}
 	if got := item.Posts; got != 3 {
 		t.Fatalf("durable POST observations=%d, want 3", got)
+	}
+}
+
+func TestBrokerDrainingRejectsConcurrentLockedRetryWithoutLaunchingExecutor(t *testing.T) {
+	executor := &sequenceExecutor{statuses: []string{"locked", "succeeded"}}
+	broker := New(executor)
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+
+	first := `{"operation_id":"draining-lock-retry","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	newerSHA := strings.Repeat("d", 40)
+	retry := `{"operation_id":"draining-lock-retry","adapter":"fx-factory-release","commit_sha":"` + newerSHA + `"}`
+	if got := postStatus(t, server, first); got != http.StatusAccepted {
+		t.Fatalf("first=%d", got)
+	}
+	waitForOperationStatus(t, server, "draining-lock-retry", "locked")
+
+	broker.mu.Lock()
+	broker.draining = true
+	broker.mu.Unlock()
+
+	result := make(chan int, 1)
+	go func() { result <- postStatus(t, server, retry) }()
+	select {
+	case got := <-result:
+		if got != http.StatusServiceUnavailable {
+			t.Fatalf("draining locked retry status=%d, want %d", got, http.StatusServiceUnavailable)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("draining locked retry did not return")
+	}
+
+	calls, _, _ := executor.snapshot()
+	if calls != 1 {
+		t.Fatalf("physical executions=%d, want 1 while draining", calls)
+	}
+	item, ok := operationSnapshot(broker, "draining-lock-retry")
+	if !ok || item.Status != "locked" || item.Posts != 1 {
+		t.Fatalf("draining retry changed operation=%+v", item)
 	}
 }
 
