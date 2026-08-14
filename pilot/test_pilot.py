@@ -1894,6 +1894,9 @@ def run_full_cycle(fixture):
             pilot, "selected_delivery", return_value=("factory/correction", "a" * 40)))
         stack.enter_context(mock.patch.object(
             pilot, "pushed_branch", return_value="factory/correction"))
+        stack.enter_context(mock.patch.object(pilot, "verify_gate", return_value={
+            "snapshot": {"candidate_sha": "a" * 40},
+        }))
         stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
         stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
         stack.enter_context(mock.patch.object(
@@ -1950,7 +1953,13 @@ elif action == "full_cycle_after_restart":
     run_full_cycle(fixture)
     verify = latest_stage(fixture, "Verify")
     set_succeeded(fixture, verify["id"], "PASS\nTRY: none")
-    run_full_cycle(fixture)
+    # Delivery advances through durable phases. Keep cycling across the same
+    # JSON boundary until the broker receipt records the terminal PASS.
+    for _ in range(10):
+        run_full_cycle(fixture)
+        if pilot.load(os.path.join(
+                pilot.VERDICT_DIR, verify["id"] + ".json"), {}).get("final_pass"):
+            break
     fixture["restart"].update({"second_pid": os.getpid(),
                                "terminal_task_id": verify["id"]})
     save_fixture(fixture)
@@ -4850,7 +4859,8 @@ class AdaptivePollingTests(unittest.TestCase):
         conf = {"enabled": True, "poll_seconds": 30}
         state = {"processed": []}
         sleeps = []
-        clock = iter((100.0, 102.0))
+        # Every successful cycle timestamps both live status and its poll hint.
+        clock = iter((100.0, 101.0, 102.0, 103.0))
 
         def fake_load(path, default):
             return conf if path == pilot.CONF_PATH else state
@@ -4866,7 +4876,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(sleeps, [2, 30])
         self.assertEqual(state["next_poll"], {
-            "seconds": 30, "reason": "idle", "chosen_at": 102.0,
+            "seconds": 30, "reason": "idle", "chosen_at": 103.0,
         })
 
     def test_network_errors_back_off_and_success_resets_interval(self):
@@ -4884,11 +4894,14 @@ class AdaptivePollingTests(unittest.TestCase):
                     urllib.error.URLError("network still down"),
                     {"seconds": 10, "reason": "active"},
                 ]):
+            # Failed cycles only timestamp the hint; the successful cycle also
+            # timestamps live status before recording its hint.
             pilot.run_loop(max_cycles=3, sleep_fn=sleeps.append,
-                           clock_fn=iter((100.0, 130.0, 190.0)).__next__)
+                           clock_fn=iter((100.0, 130.0, 190.0, 200.0)).__next__)
 
         self.assertEqual(sleeps, [30, 60, 10])
         self.assertEqual(state["next_poll"]["reason"], "active")
+        self.assertEqual(state["next_poll"]["chosen_at"], 200.0)
 
     def test_rate_limit_retry_after_never_shortens_error_backoff(self):
         error = urllib.error.HTTPError(
