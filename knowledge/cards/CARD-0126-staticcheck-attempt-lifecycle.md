@@ -4,7 +4,7 @@
 
 Status: Implemented — доказательства актуализированы
 Branch: factory/9d5bdffd-368-bee991b0-257
-Implementation commit: d1d3e849d4a4e3d9fb023cf8a364e5b270070a2c — закреплено воспроизводимое доказательство CARD-0126
+Implementation commit: 5073218fc0e8c61e14ad83b2c2d127b30b80de86 — закреплено воспроизводимое доказательство CARD-0126
 What changed: спецификация фиксирует фактический успешный запуск целевого lifecycle-теста и `staticcheck`. Поведение worker и UI не менялись.
 Evidence: `go test ./internal/worker -run '^TestLeaseRenewal'` → код 0; `just staticcheck` → код 0.
 One next action: выполнить Review опубликованной поставки.
@@ -15,7 +15,7 @@ One next action: выполнить Review опубликованной пост
 
 Заново выполнены целевой lifecycle-тест worker и полный `just staticcheck`:
 обе команды завершились с кодом 0. Результат закреплён отдельным commit
-реализации `d1d3e849d4a4e3d9fb023cf8a364e5b270070a2c`; product code и UI не
+реализации `5073218fc0e8c61e14ad83b2c2d127b30b80de86`; product code и UI не
 менялись.
 
 ### 2026-08-14 — Specification
