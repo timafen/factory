@@ -156,7 +156,7 @@ it("shows an answered heavy work reservation as waiting for a slot, not for an o
   });
   view([task("https", `[auto] [3/5 Implement + Test] ${title}`, "failed")]);
 
-  const queued = await screen.findByRole("heading", { name: "В очереди" });
+  const queued = await screen.findByRole("heading", { name: "Ожидают исполнителя" });
   expect(queued.parentElement?.parentElement).toHaveTextContent("Ответ принят — слот зарезервирован");
   expect(screen.getByText("Ответ владельца принят; эта работа ждёт зарезервированный слот.")).toBeVisible();
   expect(screen.getByText("ответ принят, ожидает зарезервированный слот из-за загрузки сервера")).toBeVisible();
