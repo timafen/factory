@@ -4,7 +4,7 @@
 
 - Status: PASS: worker-интеграции больше не зависают на SQLite write lock.
 - Branch: `factory/ea12ef6f-877-2fd7b546-74b`.
-- Implementation commit: 48d4b5580e87949dc8c0c64e23e948c50d0f0e6c — SQLite-соединения
+- Implementation commit: 48d4b55881d5676f3c42f96ab0d5ed98c30bbad7 — SQLite-соединения
   controlplane сериализованы, чтобы heartbeat не истекали на write lock.
 - What changed: reconciliation capacity из lease и журнал migration 026 сохраняются;
   SQLite pool ограничен одним соединением и защищён регрессионным тестом.
