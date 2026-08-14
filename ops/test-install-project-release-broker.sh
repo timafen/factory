@@ -87,8 +87,7 @@ FACTORY_BROKER_ACTIVE=1 \
     "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
 
 grep -qx '# broker version 2' "$temporary/out/factory-release-broker"
-grep -qx 'restart factory-release-broker.service' "$temporary/systemctl.log"
-grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
+test "$(sed -n '1,4p' "$temporary/systemctl.log" | tr '\n' ' ')" = "daemon-reload is-active --quiet factory-release-broker.service restart factory-release-broker.service restart factory-pilot.service "
 if grep -q 'enable --now factory-release-broker.service' "$temporary/systemctl.log"; then
   echo 'active broker was enabled instead of restarted' >&2
   exit 1
