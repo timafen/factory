@@ -393,6 +393,7 @@ type Task struct {
 	WorkID         string    `json:"work_id,omitempty"`
 	ParentTaskID   string    `json:"parent_task_id,omitempty"`
 	CorrectionKind string    `json:"correction_kind,omitempty"`
+	WorkClass      string    `json:"work_class,omitempty"`
 }
 
 type TaskCursor struct {
@@ -723,6 +724,9 @@ type AutomationOccurrence struct {
 	Timezone           string                 `json:"timezone,omitempty"`
 	TaskRequestKey     string                 `json:"task_request_key"`
 	Task               *AutomationTaskSummary `json:"task,omitempty"`
+	AttemptState       string                 `json:"attempt_state,omitempty"`
+	Result             string                 `json:"result,omitempty"`
+	Error              string                 `json:"error,omitempty"`
 	TaskIDSnapshot     string                 `json:"task_id_snapshot,omitempty"`
 	Diagnostic         string                 `json:"diagnostic,omitempty"`
 	CreatedAt          time.Time              `json:"created_at"`

@@ -357,8 +357,9 @@ const automationOccurrenceSelect = `
 	       schedule.kind, schedule.scheduled_at, schedule.run_request_key,
 	       schedule.cron, schedule.timezone,
 	       occurrence.task_request_key, occurrence.task_id_snapshot,
-	       occurrence.diagnostic, occurrence.created_at, occurrence.updated_at,
-	       task.id, task.title, execution.state, execution.retry_count
+		       occurrence.diagnostic, occurrence.created_at, occurrence.updated_at,
+		       task.id, task.title, execution.state, execution.retry_count,
+		       latest_attempt.state, latest_attempt.result, latest_attempt.error
 	FROM automation_occurrences occurrence
 	JOIN automations automation ON automation.id = occurrence.automation_id
 	LEFT JOIN automation_github_issue_occurrences issue ON issue.occurrence_id = occurrence.id
@@ -366,6 +367,12 @@ const automationOccurrenceSelect = `
 	LEFT JOIN automation_schedule_occurrences schedule ON schedule.occurrence_id = occurrence.id
 	LEFT JOIN tasks task ON task.id = occurrence.task_id
 	LEFT JOIN executions execution ON execution.task_id = task.id
+	LEFT JOIN attempts latest_attempt ON latest_attempt.id = (
+		SELECT attempt.id FROM attempts attempt
+		WHERE attempt.execution_id = execution.id
+		ORDER BY attempt.attempt_number DESC, COALESCE(attempt.completed_at, attempt.created_at) DESC, attempt.id DESC
+		LIMIT 1
+	)
 `
 
 func scanAutomation(row scanner) (protocol.Automation, error) {
@@ -947,6 +954,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 		var issueLabels, pullRequestLabels []byte
 		var taskID, taskTitle, taskState sql.NullString
 		var retryCount sql.NullInt64
+		var attemptState, attemptResult, attemptError sql.NullString
 		var createdAt, updatedAt int64
 		if err := rows.Scan(
 			&occurrence.ID, &occurrence.AutomationID, &occurrence.AutomationVersion,
@@ -957,7 +965,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 			&scheduleKind, &scheduledAt, &runRequestKey, &scheduleCron, &scheduleTimezone,
 			&occurrence.TaskRequestKey, &occurrence.TaskIDSnapshot,
 			&occurrence.Diagnostic, &createdAt, &updatedAt,
-			&taskID, &taskTitle, &taskState, &retryCount,
+			&taskID, &taskTitle, &taskState, &retryCount, &attemptState, &attemptResult, &attemptError,
 		); err != nil {
 			return nil, unavailable(err)
 		}
@@ -1010,6 +1018,7 @@ func scanAutomationOccurrences(rows *sql.Rows, capacity int) ([]protocol.Automat
 		if taskID.Valid {
 			occurrence.Task = &protocol.AutomationTaskSummary{ID: taskID.String, Title: taskTitle.String, State: taskState.String, RetryCount: int(retryCount.Int64), RetryStatus: automationRetryStatus(taskState.String, retryCount.Int64, occurrence.Diagnostic)}
 		}
+		occurrence.AttemptState, occurrence.Result, occurrence.Error = attemptState.String, attemptResult.String, attemptError.String
 		occurrence.CreatedAt = fromMillis(createdAt)
 		occurrence.UpdatedAt = fromMillis(updatedAt)
 		occurrences = append(occurrences, occurrence)

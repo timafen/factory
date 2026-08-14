@@ -13,6 +13,16 @@ function task(id: string, stage: string, state: Task["state"], minute: number, w
 }
 
 describe("build", () => {
+  it("removes patrol tasks before grouping while retaining ordinary work", () => {
+    const groups = build([
+      { ...task("patrol", "Verify", "succeeded", 1), work_class: "patrol" },
+      task("ordinary", "Triage", "running", 2),
+    ], {}, []);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items.map(({ task: item }) => item.id)).toEqual(["ordinary"]);
+  });
+
   it("groups stage titles by work identity and keeps equal names separate", () => {
     const sharedWork = build([
       task("triage", "Triage", "succeeded", 1, "work-shared"),
