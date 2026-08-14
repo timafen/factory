@@ -1431,6 +1431,60 @@ def brain(conf, prompt, timeout=180):
     return "", None
 
 
+ADMIN_QUESTION_MAX_FIELD = 4000
+ADMIN_QUESTION_MODEL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def senior_admin_answer(conf, stage, base, situation, question, prior_result):
+    """Ask the configured senior model through the fixed staging bridge only."""
+    if not (conf or {}).get("admin_question_enabled", False):
+        return None
+    model = str((conf or {}).get("admin_question_model") or "")
+    if not ADMIN_QUESTION_MODEL_RE.fullmatch(model):
+        log("ADMIN QUESTION senior route disabled: invalid model")
+        return None
+    fields = {
+        "stage": stage, "base": base, "situation": situation,
+        "question": question, "prior_result": prior_result,
+    }
+    if any(len(str(value or "")) > ADMIN_QUESTION_MAX_FIELD for value in fields.values()):
+        log("ADMIN QUESTION senior route rejected: input too large")
+        return None
+    payload = json.dumps({
+        "instruction": (
+            "Реши административный вопрос конвейера. Ответь только JSON: "
+            '{"decision":"answer|wait|escalate","answer":"...",'
+            '"reason":"..."}. Не запускай команды и не запрашивай секреты.'
+        ),
+        **fields,
+    }, ensure_ascii=False)
+    argv = ["sudo", "-n", "/usr/local/bin/fx", "staging", "brain",
+            "admin-question", f"--model={model}"]
+    try:
+        result = subprocess.run(
+            argv, input=payload, capture_output=True, text=True,
+            timeout=240, env=dict(os.environ, HOME=HOME), cwd=HOME,
+        )
+        if result.returncode != 0 or not (result.stdout or "").strip():
+            log(f"ADMIN QUESTION senior route failed: exit={result.returncode}")
+            return None
+        raw = result.stdout.strip()
+        value = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        decision = value.get("decision")
+        if decision not in ("answer", "wait", "escalate"):
+            return None
+        if decision == "answer" and not str(value.get("answer") or "").strip():
+            return None
+        if decision == "wait" and not str(value.get("reason") or "").strip():
+            return None
+        value["answered_by"] = "senior-admin"
+        value["model_route"] = "fx staging brain admin-question"
+        return value
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        log(f"ADMIN QUESTION senior route failed: {type(exc).__name__}")
+        return None
+
+
 def project_context():
     try:
         with open(CONTEXT_PATH) as f:
@@ -4567,6 +4621,31 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch):
         return False
+    if verdict.get("decision") == "escalate":
+        senior = senior_admin_answer(
+            conf, stage, base, situation, question, prior_result)
+        if senior is not None:
+            if resolve_orchestrator_wait(
+                    conf, senior, task_id, stage, resume_stage, base, repo_id,
+                    situation, question, options, prior_result, branch):
+                return False
+            if senior.get("decision") == "answer":
+                rec = write_question(
+                    task_id, stage,
+                    accept_forward(stage, senior["answer"]) or resume_stage,
+                    base, repo_id, situation, question, options, prior_result,
+                    branch, status="answered")
+                rec["answer"] = senior["answer"]
+                rec["answered_by"] = senior["answered_by"]
+                rec["model_route"] = senior["model_route"]
+                save(f"{QUESTION_DIR}/{task_id}.json", rec)
+                log(f"AUTO-ANSWERED by senior admin route task={task_id}")
+                notify(conf, f"Решил старший разбор · {stage}",
+                       f"{base}\n\nОтвет: {cut(senior['answer'])}\n\n"
+                       "Работа продолжается.", priority="low", tags="robot",
+                       click=f"{UI_BASE}/answer")
+                return False
+            verdict = senior
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch)
     if verdict["decision"] == "answer":
