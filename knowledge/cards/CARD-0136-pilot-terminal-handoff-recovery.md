@@ -4,7 +4,7 @@ Implementation commit: ca6c904c43e128f402cef8a9c50cc2f2e449383a — все вр�
 
 ## HEAD
 
-- Status: Implemented + tested — повторно ожидает Review.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/505ed710-017-e98b74ed-710`.
 - What changed: единый retry-helper удаляет terminal ID из `processed` и удерживает
   startup watermark во всех временных ветках, включая `area_busy` и отсутствие
@@ -12,12 +12,28 @@ Implementation commit: ca6c904c43e128f402cef8a9c50cc2f2e449383a — все вр�
 - Safety: lifecycle/stop, известный нефинальный workflow и `live_or_done_at()`
   закрывают старые работы и дубли; fixture больше не подмешивает поля списка задач.
 - Evidence: `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` — 19 OK;
+  полный `python3 -m unittest pilot.test_pilot` — 274 выполнено, 2 известных
+  падения `CorrectionProvenanceStormTests`, воспроизводятся на закреплённой базе;
   `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и `git diff --check` — OK.
 - Source contract: CARD-0155 и specification head
   `7e8eb284d89160704292add3b7609cae272b1c8c`.
-- Next action: повторный Review проверяет централизованный retry-инвариант.
+- Next action: human merge проверяет известные базовые падения отдельно от CARD-0136.
 
 ## LOG
+
+### 2026-08-14 — Verify
+
+| Критерий | Команда/проверка | Результат |
+| --- | --- | --- |
+| Незавершённый handoff переживает рестарт и повторную попытку | `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` | 19 OK, включая temporary create failure и второй рестарт после `area_busy` |
+| Повторное восстановление не создаёт continuation при существующем хвосте | тот же целевой класс: `test_restart_recovery_rejects_unsafe_or_completed_candidates` | OK |
+| Recovery watermark продвигается только после успешного handoff | тот же целевой класс: `test_loop_moves_recovery_watermark_only_after_success`, `test_loop_keeps_recovery_watermark_when_handoff_is_pending` | OK |
+| Смежные lifecycle/cursor и polling-пути не регрессировали | полный `python3 -m unittest pilot.test_pilot` | 274 выполнено; 2 failures воспроизводятся на base, новых failures нет; кандидат также устраняет 2 base errors `StopIteration` |
+
+Проверены также `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и
+`git diff --check`: оба успешно. Известные failures относятся к
+`CorrectionProvenanceStormTests` и присутствуют в закреплённой базе; они не
+являются регрессией CARD-0136.
 
 ### 2026-08-14 — Implement
 
