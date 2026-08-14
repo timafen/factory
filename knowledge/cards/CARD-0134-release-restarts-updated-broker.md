@@ -1,15 +1,15 @@
 # CARD-0134 — Выпуск перезапускает обновлённого посредника
 
-Implementation commit: 48b044c4e401080039da3d386208e16ba0bc7000 — перезапуск привязан к фактическому production-пути посредника
+Implementation commit: 604f2eac06472140b90bda01fb4eecf026e28b0e — посредник атомарно прекращает принимать новые операции перед перезапуском
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge
-- Branch: `factory/9bcbf482-22b-eda5089d-eeb`
-- Implementation commit: `48b044c4e401080039da3d386208e16ba0bc7000`
-- What changed: после durable terminal commit посредник определяет замену бинарника по фактическому пути `/opt/factory-data/bin/factory-release-broker` и перезапускает systemd unit; тест сверяет этот путь с production unit.
-- Evidence: pinned diff `ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5...64faf04dafb472c8a57197a462fb3e96802e32b0`; все обязательные Go/UI/tooling/launcher проверки, сборка, целевые restart-тесты и release fixture → PASS.
-- One next action: человеку выполнить merge ветки в `main`.
+- Status: Implemented — ready for verification
+- Branch: `factory/5b44981d-5d3-a66d90ba-a9d`
+- Implementation commit: `604f2eac06472140b90bda01fb4eecf026e28b0e`
+- What changed: после durable terminal commit обновивший себя посредник под mutex переходит в draining до systemd restart; новые операции в этом окне получают 503.
+- Evidence: `go test ./internal/releasebroker -run 'TestBroker(RestartsUpdatedExecutableAfterDurableCommit|RejectsNewOperationWhileRestartingUpdatedExecutable|DoesNotRestartUnchangedOrUncertainExecutable|PersistenceFailurePreventsRestart)' -count=1` → PASS; конкурентный тест с `-race` → PASS.
+- One next action: выполнить полную проверку перед merge.
 
 ## LOG
 
@@ -32,3 +32,7 @@ Implementation commit: 48b044c4e401080039da3d386208e16ba0bc7000 — переза
 | Общая регрессия и сборка | `just check` с `just ui-install` для отсутствовавших зависимостей; `FACTORY_BUILD_DIR=/tmp/factory-verify-j3w63d/build just build` | PASS: Go, UI 179/179, tooling, launcher и три бинарника |
 
 Живая служба была `active/running`, но фактический restart на worker не выполнялся: non-interactive sudo отсутствует, а `/proc/<pid>/exe` закрыт политикой доступа. Перед merge миграций и ручных шагов нет; после merge оператору желательно подтвердить смену PID на одном штатном выпуске.
+
+### 2026-08-13 — Implement
+
+Исправлена гонка review: при подтверждённой замене бинарника broker до освобождения mutex включает draining. Новый POST, сделанный конкурентно во время удержанного restart seam, получает 503 и не запускает операцию; idempotent POST уже завершённой операции остаётся доступным. Целевые restart-тесты и конкурентная проверка с `-race` прошли.
