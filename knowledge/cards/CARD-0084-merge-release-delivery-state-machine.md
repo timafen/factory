@@ -2,15 +2,22 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented — восстановленная защита подтверждена на свежем `main`.
+- Branch: `factory/d60e1ac5-6ed-eeac3ef8-fdd`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+Implementation commit: d780a62dbbca8c3b87926c8bdd678aa82873c766 — повторный restart подтверждает durable failure без второго выпуска.
+- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS; `git diff --check` — PASS.
+- Next action: Verify проверить ветку по закреплённому implementation SHA.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Восстановление выполнено на свежем `origin/main`, где защита terminal write уже
+присутствует. Regression усилен вторым свежим запуском broker: durable `failed`
+сохраняется, а executor остаётся вызван ровно один раз. Целевые Go-тесты прошли;
+10 реальных Pilot→broker сценариев также прошли.
 
 ### 2026-08-12 — Verify
 
