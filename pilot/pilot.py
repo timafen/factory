@@ -1449,7 +1449,7 @@ def repo_brief(repo_key):
 
 
 def orchestrator_answer(conf, stage, base, situation, question, prior_result,
-                        repo_id=""):
+                        repo_id="", action_result=""):
     """The orchestrator has the project context - it answers technical questions
     itself and escalates to the owner only when the decision is genuinely his."""
     if not conf.get("auto_answer", True):
@@ -1471,10 +1471,22 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         "последствиями.\n"
         "Всё остальное (какую среду использовать, как чинить, перезапускать ли "
         "упавший по таймауту этап, где взять сведения о коде) — решай САМ.\n\n"
-        "Если правильное решение — ждать выполнения условия и пока НЕ запускать "
+        "Если для ответа нужна безопасная техническая проверка на staging, можешь "
+        "выбрать admin_action. Это ТОЛЬКО scope staging и один из verb status, "
+        "health, restart, manage, sandbox, env-names, release-info. "
+        "Для manage нельзя выбирать migrate; collectstatic допустим. Для sandbox "
+        "допустим только --dry-run, без создания или перезаписи данных и без --force. "
+        "Никогда не выбирай admin_action для prod, factory, release, rollback, "
+        "секретов, трат, удаления или неизвестных аргументов.\n\n"
+        + ("Уже выполненная admin-операция дала результат:\n" + action_result[:2000]
+           + "\nТеперь верни только answer, wait или escalate; новую admin_action "
+             "выбирать нельзя.\n\n" if action_result else "")
+        + "Если правильное решение — ждать выполнения условия и пока НЕ запускать "
         "следующий этап, выбери отдельное решение wait. Не маскируй паузу текстом "
         "обычного answer.\n\n"
-        'Ответь ТОЛЬКО JSON: {"decision": "answer", "wait" или "escalate", '
+        'Ответь ТОЛЬКО JSON: {"decision": "answer", "wait", "escalate"'
+        + (' или "admin_action"' if not action_result else '')
+        + ', "action": {"scope":"staging", "verb":"health", "args":[]}, '
         '"answer": "<если answer: конкретный исполнимый ответ агенту по-русски, '
         '2-5 предложений, как будто это сказал владелец>", '
         '"reason": "<если wait: почему работу надо оставить на паузе; если '
@@ -1487,11 +1499,40 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
             return v
         if v.get("decision") == "wait" and (v.get("reason") or "").strip():
             return v
+        if not action_result and v.get("decision") == "admin_action" and isinstance(v.get("action"), dict):
+            return v
         return {"decision": "escalate", "answer": "",
                 "reason": v.get("reason", "оркестратор передал решение владельцу")}
     except Exception as e:
         log("orchestrator_answer_error", repr(e))
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
+
+
+def admin_fx_argv(action):
+    """Return the only argv an orchestrator admin intention may execute."""
+    if not isinstance(action, dict) or action.get("scope") != "staging":
+        return None, "разрешены только действия staging"
+    verb = action.get("verb")
+    args = action.get("args", [])
+    if not isinstance(verb, str) or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return None, "неверный формат административного действия"
+    simple = {"status", "health", "env-names", "release-info"}
+    if verb in simple and not args:
+        pass
+    elif verb == "restart" and args in ([], ["gunicorn"], ["worker"], ["notifications"], ["order-reconcile"], ["all"]):
+        pass
+    elif verb == "manage" and args in (["check"], ["showmigrations"], ["collectstatic"]):
+        pass
+    elif (verb == "sandbox" and args
+          and args[0] in ("bootstrap-accounts", "seller-policies", "listings")
+          and "--dry-run" in args[1:]
+          and all(re.fullmatch(
+              r"--(?:tenant-id|account-id|fulfillment-policy-id|payment-policy-id|return-policy-id|listing-count)=[A-Za-z0-9_.-]+|--dry-run|--interactive-bootstrap|--role=seller|--consent-status=[A-Za-z0-9_.-]+",
+              arg) for arg in args[1:])):
+        pass
+    else:
+        return None, "операция или аргументы не входят в безопасный список fx"
+    return ["sudo", "-n", "/usr/local/bin/fx", "staging", verb, *args], ""
 
 
 def stage_attempts(tasks, stage, base):
@@ -3691,14 +3732,17 @@ def diag_sweep(conf, tasks):
 
 def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
                               repo_id, situation, question, options,
-                              prior_result, branch):
+                              prior_result, branch, record=None):
     """Persist an explicit Pilot pause without turning it into a resume answer."""
     if verdict.get("decision") != "wait":
         return False
     reason = str(verdict.get("reason") or "").strip()
-    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                         question, options, prior_result, branch,
-                         status="resolved")
+    # Keep the original admin audit record: replacing it makes a technical
+    # pause indistinguishable from an owner question in the control plane.
+    rec = record if record is not None else write_question(
+        task_id, stage, resume_stage, base, repo_id, situation, question,
+        options, prior_result, branch, status="resolved")
+    rec["status"] = "resolved"
     rec["answer"] = reason
     rec["answered_by"] = "orchestrator"
     rec["machine_action"] = "wait"
@@ -3709,6 +3753,64 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
     notify(conf, f"Поставил на паузу · {stage}",
            f"{base}\n\n{reason}\n\nСледующий этап не запущен.",
            priority="low", tags="hourglass", click=f"{UI_BASE}/answer")
+    return True
+
+
+def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base, repo_id,
+                         situation, question, options, prior_result, branch):
+    """Execute a permitted admin action; return None for non-admin verdicts."""
+    if verdict.get("decision") != "admin_action":
+        return None
+    action = verdict.get("action") or {}
+    argv, why = admin_fx_argv(action)
+    rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
+                         question, options, prior_result, branch)
+    rec["authority"] = "admin"
+    rec["admin_action"] = action
+    if not argv:
+        rec["owner_only"] = True
+        rec["admin_result"] = "denied"
+        rec["escalation_reason"] = why
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(сам решить не могу: {why})",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return True
+    ok, output = _fixed_command(argv, timeout=60)
+    rec["admin_command"] = argv
+    rec["admin_result"] = "executed" if ok else "failed"
+    rec["admin_output"] = squeeze(output, 2000)
+    if not ok:
+        rec["owner_only"] = True
+        rec["escalation_reason"] = "fx отказал или завершился с ошибкой"
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Нужен твой ответ · {stage}",
+               f"{base}\n\n❓ {question}\n\n(fx не выполнил разрешённую проверку)",
+               priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
+        return True
+    follow_up = orchestrator_answer(
+        conf, stage, base, situation, question, prior_result, repo_id,
+        action_result="fx успешно выполнен:\n" + squeeze(output, 2000))
+    if follow_up.get("decision") == "answer":
+        rec["status"] = "answered"
+        rec["answer"] = follow_up["answer"]
+        rec["answered_by"] = "orchestrator"
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        notify(conf, f"Решил сам · {stage}",
+               f"{base}\n\nРазрешённая проверка выполнена. {follow_up['answer']}",
+               priority="low", tags="robot", click=f"{UI_BASE}/answer")
+        return False
+    if resolve_orchestrator_wait(
+            conf, follow_up, task_id, stage, resume_stage, base, repo_id,
+            situation, question, options, prior_result, branch, record=rec):
+        return False
+    rec["owner_only"] = True
+    rec["escalation_reason"] = follow_up.get(
+        "reason", "после результата fx нужно решение владельца")
+    save(f"{QUESTION_DIR}/{task_id}.json", rec)
+    notify(conf, f"Нужен твой ответ · {stage}",
+           f"{base}\n\n❓ {question}\n\n(после проверки: {rec['escalation_reason']})",
+           priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
     return True
 
 
@@ -3745,13 +3847,14 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
-        if cap_rescues(base, "LOOP") >= int(conf.get("max_loop_rescues", 2)):
-            v = {"decision": "owner",
-                 "reason": "orchestrator already broke this loop twice"}
-        else:
-            v = orchestrator_answer(conf, stage, base,
+        v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+        admin_result = resolve_admin_action(
+            conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+            question, options, prior_result, branch)
+        if admin_result is not None:
+            return admin_result
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch):
@@ -3817,6 +3920,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            admin_result = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_result is not None:
+                return admin_result
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3848,6 +3956,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            admin_result = resolve_admin_action(
+                conf, v, task_id, stage, resume_stage, base, repo_id, situation,
+                question, options, prior_result, branch)
+            if admin_result is not None:
+                return admin_result
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch):
@@ -3884,6 +3997,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
+    admin_result = resolve_admin_action(
+        conf, verdict, task_id, stage, resume_stage, base, repo_id, situation,
+        question, options, prior_result, branch)
+    if admin_result is not None:
+        return admin_result
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch):
