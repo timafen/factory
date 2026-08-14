@@ -25,9 +25,9 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — ожидает слияния человеком. Branch: `factory/8c403f0f-741-e39c1023-e85`. Head commit: будет указан в завершающем коммите Verify.
-What changed: UI-тесты `App.test.tsx` сверены с переименованными экранами и элементами управления; дифф от точки ветвления содержит только этот тест и карточку.
-Evidence: после чистого `npm ci` пройдены `npx vitest run src/App.test.tsx` (60/60) и `npx tsc -p tsconfig.app.json --noEmit`; полный `npm test` — 93/94, единственное известное падение в неизменённом `src/Settings.test.tsx` ожидает старый набор `notify_groups` без ключа `escalate`.
+Status: Verified PASS — ожидает слияния человеком. Branch: `factory/1adc0ddd-022-8b955a6b-6aa`.
+Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — Pilot восстанавливает пропущенные завершения после рестарта, ограничивает просмотр свежим хвостом и не создаёт дубли продолжений.
+Evidence: после rebase 24/24 целевых теста прошли; полный `pilot.test_pilot` до rebase дал 276 успешных, 13 пропущенных и два подтверждённых на закреплённой базе старых падения; Go, UI, tooling и launcher-проверки прошли.
 One next action: влить ветку в `main`.
 
 ## LOG
@@ -178,3 +178,13 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 На ветке `factory/1adc0ddd-022-8b955a6b-6aa` Pilot сохраняет watermark и startup-набор, восстанавливает только свежий отсутствующий хвост и защищает handoff от дублей.
 Доказательство: 13 целевых restart/terminal-проверок, обязательный тест, `py_compile`, `git diff --check` и `just build` — PASS.
 Открытый риск: полный набор `pilot.test_pilot` и live-стенд не запускались на этапе Implement + Test; живой API не менялся.
+
+### 2026-08-14 — Verify
+
+| Критерий | Команда / проверка | Результат |
+| --- | --- | --- |
+| Завершение доигрывается после рестарта | `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` | PASS: после rebase 24/24; восстановлен свежий обработанный terminal task без следующей стадии, просмотр ограничен свежим хвостом. |
+| Чужие и старые завершения не подхватываются | тот же набор | PASS: кандидаты до watermark, закрытые работы, уже продолженные и недоступные ID пропускаются. |
+| Повтор и конкуренция не создают дубль | тот же набор | PASS: стабильный request key, повтор после временной ошибки и два Pilot дают одно продолжение. |
+| Полный Pilot-набор | `python3 -m unittest pilot.test_pilot` | 276 PASS, 13 skipped, 2 старых падения; оба воспроизведены на `1a4cce1d46db55824ee5fbd626aceb32d28a5760`. |
+| Полная проектная проверка | `just check`; после отсутствовавших зависимостей `just ui-install && just ui-check`; `env -u FACTORY_BUILD_DIR ... just test-tooling`; `just test-launcher` | PASS: Go/static/vulnerability, 180/180 UI, tooling и launcher; первый проход UI остановился только на `eslint: not found`, затем хвост пройден после `npm ci`. |
