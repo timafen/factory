@@ -1,16 +1,23 @@
-Implementation commit: a322676d35de33d098dd7faa7976226b4038e986 — полный набор тестов Pilot стал обязательными воротами выпуска
+Implementation commit: 42fb0b0f54f35bd5e3dc44395c4fa9863a6a27f4 — полный набор тестов Pilot стал обязательными воротами выпуска
 
 # CARD-0135: тесты Pilot в воротах выпуска
 
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge
-- Branch: `factory/625c1b3c-2d0-bf1205ef-2c1`
-- Implementation commit: `a322676d35de33d098dd7faa7976226b4038e986`
-- Evidence summary: `python3 -m unittest pilot.test_pilot` → 264 tests OK, 13 skipped; `bash ops/test-fx-factory-release.sh` → exit 0 with Pilot-before-build and no-install/no-service-mutation failure scenarios; UI/Go/release checks → exit 0.
-- One next action: человеку проверить опубликованный снимок и слить ветку в `main`.
+- Branch: `factory/7b3a1ecf-aa8-544fd174-35e`
+- Implementation commit: `42fb0b0f54f35bd5e3dc44395c4fa9863a6a27f4`
+- What changed: полный `pilot.test_pilot` запускается отдельной доверенной группой до UI/Go-сборок; его ошибка останавливает выпуск до установки и перезапуска служб.
+- Evidence: `python3 -m unittest pilot.test_pilot` → 264 OK, 13 skipped; `bash ops/test-fx-factory-release.sh` → exit 0, включая `python-test-fail`.
+- One next action: повторно отправить опубликованную ветку на независимый Review.
 
 ## LOG
+
+### 2026-08-13 — Implement
+
+Поставка перебазирована на свежий `main` и опубликована в ветке этого задания.
+Повторно подтверждены 264 теста Pilot, герметичный сценарий остановки выпуска
+при ошибке Pilot и синтаксис изменённых shell-скриптов.
 
 ### 2026-08-13 — Implement
 
