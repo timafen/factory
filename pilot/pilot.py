@@ -3781,11 +3781,18 @@ def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base, repo
     rec["admin_result"] = "executed" if ok else "failed"
     rec["admin_output"] = squeeze(output, 2000)
     if not ok:
+        follow_up = orchestrator_answer(
+            conf, stage, base, situation, question, prior_result, repo_id,
+            action_result="fx завершился с ошибкой:\n" + squeeze(output, 2000))
         rec["owner_only"] = True
+        reason = str(follow_up.get("reason") or "").strip()
         rec["escalation_reason"] = "fx отказал или завершился с ошибкой"
+        if reason:
+            rec["escalation_reason"] += ": " + reason
         save(f"{QUESTION_DIR}/{task_id}.json", rec)
         notify(conf, f"Нужен твой ответ · {stage}",
-               f"{base}\n\n❓ {question}\n\n(fx не выполнил разрешённую проверку)",
+               f"{base}\n\n❓ {question}\n\n(после ошибки fx: "
+               f"{rec['escalation_reason']})",
                priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
         return True
     follow_up = orchestrator_answer(
@@ -3847,6 +3854,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
+        used = cap_rescues(base, "LOOP")
+        limit = int(conf.get("max_loop_rescues", 2))
         v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
@@ -3855,6 +3864,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             question, options, prior_result, branch)
         if admin_result is not None:
             return admin_result
+        if used >= limit:
+            v = {"decision": "owner",
+                 "reason": "orchestrator already broke this loop twice"}
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch):

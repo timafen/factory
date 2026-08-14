@@ -1665,7 +1665,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             pause_pipeline.assert_not_called()
             answer.assert_not_called()
 
-    def test_exhausted_loop_rescue_still_asks_orchestrator(self):
+    def test_loop_rescue_limit_stops_ordinary_answers(self):
         rescues = {"LOOP": 0}
 
         def cap_rescues(_base, stage):
@@ -1694,10 +1694,10 @@ class DiagnosisRepairTests(unittest.TestCase):
                 [], "", attempts_so_far=9)
 
         self.assertFalse(first)
-        self.assertFalse(second)
-        self.assertEqual(rescues["LOOP"], 2)
-        pause.assert_not_called()
-        set_baseline.assert_not_called()
+        self.assertTrue(second)
+        self.assertEqual(rescues["LOOP"], 1)
+        pause.assert_called_once_with(conf, "Починить отчёт")
+        set_baseline.assert_called_once_with("Починить отчёт", 9)
 
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
@@ -4735,6 +4735,21 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(verdict["decision"], "wait")
         self.assertEqual(verdict["reason"], "Условие продолжения ещё не выполнено")
 
+    def test_orchestrator_contract_rejects_admin_action_after_fx_error(self):
+        reply = json.dumps({
+            "decision": "admin_action",
+            "action": {"scope": "staging", "verb": "health", "args": []},
+        })
+        with mock.patch.object(pilot, "brain", return_value=(reply, "test")) as brain:
+            verdict = pilot.orchestrator_answer(
+                {"auto_answer": True}, "Triage", "Работа", "Сбой fx",
+                "Проверить стенд", "", action_result="fx завершился с ошибкой: denied")
+
+        self.assertEqual(verdict["decision"], "escalate")
+        prompt = brain.call_args.args[1]
+        self.assertIn("fx завершился с ошибкой: denied", prompt)
+        self.assertIn("новую admin_action выбирать нельзя", prompt)
+
 
     def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
         self.conf["stages"] = [
@@ -4877,6 +4892,39 @@ class AdminQuestionRoutingTests(unittest.TestCase):
         self.assertFalse(record.get("owner_only", False))
         self.assertFalse(any(
             "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
+
+    def test_failed_admin_action_is_forwarded_without_a_second_admin_action(self):
+        failure = "permission denied: staging access is disabled"
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(pilot, "QUESTION_DIR", temporary), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "_fixed_command", return_value=(False, failure)) as command, \
+                mock.patch.object(pilot, "orchestrator_answer", side_effect=[
+                    {"decision": "admin_action", "action": {
+                        "scope": "staging", "verb": "health", "args": []}},
+                    {"decision": "admin_action", "action": {
+                        "scope": "staging", "verb": "health", "args": []}},
+                ]) as orchestrator:
+            escalated = pilot.route_question(
+                {"max_stage_attempts": 3, "max_work_rounds": 8},
+                "admin-failed", "Implement + Test", "Implement + Test",
+                "Проверить стенд", "repo-id", "Нужна проверка health",
+                "Стенд жив?", [], "")
+            record = pilot.load(os.path.join(temporary, "admin-failed.json"), {})
+
+        self.assertTrue(escalated)
+        command.assert_called_once_with(
+            ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
+        self.assertEqual(orchestrator.call_count, 2)
+        self.assertIn(
+            "fx завершился с ошибкой:\n" + failure,
+            orchestrator.call_args_list[1].kwargs["action_result"])
+        self.assertTrue(record["owner_only"])
+        self.assertEqual(record["admin_result"], "failed")
+        self.assertEqual(record["admin_output"], failure)
+        self.assertEqual(record["escalation_reason"],
+                         "fx отказал или завершился с ошибкой")
 
     def test_exhausted_loop_rescues_still_resolve_admin_action_before_owner(self):
         answers = [
