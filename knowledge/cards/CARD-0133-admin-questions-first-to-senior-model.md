@@ -4,12 +4,12 @@ Implementation commit: b7ac7e202a7427ea82a6fe16404650faffc75a3d — обычны
 
 ## HEAD
 
-- Статус: Implemented; целевые проверки PASS, ожидает Review/Verify.
+- Статус: Implemented; целевые проверки PASS, полный Verify имеет внешние блокеры.
 - Ветка: `factory/f8a9cba3-553-0d3e07d9-468`.
 - Implementation commit: `b7ac7e202a7427ea82a6fe16404650faffc75a3d` — ограничены обычные loop-rescue и обработан ошибочный результат `fx` без повторного admin_action.
 - Что изменено: после исчерпания `max_loop_rescues` обычный ответ не продлевает цикл, но разрешённое admin-действие сохраняет отдельный путь; ошибка `fx` передаётся старшей модели и остаётся эскалацией владельцу.
-- Evidence: `python3 -m unittest pilot.test_pilot.OrchestratorWaitActionTests pilot.test_pilot.AdminQuestionRoutingTests pilot.test_pilot.DiagnosisRepairTests` → PASS: 32/32; `go test ./internal/controlplane` → PASS.
-- Следующее действие: повторно провести Review/Verify и проверить push этой ветки.
+- Evidence: целевые Python → PASS: 32/32; `go test ./internal/controlplane` → PASS; полный `go test ./...` и `go build ./...` → PASS; полный Pilot → 267 тестов, 2 исходных restart/provenance-сбоя; web-проверки → BLOCKED: отсутствуют `vitest`, `tsc`, `eslint`.
+- Следующее действие: после устранения внешних блокеров повторить Verify и проверить push этой ветки.
 
 ## LOG
 
@@ -29,3 +29,13 @@ Go- и Python-тесты прошли, проверка пробелов diff т
 и эскалируется владельцу. Проверено 32 целевыми Python-тестами и
 `go test ./internal/controlplane`; код-коммит — `b7ac7e202a7427ea82a6fe16404650faffc75a3d`.
 Дубликат CARD-0116 удалён, а спецификация теперь ссылается на эту карточку.
+
+### 2026-08-13 — Verify
+
+Pinned сравнение от удалённой базы `ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5`
+до кандидата `c9696b67708057fcd5074333e41d79bbbed61a6d` содержит только шесть
+ожидаемых файлов и проходит `git diff --check`. `go test ./...` и `go build ./...`
+зелёные; полный Pilot завершился 267 тестами с двумя прежними
+restart/provenance-сбоями вне admin-маршрута; web test/typecheck/lint/build
+заблокированы отсутствующими инструментами. Целевые 32 Python-теста и HTTP
+проверка проходят.
