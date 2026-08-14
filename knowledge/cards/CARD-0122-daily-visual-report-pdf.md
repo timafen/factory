@@ -1,17 +1,25 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт готовности обязательных снимков и автоматически собирается после рестарта
+Implementation commit: cda1adf1271d053650279e2f69b179333a01bf93 — browser runtime поставляется штатным релизом вместе с ежедневным PDF
 
 ## HEAD
 
-- Status: SPECIFIED — ожидает реализацию поставки browser runtime штатным релизом.
-- Branch: `factory/e8d83036-21a-49f5b4f9-956`
-- Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
-- What changed: зафиксирован следующий дефект поставки: после чистого `fx factory release` PDF renderer не должен зависеть от вручную подготовленных `/opt/factory`, `node_modules`, Chromium или launcher.
-- Evidence: текущий renderer требует абсолютный `FACTORY_BROWSER_LAUNCHER` и `playwright`, а `ops/fx-factory-release` публикует Go/control-plane artifacts без browser payload; критерии и целевой fixture-тест записаны в `knowledge/specs/daily-pdf-clean-standard-release.md`.
-- One next action: реализовать атомарную поставку и rollback pinned browser runtime через штатный release.
+- Status: IMPLEMENTED — browser runtime поставляется штатным релизом до остановки служб.
+- Branch: `factory/f054ab9c-bf6-c968f71c-945`
+- Implementation commit: `cda1adf1271d053650279e2f69b179333a01bf93` — browser payload и renderer после удаления checkout
+- What changed: release создаёт постоянное поколение payload, запускает pinned installer и публикует `current`; renderer ищет playwright в стабильном runtime root.
+- Evidence: `node --test web/report/report.test.mjs` PASS (4/4); `go test ./internal/controlplane -run 'DailyReport|VisualReport'` PASS; installer fixture PASS до повторного зависания окружения.
+- One next action: завершить полный release fixture на чистом хосте и подтвердить живой PDF smoke.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Релиз теперь копирует browser payload в постоянное поколение, вызывает installer до
+остановки Factory-служб и выбирает его `current`; при позднем rollback возвращается
+прежний browser runtime. Embedded scripts используют стабильный payload root и больше
+не требуют удаляемый checkout. Целевые Node/Go и installer проверки прошли; полный
+Go и release fixture не завершились из-за зависших параллельных процессов окружения.
 
 ### 2026-08-14 — Specification
 
