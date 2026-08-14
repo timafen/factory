@@ -189,6 +189,63 @@ func TestBrokerRestartsUpdatedExecutableAfterDurableCommit(t *testing.T) {
 	}
 }
 
+func TestBrokerRejectsNewOperationWhileRestartingUpdatedExecutable(t *testing.T) {
+	broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+	broker.brokerReplaced = func() (bool, error) { return true, nil }
+	restartStarted := make(chan struct{})
+	allowRestart := make(chan struct{})
+	restarted := make(chan struct{})
+	broker.restartBroker = func() error {
+		close(restartStarted)
+		<-allowRestart
+		close(restarted)
+		return nil
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+
+	if got := postStatus(t, server, `{"operation_id":"restart-release","adapter":"fx-factory-release","commit_sha":"`+testSHA+`"}`); got != http.StatusAccepted {
+		t.Fatalf("release POST status=%d", got)
+	}
+	select {
+	case <-restartStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not begin")
+	}
+
+	type postResult struct {
+		status int
+		err    error
+	}
+	status := make(chan postResult, 1)
+	go func() {
+		response, err := server.Client().Post(server.URL+"/v1/operations", "application/json", strings.NewReader(`{"operation_id":"must-not-start","adapter":"fx-factory-release","commit_sha":"`+testSHA+`"}`))
+		if err != nil {
+			status <- postResult{err: err}
+			return
+		}
+		defer response.Body.Close()
+		status <- postResult{status: response.StatusCode}
+	}()
+	select {
+	case got := <-status:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.status != http.StatusServiceUnavailable {
+			t.Errorf("new operation POST status=%d, want %d", got.status, http.StatusServiceUnavailable)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new operation was not rejected while restart was pending")
+	}
+	close(allowRestart)
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not finish")
+	}
+}
+
 func TestBrokerDoesNotRestartUnchangedOrUncertainExecutable(t *testing.T) {
 	for name, replaced := range map[string]func() (bool, error){
 		"unchanged": func() (bool, error) { return false, nil },

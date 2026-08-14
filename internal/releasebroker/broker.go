@@ -168,6 +168,7 @@ type Broker struct {
 	syncDir         func(string) error
 	mu              sync.Mutex
 	active          string
+	draining        bool
 	items           map[string]*operation
 	brokerReplaced  func() (bool, error)
 	restartBroker   func() error
@@ -480,6 +481,11 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, Response{Status: status})
 		return
 	}
+	if b.draining {
+		b.mu.Unlock()
+		http.Error(w, "broker is restarting", http.StatusServiceUnavailable)
+		return
+	}
 	if b.active != "" {
 		b.mu.Unlock()
 		http.Error(w, "another privileged operation is running", http.StatusConflict)
@@ -535,18 +541,26 @@ func (b *Broker) execute(item *operation) {
 	if b.active == item.Request.OperationID {
 		b.active = ""
 	}
-	b.mu.Unlock()
-	// Restarting earlier would kill the release driver in this broker's cgroup.
-	// Detection and restart therefore happen only after durable publication and
-	// after the active operation has been released.
+	// Once a committed Factory release has replaced this executable, reject
+	// every new operation before releasing the mutex.  systemd will replace this
+	// process next; accepting a driver in between would let that restart kill it.
+	restart := false
 	if committed && request.Adapter == "fx-factory-release" && b.brokerReplaced != nil && b.restartBroker != nil {
 		replaced, err := b.brokerReplaced()
 		if err != nil {
 			log.Printf("release broker: cannot determine whether broker changed: %v", err)
 		} else if replaced {
-			if err := b.restartBroker(); err != nil {
-				log.Printf("release broker: cannot restart updated broker: %v", err)
-			}
+			b.draining = true
+			restart = true
+		}
+	}
+	b.mu.Unlock()
+	// Restarting earlier would kill the release driver in this broker's cgroup.
+	// A draining broker remains closed until systemd takes over, even if restart
+	// itself reports an error.
+	if restart {
+		if err := b.restartBroker(); err != nil {
+			log.Printf("release broker: cannot restart updated broker: %v", err)
 		}
 	}
 }
