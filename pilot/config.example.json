@@ -40,6 +40,8 @@
   "fd08e9ef-0b65-40d4-95a9-c4e50c9ba061"
  ],
  "auto_answer": true,
+ "admin_question_enabled": true,
+ "admin_question_model": "claude-sonnet-think",
  "auto_merge": true,
  "project_providers": [
   {

@@ -96,6 +96,8 @@ fx — разрешённые операции:
   fx whoami                       какие доступы открыты сейчас
   fx staging status               состояние сервисов staging
   fx staging health               проверка, отвечает ли приложение
+  fx staging brain admin-question --model=<model>
+                                  один административный разбор через stdin
   fx staging logs [строк]         последние логи staging (по умолчанию 80)
   fx staging restart [что]        gunicorn | worker | notifications | order-reconcile | all
   fx staging manage <команда>     check | migrate | showmigrations | collectstatic
@@ -160,6 +162,19 @@ case "$scope" in
   staging)
     require staging "$verb"
     case "$verb" in
+      brain)
+        [ "$arg" = admin-question ] && [ "$#" -eq 4 ] || die "staging brain: разрешён только admin-question --model=<model>"
+        model="$4"
+        case "$model" in
+          --model=) die "staging brain: нужна senior-модель" ;;
+          --model=*[!A-Za-z0-9_.:-]*) die "staging brain: недопустимое имя модели" ;;
+          --model=*) ;;
+          *) die "staging brain: нужен флаг --model=<model>" ;;
+        esac
+        model="${model#--model=}"
+        say staging brain "admin-question model=$model"
+        runuser -u "$STAGING_USER" -- claude -p --model "$model" --output-format text
+        ;;
       status)
         say staging status OK
         systemctl --no-pager --plain status "${staging_units[@]}" 2>&1 | grep -E 'Loaded:|Active:|●|^automation' | head -40
