@@ -4,13 +4,11 @@ Implementation commit: 9f6631a8b48b39669f18040d0186d5540b0011b5 — админи
 
 ## HEAD
 
-- Статус: Implemented — delivery pending.
+- Статус: Verified PASS — awaiting human merge.
 - Ветка: `factory/98258fc1-adf-660fea77-4d0`.
 - Implementation commit: `9f6631a8b48b39669f18040d0186d5540b0011b5` — admin-вопросы направляются старшей модели до владельца.
-- Что изменено: безопасные staging-действия выполняются только фиксированным `fx` argv; опасные, неизвестные и неуспешные действия эскалируются владельцу.
-- Что изменено: служебный admin-аудит скрыт из owner API, а тесты сохраняют ответ владельца при гонке.
-- Evidence: `python3 -m unittest -v pilot.test_pilot.AdminQuestionRoutingTests` → 10/10 PASS; `go test ./internal/controlplane -run '^TestListQuestionsHidesPythonMockRepresentations$' -count=1` → PASS.
-- Следующее действие: отправить ветку и передать на Review.
+- Evidence: pinned diff от `151429d93310549a1bb04182ab688cc828041ed8` до `4c50aa91305641d2c1d97e6a0de625967b4e01b2` содержит шесть файлов и проходит `git diff --check`; 10/10 admin-маршрутов и HTTP-регрессия PASS.
+- Следующее действие: человек проверяет и вливает поставку.
 
 ## LOG
 
@@ -114,3 +112,18 @@ Pinned remote-проверка: `refs/heads/main` — SHA
 Разрешённые staging-вопросы сначала обрабатывает старшая модель через
 фиксированный `fx` argv; опасные варианты до исполнения эскалируются владельцу.
 Целевые `AdminQuestionRoutingTests` (10/10) и HTTP-регрессия прошли.
+
+### 2026-08-13 — Verify
+
+| Критерий | Команда / проверка | Наблюдение |
+| --- | --- | --- |
+| Разрешённый staging-вопрос первым получает старшая модель с фиксированным argv | `python3 -m unittest -v pilot.test_pilot.AdminQuestionRoutingTests` | 10/10 PASS; разрешённые сценарии вызывают только `sudo -n /usr/local/bin/fx staging ...`. |
+| Успех закрывает вопрос без владельца; ошибки и запрещённые действия эскалируются | Тот же тестовый класс | PASS: owner-уведомление отсутствует после успеха, а fx-отказ, неизвестный verb, prod, секреты и необратимые действия не исполняются. |
+| Старые owner-вопросы сохранены, служебный аудит скрыт | `go test ./internal/controlplane -run '^TestListQuestionsHidesPythonMockRepresentations$' -count=1` | PASS. |
+| Полный штатный набор | `just ui-install && just check` | Go-тесты, vet, vuln, staticcheck, lint, typecheck и 180 UI-тестов PASS; `test-tooling` падает на старом ожидании `NoNewPrivileges=true` для release-broker, хотя закреплённая база уже содержит `false` и `ops/` не входит в diff. |
+
+Pinned diff от удалённой базы `151429d93310549a1bb04182ab688cc828041ed8`
+до проверенного кандидата `4c50aa91305641d2c1d97e6a0de625967b4e01b2` содержит шесть
+ожидаемых файлов; `git diff --check` проходит. Реализация остаётся в коммите
+`9f6631a8b48b39669f18040d0186d5540b0011b5`, который предшествует коммиту карточки
+и меняет код вне `knowledge/cards/`.
