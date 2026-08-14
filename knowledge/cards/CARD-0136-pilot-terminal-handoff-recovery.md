@@ -1,23 +1,30 @@
 # CARD-0136 — Доиграть передачу этапа после рестарта Pilot
 
-Implementation commit: 147bb0e31a4243c15be38e19b926a61c505118c2 — recovery читает реальные временные поля detail, а watermark удерживается до успешной или отложенной обработки.
+Implementation commit: ca6c904c43e128f402cef8a9c50cc2f2e449383a — все временные retry-пути удерживают recovery watermark, включая блокировку области и отсутствие workflow/worker.
 
 ## HEAD
 
-- Status: Implemented + tested — ожидает Review.
-- Branch: `factory/eb975ba5-c9a-f4ba8c5b-e65`.
-- What changed: startup recovery получает timestamp из detail (`execution.updated_at`
-  или `attempts[].completed_at`), а временный сбой, лимит или backlog удерживают
-  watermark для следующей попытки.
+- Status: Implemented + tested — повторно ожидает Review.
+- Branch: `factory/505ed710-017-e98b74ed-710`.
+- What changed: единый retry-helper удаляет terminal ID из `processed` и удерживает
+  startup watermark во всех временных ветках, включая `area_busy` и отсутствие
+  workflow/worker; handoff переживает сохранение state и второй рестарт.
 - Safety: lifecycle/stop, известный нефинальный workflow и `live_or_done_at()`
   закрывают старые работы и дубли; fixture больше не подмешивает поля списка задач.
-- Evidence: `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` — 18 OK;
-  `git diff --check` — OK.
+- Evidence: `python3 -m unittest pilot.test_pilot.AdaptivePollingTests` — 19 OK;
+  `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и `git diff --check` — OK.
 - Source contract: CARD-0155 и specification head
   `7e8eb284d89160704292add3b7609cae272b1c8c`.
-- Next action: Review проверяет границы startup-recovery и финальный duplicate guard.
+- Next action: повторный Review проверяет централизованный retry-инвариант.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+После замечания Review все ветки, повторно ставящие terminal-задачу через удаление
+из `processed`, переведены на единый helper, который удерживает startup watermark.
+Регрессия воспроизводит `area_busy`, сохраняет и загружает state как новый процесс,
+после чего подтверждает создание handoff; целевой класс: 19 тестов OK.
 
 ### 2026-08-14 — Implement
 
