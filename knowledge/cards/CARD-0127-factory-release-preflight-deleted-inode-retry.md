@@ -1,16 +1,16 @@
-Implementation commit: 250281be25d38f8552c619f93b6d58d595a04f92 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+Implementation commit: dab1bbbb27d2b82aa65d6a6c66e7e54fc138d25f — fixture доказывает fail-closed отказ при deleted inode без изменения артефактов или публикации версии.
 
 # CARD-0127: Повтор предполётной проверки deleted-inode
 
 ## HEAD
 
-Status: Implemented.
-Branch: factory/af918838-ce0-d6326a25-705.
-Implementation commit: 250281be25d38f8552c619f93b6d58d595a04f92 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+Status: Implemented; ready for Review.
+Branch: factory/037d4c9e-150-ad22f7ab-024.
+Implementation commit: dab1bbbb27d2b82aa65d6a6c66e7e54fc138d25f — fixture доказывает fail-closed отказ при deleted inode без изменения артефактов или публикации версии.
 What changed: `ops/test-fx-factory-release.sh` эмулирует активный `factory-server.service` с `MainPID` и `/proc/<pid>/exe` с суффиксом ` (deleted)`.
-The fixture требует code 4, понятную строку с unit и отсутствие service mutations.
+The fixture требует code 4, понятную строку с unit, неизменность install/live/database/release-info и отсутствие нового generation и service mutations.
 Evidence: `bash -n ops/test-fx-factory-release.sh ops/fx-factory-release` → PASS; `bash ops/test-fx-factory-release.sh` → PASS.
-One next action: выполнить `ops/test-factory-release-systemd.sh` в root/systemd CI fixture для проверки предпосылки на реальном MainPID.
+One next action: Review проверить сценарий и передать его на системную root/systemd fixture.
 
 ## LOG
 
@@ -23,3 +23,7 @@ Scope: `knowledge/specs/factory-release-preflight-deleted-inode-retry.md`, оп�
 ### 2026-08-14 — Implement
 
 Добавлен изолированный сценарий release fixture: активный `factory-server.service` возвращает MainPID, а его `/proc/<pid>/exe` помечен ` (deleted)`. Проверка подтверждает code 4, русскую диагностическую строку и отсутствие мутаций служб. `bash ops/test-fx-factory-release.sh` завершился успешно; systemd-проверка в текущем окружении явно SKIP, поскольку нет root/systemd fixture.
+
+### 2026-08-14 — Implement
+
+После замечания Review сценарий теперь снимает контрольный снимок install/live/database/release-info и каталога generations до запуска. После отказа он подтверждает полную неизменность снимка, отсутствие новой опубликованной версии и отсутствие service mutations. `bash -n ops/test-fx-factory-release.sh ops/fx-factory-release` и `bash ops/test-fx-factory-release.sh` завершились успешно.
