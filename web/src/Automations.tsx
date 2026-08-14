@@ -19,6 +19,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "./api";
+import { occurrenceFinding, occurrenceOutcome } from "./automationOccurrence";
 import { invalidateControlPlane } from "./controlPlaneQueries";
 import { useVisibleInterval } from "./polling";
 import type {
@@ -496,6 +497,10 @@ export function AutomationDetail({
                   <span className="occurrence-identity">
                     <strong>{occurrenceIdentity(occurrence)}</strong>
                     <small>{formatTimestamp(occurrence.created_at)}{occurrence.task ? ` · ${occurrence.task.title}` : ""}{occurrence.diagnostic ? ` · ${occurrence.diagnostic}` : ""}</small>
+                    {occurrenceFinding(occurrence.result).map((finding) => (
+                      <small key={finding} aria-label="Находка"><strong>Находка:</strong> {finding}</small>
+                    ))}
+                    <small aria-label="Итог"><strong>Итог:</strong> {occurrenceOutcome(occurrence)}</small>
                   </span>
                   <span className="occurrence-actions">
                     {sourceURL && (
