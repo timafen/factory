@@ -9076,25 +9076,44 @@ class SeniorAdminQuestionTests(unittest.TestCase):
                     {"admin_question_enabled": True, "admin_question_model": "senior"},
                     "Review", "Работа", "ситуация", "вопрос", "результат"))
 
-    def test_escalation_calls_senior_route_before_owner_question(self):
+    def test_admin_question_calls_fixed_senior_route_before_orchestrator(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         conf = {"admin_question_enabled": True, "admin_question_model": "senior",
                 "deep_diag_rounds": 99, "max_stage_attempts": 3,
                 "max_work_rounds": 8, "stopped_pipelines": []}
+        calls = []
+
+        def senior_run(argv, **kwargs):
+            calls.append(("senior", argv, kwargs["input"]))
+            return mock.Mock(returncode=0, stdout=(
+                '{"decision":"escalate","reason":"нужен обычный разбор"}'))
+
+        def ordinary_answer(*_args, **_kwargs):
+            calls.append(("ordinary", None, None))
+            return {"decision": "escalate", "reason": "нужен владелец"}
+
         with mock.patch.object(pilot, "QUESTION_DIR", temporary.name), \
-                mock.patch.object(pilot, "orchestrator_answer", return_value={
-                    "decision": "escalate", "reason": "нужен владелец"}), \
-                mock.patch.object(pilot, "senior_admin_answer", return_value={
-                    "decision": "answer", "answer": "Исправь конфигурацию",
-                    "answered_by": "senior-admin", "model_route": "fx staging brain admin-question"}), \
+                mock.patch.object(pilot.subprocess, "run", side_effect=senior_run), \
+                mock.patch.object(pilot, "orchestrator_answer",
+                                  side_effect=ordinary_answer), \
                 mock.patch.object(pilot, "notify"):
-            self.assertFalse(pilot.route_question(
+            self.assertTrue(pilot.route_question(
                 conf, "admin-question", "Review", "Implement + Test", "Работа",
                 "repo", "сбой", "Что делать?", [], "результат"))
-        saved = pilot.load(os.path.join(temporary.name, "admin-question.json"), {})
-        self.assertEqual(saved["answered_by"], "senior-admin")
-        self.assertEqual(saved["answer"], "Исправь конфигурацию")
+        self.assertEqual([call[0] for call in calls], ["senior", "ordinary"])
+        self.assertEqual(calls[0][1], [
+            "sudo", "-n", "/usr/local/bin/fx", "staging", "brain",
+            "admin-question", "--model=senior",
+        ])
+        self.assertEqual(json.loads(calls[0][2]), {
+            "instruction": (
+                "Реши административный вопрос конвейера. Ответь только JSON: "
+                '{"decision":"answer|wait|escalate","answer":"...",'
+                '"reason":"..."}. Не запускай команды и не запрашивай секреты.'),
+            "stage": "Review", "base": "Работа", "situation": "сбой",
+            "question": "Что делать?", "prior_result": "результат",
+        })
 
 
 if __name__ == "__main__":

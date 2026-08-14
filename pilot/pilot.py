@@ -4470,6 +4470,29 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    repair_task=None):
     """Try to resolve the question with the orchestrator; escalate if it's the
     owner's call OR if this stage has already been retried too many times."""
+    senior = senior_admin_answer(
+        conf, stage, base, situation, question, prior_result)
+    if senior is not None:
+        if resolve_orchestrator_wait(
+                conf, senior, task_id, stage, resume_stage, base, repo_id,
+                situation, question, options, prior_result, branch):
+            return False
+        if senior.get("decision") == "answer":
+            rec = write_question(
+                task_id, stage,
+                accept_forward(stage, senior["answer"]) or resume_stage,
+                base, repo_id, situation, question, options, prior_result,
+                branch, status="answered")
+            rec["answer"] = senior["answer"]
+            rec["answered_by"] = senior["answered_by"]
+            rec["model_route"] = senior["model_route"]
+            save(f"{QUESTION_DIR}/{task_id}.json", rec)
+            log(f"AUTO-ANSWERED by senior admin route task={task_id}")
+            notify(conf, f"Решил старший разбор · {stage}",
+                   f"{base}\n\nОтвет: {cut(senior['answer'])}\n\n"
+                   "Работа продолжается.", priority="low", tags="robot",
+                   click=f"{UI_BASE}/answer")
+            return False
     cap = conf.get("max_stage_attempts", 3)
     # Порог разбора: столько кругов подряд — и зовём сильную модель разобраться,
     # а владельцу уходит одно человеческое сообщение вместо десяти пушей.
@@ -4641,31 +4664,6 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
             situation, question, options, prior_result, branch):
         return False
-    if verdict.get("decision") == "escalate":
-        senior = senior_admin_answer(
-            conf, stage, base, situation, question, prior_result)
-        if senior is not None:
-            if resolve_orchestrator_wait(
-                    conf, senior, task_id, stage, resume_stage, base, repo_id,
-                    situation, question, options, prior_result, branch):
-                return False
-            if senior.get("decision") == "answer":
-                rec = write_question(
-                    task_id, stage,
-                    accept_forward(stage, senior["answer"]) or resume_stage,
-                    base, repo_id, situation, question, options, prior_result,
-                    branch, status="answered")
-                rec["answer"] = senior["answer"]
-                rec["answered_by"] = senior["answered_by"]
-                rec["model_route"] = senior["model_route"]
-                save(f"{QUESTION_DIR}/{task_id}.json", rec)
-                log(f"AUTO-ANSWERED by senior admin route task={task_id}")
-                notify(conf, f"Решил старший разбор · {stage}",
-                       f"{base}\n\nОтвет: {cut(senior['answer'])}\n\n"
-                       "Работа продолжается.", priority="low", tags="robot",
-                       click=f"{UI_BASE}/answer")
-                return False
-            verdict = senior
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch)
     if verdict["decision"] == "answer":
