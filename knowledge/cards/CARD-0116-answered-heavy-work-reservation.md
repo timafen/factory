@@ -1,4 +1,4 @@
-Implementation commit: 16eab48e1fe2a20ff2ae01bdff23f070fb51c251 — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
+Implementation commit: fcf119a395a9af99ce58f6502d4b239ae2295a8f — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
 
 # CARD-0116 — Резервирование отвеченной тяжёлой работы
 
@@ -6,7 +6,7 @@ Implementation commit: 16eab48e1fe2a20ff2ae01bdff23f070fb51c251 — durable rese
 
 Status: IMPLEMENTED — готово к повторной проверке выпуска.
 Branch: `factory/e8691177-e88-17abb425-6e4`.
-Implementation commit: 16eab48e1fe2a20ff2ae01bdff23f070fb51c251 — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
+Implementation commit: fcf119a395a9af99ce58f6502d4b239ae2295a8f — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
 What changed: ответ на тяжёлый этап сохраняет резерв в вопросе, переживает
 рестарт и получает первый безопасный слот; новые тяжёлые старты ждут.
 What changed: backend-проверки подтверждают восстановление из файлов, FIFO
