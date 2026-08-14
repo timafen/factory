@@ -435,8 +435,6 @@ class DeliveryAreaTests(unittest.TestCase):
         with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={"state": "ok", "files": ["web/src/Browser.tsx"], "base_sha": "a" * 40, "candidate_sha": "b" * 40, "default_branch": "main"}), \
                 mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
                 mock.patch.object(pilot, "load", side_effect=loader), \
-                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
-                mock.patch.object(pilot, "other_areas", return_value=[]), \
                 mock.patch.object(pilot, "rebuild_clean_branch") as rebuild:
             result = pilot.review_gate({}, "Браузер после ожидания", "browser", "file:///tmp/repo",
                                        active_tasks=live)
@@ -7062,6 +7060,25 @@ pilot.save(pilot.STATE_PATH, state)
             time.sleep(.02)
         else:
             self.fail("physical FX did not start")
+
+        # Hold the physical command at its gate until the broker has durably
+        # recorded the running state.  Corrupting the state directory before
+        # this point tests a startup-write failure instead and legitimately
+        # lets the broker terminate the child, which made this terminal-write
+        # scenario depend on process scheduling.
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        operation_id = target["current_generation"]
+        broker_path = os.path.join(paths["broker_state"], operation_id + ".json")
+        for _ in range(750):
+            try:
+                if self._read_json(broker_path).get("status") == "running":
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(.02)
+        else:
+            self.fail("broker did not durably record the running delivery")
 
         saved_state = paths["broker_state"] + ".saved"
         os.rename(paths["broker_state"], saved_state)

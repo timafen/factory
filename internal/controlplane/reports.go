@@ -128,15 +128,19 @@ func (service *DailyReportService) createPreviousDay(ctx context.Context) error 
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
 	result, err := service.store.db.ExecContext(ctx, `UPDATE daily_reports SET status='ready',metrics_json=?,pdf_path=?,pdf_sha256=?,pdf_size=?,error='',updated_at=? WHERE report_date=? AND timezone=? AND status='running' AND claim_token=?`, string(metricsJSON), filename, hash, len(content), service.store.now().UTC().Format(time.RFC3339Nano), date, service.location.String(), token)
 	if err != nil {
-		_ = os.Remove(final)
+		// ExecContext can return a cancellation error after SQLite has already
+		// committed the row.  Keep the atomically published file on an
+		// ambiguous outcome so a durable ready row can never point at a file we
+		// removed during shutdown.  An unreferenced file is safe and can be
+		// cleaned later; a referenced missing report is not.
 		return err
 	}
 	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
 		_ = os.Remove(final)
-		if err != nil {
-			return err
-		}
 		return fmt.Errorf("daily report claim expired")
 	}
 	return nil
