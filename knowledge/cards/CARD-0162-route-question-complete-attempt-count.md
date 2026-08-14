@@ -1,25 +1,25 @@
-Implementation commit: a6c0a2557e8d74c74497b3edb6228e393f39f015 — в текущем продукте реализован исследуемый стоп-кран `route_question()`, сравнивающий переданное число попыток с лимитом кругов
+Implementation commit: 99113ff04c63e34431e29edc0f5828cc8c8fc23c — `route_question()` считает попытки по полной строгой истории задач
 
 # CARD-0162 — Стоп-кран считает всю историю попыток
 
 ## HEAD
 
-Status: Specification — готово к Implement + Test.
+Status: Implement + Test — готово к Review.
 
-Branch: `factory/fdc0028c-a78-b6d3fdd3-e2d`.
+Branch: `factory/ac0278a6-7a9-cc42c4bf-582`.
 
-Specification: `knowledge/specs/route-question-complete-attempt-count.md`.
+Implementation commit: `99113ff04c63e34431e29edc0f5828cc8c8fc23c`.
 
-What changes: `route_question()` перестаёт доверять числу из первых 100 задач;
-перед пороговым решением Пилот дочитывает все страницы истории конкретной работы,
-а неполную историю оставляет на безопасный повтор без вопроса владельцу.
+What changed: перед всеми нетехническими порогами `route_question()` получает
+полную постраничную историю, дедуплицирует `task.id` и считает попытки той же
+работы по `work_id` (с прежним legacy fallback). Неполная история снимает
+терминальную задачу с `processed` без автоответа, паузы, вопроса или уведомления.
 
-Evidence: фактический путь прослежен от `/tasks?limit=100` через
-`stage_attempts()` до `attempts_so_far` в `route_question()`; спецификация
-фиксирует постраничный регрессионный тест и fail-closed поведение.
+Evidence: `python3 -m unittest -v pilot.test_pilot` — 296 passed, 13 skipped;
+целевые `RouteQuestionCompleteAttemptCountTests` покрывают вторую страницу,
+разные `work_id`, дубль, повтор cursor, ошибку API и нулевой режим ворот.
 
-One next action: реализовать строгий полный подсчёт и целевые регрессии в
-`pilot/pilot.py` и `pilot/test_pilot.py`.
+One next action: проверить изменения в Review на свежем `main`.
 
 ## LOG
 
@@ -30,3 +30,10 @@ One next action: реализовать строгий полный подсчё
 остановку всей работы. Определён единый контракт: строгая пагинация с
 дедупликацией, принадлежность по `work_id` и безопасный повтор без внешних
 действий, если полную историю получить нельзя.
+
+### 2026-08-14 — Implement
+
+`route_question()` теперь получает авторитетный счётчик только из строгого
+постраничного обхода задач; повтор cursor, предел страниц и ошибка API не
+порождают внешних действий и возвращают терминальную задачу на следующий цикл.
+Проверено: `python3 -m unittest -v pilot.test_pilot` — 296 passed, 13 skipped.
