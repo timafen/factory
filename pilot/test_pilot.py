@@ -4627,6 +4627,41 @@ class StageWorkerCapacityTests(unittest.TestCase):
                         pilot.worker_capability_rank("codex-sol-high"))
 
 
+class TriageCloseTests(unittest.TestCase):
+    def test_close_or_duplicate_finishes_linked_plan_card(self):
+        task = {"id": "triage-task", "title": "[auto] [1/5 Triage] Old work"}
+        cards = [
+            {"id": "linked", "task_id": "triage-task", "state": "in_work"},
+            {"id": "other", "task_id": "other-task", "state": "in_work"},
+        ]
+
+        with mock.patch.object(pilot, "ideas_all", return_value=cards), \
+                mock.patch.object(pilot, "close_work") as close, \
+                mock.patch.object(pilot, "set_idea") as set_idea:
+            closed = pilot.close_triage_without_work(
+                task, "CLOSE / DUPLICATE — already shipped in CARD-0030")
+
+        self.assertTrue(closed)
+        close.assert_called_once_with(
+            "Old work",
+            "Разбор закрыл работу: она уже выполнена или дублирует существующую.",
+        )
+        set_idea.assert_called_once_with(
+            "linked", state="done",
+            reason="Разбор закрыл работу: она уже выполнена или дублирует существующую.",
+        )
+
+    def test_ready_report_is_not_closed(self):
+        with mock.patch.object(pilot, "close_work") as close:
+            closed = pilot.close_triage_without_work(
+                {"id": "triage-task", "title": "[auto] [1/5 Triage] New work"},
+                "READY TO SPECIFY\nProblem: still reproducible",
+            )
+
+        self.assertFalse(closed)
+        close.assert_not_called()
+
+
 class AnswerEscalationTests(unittest.TestCase):
     @mock.patch.object(pilot, "load_limits", return_value={})
     def test_repeated_stage_really_uses_stronger_worker(self, _limits):

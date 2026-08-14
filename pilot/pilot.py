@@ -844,6 +844,33 @@ def close_work(base, reason):
     save(f"{HOME}/pilot/work_status.json", statuses)
 
 
+TRIAGE_CLOSE_RE = re.compile(
+    r"^\s*(?:\*\*)?(?:VERDICT\s*:\s*)?"
+    r"(?:CLOSE\s*/\s*DUPLICATE|CLOSE|DUPLICATE)\b",
+    re.I,
+)
+
+
+def close_triage_without_work(task, result):
+    """Finish an honest Triage close instead of inventing a next stage."""
+    first_line = next(
+        (line.strip() for line in str(result or "").splitlines() if line.strip()),
+        "",
+    )
+    if not TRIAGE_CLOSE_RE.match(first_line):
+        return False
+    base = base_title((task or {}).get("title", ""))
+    reason = "Разбор закрыл работу: она уже выполнена или дублирует существующую."
+    close_work(base, reason)
+    task_id = (task or {}).get("id") or ""
+    for idea in ideas_all():
+        if (idea.get("state") in ("planned", "in_work")
+                and idea.get("task_id") == task_id):
+            set_idea(idea["id"], state="done", reason=reason)
+    log(f"TRIAGE CLOSED base={base!r} task={task_id}: {first_line[:120]}")
+    return True
+
+
 def reopen_work(base, generation, reason="Владелец явно запустил новое поколение работы."):
     """Open a new generation while retaining the previous close receipt."""
     works = load(WORKS_PATH, {}) or {}
@@ -7818,6 +7845,8 @@ def cycle(conf, state):
                            priority="high", tags="warning", click=f"{UI_BASE}/tasks/{tid}")
             continue
         if verdict["action"] != "advance":
+            if wf == "Triage" and close_triage_without_work(t, result):
+                continue
             base = base_title(title)
             rid = detail["task"].get("repository_id") or ""
             situation = verdict.get("situation_ru") or ""
