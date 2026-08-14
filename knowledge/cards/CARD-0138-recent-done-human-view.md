@@ -4,7 +4,7 @@
 
 - Status: Implemented.
 - Branch: `factory/b87cb406-e3f-1dcbf9d1-7be`.
-- Implementation commit: fdb1f127b9a2c05016d78d62e5c29081b192a823 — server-side work_class, раздельные группы влитых работ и провалов, человеческие даты и подписи Overview.
+- Implementation commit: fdb1f1269b94e9d53080e15bdab4d67af5dde642 — server-side work_class, раздельные группы влитых работ и провалов, человеческие даты и подписи Overview.
 - What changed: API Task вычисляет durable `work_class`; Pilot доверяет receipt и выдаёт независимые группы `merged`/`failed` с этапом и причиной. Overview отображает обе группы и безопасно форматирует даты.
 - Evidence: `go test ./internal/controlplane ./internal/protocol`; `python3 -m unittest -v pilot.test_pilot.RecentDoneTest`; `npm --prefix web test -- --run src/Overview.test.ts`; typecheck и lint — зелёные.
 - One next action: после публикации проверить экран `/` на стенде и убедиться, что следующий dashboard snapshot содержит обе группы.
