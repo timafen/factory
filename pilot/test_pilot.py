@@ -9040,5 +9040,62 @@ class MergedCommitShaTests(unittest.TestCase):
             self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "d" * 40)
 
 
+class SeniorAdminQuestionTests(unittest.TestCase):
+    def test_uses_only_fixed_fx_argv_and_stdin(self):
+        result = mock.Mock(returncode=0, stdout='{"decision":"answer","answer":"Продолжай"}')
+        with mock.patch.object(pilot.subprocess, "run", return_value=result) as run:
+            answer = pilot.senior_admin_answer(
+                {"admin_question_enabled": True, "admin_question_model": "claude-sonnet-think"},
+                "Review", "Работа", "Нужен доступ", "Что делать?", "ошибка")
+
+        self.assertEqual(answer["decision"], "answer")
+        self.assertEqual(run.call_args.args[0], [
+            "sudo", "-n", "/usr/local/bin/fx", "staging", "brain",
+            "admin-question", "--model=claude-sonnet-think",
+        ])
+        self.assertIn("Нужен доступ", run.call_args.kwargs["input"])
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_rejects_model_or_payload_injection_before_launch(self):
+        with mock.patch.object(pilot.subprocess, "run") as run:
+            self.assertIsNone(pilot.senior_admin_answer(
+                {"admin_question_enabled": True, "admin_question_model": "x; rm -rf /"},
+                "Review", "Работа", "", "", ""))
+            self.assertIsNone(pilot.senior_admin_answer(
+                {"admin_question_enabled": True, "admin_question_model": "senior"},
+                "Review", "Работа", "x" * 4001, "", ""))
+        run.assert_not_called()
+
+    def test_failed_or_invalid_bridge_response_is_safe_fallback(self):
+        for result in (
+                mock.Mock(returncode=7, stdout=""),
+                mock.Mock(returncode=0, stdout='{"decision":"run-shell"}')):
+            with self.subTest(result=result.returncode), \
+                    mock.patch.object(pilot.subprocess, "run", return_value=result):
+                self.assertIsNone(pilot.senior_admin_answer(
+                    {"admin_question_enabled": True, "admin_question_model": "senior"},
+                    "Review", "Работа", "ситуация", "вопрос", "результат"))
+
+    def test_escalation_calls_senior_route_before_owner_question(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        conf = {"admin_question_enabled": True, "admin_question_model": "senior",
+                "deep_diag_rounds": 99, "max_stage_attempts": 3,
+                "max_work_rounds": 8, "stopped_pipelines": []}
+        with mock.patch.object(pilot, "QUESTION_DIR", temporary.name), \
+                mock.patch.object(pilot, "orchestrator_answer", return_value={
+                    "decision": "escalate", "reason": "нужен владелец"}), \
+                mock.patch.object(pilot, "senior_admin_answer", return_value={
+                    "decision": "answer", "answer": "Исправь конфигурацию",
+                    "answered_by": "senior-admin", "model_route": "fx staging brain admin-question"}), \
+                mock.patch.object(pilot, "notify"):
+            self.assertFalse(pilot.route_question(
+                conf, "admin-question", "Review", "Implement + Test", "Работа",
+                "repo", "сбой", "Что делать?", [], "результат"))
+        saved = pilot.load(os.path.join(temporary.name, "admin-question.json"), {})
+        self.assertEqual(saved["answered_by"], "senior-admin")
+        self.assertEqual(saved["answer"], "Исправь конфигурацию")
+
+
 if __name__ == "__main__":
     unittest.main()
