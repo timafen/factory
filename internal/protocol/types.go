@@ -988,26 +988,28 @@ type APIError struct {
 
 // PilotSettings is the complete, user-editable pilot configuration.
 type PilotSettings struct {
-	Note                string       `json:"_note,omitempty"`
-	Enabled             bool         `json:"enabled"`
-	PollSeconds         float64      `json:"poll_seconds"`
-	TimeoutSeconds      float64      `json:"timeout_seconds"`
-	AutoMerge           bool         `json:"auto_merge"`
-	AutoAnswer          bool         `json:"auto_answer"`
-	MaxStageAttempts    int          `json:"max_stage_attempts"`
-	AllowAnyWorker      bool         `json:"allow_any_worker"`
-	RespectHostLoad     bool         `json:"respect_host_load"`
-	AllowedWorkers      []string     `json:"allowed_workers"`
-	MaxParallelSubtasks int          `json:"max_parallel_subtasks"`
-	MaxParallelWorks    int          `json:"max_parallel_works"`
-	DayCapUSD           float64      `json:"day_cap_usd"`
-	DeployStagingCmd    string       `json:"deploy_staging_cmd"`
-	DeployFactoryCmd    string       `json:"deploy_factory_cmd"`
-	OwnerChatURL        string       `json:"owner_chat_url"`
-	OwnerUIURL          string       `json:"owner_ui_url"`
-	Stages              []PilotStage `json:"stages"`
-	SkipStagesForLow    []string     `json:"skip_stages_for_low"`
-	StoppedPipelines    []string     `json:"stopped_pipelines"`
+	Note                 string       `json:"_note,omitempty"`
+	Enabled              bool         `json:"enabled"`
+	PollSeconds          float64      `json:"poll_seconds"`
+	TimeoutSeconds       float64      `json:"timeout_seconds"`
+	AutoMerge            bool         `json:"auto_merge"`
+	AutoAnswer           bool         `json:"auto_answer"`
+	AdminQuestionEnabled bool         `json:"admin_question_enabled,omitempty"`
+	AdminQuestionModel   string       `json:"admin_question_model,omitempty"`
+	MaxStageAttempts     int          `json:"max_stage_attempts"`
+	AllowAnyWorker       bool         `json:"allow_any_worker"`
+	RespectHostLoad      bool         `json:"respect_host_load"`
+	AllowedWorkers       []string     `json:"allowed_workers"`
+	MaxParallelSubtasks  int          `json:"max_parallel_subtasks"`
+	MaxParallelWorks     int          `json:"max_parallel_works"`
+	DayCapUSD            float64      `json:"day_cap_usd"`
+	DeployStagingCmd     string       `json:"deploy_staging_cmd"`
+	DeployFactoryCmd     string       `json:"deploy_factory_cmd"`
+	OwnerChatURL         string       `json:"owner_chat_url"`
+	OwnerUIURL           string       `json:"owner_ui_url"`
+	Stages               []PilotStage `json:"stages"`
+	SkipStagesForLow     []string     `json:"skip_stages_for_low"`
+	StoppedPipelines     []string     `json:"stopped_pipelines"`
 	// Потолок кругов по одной работе и группы уведомлений: этим управляет
 	// пилот, но владелец должен видеть и править их на экране «Настройки».
 	MaxWorkRounds    int                `json:"max_work_rounds,omitempty"`
