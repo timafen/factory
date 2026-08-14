@@ -4954,6 +4954,102 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertEqual(order, ["answer", "plan"])
         self.assertIs(conf["_active_work_tasks"], fresh_tasks)
 
+    def test_reservations_restore_from_question_files(self):
+        """A process restart reconstructs priority from durable question files."""
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pilot, "QUESTION_DIR", directory):
+            pilot.save(os.path.join(directory, "later.json"), {
+                "id": "later", "status": "answered", "answer": "да",
+                "resume_stage": "Implement + Test",
+                "reservation": {"answered_at": "2026-08-14T10:01:00Z"},
+            })
+            pilot.save(os.path.join(directory, "first.json"), {
+                "id": "first", "status": "answered", "answer": "да",
+                "resume_stage": "Implement + Test",
+                "reservation": {"answered_at": "2026-08-14T10:00:00Z"},
+            })
+
+            restored = pilot.refresh_answer_reservations({})
+
+        self.assertEqual([item["question_id"] for item in restored],
+                         ["first", "later"])
+
+    def test_multiple_answered_reservations_keep_fifo_order(self):
+        questions = [
+            {"id": "second", "status": "answered", "answer": "да",
+             "resume_stage": "Implement + Test",
+             "reservation": {"answered_at": "2026-08-14T10:02:00Z"}},
+            {"id": "first", "status": "answered", "answer": "да",
+             "resume_stage": "Implement + Test",
+             "reservation": {"answered_at": "2026-08-14T10:01:00Z"}},
+        ]
+
+        reservations = pilot.refresh_answer_reservations({}, questions)
+
+        self.assertEqual([item["question_id"] for item in reservations],
+                         ["first", "second"])
+
+    def test_new_heavy_start_waits_for_answered_reservation(self):
+        conf = {"_answer_reservations": [{"question_id": "owner-answer",
+                                           "answered_at": "2026-08-14T10:00:00Z"}],
+                "_host_load_tasks": [], "_host_load_snapshot": {}}
+        body = {"title": "[auto] [3/5 Implement + Test] Новый запуск"}
+
+        admission = pilot.task_admission_result(conf, body)
+
+        self.assertEqual(admission,
+                         {"admitted": False, "reason": "reserved_answered_work"})
+
+    def test_owner_reservation_is_admitted_before_new_heavy_work(self):
+        conf = {"_answer_reservations": [{"question_id": "owner-answer",
+                                           "answered_at": "2026-08-14T10:00:00Z"}],
+                "_answer_reservation_in_progress": "owner-answer",
+                "_host_load_tasks": [], "_host_load_snapshot": {}}
+        body = {"title": "[auto] [3/5 Implement + Test] Продолжение владельца"}
+
+        admission = pilot.task_admission_result(conf, body)
+
+        self.assertEqual(admission, {"admitted": True, "reason": ""})
+
+    def test_starting_reserved_answer_releases_its_reservation(self):
+        question = {
+            "id": "question-id", "task_id": "source-task", "work_id": "work-id",
+            "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test", "stage": "Review",
+            "title": "Работа", "repository_id": "repo-id",
+            "reservation": {"answered_at": "2026-08-14T10:00:00Z",
+                            "stage": "Implement + Test"},
+        }
+        conf = {"stages": [{"workflow": "Implement + Test", "workers": {
+                    "medium": "worker"}}], "timeout_seconds": 900}
+        saved = []
+
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "load", return_value=dict(question)), \
+                mock.patch.object(pilot, "work_lifecycle_block", return_value=""), \
+                mock.patch.object(pilot, "stage_attempts", return_value=0), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
+                mock.patch.object(pilot, "branch_from_history", return_value=""), \
+                mock.patch.object(pilot, "is_stopped", return_value=False), \
+                mock.patch.object(pilot, "live_or_done_at", return_value=None), \
+                mock.patch.object(pilot, "create_child_task",
+                                  return_value={"task": {"id": "new-task"}}), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "save",
+                                  side_effect=lambda _path, record: saved.append(dict(record))):
+            applied = pilot.handle_answers(
+                conf,
+                {"Implement + Test": {"enabled": True, "revision_id": "revision"}},
+                {"worker": {"id": "worker-id", "online": True, "health": "healthy"}},
+                [],
+            )
+
+        self.assertEqual(applied, 1)
+        self.assertEqual(conf["_answer_reservations"], [])
+        self.assertEqual(saved[-1]["status"], "resolved")
+        self.assertNotIn("reservation", saved[-1])
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
