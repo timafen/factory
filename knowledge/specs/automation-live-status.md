@@ -1,4 +1,8 @@
-# Экран «Автоматизация»: все автоматики Фабрики с живым статусом
+# Спецификация: экран «Автоматизация» с живым статусом всех автоматик
+
+Состояние: Verified PASS. Реализация уже поставлена в `main` коммитом
+`14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`; этот документ фиксирует проверяемый
+результат и не требует изменений продуктового кода.
 
 ## Цель и влияние на владельца
 
@@ -106,8 +110,8 @@
 - `python3 -m unittest -q pilot.test_pilot.AutomationStatusSnapshotTests`:
   allowlist, timestamp из janitor и systemd, атомарный файл и частичный отказ
   без ложного `running`.
-- `cd web && npm test -- --run web/src/Automations.test.tsx`: таблица выводит
-  все типы и «нет данных», а host-строка не получает control-plane action.
+- `cd web && npm test -- --run`: таблица выводит все типы и «нет данных», а
+  host-строка не получает control-plane action.
 - После реализации выполнить `go test ./internal/controlplane -run
   'TestAutomationStatus'` как обязательную быструю регрессию; общая Verify
   стадия отдельно запускает полный набор.
@@ -126,9 +130,8 @@
 
 Карточка: `knowledge/cards/CARD-0123-automation-live-status.md`.
 
-Статус: Specification. Реализация должна сделать единственный нормализованный
-read-only список со снимком host-источников и без ложного здоровья при
-отсутствии данных.
+Статус: Verified PASS. Реализация закрыта в `main`; нормализованный read-only
+список, host-снимок и честное `no_data` подтверждены проверками ниже.
 
 ГОТОВО-КОГДА: файл internal/protocol/types.go
 ГОТОВО-КОГДА: файл internal/controlplane/automation_status.go

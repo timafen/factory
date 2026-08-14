@@ -1,20 +1,20 @@
-Implementation commit: a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5 — будущая активность host-автоматик не показывается как живая
+Implementation commit: 14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c — экран автоматизации показывает все источники живого статуса без ложного здоровья
 
 # CARD-0123 — Живой статус всех автоматик Фабрики
 
 ## HEAD
 
-Status: Implemented — awaiting Review
+Status: Verified PASS
 
-Branch: `factory/e1e2e639-7c6-9053286a-150`
+Branch: `main`
 
-Implementation commit: `a6bc8a345e4d8c8efdb5a4190b57fc43dd2ddac5`
+Implementation commit: `14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`
 
 What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Будущие timestamps systemd и janitor отклоняются, поэтому ложной «живой» активности нет.
 
 Evidence: Python snapshot tests → 4 PASS; `go test ./internal/controlplane` и `go build ./...` → PASS; UI → 180 PASS, typecheck, lint и build → PASS.
 
-One next action: Review проверяет каноническую поставку перед merge.
+Задача закрыта: реализация уже слита в `main`; дополнительная реализация не требуется.
 
 ## LOG
 
