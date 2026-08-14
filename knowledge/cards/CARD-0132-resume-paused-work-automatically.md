@@ -9,7 +9,7 @@ Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — успешн
 - Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — пауза больше не поглощает успешный переход, а повторная попытка идемпотентна.
 - What changed: terminal handoff during a pause remains unprocessed; after resume it preserves `work_id`, `parent_task_id`, and a deterministic request key.
 - What changed: the ordinary cycle and the stall watcher reuse an already-created successor after a lost API response.
-- Evidence: 13 PipelineWatch tests PASS, включая снятие паузы и потерянный ответ API; `just check` прошёл Go-анализ и Go-тесты, а UI-проверка прошла 178 тестов. Два падения полного Pilot-набора воспроизведены на закреплённой базе.
+- Evidence: 13 `PipelineWatchTests` PASS, включая снятие паузы и потерянный ответ API; Go gates, release, race и UI unit (178/178) PASS. Полный Pilot сохраняет два падения `CorrectionProvenanceStormTests`; browser E2E остановился после 5 PASS из-за известного сбоя `/work`, вне области поставки.
 - One next action: влить ветку в `main` после просмотра evidence Verify.
 
 ## LOG
@@ -27,3 +27,13 @@ Implementation commit: 14f61511c1e2ccb997557c2a6efbc47ef928bd84 — успешн
 | Смежные пути не регрессируют | `just check`; UI после `npm ci` | Go vet/vuln/staticcheck и Go-тесты PASS; 178 UI-тестов PASS |
 
 Полный Pilot-набор кандидата: 257 тестов, 2 падения `CorrectionProvenanceStormTests`; те же два падения и тот же стек воспроизводятся на закреплённой базе до поставки. После удаления внешней переменной `FACTORY_BUILD_DIR` инструментальный и launcher-наборы PASS; переменная подменяла ожидаемый тестом `FACTORY_V2_BUILD_DIR`.
+
+### 2026-08-13 — Verify (закреплённая повторная проверка)
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Возобновление создаёт ровно одного преемника того же поколения | `python3 -m unittest -q pilot.test_pilot.PipelineWatchTests` | 13/13 PASS за 0.094 s; сохранены `work_id`, `parent_task_id` и детерминированный ключ |
+| Потерянный ответ API не создаёт дубль | тот же `PipelineWatchTests`, сценарий `response lost after create` | PASS: сторож нашёл уже созданный следующий этап |
+| Полный проектный набор не получил регрессию | `just check`; `just test-release`; `just test-worker-race`; `npm ci` + UI lint/typecheck/unit/browser | Go/release/race и UI lint/typecheck/178 unit PASS; browser 5 PASS, затем известный `/work` timeout, 15 тестов не запущены |
+
+Закреплённое сравнение: база `ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5`, кандидат `b581c605d82f5ada0afba2ce53eb0c578da53a8f`. Полный Pilot: 256 тестов, 2 прежних падения `CorrectionProvenanceStormTests`; изменений в `pilot` их стек не затрагивает.
