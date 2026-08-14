@@ -1,18 +1,18 @@
-Implementation commit: 5bde9d8d300d40fc89179283ac80a3619c28cfe5 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
+Implementation commit: 16eab48e1fe2a20ff2ae01bdff23f070fb51c251 — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
 
 # CARD-0116 — Резервирование отвеченной тяжёлой работы
 
 ## HEAD
 
-Status: IMPLEMENTED — готово к проверке выпуска.
-Branch: `factory/29cb07e5-6c1-de1548c8-bc2`.
-Implementation commit: 5bde9d8d300d40fc89179283ac80a3619c28cfe5 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
+Status: IMPLEMENTED — готово к повторной проверке выпуска.
+Branch: `factory/e8691177-e88-17abb425-6e4`.
+Implementation commit: 16eab48e1fe2a20ff2ae01bdff23f070fb51c251 — durable reservation покрыт backend-проверками восстановления, FIFO, приоритета и освобождения после запуска.
 What changed: ответ на тяжёлый этап сохраняет резерв в вопросе, переживает
 рестарт и получает первый безопасный слот; новые тяжёлые старты ждут.
-What changed: Answer, Work и Overview показывают принятое решение и честную
-причину ожидания без нового badge открытых вопросов.
-Evidence: `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` → OK (3 tests).
-Next action: Verify должен установить web-зависимости, прогнать три UI-теста и browser-проверку.
+What changed: backend-проверки подтверждают восстановление из файлов, FIFO
+нескольких ответов, блокировку конкурирующего запуска и снятие резерва.
+Evidence: `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` → OK (8 tests).
+Next action: Review повторно проверяет поставку перед Verify; в `main` не вливать до PASS.
 
 ## LOG
 
@@ -28,3 +28,11 @@ Next action: Verify должен установить web-зависимости
 - `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` завершился OK
   (3 tests). UI-команда не стартовала: в worktree отсутствуют пакеты `vitest`
   и `@vitejs/plugin-react`.
+
+### 2026-08-14 — Implement
+
+- Добавлены backend-проверки durable reservation: восстановление из файлов,
+  FIFO нескольких ответов, запрет нового тяжёлого старта, приоритет владельца
+  и снятие резерва после запуска продолжения.
+- `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` завершился OK
+  (8 tests).
