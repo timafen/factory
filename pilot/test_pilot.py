@@ -5685,6 +5685,113 @@ class AdaptivePollingTests(unittest.TestCase):
             [{"wait": True}, {"wait": True}, None],
         )
 
+    def test_area_wait_does_not_starve_unrelated_terminal_handoff(self):
+        conf = {
+            "stages": [
+                {"workflow": "Implement + Test"},
+                {"workflow": "Review"},
+                {"workflow": "Verify"},
+            ],
+            "poll_seconds": 30,
+            "max_terminal_tasks_per_cycle": 1,
+        }
+        blocked = {
+            "id": "review-wait", "state": "succeeded",
+            "title": "[auto] [2/3 Review] Занятая область",
+            "created_at": "2026-08-10T10:00:00Z",
+            "repository_id": "repo-id",
+        }
+        ready = {
+            "id": "implement-ready", "state": "succeeded",
+            "title": "[auto] [1/3 Implement + Test] Свободная работа",
+            "created_at": "2026-08-10T10:01:00Z",
+            "repository_id": "repo-id",
+        }
+        tasks = [ready, blocked]
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(tasks)}
+            if path in ("/tasks/review-wait", "/tasks/implement-ready"):
+                task = blocked if path.endswith("review-wait") else ready
+                stage = "Review" if task is blocked else "Implement + Test"
+                result = "APPROVE" if task is blocked else (
+                    "PASS\nBRANCH: factory/ready\n"
+                    "HEAD: " + "a" * 40 + "\nPUSHED: yes"
+                )
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": stage},
+                    "context": "",
+                    "attempts": [{"result": result}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 2, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": stage, "enabled": True,
+                    "current_revision": {"id": "rev-" + stage, "title": stage},
+                } for stage in ("Review", "Verify")]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "money_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "retry_pending_factory_deploy", "autostart_plan", "area_extend",
+            "collect_ideas", "all_tasks", "record_implementation_artifact",
+        )
+        verdict = {
+            "action": "advance", "reason": "готово",
+            "next_complexity": "medium", "handoff": "",
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "decide", return_value=verdict))
+            stack.enter_context(mock.patch.object(
+                pilot, "area_busy",
+                side_effect=lambda _tasks, base, _context, _repo: (
+                    "другая работа" if base == "Занятая область" else "")))
+            stack.enter_context(mock.patch.object(
+                pilot, "review_gate", return_value=None))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {
+                    "id": "review-created", "title": body["title"],
+                    "state": "created", "repository_id": "repo-id",
+                }}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, {"processed": []})
+
+        self.assertEqual([body["title"] for body in created], [
+            "[auto] [2/3 Review] Свободная работа",
+        ])
+
     def test_duplicate_terminal_attempts_start_one_heavy_next_stage(self):
         conf = {
             "stages": [
