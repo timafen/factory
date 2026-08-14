@@ -1,12 +1,12 @@
 # CARD-0131 — «Сделано недавно»: влитое отдельно и даты по-человечески
 
-Implementation commit: 92249bc3b72e20194da28e69eaba5376d0317e60 — подтверждённые слияния и остановки разделены, даты и причины понятны владельцу.
+Implementation commit: e627e82e997c3e16604ddf2f6a572e8dadaa18a0 — служебные данные исключены из причин остановки.
 
 ## HEAD
 
 - Status: Implemented.
 - Branch: `factory/595f144c-1ce-4b89e067-dbf`.
-- Implementation commit: 4a1bbef467c2aa6faf58b9e307be823a46abfe13 — служебные данные исключены из причин остановки.
+- Implementation commit: e627e82e997c3e16604ddf2f6a572e8dadaa18a0 — служебные данные исключены из причин остановки.
 - What changed: обзор принимает только безопасные строки `ДОКАЗАТЕЛЬСТВО:`/`ПРОВЕРКА:` без task_id, SHA и PID.
 - What changed: небезопасный или нераспознанный результат заменяется нейтральной причиной; добавлен регрессионный тест.
 - Evidence: `python3 -m unittest -v pilot.test_pilot.RecentDoneTest` → 7 tests OK; Overview → 30 tests passed, typecheck/build passed.
