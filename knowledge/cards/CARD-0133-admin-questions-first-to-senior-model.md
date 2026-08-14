@@ -1,4 +1,4 @@
-Implementation commit: ab56bc6a936663bc00e8fa1faf4951313799181 — admin-вопросы маршрутизируются старшей модели, а получение HEAD ветки выполняется безопасно.
+Implementation commit: ab56bc6a936663bc00e8fa1faf4951313799181e — admin-вопросы маршрутизируются старшей модели, а получение HEAD ветки выполняется безопасно.
 
 # CARD-0133 — Административные вопросы сначала решает старшая модель
 
@@ -6,7 +6,7 @@ Implementation commit: ab56bc6a936663bc00e8fa1faf4951313799181 — admin-воп�
 
 - Статус: Implemented; targeted verification PASS.
 - Ветка: `factory/291a1f2e-2dc-aab7819b-463`.
-- Implementation commit: `ab56bc6a936663bc00e8fa1faf4951313799181` — admin-вопросы сначала решает старшая модель, а имя ветки проверяется до безопасного argv-вызова.
+- Implementation commit: `ab56bc6a936663bc00e8fa1faf4951313799181e` — admin-вопросы сначала решает старшая модель, а имя ветки проверяется до безопасного argv-вызова.
 - Изменено: служебный admin-аудит скрыт от owner API до эскалации; добавлена регрессия на вредоносное имя ветки.
 - Evidence: 13/13 целевых сценариев и `go test ./internal/controlplane` — PASS; полный Pilot — 278 PASS, 13 skipped; `go build ./...` — PASS.
 - Следующее действие: Review проверяет стабильную `Implementation commit` и опубликованный candidate.
@@ -16,7 +16,7 @@ Implementation commit: ab56bc6a936663bc00e8fa1faf4951313799181 — admin-воп�
 ### 2026-08-13 — Implement
 
 Карточка теперь начинается с машинно проверяемой строки `Implementation commit`,
-которая ссылается на отдельный кодовый коммит `ab56bc6a936663bc00e8fa1faf4951313799181`.
+которая ссылается на отдельный кодовый коммит `ab56bc6a936663bc00e8fa1faf4951313799181e`.
 Целевые 13 Python-тестов и HTTP Go-пакет прошли; полный Pilot — 278 PASS,
 13 skipped; `go build ./...` прошёл.
 
