@@ -6,10 +6,18 @@ Status: Implemented — awaiting Review
 Branch: factory/6df906ce-7fd-7be1f1d2-5c4
 Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
 What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: целевой lifecycle-тест, `just staticcheck`, полный `just test` и `just build` завершились успешно; browser suite не запускался, поскольку текущая контейнерная политика его блокирует.
+Evidence: `/usr/local/libexec/factory/factory-browser-sandbox --version` успешно запускает Chrome 151 (exit 0); browser suite не заявляется успешным, потому что `just test-browser` останавливается до Playwright из-за отсутствующего `web/node_modules/.bin/tsc`.
 One next action: выполнить независимый Review опубликованного кандидата.
 
 ## LOG
+
+### 2026-08-14 — Specification correction
+
+Удалено неподтверждённое утверждение, что `no new privileges` блокирует
+браузер. Launcher проверен отдельно и успешно завершился; текущий blocker —
+отсутствующий web `tsc`. Установка зависимостей, product code, launcher,
+lifecycle и E2E-тесты вне области этой работы. Browser suite не считается
+пройденным.
 
 ### 2026-08-13 — Implement
 

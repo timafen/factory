@@ -1,62 +1,65 @@
-# Спецификация: устойчивый staticcheck для lifecycle-теста worker
+# Спецификация: актуализация доказательств browser suite в CARD-0126
 
 ## Цель и влияние на владельца
 
-Устранить ложное падение обязательной проверки `staticcheck`, чтобы CI мог
-проверять worker без ручного разбора старого теста. Поведение lease renewal не
-меняется: тест должен по-прежнему подтверждать распределение фаз и стабильность
-фазы для одного идентификатора. Browser suite остаётся отдельной проверкой;
-локальная контейнерная политика не должна маскироваться под дефект этой работы.
+Убрать из CARD-0126 и этой спецификации неподтверждённое утверждение, что
+`no new privileges` блокирует браузер. Для владельца результат должен ясно
+разделять проверенную работоспособность launcher и текущую отсутствующую
+зависимость web: browser suite не объявляется пройденным.
 
 ## Технический подход и реальные файлы
 
-1. В `internal/worker/attempt_lifecycle_test.go` заменить проверку стабильности,
-   которая сравнивает выражение с самим собой и вызывает `SA4000`, на проверку
-   двух вычисленных значений с явным ожидаемым результатом.
-2. Не менять `internal/worker/attempt_lifecycle.go`, UI, CI или публичный
-   контракт: причина находится в тестовом выражении на строке 31.
-3. Сохранить команду анализа из `Justfile` (`SA*,U1000`) и отдельно отметить,
-   что `just test-browser` требует Chromium/политику запуска браузера.
+1. В `knowledge/cards/CARD-0126-staticcheck-attempt-lifecycle.md` заменить
+   stale claim о NNP актуальным наблюдением: `/usr/local/libexec/factory/factory-browser-sandbox --version`
+   успешно запускает Chrome 151 с exit 0.
+2. Зафиксировать текущий блокер `just test-browser`: отсутствует
+   `web/node_modules/.bin/tsc`, поэтому Playwright и browser suite не стартуют.
+3. Не устанавливать зависимости и не менять product code, launcher, lifecycle
+   или E2E-тесты; перечисленные файлы реализации остаются областью будущей работы.
 
 ## Последовательный план
 
-1. Исправить только тестовую проверку стабильной задержки.
-2. Запустить `go test ./internal/worker` и целевой `staticcheck` для worker.
-3. Запустить `just staticcheck` по всему Go-проекту.
-4. В среде с разрешённым Chromium запустить browser suite; в контейнере этой
-   работы зафиксировать блокировку политики как находку инфраструктуры.
+1. Проверить наличие launcher и выполнить его `--version` с ограничением времени.
+2. Проверить отсутствие `web/node_modules/.bin/tsc` и зафиксировать фактический
+   ранний отказ `just test-browser`.
+3. Обновить только эту спецификацию и карточку; dependency installation и
+   повторный browser suite оставить следующему этапу.
 
 ## Критерии приёмки
 
-- `staticcheck` больше не сообщает `SA4000` в `attempt_lifecycle_test.go`.
-- Проверка lifecycle проходит и подтверждает: задержка детерминирована для
-  одинакового attempt ID, лежит в lease-бюджете и распределяется по фазам.
-- Изменён только тестовый файл реализации; product code и UI не изменены.
-- Browser suite не объявляется успешной без фактического запуска браузера.
+- Устаревшее утверждение о `no new privileges` удалено из карточки и спецификации.
+- Launcher подтверждён командой `factory-browser-sandbox --version`, exit 0.
+- Текущий blocker назван явно: отсутствует `web/node_modules/.bin/tsc`.
+- Browser suite не объявлен успешным; установка зависимостей не выполнена.
+- Diff содержит только спецификацию и карточку CARD-0126.
 
 ## Тест-план
 
-- Целевой тест: `go test ./internal/worker -run 'TestLeaseRenewal'`.
-- Анализ области: `go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -checks 'SA*,U1000' ./internal/worker`.
-- Обязательные ворота: `just staticcheck`.
-- Browser-проверка: `just test-browser` только в окружении, где разрешён
-  Chromium; текущий контейнер блокирует её политикой и это не критерий этой
-  спецификации.
+- `test -x /usr/local/libexec/factory/factory-browser-sandbox`.
+- `timeout 30s /usr/local/libexec/factory/factory-browser-sandbox --version`.
+- Проверить blocker: `test ! -x web/node_modules/.bin/tsc`.
+- После установки зависимостей следующий этап выполняет ровно один
+  `just test-browser`; здесь suite намеренно не заявляется пройденным.
 
 ## Риски и решения
 
-- Риск случайно ослабить тест: сравнивать два независимых вызова и явно
-  сохранять проверку значения, а не удалять assertion.
-- Риск скрыть другие ошибки staticcheck: после целевой проверки запускать
-  проектную команду `just staticcheck`.
-- Риск принять контейнерное ограничение за регрессию: разделять результат
-  Go/staticcheck и статус browser suite.
+- Риск снова принять инфраструктурное наблюдение за причиной: хранить вывод
+  launcher и exit code отдельно от browser suite.
+- Риск преждевременно объявить E2E зелёным: считать отсутствие `tsc` блокером
+  до установки web-зависимостей и фактического запуска Playwright.
+- Риск расширить область: запретить dependency installation и любые изменения
+  исходников, launcher, lifecycle и тестов на этом этапе.
 
 ## Карточка работы
 
 Карточка: `knowledge/cards/CARD-0126-staticcheck-attempt-lifecycle.md`.
-Реализация оставляет рабочий commit с изменением только
-`internal/worker/attempt_lifecycle_test.go`; документационный commit карточки
-идёт после него.
+Текущая работа — документационная коррекция; реализация отсутствует.
+
+Файлы реализации для следующего этапа: нет изменений в репозитории; область
+проверки — `/usr/local/libexec/factory/factory-browser-sandbox` и web-зависимости.
+
+ГОТОВО-КОГДА: файл knowledge/specs/staticcheck-attempt-lifecycle.md
+ГОТОВО-КОГДА: файл knowledge/cards/CARD-0126-staticcheck-attempt-lifecycle.md
+ГОТОВО-КОГДА: команда timeout 30s /usr/local/libexec/factory/factory-browser-sandbox --version
 
 Implementation commit: 4707a6de747a52c01e5db914f905b4378b3159fe — исправлено самосравнение в lifecycle-тесте worker
