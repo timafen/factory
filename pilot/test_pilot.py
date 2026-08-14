@@ -4827,7 +4827,6 @@ class AdaptivePollingTests(unittest.TestCase):
             "title": "[auto] [1/2 Triage] Восстановить передачу",
             "state": "succeeded",
             "created_at": "2026-08-10T09:00:00Z",
-            "finished_at": "2026-08-10T10:01:00Z",
             "repository_id": "repo-id",
         }]
         created = []
@@ -4841,6 +4840,7 @@ class AdaptivePollingTests(unittest.TestCase):
                     "task": {"repository_id": "repo-id"},
                     "workflow": {"title": "Triage"},
                     "context": "",
+                    "execution": {"updated_at": "2026-08-10T10:01:00Z"},
                     "attempts": [{"result": "READY"}],
                 }
             if path == "/tasks" and body is not None:
@@ -4937,7 +4937,6 @@ class AdaptivePollingTests(unittest.TestCase):
         source = {
             "id": "done", "title": "[auto] [1/2 Triage] Работа",
             "state": "succeeded", "created_at": "2026-08-10T09:00:00Z",
-            "finished_at": "2026-08-10T10:01:00Z",
         }
         conf = {
             "_restart_recovery_ids": frozenset(("done",)),
@@ -4960,7 +4959,7 @@ class AdaptivePollingTests(unittest.TestCase):
         rejected = (
             (dict(source, state="failed"), conf, detail, ""),
             (dict(source, state="cancelled"), conf, detail, ""),
-            (dict(source, finished_at=""), conf, detail, ""),
+            (source, conf, dict(detail, execution={}), ""),
             (source, dict(conf, _restart_recovery_watermark=""), detail, ""),
             (source, conf, {"workflow": {"title": "Unknown"}}, ""),
             (source, conf, {"workflow": {"title": "Specification"}}, ""),
@@ -4980,6 +4979,13 @@ class AdaptivePollingTests(unittest.TestCase):
             self.assertIsNone(pilot.restart_recovery_detail(
                 dict(conf, stopped_pipelines=["Работа"]), [source], source,
                 ["Triage", "Specification"]))
+
+        with mock.patch.object(pilot, "api", return_value={
+                "workflow": {"title": "Triage"},
+                "attempts": [{"completed_at": "2026-08-10T10:01:00Z"}],
+        }), mock.patch.object(pilot, "work_lifecycle_block", return_value=""):
+            self.assertIsNotNone(pilot.restart_recovery_detail(
+                conf, [source], source, ["Triage", "Specification"]))
 
     def test_loop_moves_recovery_watermark_only_after_success(self):
         conf = {"enabled": True, "poll_seconds": 30}
@@ -5004,6 +5010,30 @@ class AdaptivePollingTests(unittest.TestCase):
             state["terminal_handoff_watermark"], "1970-01-01T00:01:40Z")
         self.assertEqual(cycle.call_args_list[0].args[0]["_restart_recovery_ids"],
                          frozenset(("done",)))
+
+    def test_loop_keeps_recovery_watermark_when_handoff_is_pending(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {
+            "processed": ["done"],
+            "terminal_handoff_watermark": "2026-08-10T10:00:00Z",
+        }
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def pending_cycle(cycle_conf, _state):
+            cycle_conf["_restart_recovery_retry"] = True
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=pending_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertEqual(
+            state["terminal_handoff_watermark"], "2026-08-10T10:00:00Z")
 
     def test_loop_retains_more_than_two_thousand_terminal_task_ids(self):
         conf = {"enabled": True, "poll_seconds": 30}

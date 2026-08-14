@@ -1536,13 +1536,24 @@ def restart_recovery_detail(conf, tasks, task, stages):
     if task_id not in recovery_ids or task.get("state") != "succeeded":
         return None
     watermark = _work_time(conf.get("_restart_recovery_watermark"))
-    finished = _work_time(task.get("finished_at") or task.get("updated_at"))
-    if not watermark or not finished or finished <= watermark:
+    if not watermark:
         return None
     base = base_title(task.get("title", ""))
     if work_lifecycle_block(base, task, tasks) or is_stopped(conf, base):
         return None
     detail = api(f"/tasks/{task_id}")
+    execution = detail.get("execution") or {}
+    attempts = detail.get("attempts") or []
+    finished = _work_time(execution.get("updated_at"))
+    if not finished:
+        finished = next(
+            (_work_time(attempt.get("completed_at"))
+             for attempt in reversed(attempts)
+             if _work_time(attempt.get("completed_at"))),
+            None,
+        )
+    if not finished or finished <= watermark:
+        return None
     workflow = (detail.get("workflow") or {}).get("title")
     if workflow not in stages or stages.index(workflow) + 1 >= len(stages):
         return None
@@ -7351,6 +7362,8 @@ def cycle(conf, state):
     # Дневной потолок: начатое доигрывается, новое не берётся.
     try:
         if day_budget_blocks(conf, tasks, codex_snapshot[day_start]):
+            if conf.get("_restart_recovery_ids"):
+                conf["_restart_recovery_retry"] = True
             hint = next_poll_hint(conf, tasks, fast=new_terminal)
             conf.pop("_cycle_activity", None)
             return hint
@@ -7458,6 +7471,8 @@ def cycle(conf, state):
         1,
     )
     terminal_tasks = list(tasks)
+    recovery_ids = conf.get("_restart_recovery_ids") or ()
+    recovery_seen = set()
     terminal_cursor = state.get("terminal_cursor")
     cursor_index = next((index for index, task in enumerate(terminal_tasks)
                          if task.get("id") == terminal_cursor), None)
@@ -7466,6 +7481,8 @@ def cycle(conf, state):
                           + terminal_tasks[:cursor_index + 1])
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
+        if tid in recovery_ids:
+            recovery_seen.add(tid)
         if not title.startswith(PREFIX):
             continue
         recovery_detail = None
@@ -7474,6 +7491,8 @@ def cycle(conf, state):
             if recovery_detail is None:
                 continue
         if tstate not in ("succeeded", "failed", "cancelled"):
+            if tid in recovery_ids:
+                conf["_restart_recovery_retry"] = True
             continue
 
         closed_reason = work_lifecycle_block(base_title(title), t, tasks)
@@ -7484,6 +7503,8 @@ def cycle(conf, state):
             continue
 
         if terminal_examined >= terminal_limit:
+            if tid in recovery_ids:
+                conf["_restart_recovery_retry"] = True
             activity["terminal_backlog"] = True
             break
         terminal_examined += 1
@@ -7984,6 +8005,8 @@ def cycle(conf, state):
             # cycle tries again once a healthy worker is back.
             if tid in state["processed"]:
                 state["processed"].remove(tid)
+            if tid in (conf.get("_restart_recovery_ids") or ()):
+                conf["_restart_recovery_retry"] = True
             log(f"cannot advance '{base}' {wf} -> {next_stage} (повторю позже): {e}")
             continue
         # The task snapshot was loaded before this cycle started.  Keep it
@@ -8001,8 +8024,9 @@ def cycle(conf, state):
     # Recovery goes through the legacy retry mechanism, which removes a
     # processed id on a temporary handoff failure. Keep the immutable startup
     # cursor durable, and collapse the temporary duplicate after success.
-    recovery_ids = conf.get("_restart_recovery_ids") or ()
     if recovery_ids:
+        if set(recovery_ids) - recovery_seen:
+            conf["_restart_recovery_retry"] = True
         seen = set()
         kept = []
         for task_id in state["processed"]:
@@ -8088,10 +8112,11 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 cycle_now = clock_fn()
                 failures = 0
-                state["terminal_handoff_watermark"] = (
-                    datetime.datetime.fromtimestamp(
-                        cycle_now, datetime.timezone.utc).isoformat().replace(
-                            "+00:00", "Z"))
+                if not conf.get("_restart_recovery_retry"):
+                    state["terminal_handoff_watermark"] = (
+                        datetime.datetime.fromtimestamp(
+                            cycle_now, datetime.timezone.utc).isoformat().replace(
+                                "+00:00", "Z"))
                 try:
                     write_automation_status(pilot_completed_at=datetime.datetime.fromtimestamp(
                         cycle_now, datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
