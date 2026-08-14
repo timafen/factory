@@ -5202,9 +5202,16 @@ def day_spent(tasks, codex_day=None):
 
 def branch_head(branch):
     """Вершина рабочей ветки на origin — признак того, что работа движется."""
-    if not branch:
+    # Ветка приходит из отчёта агента. Допускаем только простые сегменты
+    # служебных веток, чтобы это значение никогда не становилось командой.
+    if not re.fullmatch(
+            r"factory/(?:[A-Za-z0-9][A-Za-z0-9._-]*)(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*",
+            branch or ""):
         return ""
-    out = _sh("sudo -n /usr/local/bin/fx repo head " + branch)
+    ok, out = _fixed_command(
+        ["sudo", "-n", "/usr/local/bin/fx", "repo", "head", branch])
+    if not ok:
+        return ""
     m = re.search(r"\b[0-9a-f]{40}\b", out or "")
     return m.group(0) if m else ""
 
@@ -5282,12 +5289,19 @@ def budget_guard(conf, tasks, workers=None):
         ext = int(rec.get("extensions") or 0)
         cap = stage_cap(conf, stage, cx, wname) * (1.5 ** ext)
 
+        # Запоминаем вершину заранее, пока задача ещё укладывается в бюджет.
+        # Иначе первая проверка после перерасхода примет уже существующий
+        # коммит за прогресс этой задачи и подарит ей несколько дорогих кругов.
+        branch = branch_from_history(tasks, base)
+        head = branch_head(branch)
+        if not rec.get("last_head") and head:
+            rec["last_head"] = head
+            changed = True
+
         spent = task_cost_usd(attempts_of(t["id"], False))
         if spent < cap:
             continue
 
-        branch = branch_from_history(tasks, base)
-        head = branch_head(branch)
         moved = bool(head) and head != (rec.get("last_head") or "")
         # credit — списание за прошлые сгоревшие заходы, в которых виновата
         # не работа, а наша собственная поломка.

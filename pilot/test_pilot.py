@@ -5386,6 +5386,96 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(state["terminal_cursor"], "done-1")
 
 
+class BudgetGuardTests(unittest.TestCase):
+    def test_branch_head_rejects_malicious_branch_without_running_command(self):
+        """BRANCH из отчёта не может превратиться в запуск команды."""
+        with mock.patch.object(pilot, "_fixed_command") as command:
+            head = pilot.branch_head("factory/valid; touch /tmp/pilot-owned")
+
+        self.assertEqual(head, "")
+        command.assert_not_called()
+
+    def test_branch_head_uses_validated_branch_as_argv(self):
+        expected = "a" * 40
+        with mock.patch.object(pilot, "_fixed_command", return_value=(True, expected)) as command:
+            head = pilot.branch_head("factory/valid-branch")
+
+        self.assertEqual(head, expected)
+        command.assert_called_once_with(
+            ["sudo", "-n", "/usr/local/bin/fx", "repo", "head", "factory/valid-branch"])
+
+    def test_unchanged_branch_downgrades_on_first_overrun(self):
+        """Первый перерасход не получает продления за старый коммит ветки."""
+        task = {
+            "id": "run-1", "state": "running", "worker_id": "worker-1",
+            "title": "[auto] [3/5 Implement + Test] Неизменная работа",
+        }
+        workers = [{"id": "worker-1", "name": "terra-worker"}]
+        budget = {}
+        saved = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks/run-1/cancel":
+                return {}
+            if path == "/tasks/run-1":
+                return {"task": {"repository_id": "repo-1"}}
+            raise AssertionError(path)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "load", return_value=budget))
+            stack.enter_context(mock.patch.object(pilot, "save",
+                side_effect=lambda path, value: saved.append((path, value.copy()))))
+            stack.enter_context(mock.patch.object(pilot, "branch_from_history",
+                return_value="factory/unchanged"))
+            stack.enter_context(mock.patch.object(pilot, "branch_head",
+                return_value="a" * 40))
+            stack.enter_context(mock.patch.object(pilot, "attempts_of", return_value=[]))
+            cost = stack.enter_context(mock.patch.object(pilot, "task_cost_usd",
+                side_effect=[0.0, 8.0]))
+            stack.enter_context(mock.patch.object(pilot, "work_spent", return_value=8.0))
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            retry = stack.enter_context(mock.patch.object(pilot, "write_budget_retry"))
+            stack.enter_context(mock.patch.object(pilot, "notify"))
+
+            pilot.budget_guard({}, [task], workers)
+            pilot.budget_guard({}, [task], workers)
+
+        self.assertEqual(budget["Неизменная работа"]["last_head"], "a" * 40)
+        self.assertEqual(budget["Неизменная работа"]["extensions"], 0)
+        self.assertEqual(budget["Неизменная работа"]["downgrades"], 1)
+        self.assertEqual(cost.call_count, 2)
+        retry.assert_called_once()
+        self.assertTrue(saved)
+
+    def test_new_commit_still_earns_an_extension(self):
+        task = {
+            "id": "run-1", "state": "running", "worker_id": "worker-1",
+            "title": "[auto] [3/5 Implement + Test] Движущаяся работа",
+        }
+        budget = {"Движущаяся работа": {
+            "extensions": 0, "downgrades": 0, "last_head": "a" * 40,
+            "stopped": "",
+        }}
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "load", return_value=budget))
+            stack.enter_context(mock.patch.object(pilot, "save"))
+            stack.enter_context(mock.patch.object(pilot, "branch_from_history",
+                return_value="factory/moving"))
+            stack.enter_context(mock.patch.object(pilot, "branch_head",
+                return_value="b" * 40))
+            stack.enter_context(mock.patch.object(pilot, "attempts_of", return_value=[]))
+            stack.enter_context(mock.patch.object(pilot, "task_cost_usd", return_value=8.0))
+            stack.enter_context(mock.patch.object(pilot, "work_spent", return_value=8.0))
+            retry = stack.enter_context(mock.patch.object(pilot, "write_budget_retry"))
+
+            pilot.budget_guard({}, [task], [{"id": "worker-1", "name": "terra"}])
+
+        self.assertEqual(budget["Движущаяся работа"]["extensions"], 1)
+        self.assertEqual(budget["Движущаяся работа"]["last_head"], "b" * 40)
+        retry.assert_not_called()
+
+
 class HostLoadAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.cpu_over = {
