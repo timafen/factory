@@ -65,6 +65,12 @@ BROKER_OWNER="${FACTORY_RELEASE_BROKER_OWNER-root:root}"
 CONTROL_OWNER="${FACTORY_CONTROL_OWNER-root:root}"
 BRAIN_OWNER="${FACTORY_BRAIN_OWNER-factory:factory}"
 BRAIN_LIVE="${FACTORY_BRAIN_LIVE:-/opt/factory-data}"
+BROWSER_RUNTIME_ROOT="${FACTORY_BROWSER_RUNTIME_ROOT:-$REL/browser-runtime}"
+BROWSER_RUNTIME_CURRENT="$BROWSER_RUNTIME_ROOT/current"
+BROWSER_RUNTIME_GENERATIONS="$BROWSER_RUNTIME_ROOT/generations"
+old_browser_current=''
+browser_published=0
+browser_stage=''
 GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
@@ -592,6 +598,7 @@ cleanup() {
   [ -z "$stage" ] || rm -rf "$stage"
   [ -z "$bootstrap" ] || rm -rf "$bootstrap"
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
+  [ -z "$browser_stage" ] || [ ! -e "$browser_stage" ] || rm -rf -- "$browser_stage"
   rm -rf "$work"
 }
 on_release_exit() { cleanup; }
@@ -1058,6 +1065,38 @@ candidate_worker_version=$("$work/factory-worker" version 2>/dev/null || true)
 [[ "$candidate_server_version" == *"$sha"* && "$candidate_worker_version" == *"$sha"* ]] \
   || { fail "собранные server/worker не подтверждают candidate SHA $sha"; cleanup; exit 4; }
 
+step "готовлю browser runtime для ежедневного PDF"
+browser_installer="${FACTORY_BROWSER_INSTALLER:-$work/src/ops/install-server-browser.sh}"
+browser_stage="$BROWSER_RUNTIME_ROOT/.incoming-$sha.$$"
+browser_generation="$BROWSER_RUNTIME_GENERATIONS/$sha"
+old_browser_current=$(readlink -f "$BROWSER_RUNTIME_CURRENT" 2>/dev/null || true)
+[ -x "$browser_installer" ] || { fail "в кандидате нет browser installer"; cleanup; exit 4; }
+if [ ! -d "$browser_generation" ]; then
+  mkdir -p "$browser_stage/web/report" "$browser_stage/ops" "$BROWSER_RUNTIME_GENERATIONS" \
+    || { fail "не удалось подготовить постоянный browser payload"; cleanup; exit 4; }
+  cp -f "$work/src/web/package.json" "$work/src/web/package-lock.json" "$browser_stage/web/" \
+    && cp -f "$work/src/web/report/capture.mjs" "$work/src/web/report/render.mjs" "$browser_stage/web/report/" \
+    && cp -f "$work/src/ops/factory-browser-sandbox" "$work/src/ops/factory-browser-isolated" \
+      "$work/src/ops/test-browser-sandbox.sh" "$work/src/ops/test-systemd-browser-firewall.sh" "$browser_stage/ops/" \
+    || { fail "не удалось скопировать browser payload кандидата"; cleanup; exit 4; }
+  chmod 755 "$browser_stage/ops/"* || { cleanup; exit 4; }
+  FACTORY_BROWSER_SHARE="$browser_stage" \
+    FACTORY_BROWSER_PAYLOAD="$browser_stage" \
+    FACTORY_BROWSER_RUNTIME_ROOT="$BROWSER_RUNTIME_ROOT" \
+    "$TRUSTED_BASH" "$browser_installer" \
+    || { fail "browser runtime не прошёл установку и smoke"; cleanup; exit 4; }
+  mv -- "$browser_stage" "$browser_generation" \
+    || { fail "не удалось опубликовать browser runtime поколение"; cleanup; exit 4; }
+else
+  step "browser runtime не изменился — переустановку пропускаю"
+fi
+[ -d "$browser_generation/web/node_modules" ] \
+  || { fail "browser runtime не содержит установленные Node-модули"; cleanup; exit 4; }
+ln -sfn "$browser_generation" "$BROWSER_RUNTIME_CURRENT" \
+  || { fail "не удалось выбрать browser runtime поколение"; cleanup; exit 4; }
+browser_published=1
+
+step "проверяю работающий выпуск до первой мутации"
 processes="$work/processes.tsv"
 : >"$processes"
 for unit in "$SERVER_SERVICE" $(worker_service_list) "$PILOT_SERVICE" "$INTAKE_SERVICE" "$BROKER_SERVICE"; do
@@ -1232,7 +1271,23 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+rollback() {
+  local why=$1 status=$2 result
+  trap - EXIT HUP INT TERM
+  rollback_armed=0
+  rollback_to_generation "$old_generation" "$why"
+  result=$?
+  if [ "$browser_published" = 1 ]; then
+    if [ -n "$old_browser_current" ] && [ -d "$old_browser_current" ]; then
+      ln -sfn "$old_browser_current" "$BROWSER_RUNTIME_CURRENT"
+    else
+      rm -f -- "$BROWSER_RUNTIME_CURRENT"
+    fi
+  fi
+  cleanup
+  [ "$result" -eq 0 ] || status=$result
+  exit "$status"
+}
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 

@@ -142,6 +142,12 @@ EOF
 [ "${1:-}" = version ] && echo 'factory-worker test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
+  cat >"$case_dir/bin/browser-installer" <<'EOF'
+#!/bin/bash
+echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
+[ "$TEST_MODE" != browser-install-fail ] || exit 7
+mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules"
+EOF
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
   printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/fx"
@@ -183,6 +189,7 @@ GATE
   # artifacts instead of inheriting the caller's umask.
   chmod 755 "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
     "$case_dir/install/factory-release-broker" "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
+  chmod 755 "$case_dir/bin/browser-installer"
   chmod 644 "$case_dir/install/factory-release-broker.service" \
     "$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
@@ -214,6 +221,11 @@ case "$*" in
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/context.md" "$destination/pilot/context.md"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/app.py" "$destination/intake/app.py"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/plan.py" "$destination/intake/plan.py"
+    /bin/cp "$TEST_RELEASE_SOURCE/web/package.json" "$TEST_RELEASE_SOURCE/web/package-lock.json" "$destination/web/"
+    mkdir -p "$destination/web/report"
+    /bin/cp "$TEST_RELEASE_SOURCE/web/report/capture.mjs" "$TEST_RELEASE_SOURCE/web/report/render.mjs" "$destination/web/report/"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/factory-browser-sandbox" "$TEST_RELEASE_SOURCE/ops/factory-browser-isolated" \
+      "$TEST_RELEASE_SOURCE/ops/test-browser-sandbox.sh" "$TEST_RELEASE_SOURCE/ops/test-systemd-browser-firewall.sh" "$destination/ops/"
     cat >"$destination/ops/install-brain.sh" <<'BRAIN'
 #!/bin/bash
 echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_RESTART_MARKER:-}" >>"$TEST_GATES"
@@ -221,7 +233,12 @@ echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_
 [ "${FACTORY_BRAIN_DEFER_PILOT_RESTART:-}" = 1 ] || exit 9
 : >"$FACTORY_BRAIN_RESTART_MARKER"
 BRAIN
-    touch "$destination/ops/install-server-browser.sh"
+    cat >"$destination/ops/install-server-browser.sh" <<'BROWSER'
+#!/bin/bash
+echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
+[ "$TEST_MODE" != browser-install-fail ] || exit 7
+mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules"
+BROWSER
     if [ "$TEST_MODE" = trusted-gate-real-race ]; then
       /bin/cp "$TEST_REAL_GATE" "$destination/ops/test-fx-factory-release.sh"
     else
@@ -817,7 +834,7 @@ run_release() {
     TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
-    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_FX_BIN="$case_dir/install/fx" \
@@ -1016,6 +1033,8 @@ for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
 assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
+grep -F 'browser-install payload=' "$success/gates" >/dev/null \
+  || fail "release did not install the browser payload before publishing"
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
 grep -F 'полный вывод: Go-проверки, тесты пилота и сценарий выката' "$success/output" >/dev/null \
@@ -1182,7 +1201,7 @@ run_release "$identity_retry" identity-transient \
   || { cat "$identity_retry/output" >&2; fail "transient identity lock was not retried"; }
 [ -e "$identity_retry/identity-retried" ] || fail "identity retry scenario did not exercise the transient failure"
 
-for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install; do
+for mode in server-fail worker-fail stale-healthy-worker worker-install-fail browser-install-fail interrupt-between-install; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   set +e
@@ -1194,6 +1213,9 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   assert_file "$failed/install/factory-worker" old-worker
   assert_file "$failed/install/fx" 'exit 0'
   assert_file "$failed/live/pilot/pilot.py" 'old pilot'
+  if [ "$mode" = browser-install-fail ]; then
+    [ ! -s "$failed/events" ] || fail "services restarted after browser installation failure"
+  fi
   if [ "$mode" = worker-install-fail ]; then
     assert_file "$failed/releases/transaction" 'phase=old-stopped'
   else
