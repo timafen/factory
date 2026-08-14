@@ -13,6 +13,19 @@ if [ -z "${HOME:-}" ]; then
   export HOME
 fi
 
+# Бортовой журнал рейса: когда выпуск запущен посредником (есть id операции),
+# весь вывод дублируется в файл — иначе упавший самоходный рейс не оставляет
+# ни строчки (посредник глушит stdout), и причина провала неизвестна.
+if [ -n "${FACTORY_DELIVERY_ID:-}" ] && [ -z "${FACTORY_RELEASE_LOG_ACTIVE:-}" ]; then
+  export FACTORY_RELEASE_LOG_ACTIVE=1
+  _voyage_log_dir="${FACTORY_RELEASE_VOYAGE_LOG_DIR:-/var/lib/factory/release-broker}"
+  _voyage_log="$_voyage_log_dir/voyage-${FACTORY_DELIVERY_ID//[^A-Za-z0-9._-]/_}.log"
+  if mkdir -p -- "$_voyage_log_dir" 2>/dev/null && : >>"$_voyage_log" 2>/dev/null; then
+    chmod 600 -- "$_voyage_log" 2>/dev/null || true
+    exec > >(tee -a -- "$_voyage_log") 2>&1
+  fi
+fi
+
 REPO="${FACTORY_RELEASE_REPO:-https://github.com/timafen/factory.git}"
 SERVER_BIN="${FACTORY_SERVER_BIN:-/opt/factory-data/bin/factory-server}"
 WORKER_BIN="${FACTORY_WORKER_BIN:-/opt/factory-data/bin/factory-worker}"
