@@ -107,8 +107,7 @@ pagination: один occurrence по-прежнему даёт одну стро
 - `go test ./internal/controlplane -run
   'TestTasks.*WorkClass|TestAutomationOccurrence.*AttemptResult'` — устойчивая
   классификация, пользовательские исключения и проекция последней попытки.
-- `cd web && npm test -- --run web/src/Work.test.ts
-  web/src/Automations.test.tsx` — патрули отсутствуют во всех Work-состояниях,
+- `cd web && npm test -- --run src/Work.test.ts src/Automations.test.tsx` — патрули отсутствуют во всех Work-состояниях,
   обычные задачи остаются, runs показывают success/failure/empty.
 - `cd web && npm run typecheck && npm run lint && npm run build` — контракты и
   production-сборка после расширения DTO.
@@ -144,4 +143,4 @@ pagination: один occurrence по-прежнему даёт одну стро
 ГОТОВО-КОГДА: файл web/src/Work.test.ts
 ГОТОВО-КОГДА: файл web/src/Automations.tsx
 ГОТОВО-КОГДА: файл web/src/Automations.test.tsx
-ГОТОВО-КОГДА: команда cd web && npm test -- --run web/src/Work.test.ts web/src/Automations.test.tsx
+ГОТОВО-КОГДА: команда cd web && npm test -- --run src/Work.test.ts src/Automations.test.tsx
