@@ -4,14 +4,23 @@ Implementation commit: 42fb0b0f54f35bd5e3dc44395c4fa9863a6a27f4 — полный
 
 ## HEAD
 
-- Status: Implemented — awaiting repeat Review
+- Status: Verified PASS — awaiting human merge
 - Branch: `factory/93b34cba-104-9003bc62-d7d`
 - Implementation commit: `42fb0b0f54f35bd5e3dc44395c4fa9863a6a27f4`
 - What changed: полный `pilot.test_pilot` запускается отдельной доверенной группой до UI/Go-сборок; его ошибка останавливает выпуск до установки и перезапуска служб.
-- Evidence: base `65d0d1ef70f71b25751e96e0c4961e897849abcb`; `python3 -m unittest pilot.test_pilot` → 268 OK, 13 skipped; `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → exit 0, включая `python-test-fail`.
-- One next action: повторно отправить опубликованную ветку на независимый Review.
+- Evidence: pinned base `65d0d1ef70f71b25751e96e0c4961e897849abcb`; implementation `42fb0b0f54f35bd5e3dc44395c4fa9863a6a27f4`; `python3 -m unittest pilot.test_pilot` → 268 OK, 13 skipped; `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → exit 0, включая `python-test-fail`; `just check` → exit 0.
+- One next action: человеку проверить отчёт Verify и принять решение о слиянии.
 
 ## LOG
+
+### 2026-08-14 — Verify
+
+| Критерий | Проверка | Результат |
+| --- | --- | --- |
+| Полный Pilot-набор обязателен | `python3 -m unittest pilot.test_pilot` | 268 успешно, 13 пропущено |
+| Pilot запускается до сборки и имеет отдельный лог | `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` | exit 0; фикстура проверяет порядок перед `vite build`/Go-сборкой и строку «Pilot-проверки» |
+| Ошибка Pilot останавливает выпуск без изменений | тот же shell-полигон, режим `python-test-fail` | exit 0; UI и Go-группы остановлены, старые бинарники сохранены, службы не затронуты |
+| Смежные проверки не регрессировали | `just check` | exit 0 |
 
 ### 2026-08-13 — Implement
 
