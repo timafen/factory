@@ -5228,7 +5228,7 @@ class AdaptivePollingTests(unittest.TestCase):
         conf = {"enabled": True, "poll_seconds": 30}
         state = {"processed": []}
         sleeps = []
-        clock = iter((100.0, 102.0))
+        clock = iter((99.0, 100.0, 101.0, 102.0))
 
         def fake_load(path, default):
             return conf if path == pilot.CONF_PATH else state
@@ -5263,7 +5263,7 @@ class AdaptivePollingTests(unittest.TestCase):
                     {"seconds": 10, "reason": "active"},
                 ]):
             pilot.run_loop(max_cycles=3, sleep_fn=sleeps.append,
-                           clock_fn=iter((100.0, 130.0, 190.0)).__next__)
+                           clock_fn=iter((100.0, 130.0, 189.0, 190.0)).__next__)
 
         self.assertEqual(sleeps, [30, 60, 10])
         self.assertEqual(state["next_poll"]["reason"], "active")
