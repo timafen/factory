@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -65,6 +66,17 @@ func run() error {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate broker executable: %w", err)
+	}
+	var restartRequested atomic.Bool
+	if err := broker.RestartWhenExecutableChanges(executable, func() {
+		restartRequested.Store(true)
+		_ = server.Close()
+	}); err != nil {
+		return fmt.Errorf("watch broker executable: %w", err)
+	}
 	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -73,6 +85,9 @@ func run() error {
 	}()
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
+		if restartRequested.Load() {
+			return errors.New("installed broker executable changed; requesting service restart")
+		}
 		return nil
 	}
 	return err

@@ -54,7 +54,7 @@ FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
 test -x "$temporary/out/factory-release-broker"
 grep -qx 'User=root' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'Group=factory-release' "$temporary/systemd/factory-release-broker.service"
-grep -qx 'NoNewPrivileges=true' "$temporary/systemd/factory-release-broker.service"
+grep -qx 'NoNewPrivileges=false' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'StateDirectory=factory/release-broker' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf"
 test ! -e "$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
@@ -87,8 +87,7 @@ FACTORY_BROKER_ACTIVE=1 \
     "$temporary/broker" "$root/ops/systemd/factory-release-broker.service"
 
 grep -qx '# broker version 2' "$temporary/out/factory-release-broker"
-grep -qx 'restart factory-release-broker.service' "$temporary/systemctl.log"
-grep -qx 'restart factory-pilot.service' "$temporary/systemctl.log"
+test "$(sed -n '1,4p' "$temporary/systemctl.log" | tr '\n' ' ')" = "daemon-reload is-active --quiet factory-release-broker.service restart factory-release-broker.service restart factory-pilot.service "
 if grep -q 'enable --now factory-release-broker.service' "$temporary/systemctl.log"; then
   echo 'active broker was enabled instead of restarted' >&2
   exit 1

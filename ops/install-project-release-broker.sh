@@ -17,7 +17,10 @@ BROKER_GROUP=${FACTORY_RELEASE_BROKER_GROUP:-factory-release}
 [ -f "$SOURCE_UNIT" ]
 grep -qx 'User=root' "$SOURCE_UNIT"
 grep -qx "Group=$BROKER_GROUP" "$SOURCE_UNIT"
-grep -qx 'NoNewPrivileges=true' "$SOURCE_UNIT"
+# The broker starts as root and the release driver drops to the factory user
+# with setpriv. With the unit's isolation profile, NoNewPrivileges removes the
+# CAP_SETUID needed for that transition; the unit documents this exception.
+grep -qx 'NoNewPrivileges=false' "$SOURCE_UNIT"
 grep -qx 'StateDirectory=factory/release-broker' "$SOURCE_UNIT"
 grep -qx 'ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker' "$SOURCE_UNIT"
 

@@ -3,6 +3,7 @@ package releasebroker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +169,29 @@ type Broker struct {
 	mu              sync.Mutex
 	active          string
 	items           map[string]*operation
+	executablePath  string
+	executableHash  [sha256.Size]byte
+	restart         func()
+}
+
+// RestartWhenExecutableChanges asks the broker to leave its current process
+// only after a successful operation has been durably committed. The service
+// manager can then start the executable which the release installed in place
+// of the running image without interrupting the delivery receipt.
+func (b *Broker) RestartWhenExecutableChanges(path string, restart func()) error {
+	if !filepath.IsAbs(path) || restart == nil {
+		return errors.New("restart executable path and handler are required")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.executablePath = path
+	b.executableHash = sha256.Sum256(body)
+	b.restart = restart
+	b.mu.Unlock()
+	return nil
 }
 
 func (b *Broker) saveTerminal(item *operation) error {
@@ -498,15 +522,37 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
+	terminalCommitted := false
 	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err == nil {
 		if err := b.saveTerminal(&updated); err == nil && b.writeTerminalMarker(item.Request.OperationID, "committed", false) == nil {
 			*item = updated
+			terminalCommitted = true
 		}
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
 	}
+	restart := b.restart
+	if !terminalCommitted || status != "succeeded" || !b.executableChanged() {
+		restart = nil
+	} else {
+		// At most one successful operation may request this process restart.
+		b.restart = nil
+	}
 	b.mu.Unlock()
+	if restart != nil {
+		restart()
+	}
+}
+
+// executableChanged is called with b.mu held. A read failure must not recycle
+// a healthy broker: the next successful release can try the comparison again.
+func (b *Broker) executableChanged() bool {
+	if b.executablePath == "" || b.restart == nil {
+		return false
+	}
+	body, err := os.ReadFile(b.executablePath)
+	return err == nil && sha256.Sum256(body) != b.executableHash
 }
 
 // runnerStarted creates the real durable boundaries after the wrapper starts:
