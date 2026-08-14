@@ -1750,7 +1750,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             pause_pipeline.assert_not_called()
             answer.assert_not_called()
 
-    def test_exhausted_loop_rescue_still_asks_orchestrator(self):
+    def test_exhausted_loop_rescue_stops_after_ordinary_orchestrator_answer(self):
         rescues = {"LOOP": 0}
 
         def cap_rescues(_base, stage):
@@ -1779,10 +1779,10 @@ class DiagnosisRepairTests(unittest.TestCase):
                 [], "", attempts_so_far=9)
 
         self.assertFalse(first)
-        self.assertFalse(second)
-        self.assertEqual(rescues["LOOP"], 2)
-        pause.assert_not_called()
-        set_baseline.assert_not_called()
+        self.assertTrue(second)
+        self.assertEqual(rescues["LOOP"], 1)
+        pause.assert_called_once()
+        set_baseline.assert_called_once_with("Починить отчёт", 9)
 
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
@@ -5204,7 +5204,7 @@ class AdminQuestionRoutingTests(unittest.TestCase):
         self.assertFalse(any(
             "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
 
-    def test_exhausted_loop_rescues_still_resolve_admin_action_before_owner(self):
+    def test_exhausted_loop_rescues_allow_admin_action_but_escalate_its_answer(self):
         answers = [
             {"decision": "admin_action", "action": {
                 "scope": "staging", "verb": "health", "args": []}},
@@ -5227,14 +5227,13 @@ class AdminQuestionRoutingTests(unittest.TestCase):
             record = pilot.load(
                 os.path.join(temporary, "loop-admin-question.json"), {})
 
-        self.assertFalse(escalated)
+        self.assertTrue(escalated)
         self.assertEqual(orchestrator.call_count, 2)
         command.assert_called_once_with(
             ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
         self.assertEqual(record["admin_result"], "executed")
-        self.assertEqual(record["answered_by"], "orchestrator")
-        self.assertFalse(record.get("owner_only", False))
-        self.assertFalse(any(
+        self.assertTrue(record["owner_only"])
+        self.assertTrue(any(
             "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
 
     def test_allowed_staging_health_is_resolved_by_orchestrator_before_owner(self):
