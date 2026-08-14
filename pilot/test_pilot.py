@@ -4814,7 +4814,8 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
 
 class AdaptivePollingTests(unittest.TestCase):
-    def _restart_handoff_fixture(self, create_effects, cycles):
+    def _restart_handoff_fixture(self, create_effects, cycles,
+                                 area_busy_effect="", restart_after_first=False):
         conf = {
             "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
             "poll_seconds": 30,
@@ -4891,7 +4892,10 @@ class AdaptivePollingTests(unittest.TestCase):
                 pilot, "host_block", return_value={"state": "ok"}))
             stack.enter_context(mock.patch.object(
                 pilot, "stage_worker", return_value="worker"))
-            stack.enter_context(mock.patch.object(pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "area_busy", side_effect=area_busy_effect
+                if callable(area_busy_effect) or isinstance(area_busy_effect, list)
+                else None, return_value=area_busy_effect))
             stack.enter_context(mock.patch.object(
                 pilot, "work_lifecycle_block", return_value=""))
             decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
@@ -4899,8 +4903,23 @@ class AdaptivePollingTests(unittest.TestCase):
             }))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
-            for _ in range(cycles):
+            for cycle_number in range(cycles):
                 pilot.cycle(conf, state)
+                if restart_after_first and cycle_number == 0:
+                    state["terminal_handoff_watermark"] = (
+                        conf["_restart_recovery_watermark"]
+                        if conf.get("_restart_recovery_retry")
+                        else "2026-08-10T12:00:00Z")
+                    state_path = os.path.join(
+                        _TEST_DATA_HOME.name,
+                        f"restart-recovery-state-{uuid.uuid4()}.json")
+                    pilot.save(state_path, state)
+                    state = pilot.load(state_path, {})
+                    conf = {key: value for key, value in conf.items()
+                            if key != "_restart_recovery_retry"}
+                    conf["_restart_recovery_ids"] = frozenset(state["processed"])
+                    conf["_restart_recovery_watermark"] = state[
+                        "terminal_handoff_watermark"]
 
         return state, tasks, created, decide
 
@@ -4931,6 +4950,15 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(len(created), 1)
         self.assertEqual(decide.call_count, 2)
+        self.assertEqual(state["processed"], ["triage-done"])
+
+    def test_restart_recovery_survives_area_wait_and_second_restart(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [None], 2, area_busy_effect=["другая работа", ""],
+            restart_after_first=True)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 1)
         self.assertEqual(state["processed"], ["triage-done"])
 
     def test_restart_recovery_rejects_unsafe_or_completed_candidates(self):

@@ -1564,6 +1564,14 @@ def restart_recovery_detail(conf, tasks, task, stages):
     return detail
 
 
+def retry_terminal_task(conf, state, task_id):
+    """Requeue a terminal task without advancing a startup recovery cursor."""
+    if task_id in state["processed"]:
+        state["processed"].remove(task_id)
+    if task_id in (conf.get("_restart_recovery_ids") or ()):
+        conf["_restart_recovery_retry"] = True
+
+
 def resume_stage_for(stages, wf, next_stage):
     """Куда возвращать работу после остановки конвейера.
     Ревью и финальная проверка означают доработку — значит назад в разработку,
@@ -7554,8 +7562,7 @@ def cycle(conf, state):
                            tags="repeat", click=f"{UI_BASE}/work")
                     continue
                 except Exception as e:
-                    if tid in state["processed"]:
-                        state["processed"].remove(tid)
+                    retry_terminal_task(conf, state, tid)
                     log("infra_retry_error", repr(e))
                     continue
 
@@ -7716,8 +7723,7 @@ def cycle(conf, state):
         if holder:
             log(f"AREA WAIT {base_title(title)!r} ждёт: тот же файл правит {holder!r}")
             overlap_wait_decisions[tid] = verdict
-            if tid in state["processed"]:
-                state["processed"].remove(tid)
+            retry_terminal_task(conf, state, tid)
             continue
         nw = workflows.get(next_stage)
         complexity = verdict.get("next_complexity", "medium")
@@ -7728,8 +7734,7 @@ def cycle(conf, state):
             conf, next_stage, complexity, workers, repository_id=rid)
         worker = workers.get(worker_name)
         if not nw or not nw.get("enabled") or not worker:
-            if tid in state["processed"]:
-                state["processed"].remove(tid)
+            retry_terminal_task(conf, state, tid)
             log(f"cannot advance: workflow/worker missing for '{next_stage}' (повторю позже)")
             continue
 
@@ -7781,16 +7786,14 @@ def cycle(conf, state):
                     branch_state, branch_files = branch_report(
                         repo_identity_by_id.get(rid_s, ""), branch)
                 except Exception as e:
-                    if tid in state["processed"]:
-                        state["processed"].remove(tid)
+                    retry_terminal_task(conf, state, tid)
                     log(f"SPEC BRANCH WAIT {base[:40]!r}: проверка GitHub недоступна: {e}")
                     continue
 
             branch_missing = not branch or branch_state == "нет"
             branch_empty = branch_state == "есть" and not branch_files
             if branch and branch_state not in ("есть", "нет"):
-                if tid in state["processed"]:
-                    state["processed"].remove(tid)
+                retry_terminal_task(conf, state, tid)
                 log(f"SPEC BRANCH WAIT {base[:40]!r}: состояние ветки неизвестно")
                 continue
             if branch_missing or branch_empty:
@@ -7827,8 +7830,7 @@ def cycle(conf, state):
                            tags="wrench", click=f"{UI_BASE}/work")
                     continue
                 except Exception as e:
-                    if tid in state["processed"]:
-                        state["processed"].remove(tid)
+                    retry_terminal_task(conf, state, tid)
                     log("spec_branch_gate_error", repr(e))
                     continue
 
@@ -7868,8 +7870,7 @@ def cycle(conf, state):
                        tags="wrench", click=f"{UI_BASE}/work")
                 continue
             except Exception as e:
-                if tid in state["processed"]:
-                    state["processed"].remove(tid)
+                retry_terminal_task(conf, state, tid)
                 log("spec_gate_error", repr(e))
                 continue
 
@@ -7898,8 +7899,7 @@ def cycle(conf, state):
                     log(f"SPEC HEAD GATE {base[:40]!r}: {head_reason}")
                     continue
                 except Exception as e:
-                    if tid in state["processed"]:
-                        state["processed"].remove(tid)
+                    retry_terminal_task(conf, state, tid)
                     log("spec_head_gate_error", repr(e))
                     continue
 
@@ -7910,8 +7910,7 @@ def cycle(conf, state):
             rid_c = detail["task"].get("repository_id") or ""
             card = reserved_card_number(state, repo_identity_by_id.get(rid_c, ""), branch)
             if not card:
-                if tid in state["processed"]:
-                    state["processed"].remove(tid)
+                retry_terminal_task(conf, state, tid)
                 log(f"SPEC CARD WAIT {base[:40]!r}: каталог карточек недоступен")
                 continue
         card_line = f"Card: {card}\n" if card else ""
@@ -7924,8 +7923,7 @@ def cycle(conf, state):
                             area_repo=rid_g, expected_card=card)
             if g and g.get("wait"):
                 overlap_wait_decisions[tid] = verdict
-                if tid in state["processed"]:
-                    state["processed"].remove(tid)
+                retry_terminal_task(conf, state, tid)
                 continue
             if g and g.get("blocked"):
                 # A failed authoritative fetch is an infrastructure verdict,
@@ -7963,8 +7961,7 @@ def cycle(conf, state):
                            click=(f"{UI_BASE}/tasks/{new_tid}" if new_tid else f"{UI_BASE}/work"))
                     continue
                 except Exception as e:
-                    if tid in state["processed"]:
-                        state["processed"].remove(tid)
+                    retry_terminal_task(conf, state, tid)
                     log("gate_return_error", repr(e))
                 continue
             elif g:
@@ -8003,10 +8000,7 @@ def cycle(conf, state):
         except Exception as e:
             # do NOT swallow this task: drop it from 'processed' so the next
             # cycle tries again once a healthy worker is back.
-            if tid in state["processed"]:
-                state["processed"].remove(tid)
-            if tid in (conf.get("_restart_recovery_ids") or ()):
-                conf["_restart_recovery_retry"] = True
+            retry_terminal_task(conf, state, tid)
             log(f"cannot advance '{base}' {wf} -> {next_stage} (повторю позже): {e}")
             continue
         # The task snapshot was loaded before this cycle started.  Keep it
