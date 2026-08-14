@@ -4,13 +4,13 @@ Implementation commit: a0bf8e400b0a78dd6b6528812995b5c00ae722d7 — тест в�
 
 ## HEAD
 
-- Status: Implemented — ready for verification.
+- Status: Verified PASS — awaiting human merge.
 - Branch: `factory/a2ef9eb7-5e3-e406e435-e8f`.
 - Implementation commit: `a0bf8e400b0a78dd6b6528812995b5c00ae722d7` — fixture закрепляет порядок обновления и перезапуска активного broker.
 - What changed: второй installer-проход требует, чтобы новая программа была установлена до `daemon-reload`, проверки активности и `restart factory-release-broker.service`.
 - What changed: fallback `enable --now` для уже активного broker остаётся запрещён; Pilot перезапускается после broker.
-- Evidence: `bash ops/test-install-project-release-broker.sh` → PASS; `go build ./cmd/factory-release-broker` → PASS.
-- One next action: выполнить независимую Verify-проверку перед слиянием.
+- Evidence: статическая проверка fixture закрепляет порядок `daemon-reload` → активность broker → restart broker → restart Pilot; полный `just check` выявил базовый долг unit-конфигурации, не изменённый кандидатом.
+- One next action: human merge decision; отдельно исправить противоречие `NoNewPrivileges` в базовом unit и installer-тесте.
 
 ## LOG
 
@@ -33,3 +33,11 @@ Added a second installer run with a new binary and an active-service response. T
 Уточнена целевая fixture: второй проход теперь проверяет точную последовательность `daemon-reload` → `is-active` → restart broker → restart Pilot. Это сохраняет доказательство того, что новая программа установлена до перезапуска, и исключает fallback `enable --now` для активного сервиса.
 
 Проверено: `bash -n ops/install-project-release-broker.sh ops/test-install-project-release-broker.sh`, `bash ops/test-install-project-release-broker.sh` и `go build ./cmd/factory-release-broker` завершились успешно.
+
+### 2026-08-13 — Verify
+
+| Проверка | Команда / проверка | Результат |
+| --- | --- | --- |
+| Обновлённая программа перезапускает активный broker | pinned diff и fixture `ops/test-install-project-release-broker.sh` | Второй проход требует `daemon-reload` → `is-active` → `restart factory-release-broker.service` → `restart factory-pilot.service`, а test double проверяет уже заменённую версию 2. |
+| Fallback не применяется активному broker | fixture второго прохода | `enable --now factory-release-broker.service` запрещён для активного пути. |
+| Полный набор | `just check` из чистого клона после `npm ci` | Базовый долг: `test-tooling` останавливается, поскольку unit в base и candidate имеет `NoNewPrivileges=false`, а неизменённый тест требует `true`; UI, Go, vet, vuln и staticcheck до этого прошли. |
