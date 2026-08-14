@@ -7590,8 +7590,13 @@ def cycle(conf, state):
     codex_snapshot = codex_usage_snapshot(day_start, week_start)
 
     # Снимок для главного экрана. Никогда не должен ломать цикл.
+    # The same complete snapshot feeds terminal handoffs below. Looking only
+    # at /tasks?limit=100 there loses a completed stage once service traffic
+    # pushes it off the first page.
+    complete_tasks = None
     try:
-        write_dashboard(conf, all_tasks(), {w["id"]: w for w in api("/workers")["workers"]},
+        complete_tasks = all_tasks()
+        write_dashboard(conf, complete_tasks, {w["id"]: w for w in api("/workers")["workers"]},
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
@@ -7732,7 +7737,8 @@ def cycle(conf, state):
                      MAX_TERMINAL_TASKS_PER_CYCLE)),
         1,
     )
-    terminal_tasks = list(tasks)
+    handoff_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
+    terminal_tasks = list(handoff_tasks)
     terminal_cursor = state.get("terminal_cursor")
     cursor_index = next((index for index, task in enumerate(terminal_tasks)
                          if task.get("id") == terminal_cursor), None)
@@ -7759,7 +7765,7 @@ def cycle(conf, state):
                 conf["_restart_recovery_retry"] = True
             continue
 
-        closed_reason = work_lifecycle_block(base_title(title), t, tasks)
+        closed_reason = work_lifecycle_block(base_title(title), t, handoff_tasks)
         if closed_reason:
             overlap_wait_decisions.pop(tid, None)
             if tid not in state["processed"]:
@@ -7793,7 +7799,8 @@ def cycle(conf, state):
             if is_stopped(conf, base):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, t, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(
+                handoff_tasks, t, stage_no_of(title), since=t.get("created_at"))
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
@@ -7824,7 +7831,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(tasks, wf, t)
+            done = stage_attempts(handoff_tasks, wf, t)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -7949,7 +7956,7 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, t),
+                    squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
                 attach_question_work_id(t)
@@ -7971,7 +7978,7 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, t),
+                           attempts_so_far=stage_attempts(handoff_tasks, back, t),
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
             attach_question_work_id(t)
@@ -8013,7 +8020,8 @@ def cycle(conf, state):
         if is_stopped(conf, base):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
-        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(
+            handoff_tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -8259,7 +8267,8 @@ def cycle(conf, state):
         # The decision and delivery gates above can take long enough for
         # another Pilot to create the continuation. Re-check the shared
         # snapshot at the last possible moment before the external write.
-        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(
+            handoff_tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' продолжение появилось перед созданием "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -8280,6 +8289,8 @@ def cycle(conf, state):
                 and not any(item.get("id") == created_task.get("id")
                             for item in tasks)):
             tasks.append(created_task)
+            if handoff_tasks is not tasks:
+                handoff_tasks.append(created_task)
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")

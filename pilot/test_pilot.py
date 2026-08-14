@@ -5324,6 +5324,98 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(len(tasks), 101)
         api.assert_called_once_with("/tasks/old-terminal")
 
+    def test_normal_cycle_advances_terminal_task_beyond_first_page(self):
+        conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        recent = [{
+            "id": f"recent-{number}", "title": f"service task {number}",
+            "state": "succeeded", "created_at": "2026-08-10T11:00:00Z",
+        } for number in range(100)]
+        hidden = {
+            "id": "hidden-triage",
+            "title": "[auto] [1/2 Triage] Hidden continuation",
+            "state": "succeeded", "created_at": "2026-08-10T09:00:00Z",
+            "repository_id": "repo-id",
+        }
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(recent)}
+            if path == "/tasks/hidden-triage":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "attempts": [{"result": "READY"}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {
+                        "id": "rev-spec", "title": "Specification",
+                    },
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "cleanup_work_archive", "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "all_tasks", return_value=recent + [hidden]))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {
+                    "id": "spec-created", "title": body["title"],
+                    "state": "created", "repository_id": "repo-id",
+                }}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        self.assertEqual([body["title"] for body in created], [
+            "[auto] [2/2 Specification] Hidden continuation",
+        ])
+        self.assertIn("hidden-triage", state["processed"])
+
     def test_restart_recovery_skips_unavailable_ids_individually(self):
         conf = {
             "_restart_recovery_ids": frozenset(("gone", "broken", "available")),

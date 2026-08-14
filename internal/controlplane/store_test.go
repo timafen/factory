@@ -43,6 +43,26 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestStoreAttachmentRootFollowsDataHome(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", dataHome)
+
+	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "controlplane.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if got, want := store.attachmentRoot, filepath.Join(dataHome, "attachments"); got != want {
+		t.Fatalf("attachment root = %q; want %q", got, want)
+	}
+	if info, err := os.Stat(store.attachmentRoot); err != nil {
+		t.Fatalf("stat attachment root: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("attachment root is not a directory: %s", store.attachmentRoot)
+	}
+}
+
 func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenForTest(ctx, filepath.Join(t.TempDir(), "testing.sqlite3"), 17)

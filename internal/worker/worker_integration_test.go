@@ -3301,7 +3301,7 @@ func TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay(t *testing.T) {
 	}))
 	defer server.Close()
 	manager := &Manager{
-		client:  newClient(server.URL, server.Client()),
+		client: newClient(server.URL, server.Client()),
 		// Keep the same production schedule ratio, but make its 30% phase
 		// window wider than an ordinary loaded-CI scheduler stall. With a 40ms
 		// interval all ten correct timers can be released in one OS timeslice,
