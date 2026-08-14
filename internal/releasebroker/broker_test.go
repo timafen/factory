@@ -136,6 +136,101 @@ func waitForBrokerIdle(t *testing.T, broker *Broker) {
 	}
 }
 
+func TestBrokerRestartsUpdatedExecutableAfterDurableCommit(t *testing.T) {
+	for _, terminal := range []string{"succeeded", "release_failed_rolled_back"} {
+		t.Run(terminal, func(t *testing.T) {
+			stateDir := t.TempDir()
+			broker, err := NewAt(stateDir, &sequenceExecutor{statuses: []string{terminal}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			broker.brokerReplaced = func() (bool, error) { return true, nil }
+			restarted := make(chan struct{}, 1)
+			broker.restartBroker = func() error {
+				broker.mu.Lock()
+				active := broker.active
+				broker.mu.Unlock()
+				if active != "" {
+					t.Errorf("restart requested while operation %q is active", active)
+				}
+				data, readErr := os.ReadFile(filepath.Join(stateDir, "restart-release.commit"))
+				if readErr != nil || !strings.Contains(string(data), `"committed"`) {
+					t.Errorf("restart preceded durable committed marker: data=%q err=%v", data, readErr)
+				}
+				var saved operation
+				data, readErr = os.ReadFile(filepath.Join(stateDir, "restart-release.json"))
+				if readErr != nil || json.Unmarshal(data, &saved) != nil || saved.Status != terminal {
+					t.Errorf("restart preceded durable terminal record: data=%q err=%v", data, readErr)
+				}
+				restarted <- struct{}{}
+				return nil
+			}
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"restart-release","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			if got := postStatus(t, server, body); got != http.StatusAccepted {
+				t.Fatalf("POST status=%d", got)
+			}
+			select {
+			case <-restarted:
+			case <-time.After(time.Second):
+				t.Fatal("updated broker was not restarted")
+			}
+			waitForOperationStatus(t, server, "restart-release", terminal)
+			if got := postStatus(t, server, body); got != http.StatusOK {
+				t.Fatalf("duplicate POST status=%d", got)
+			}
+			select {
+			case <-restarted:
+				t.Fatal("duplicate terminal POST restarted broker again")
+			case <-time.After(20 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestBrokerDoesNotRestartUnchangedOrUncertainExecutable(t *testing.T) {
+	for name, replaced := range map[string]func() (bool, error){
+		"unchanged": func() (bool, error) { return false, nil },
+		"uncertain": func() (bool, error) { return false, errors.New("cannot stat executable") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+			broker.brokerReplaced = replaced
+			restarts := 0
+			broker.restartBroker = func() error { restarts++; return nil }
+			server := httptest.NewServer(broker.Handler())
+			defer server.Close()
+			body := `{"operation_id":"no-restart","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+			postStatus(t, server, body)
+			waitForOperationStatus(t, server, "no-restart", "succeeded")
+			waitForBrokerIdle(t, broker)
+			if restarts != 0 {
+				t.Fatalf("restart calls=%d", restarts)
+			}
+		})
+	}
+}
+
+func TestBrokerPersistenceFailurePreventsRestart(t *testing.T) {
+	broker := New(&sequenceExecutor{statuses: []string{"succeeded"}})
+	broker.brokerReplaced = func() (bool, error) { return true, nil }
+	restarts := 0
+	broker.restartBroker = func() error { restarts++; return nil }
+	broker.persistTerminal = func(*operation) error { return errors.New("disk unavailable") }
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"failed-persist","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	postStatus(t, server, body)
+	waitForBrokerIdle(t, broker)
+	if restarts != 0 {
+		t.Fatalf("restart calls=%d", restarts)
+	}
+	if got := operationStatus(t, server, "failed-persist").Status; got == "succeeded" {
+		t.Fatal("published terminal result despite persistence failure")
+	}
+}
+
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
 	executor := &recordingExecutor{done: make(chan struct{})}
 	server := httptest.NewServer(New(executor).Handler())

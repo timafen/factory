@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -168,6 +169,29 @@ type Broker struct {
 	mu              sync.Mutex
 	active          string
 	items           map[string]*operation
+	brokerReplaced  func() (bool, error)
+	restartBroker   func() error
+}
+
+// WithBrokerRestart asks systemd to replace this process after a Factory
+// release has durably committed an updated broker executable.
+func WithBrokerRestart(installedExecutable, unit string) func(*Broker) {
+	return func(b *Broker) {
+		b.brokerReplaced = func() (bool, error) {
+			running, err := os.Stat("/proc/self/exe")
+			if err != nil {
+				return false, err
+			}
+			installed, err := os.Stat(installedExecutable)
+			if err != nil {
+				return false, err
+			}
+			return !os.SameFile(running, installed), nil
+		}
+		b.restartBroker = func() error {
+			return exec.Command("/usr/bin/systemctl", "restart", unit).Run()
+		}
+	}
 }
 
 func (b *Broker) saveTerminal(item *operation) error {
@@ -181,7 +205,7 @@ func (b *Broker) saveTerminal(item *operation) error {
 // must use NewAt, supplied by the systemd StateDirectory.
 func New(executor Executor) *Broker { return newBroker("", executor) }
 
-func NewAt(stateDir string, executor Executor) (*Broker, error) {
+func NewAt(stateDir string, executor Executor, options ...func(*Broker)) (*Broker, error) {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return nil, errors.New("state directory must be absolute")
 	}
@@ -189,6 +213,9 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		return nil, err
 	}
 	b := newBroker(stateDir, executor)
+	for _, option := range options {
+		option(b)
+	}
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		return nil, err
@@ -498,15 +525,30 @@ func (b *Broker) execute(item *operation) {
 	// receipt from an outcome which a fresh broker cannot confirm.
 	updated := *item
 	updated.Status = status
+	committed := false
 	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err == nil {
 		if err := b.saveTerminal(&updated); err == nil && b.writeTerminalMarker(item.Request.OperationID, "committed", false) == nil {
 			*item = updated
+			committed = true
 		}
 	}
 	if b.active == item.Request.OperationID {
 		b.active = ""
 	}
 	b.mu.Unlock()
+	// Restarting earlier would kill the release driver in this broker's cgroup.
+	// Detection and restart therefore happen only after durable publication and
+	// after the active operation has been released.
+	if committed && request.Adapter == "fx-factory-release" && b.brokerReplaced != nil && b.restartBroker != nil {
+		replaced, err := b.brokerReplaced()
+		if err != nil {
+			log.Printf("release broker: cannot determine whether broker changed: %v", err)
+		} else if replaced {
+			if err := b.restartBroker(); err != nil {
+				log.Printf("release broker: cannot restart updated broker: %v", err)
+			}
+		}
+	}
 }
 
 // runnerStarted creates the real durable boundaries after the wrapper starts:
