@@ -1,7 +1,7 @@
 # CARD-0073 — Изоляция снимка задач Пилота
 
-Implementation commit: pending — спецификация текущего этапа; реализация будет
-зафиксирована отдельным коммитом следующего этапа.
+Implementation commit: 17564d397ff9ab2e6954393969444f3f21d916cd — зафиксирована
+спецификация; реализация будет отдельным коммитом следующего этапа.
 
 ## Scope
 
@@ -14,4 +14,3 @@ Implementation commit: pending — спецификация текущего э�
 Спецификация: `knowledge/specs/pilot-task-snapshot-isolation.md`.
 Реализация должна изменить только `pilot/pilot.py` и `pilot/test_pilot.py`,
 добавив целевой класс `TaskSnapshotIsolationTests` и сохранив API и UI.
-
