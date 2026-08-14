@@ -1,14 +1,14 @@
-Implementation commit: 36f2323a9ec2dace4fed2938e838fe38d1b99374 — административные вопросы сначала получает старшая модель, а опасные действия эскалируются владельцу.
+Implementation commit: 83da64f5a12667e696aad3e49fb91b8711074015 — ответ владельца не теряется при сохранении результата admin-проверки.
 
 # CARD-0133 — Административные вопросы сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Implemented and targeted tests PASS — awaiting Review.
-- Ветка: `factory/32a417bb-fe9-a66e4207-bc2`.
-- Implementation commit: `36f2323a9ec2dace4fed2938e838fe38d1b99374` — admin-вопросы направляются старшей модели до владельца.
-- Изменено: безопасные staging-действия проходят через фиксированный `fx` argv; запрещённые и неуспешные действия эскалируются владельцу, служебный аудит скрыт из owner API.
-- Evidence: `AdminQuestionRoutingTests` — 10/10 PASS; HTTP-регрессия, `py_compile` и Go build — PASS.
+- Статус: Implemented and full verification PASS.
+- Ветка: `factory/ca162a59-289-0edf5c51-c29`.
+- Implementation commit: `83da64f5a12667e696aad3e49fb91b8711074015` — admin-вопросы сначала решает старшая модель, а ответ владельца защищён от перезаписи.
+- Изменено: ветки успешного `fx` для `wait` и эскалации сохраняют через атомарное слияние под блокировкой; добавлена детерминированная регрессия owner POST.
+- Evidence: `AdminQuestionRoutingTests` — 11/11 PASS; `python3 -m unittest pilot.test_pilot` — 276 PASS (13 skipped); `go test ./...`, `go build ./...` — PASS.
 - Следующее действие: Review проверяет опубликованный remote candidate относительно свежего `main`.
 
 ## LOG
@@ -136,3 +136,11 @@ Pinned diff от удалённой базы `151429d93310549a1bb04182ab688cc828
 CARD-0133. Код-коммит — `36f2323a9ec2dace4fed2938e838fe38d1b99374`.
 Целевые `AdminQuestionRoutingTests` прошли 10/10, HTTP-регрессия, Python
 compilation и Go build также завершились успешно.
+
+### 2026-08-13 — Implement
+
+После замечания Review финальные ветки `fx success → wait` и `fx success →
+escalate` переведены на `save_question(rec)`: блокировка сливает уже записанный
+ответ владельца вместо его перезаписи. Детерминированный регрессионный тест
+моделирует конкурентный owner POST для обеих веток. `AdminQuestionRoutingTests`
+11/11, полный Pilot 276/276 (13 skipped), `go test ./...` и `go build ./...` — PASS.
