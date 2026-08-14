@@ -5,6 +5,8 @@ Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — тесты P
 ## HEAD
 
 Status: Closed — duplicate
+Branch: factory/5ada57fd-1fa-ef2a3316-015
+Implementation commit: c648f4a4adaa65faefaa6d1806ca1a3090b0afca — обязательные ворота тестов Pilot до сборки и установки уже находятся в main
 Duplicate of: CARD-0030
 Related work: CARD-0043
 What changed: зафиксировано, что воспроизведённый сбой уже устранён в текущем
@@ -39,3 +41,11 @@ CARD-0043 отмечена как связанная работа. Канони�
 закрытию уже исправленного сбоя.
 
 Спецификация: `knowledge/specs/pilot-release-gate-duplicate.md`.
+
+### 2026-08-14 — Implement
+
+Реализация не повторялась: по утверждённому решению владельца задача остаётся
+закрытым дубликатом CARD-0030, а CARD-0043 сохранена как связанная работа.
+Подтверждено на текущем `main`: `python3 -m unittest -q pilot.test_pilot` —
+286 тестов, `OK` (13 skipped); `bash ops/test-fx-factory-release.sh` — exit 0.
+Новая разработка и живой привилегированный выпуск не запускались.
