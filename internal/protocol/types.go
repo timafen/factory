@@ -393,6 +393,7 @@ type Task struct {
 	WorkID         string    `json:"work_id,omitempty"`
 	ParentTaskID   string    `json:"parent_task_id,omitempty"`
 	CorrectionKind string    `json:"correction_kind,omitempty"`
+	WorkClass      string    `json:"work_class,omitempty"`
 }
 
 type TaskCursor struct {
