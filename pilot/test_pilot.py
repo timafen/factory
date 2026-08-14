@@ -5138,6 +5138,36 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(recovery_seen,
                          [frozenset(("done",)), None])
 
+    def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        ids = [
+            f"terminal-{number}"
+            for number in range(pilot.RESTART_RECOVERY_RETENTION + 1)
+        ]
+        state = {
+            "processed": ids,
+            "terminal_handoff_watermark": "2026-08-10T10:00:00Z",
+        }
+        recovery_seen = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(cycle_conf, _state):
+            recovery_seen.append(cycle_conf.get("_restart_recovery_ids"))
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertEqual(len(recovery_seen[0]), pilot.RESTART_RECOVERY_RETENTION)
+        self.assertNotIn(ids[0], recovery_seen[0])
+        self.assertIn(ids[-1], recovery_seen[0])
+
     def test_loop_keeps_recovery_watermark_when_handoff_is_pending(self):
         conf = {"enabled": True, "poll_seconds": 30}
         state = {
@@ -5198,7 +5228,7 @@ class AdaptivePollingTests(unittest.TestCase):
         conf = {"enabled": True, "poll_seconds": 30}
         state = {"processed": []}
         sleeps = []
-        clock = iter((99.0, 100.0, 101.0, 102.0))
+        clock = iter((100.0, 102.0))
 
         def fake_load(path, default):
             return conf if path == pilot.CONF_PATH else state
@@ -5233,7 +5263,7 @@ class AdaptivePollingTests(unittest.TestCase):
                     {"seconds": 10, "reason": "active"},
                 ]):
             pilot.run_loop(max_cycles=3, sleep_fn=sleeps.append,
-                           clock_fn=iter((100.0, 130.0, 189.0, 190.0)).__next__)
+                           clock_fn=iter((100.0, 130.0, 190.0)).__next__)
 
         self.assertEqual(sleeps, [30, 60, 10])
         self.assertEqual(state["next_poll"]["reason"], "active")

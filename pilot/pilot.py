@@ -48,6 +48,7 @@ HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
 HOST_LOAD_MINIMUM_ACTIVE = 1
 MAX_RETAINED_PER_REPOSITORY = 10
 PROCESSED_RETENTION = 10000
+RESTART_RECOVERY_RETENTION = 500
 FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
@@ -8126,7 +8127,8 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         if conf and conf.get("enabled", True):
             if recovery_ids is None:
                 recovery_watermark = state.get("terminal_handoff_watermark")
-                recovery_ids = (frozenset(state.get("processed") or [])
+                recovery_ids = (frozenset(
+                    (state.get("processed") or [])[-RESTART_RECOVERY_RETENTION:])
                                 if recovery_watermark else frozenset())
                 recovery_watermark = recovery_watermark or ""
             else:
