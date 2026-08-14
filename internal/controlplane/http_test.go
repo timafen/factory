@@ -31,6 +31,30 @@ type httpFixture struct {
 
 const testWorkerBootstrapCredential = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
+func TestPromisesExposeVerificationAndRebuiltDeliveryState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "pilot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	promises := `{"Восстановить поставку":{"files":["pilot/pilot.py"],"commands":["python3 -m unittest pilot.test_pilot"],"delivery_status":"пересобрана и заново закреплена"}}`
+	if err := os.WriteFile(filepath.Join(home, "pilot", "promises.json"), []byte(promises), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newHTTPFixture(t)
+	response := fixture.request(http.MethodGet, "/api/v1/promises", "", "", nil)
+	requireStatus(t, response, http.StatusOK)
+	got := decodeResponse[map[string]struct {
+		Files          []string `json:"files"`
+		Commands       []string `json:"commands"`
+		DeliveryStatus string   `json:"delivery_status"`
+	}](t, response)
+	entry := got["Восстановить поставку"]
+	if len(entry.Files) != 1 || len(entry.Commands) != 1 || entry.DeliveryStatus != "пересобрана и заново закреплена" {
+		t.Fatalf("promises response = %#v", got)
+	}
+}
+
 func TestDashboardSerializesManagedRepositoryReadiness(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("FACTORY_DATA_HOME", home)

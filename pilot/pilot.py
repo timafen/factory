@@ -2775,6 +2775,17 @@ def save_promises(base, text):
     log("PROMISES %r: файлов %d, команд %d" % (base[:40], len(files), len(cmds)))
 
 
+def record_promise_delivery_state(base, state):
+    """Expose a short operator-facing delivery state without Git internals."""
+    promises = load(PROMISES_PATH, {}) or {}
+    item = promises.get(base)
+    if not isinstance(item, dict):
+        return
+    item["delivery_status"] = state
+    promises[base] = item
+    save(PROMISES_PATH, promises)
+
+
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -3040,8 +3051,9 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
     """
     if not (repo_identity and dirty_branch and keep_files):
         return ""
-    short = repo_identity.split("github.com/")[-1]
-    url = f"https://github.com/{short}.git"
+    url = _remote_url(repo_identity)
+    if not url:
+        return ""
     os.makedirs(REBUILD_DIR, exist_ok=True)
     work = f"{REBUILD_DIR}/{re.sub(chr(91) + '^a-zA-Z0-9' + chr(93), '_', dirty_branch)[:60]}"
     try:
@@ -3050,28 +3062,31 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
         rc, out = _git(REBUILD_DIR, "init", "-q", work)
         if rc:
             log("rebuild: init " + out[:120]); return ""
+        default, error = _default_branch(url)
+        if error:
+            log("rebuild: " + error[:160]); return ""
         for args in (("remote", "add", "origin", url),
                      ("fetch", "origin",
-                      "+main:refs/remotes/origin/main"),
+                      "+refs/heads/" + default + ":refs/remotes/origin/" + default),
                      ("fetch", "origin",
-                      "+" + dirty_branch + ":refs/remotes/origin/" + dirty_branch)):
+                      "+refs/heads/" + dirty_branch + ":refs/remotes/origin/" + dirty_branch)):
             rc, out = _git(work, *args)
             if rc:
                 log("rebuild: " + args[0] + " " + out[:160]); return ""
         clean = dirty_branch + "-clean"
-        rc, out = _git(work, "checkout", "-q", "-B", clean, "origin/main")
+        rc, out = _git(work, "checkout", "-q", "-B", clean, "origin/" + default)
         if rc:
             log("rebuild: base " + out[:160]); return ""
         selected = sorted(set(keep_files))
         rc, source = _git(work, "diff", "--name-only",
-                          "origin/main...origin/" + dirty_branch, "--", *selected)
+                          "origin/" + default + "...origin/" + dirty_branch, "--", *selected)
         if rc:
             log("rebuild: source diff " + source[:160]); return ""
         expected = {p.strip() for p in source.splitlines() if p.strip()}
         if not expected:
             log("rebuild: ни один файл области не перенесён"); return ""
         rc, patch = _git(work, "diff", "--binary",
-                         "origin/main...origin/" + dirty_branch, "--", *sorted(expected))
+                         "origin/" + default + "...origin/" + dirty_branch, "--", *sorted(expected))
         if rc or not patch:
             log("rebuild: patch " + patch[:160]); return ""
         rc, out = _git(work, "apply", "--index", "--3way", "-",
@@ -3083,7 +3098,7 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
                        "Пересобрано машиной от свежей главной: " + base[:90])
         if rc:
             log("rebuild: commit " + out[:160]); return ""
-        rc, final = _git(work, "diff", "--name-only", "origin/main...HEAD")
+        rc, final = _git(work, "diff", "--name-only", "origin/" + default + "...HEAD")
         if rc:
             log("rebuild: final diff " + final[:160]); return ""
         final_paths = {p.strip() for p in final.splitlines() if p.strip()}
@@ -3106,6 +3121,35 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
             subprocess.run(["rm", "-rf", work], timeout=60)
         except Exception:
             pass
+
+
+def rebuild_stale_delivery(repo_identity, base, promised_files, area_repo=""):
+    """Rebuild a stale delivery only from its verified implementation artifact.
+
+    A delivery branch is not a source of truth: it may have been published
+    before the default branch advanced.  The durable implementation artifact
+    is the only branch allowed to supply the promised paths.
+    """
+    artifact = implementation_artifact(base)
+    if not artifact or not promised_files:
+        return {"state": "unavailable"}
+    source = fresh_branch_snapshot(repo_identity, artifact["branch"])
+    if source.get("state") != "ok":
+        return {"state": "blocked", "reason": source.get("reason") or "cannot fetch implementation artifact"}
+    if source.get("candidate_sha") != artifact["head"]:
+        return {"state": "unavailable"}
+    if not set(promised_files).issubset(set(source.get("files") or [])):
+        return {"state": "unavailable"}
+    clean = rebuild_clean_branch(repo_identity, artifact["branch"], promised_files,
+                                 base, area_repo=area_repo)
+    if not clean:
+        return {"state": "blocked", "reason": "cannot rebuild delivery from implementation artifact"}
+    rebuilt = fresh_branch_snapshot(repo_identity, clean)
+    if rebuilt.get("state") != "ok":
+        return {"state": "blocked", "reason": rebuilt.get("reason") or "rebuilt candidate is not published"}
+    if not set(promised_files).issubset(set(rebuilt.get("files") or [])):
+        return {"state": "blocked", "reason": "rebuilt candidate lost promised paths"}
+    return {"state": "ok", "branch": clean, "snapshot": rebuilt}
 
 
 def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo="",
@@ -3166,8 +3210,28 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
         prom = (load(PROMISES_PATH, {}) or {}).get(base) or {}
         if not isinstance(prom, dict):
             prom = {}
-        missing_promises = sorted(set(prom.get("files") or []) - set(files))
+        promised_files = sorted(set(prom.get("files") or []))
+        missing_promises = sorted(set(promised_files) - set(files))
         if missing_promises:
+            # Only a branch genuinely left behind by the freshly pinned
+            # default branch qualifies for recovery.  Empty, service, and
+            # unverified sources deliberately keep the old safe return.
+            if snapshot.get("base_advanced"):
+                rebuilt = rebuild_stale_delivery(repo_identity, base, promised_files,
+                                                 area_repo=area_repo)
+                if rebuilt.get("state") == "blocked":
+                    return {"blocked": True, "note": (
+                        "BLOCKED: review infrastructure. Отставшую поставку нельзя "
+                        "безопасно пересобрать и заново закрепить перед Review. Причина: "
+                        + rebuilt.get("reason", "unknown rebuild failure"))}
+                if rebuilt.get("state") == "ok":
+                    rebuilt_snapshot = rebuilt["snapshot"]
+                    record_promise_delivery_state(base, "пересобрана и заново закреплена")
+                    return {"back": False, "branch": rebuilt["branch"],
+                            "head": rebuilt_snapshot["candidate_sha"],
+                            "note": ("Отставшая ветка поставки пересобрана из подтверждённой "
+                                     "реализации только по обещанным файлам и заново закреплена "
+                                     "перед Review.")}
             log(f"GATE '{base}': нет обещанных файлов: " + ", ".join(missing_promises))
             return {"back": True,
                     "alert": "Вернул сам: исчез обещанный файл реализации",
