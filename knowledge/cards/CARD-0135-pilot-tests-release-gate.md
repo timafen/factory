@@ -9,7 +9,7 @@ Implementation commit: 89617879b36b92fd05a9169ca04211d4ff28fa29 — полный
 - Implementation commit: `89617879b36b92fd05a9169ca04211d4ff28fa29`
 - What changed: полный `pilot.test_pilot` запускается отдельной доверенной группой до UI/Go-сборок; его ошибка останавливает выпуск до установки и перезапуска служб.
 - Evidence: base `65d0d1ef70f71b25751e96e0c4961e897849abcb`; Pilot → 268 OK, 13 skipped; shell-ворота → PASS; `just ui-check` → 180 tests passed; `just build` → три бинарника собраны.
-- One next action: опубликовать ветку и передать её на независимый Review.
+- One next action: передать опубликованную ветку на независимый Review.
 
 ## LOG
 
