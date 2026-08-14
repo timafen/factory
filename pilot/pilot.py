@@ -917,6 +917,13 @@ def work_lifecycle_block(base, task=None, tasks=None):
             return "новое поколение запланировано, но ещё не начато"
         if task and task.get("id") == linked_id:
             return ""
+        # Every continuation created by the control plane carries the durable
+        # root work identity.  The linked Plan root can legitimately fall
+        # outside the API's current 100-task page; its descendants still
+        # belong to this exact generation and must not be mistaken for an old
+        # run merely because the boundary row is not in the snapshot.
+        if task and task.get("work_id") == linked_id:
+            return ""
         linked = next((item for item in (tasks or []) if item.get("id") == linked_id), None)
         boundary = (linked or {}).get("created_at") or ""
         if task and boundary and (task.get("created_at") or "") >= boundary:
