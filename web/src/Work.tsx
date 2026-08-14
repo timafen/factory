@@ -114,6 +114,7 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
   const qState = new Map(questions.map((q) => [q.task_id ?? "", q.status ?? ""]));
   const map = new Map<string, Group>();
   for (const t of tasks) {
+    if (t.work_class === "patrol") continue;
     const { base, stage } = parse(t.title);
     const v = verdicts[t.id];
     const id = t.work_id?.trim() || base;
@@ -734,7 +735,7 @@ function GroupRow({ g, workerMap, expanded, onToggle, onTask, onAnswer, onResume
               : stopped && !isLast && stage === "Review" ? "вернул на доработку"
               : stopped && !isLast ? "ход закончен, работа пошла дальше"
               : stopped ? "пауза по решению"
-              : "отработала";
+              : "задача выполнена";
             const tone =
               LIVE.includes(task.state) ? "live"
               : task.state === "failed" ? "bad"

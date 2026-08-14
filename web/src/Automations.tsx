@@ -496,6 +496,10 @@ export function AutomationDetail({
                   <span className="occurrence-identity">
                     <strong>{occurrenceIdentity(occurrence)}</strong>
                     <small>{formatTimestamp(occurrence.created_at)}{occurrence.task ? ` · ${occurrence.task.title}` : ""}{occurrence.diagnostic ? ` · ${occurrence.diagnostic}` : ""}</small>
+                    {occurrenceFinding(occurrence.result).map((finding) => (
+                      <small key={finding} aria-label="Находка"><strong>Находка:</strong> {finding}</small>
+                    ))}
+                    <small aria-label="Итог"><strong>Итог:</strong> {occurrenceOutcome(occurrence)}</small>
                   </span>
                   <span className="occurrence-actions">
                     {sourceURL && (
@@ -1139,6 +1143,18 @@ function automationRunState(occurrence: AutomationOccurrence): { style: string; 
   if (occurrence.state === "task_deleted") return { style: "cancelled", label: "Task deleted" };
   if (occurrence.state === "skipped") return { style: "skipped", label: "Skipped" };
   return { style: occurrence.state, label: formatRunState(occurrence.state) };
+}
+
+export function occurrenceFinding(result: string | undefined): string[] {
+  return (result ?? "").split("\\n")
+    .filter((line) => line.startsWith("НАХОДКА:"))
+    .map((line) => line.slice("НАХОДКА:".length).trim())
+    .filter(Boolean);
+}
+
+export function occurrenceOutcome(occurrence: AutomationOccurrence): string {
+  const outcome = occurrence.result?.trim() || occurrence.error?.trim();
+  return outcome || "Результат не оставлен";
 }
 
 function retryRunState(status: NonNullable<AutomationTaskSummary["retry_status"]>): { style: string; label: string } {
