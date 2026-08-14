@@ -1,24 +1,25 @@
+Implementation commit: 0b385da2cc220ab6249a29e5c0ce91e6c764fc29 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+
 # CARD-0127: Повтор предполётной проверки deleted-inode
 
-Implementation commit: 5746dbc1fa1314497dc1fe69c68f0162e236a866 — выпуск до мутаций проверяет executable активных unit, сохраняет бортовой журнал и прекращает release при deleted inode.
+## HEAD
 
-## Статус
+Status: Implemented.
+Branch: factory/af918838-ce0-d6326a25-705.
+Implementation commit: 0b385da2cc220ab6249a29e5c0ce91e6c764fc29 — fixture доказывает fail-closed отказ выпуска при deleted inode до мутаций.
+What changed: `ops/test-fx-factory-release.sh` эмулирует активный `factory-server.service` с `MainPID` и `/proc/<pid>/exe` с суффиксом ` (deleted)`.
+The fixture требует code 4, понятную строку с unit и отсутствие service mutations.
+Evidence: `bash -n ops/test-fx-factory-release.sh ops/fx-factory-release` → PASS; `bash ops/test-fx-factory-release.sh` → PASS.
+One next action: выполнить `ops/test-factory-release-systemd.sh` в root/systemd CI fixture для проверки предпосылки на реальном MainPID.
 
-Status: Specification ready. Владелец разрешил повторную предполётную проверку; предыдущий обрыв вывода не считается результатом release.
+## LOG
 
-## Результат для владельца
+### 2026-08-14 — Specification
 
-Повторная проверка теперь определена как отдельная диагностируемая операция: deleted inode останавливает выпуск до изменения Factory, а новая потеря supervisor output требует сохранить последний шаг и полный voyage-log, а не назвать попытку успешной.
+Определена отдельная диагностируемая операция: deleted inode останавливает выпуск до изменения Factory, а новая потеря supervisor output требует сохранить последний шаг и полный voyage-log, а не назвать попытку успешной.
 
-## Scope
+Scope: `knowledge/specs/factory-release-preflight-deleted-inode-retry.md`, операционная проверка существующих `ops/fx-factory-release`, `ops/test-fx-factory-release.sh`, `ops/test-factory-release-systemd.sh` и `docs/factory-handover-sol.md`.
 
-- `knowledge/specs/factory-release-preflight-deleted-inode-retry.md`
-- операционная проверка существующих `ops/fx-factory-release`, `ops/test-fx-factory-release.sh`, `ops/test-factory-release-systemd.sh` и `docs/factory-handover-sol.md`
+### 2026-08-14 — Implement
 
-## Приёмка
-
-Обязательная проверка реализации: `bash ops/test-fx-factory-release.sh` завершается с кодом 0. Для живого повтора результатом является полный voyage-log с последним шагом и exit code; при `deleted-inode` перед повтором перезапускается только названный unit.
-
-## Ограничения
-
-Эта работа — только Specification: не меняет продуктовый код, UI, production, службы и базу. После повторного запуска при новом обрыве в карточку/диагностику переносится полный вывод ошибки и точный шаг.
+Добавлен изолированный сценарий release fixture: активный `factory-server.service` возвращает MainPID, а его `/proc/<pid>/exe` помечен ` (deleted)`. Проверка подтверждает code 4, русскую диагностическую строку и отсутствие мутаций служб. `bash ops/test-fx-factory-release.sh` завершился успешно; systemd-проверка в текущем окружении явно SKIP, поскольку нет root/systemd fixture.
