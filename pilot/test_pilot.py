@@ -99,6 +99,30 @@ class AgentRulesScopeTests(unittest.TestCase):
         self.assertIn("candidate_sha", rules)
         self.assertIn("git push --force-with-lease", rules)
 
+    def test_verify_cannot_change_the_reviewed_candidate(self):
+        rules = pilot.agent_rules({}, "Verify")
+
+        self.assertIn("ФИНАЛЬНАЯ ПРОВЕРКА — ТОЛЬКО ЧТЕНИЕ", rules)
+        self.assertIn("запрещено изменять любые файлы", rules)
+        self.assertIn("неизменённый снимок", rules)
+        self.assertNotIn(
+            "ФИНАЛЬНАЯ ПРОВЕРКА — ТОЛЬКО ЧТЕНИЕ",
+            pilot.agent_rules({}, "Implement + Test"),
+        )
+
+    @mock.patch.object(pilot, "money_guard")
+    @mock.patch.object(pilot, "api", return_value={"task": {"id": "task"}})
+    def test_verify_task_receives_read_only_override(self, _api, _money):
+        body = {
+            "title": "[auto] [5/5 Verify] Проверить поставку",
+            "context": "Контекст\n\n" + pilot.AGENT_RULES,
+        }
+
+        pilot.create_task(body, {})
+
+        self.assertIn("ФИНАЛЬНАЯ ПРОВЕРКА — ТОЛЬКО ЧТЕНИЕ", body["context"])
+        self.assertEqual(body["context"].count("ПРАВИЛА ДЛЯ АГЕНТА"), 1)
+
     def test_stage_verdict_keeps_review_return_reason(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
