@@ -1,16 +1,16 @@
-Implementation commit: a0bf8e400b0a78dd6b6528812995b5c00ae722d7 — тест выпуска подтверждает порядок перезапуска активного release-broker после замены программы
+Implementation commit: d270f5ccc3f7ecd92eb0ce079cb50299c0f03a3a — installer и unit согласованы, повторная установка перезапускает обновлённый release-broker
 
 # CARD-0067 — Active release broker restarts after binary replacement
 
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge.
-- Branch: `factory/a2ef9eb7-5e3-e406e435-e8f`.
-- Implementation commit: `a0bf8e400b0a78dd6b6528812995b5c00ae722d7` — fixture закрепляет порядок обновления и перезапуска активного broker.
-- What changed: второй installer-проход требует, чтобы новая программа была установлена до `daemon-reload`, проверки активности и `restart factory-release-broker.service`.
-- What changed: fallback `enable --now` для уже активного broker остаётся запрещён; Pilot перезапускается после broker.
-- Evidence: статическая проверка fixture закрепляет порядок `daemon-reload` → активность broker → restart broker → restart Pilot; полный `just check` выявил базовый долг unit-конфигурации, не изменённый кандидатом.
-- One next action: human merge decision; отдельно исправить противоречие `NoNewPrivileges` в базовом unit и installer-тесте.
+- Branch: `factory/77526c28-ac9-a5079562-075`.
+- Implementation commit: `d270f5ccc3f7ecd92eb0ce079cb50299c0f03a3a` — installer проверяет фактически рабочее исключение `NoNewPrivileges=false`, документированное в unit для сохранения `CAP_SETUID`.
+- What changed: второй installer-проход ставит новую программу, затем требует `daemon-reload` → проверку активности → restart broker → restart Pilot.
+- What changed: активный broker не уходит в fallback `enable --now`; первая установка по-прежнему включает неактивный сервис.
+- Evidence: `bash ops/test-install-project-release-broker.sh`, `env -u FACTORY_BUILD_DIR just test-tooling` и сборка `factory-release-broker` — PASS на implementation commit.
+- One next action: human merge decision.
 
 ## LOG
 
@@ -41,3 +41,9 @@ Added a second installer run with a new binary and an active-service response. T
 | Обновлённая программа перезапускает активный broker | pinned diff и fixture `ops/test-install-project-release-broker.sh` | Второй проход требует `daemon-reload` → `is-active` → `restart factory-release-broker.service` → `restart factory-pilot.service`, а test double проверяет уже заменённую версию 2. |
 | Fallback не применяется активному broker | fixture второго прохода | `enable --now factory-release-broker.service` запрещён для активного пути. |
 | Полный набор | `just check` из чистого клона после `npm ci` | Базовый долг: `test-tooling` останавливается, поскольку unit в base и candidate имеет `NoNewPrivileges=false`, а неизменённый тест требует `true`; UI, Go, vet, vuln и staticcheck до этого прошли. |
+
+### 2026-08-13 — Implement
+
+Installer согласован с поставляемым unit без недокументированного ослабления: он требует явное `NoNewPrivileges=false`, поскольку текущий isolation profile иначе лишает root-процесс `CAP_SETUID`, нужной `setpriv` для запуска выпуска от пользователя `factory`. Fixture проверяет это значение и полный второй проход после замены программы.
+
+Evidence на `d270f5ccc3f7ecd92eb0ce079cb50299c0f03a3a`: `bash -n ops/install-project-release-broker.sh ops/test-install-project-release-broker.sh`, `bash ops/test-install-project-release-broker.sh`, `env -u FACTORY_BUILD_DIR just test-tooling` и `go build -o /tmp/factory-release-broker-d270f5ccc3f7 ./cmd/factory-release-broker` — PASS.
