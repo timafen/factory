@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented
-Branch: factory/08636c0c-7d3-a0e71831-c9e
-Implementation commit: 9065718bc8e784d69bd7fe412b4aee4c261f86c6 — патрульные задачи скрываются из «Работа», а результаты запусков показываются в «Автоматизациях»
-What changed: Tasks получают устойчивый `work_class` по фактам scheduled Automation; occurrence проецирует последнюю попытку, включая result/error. UI фильтрует patrol и показывает находки/итог.
-Evidence: targeted controlplane Go tests — PASS; `cd web && npm test -- --run src/Work.test.ts src/Automations.test.tsx` — 17 PASS; typecheck/lint/build — PASS.
-Next action: Verify на стенде открыть `/work` и `/automations/<id>` у патруля с успешным, неуспешным и пустым запуском.
+Status: Implemented — ожидает повторный Review
+Branch: factory/201d3c5f-8d0-effdd4a6-7de
+Implementation commit: 778179b70ab5839f5d7c53117f4be7faf323fd66 — патрули скрываются в обоих режимах «Работы», а результаты последней попытки подтверждены через Store и HTTP API
+What changed: Tasks получают устойчивый `work_class`; UI исключает patrol в списке и доске этапов, а находки понимают настоящие LF/CRLF. Последняя попытка проецирует retry, result/error и пустое состояние.
+Evidence: 25 целевых UI-тестов, целевые Go-тесты, typecheck и production build — PASS.
+Next action: повторный Review перед Verify.
 
 ## LOG
 
@@ -22,3 +22,9 @@ Next action: Verify на стенде открыть `/work` и `/automations/<i
 На ветке сдачи заново подтверждены классификация патрулей и проекция последней
 попытки: целевой Go-набор, 17 UI-проверок, typecheck, lint и production build
 прошли. CARD-0129 дополнена обязательной стабильной ссылкой на коммит реализации.
+
+### 2026-08-14 — Implement
+
+Исправлены все замечания повторного Review: режим «по этапам» не показывает
+патрули, разбор находок работает с LF/CRLF, Store и HTTP API проверены для
+пустой попытки, retry, error и result. Целевые проверки и production build прошли.

@@ -1,22 +1,20 @@
 # CARD-0129 — Патрули показывают находки в «Автоматизациях»
 
-Implementation commit: 9065718bc8e784d69bd7fe412b4aee4c261f86c6 — патрульные задачи скрываются из «Работа», а результаты запусков показываются в «Автоматизациях».
+Implementation commit: 778179b70ab5839f5d7c53117f4be7faf323fd66 — патрули скрываются в обоих режимах «Работы», а последняя попытка Automation проверена через Store и HTTP API.
 
 ## HEAD
 
-- Статус: Implemented — ожидает Verify.
-- Ветка: `factory/08636c0c-7d3-a0e71831-c9e`.
-- Implementation commit: `9065718bc8e784d69bd7fe412b4aee4c261f86c6` —
-  патрульные задачи скрываются из «Работа», а результаты запусков показываются
-  в «Автоматизациях».
+- Статус: Implemented — ожидает повторный Review.
+- Ветка: `factory/201d3c5f-8d0-effdd4a6-7de`.
+- Implementation commit: `778179b70ab5839f5d7c53117f4be7faf323fd66` —
+  патрули скрываются в обоих режимах «Работы», а последняя попытка Automation
+  проверена через Store и HTTP API.
 - Спецификация: `knowledge/specs/patrol-findings-on-automations.md`.
 - Область: скрыть только встроенные патрули с экрана «Работа» и перенести
   наблюдение их запусков, находок и итогов на detail-экран Automation.
-- Evidence: целевые Go-проверки — PASS; `cd web && npm test -- --run
-  src/Work.test.ts src/Automations.test.tsx` — 17 PASS; typecheck, lint и
-  production build — PASS.
-- Следующее действие: на стенде открыть `/work` и `/automations/<id>` у патруля
-  с успешным, неуспешным и пустым запуском.
+- Evidence: 25 целевых UI-проверок, целевые Go-проверки и typecheck — PASS;
+  production build завершился успешно.
+- Следующее действие: повторный Review изменений перед Verify.
 
 ## LOG
 
@@ -55,3 +53,10 @@ Automation показывает состояние, явные строки `Н�
 список Work скрывает только устойчиво классифицированные патрули, а Automation
 показывает последнюю попытку, находки и нейтральный пустой итог. Целевые Go
 проверки, 17 UI-проверок, typecheck, lint и production build прошли.
+
+### 2026-08-14 — Implement
+
+После возврата Review патрули исключены и из режима «по этапам», а находки
+разбирают реальные LF/CRLF. Store и HTTP API покрыты для отсутствующей попытки,
+ошибки с поставленным retry и успешного результата повторной попытки.
+Целевые Go-тесты, 25 UI-тестов, typecheck и production build прошли.
