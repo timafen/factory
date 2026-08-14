@@ -1,12 +1,11 @@
-Implementation commit: ad163d708e407f23261382da4a0d35e1ada588a5 — выпуск перезапускает broker после установки новой версии и долговечной записи успеха
+Implementation commit: 5ca87ce52a6218e0b12d13186ce4b817abe0c7b4 — squash-коммит выпуска перезапускает broker после установки новой версии и долговечной записи успеха
 
 # CARD-0067 — Active release broker restarts after binary replacement
 
 ## HEAD
 
-- Status: Implemented and verified — awaiting human merge.
-- Branch: `factory/8f06ea11-375-6280f3ad-762`.
-- Implementation commit: `ad163d708e407f23261382da4a0d35e1ada588a5` — broker detects its replaced executable and exits for systemd only after durable success.
+- Status: Implemented and verified in `origin/main`; повторный выпуск не требуется.
+- Implementation commit: `5ca87ce52a6218e0b12d13186ce4b817abe0c7b4` — broker detects its replaced executable and exits for systemd only after durable success.
 - What changed: the release installs a distinct broker candidate; the running broker preserves the receipt, then requests service restart. Unchanged executables stay running.
 - Evidence: targeted Go tests and `ops/test-fx-factory-release.sh` pass; all Go checks, UI checks (180 tests), tooling, launcher, and broker build pass.
 - One next action: human merge decision.
