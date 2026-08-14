@@ -1,12 +1,12 @@
 # CARD-0127 — Статус `Implemented` в HEAD карточки
 
-Implementation commit: 9fbd3b5f9c561019bc583302d5b009b754833a33 — Review проверяет статус Implemented в HEAD опубликованной карточки
+Implementation commit: db8e9455f86fcfe76dbf75ce6e5b1d37a21035a0 — Review проверяет статус Implemented в HEAD опубликованной карточки
 
 ## HEAD
 
 - Status: Implemented
 - Branch: `factory/8544e80e-5aa-af4e85fd-524`
-- Implementation commit: `9fbd3b5f9c561019bc583302d5b009b754833a33` — Review проверяет статус Implemented в HEAD опубликованной карточки.
+- Implementation commit: `db8e9455f86fcfe76dbf75ce6e5b1d37a21035a0` — Review проверяет статус Implemented в HEAD опубликованной карточки.
 - What changed: Review читает `Status: Implemented` только из секции HEAD карточки и возвращает старый, отсутствующий или чужой статус в Implement. Ошибка чтения remote остаётся повторяемой инфраструктурной проверкой.
 - Evidence: `python3 -m unittest -v pilot.test_pilot.CardHeadStatusTests` и три существующих card-gate теста → 8 PASS; `python3 -m py_compile pilot/pilot.py pilot/test_pilot.py` и `git diff --check` → PASS.
 - One next action: Review проверяет опубликованную ветку и свежую базу перед созданием Review.
