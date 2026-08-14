@@ -178,3 +178,8 @@ Implementation commit: 2a25b03edd0b35d7f905896dc3bfba72f538531f — закрыт
 На ветке `factory/1adc0ddd-022-8b955a6b-6aa` Pilot сохраняет watermark и startup-набор, восстанавливает только свежий отсутствующий хвост и защищает handoff от дублей.
 Доказательство: 13 целевых restart/terminal-проверок, обязательный тест, `py_compile`, `git diff --check` и `just build` — PASS.
 Открытый риск: полный набор `pilot.test_pilot` и live-стенд не запускались на этапе Implement + Test; живой API не менялся.
+
+### 2026-08-14 — Implement: обязательные Python-ворота Pilot
+На ветке `factory/4b04fa27-3ac-d982d099-993` исправлены фикстуры AdaptivePollingTests и добавлен параллельный обязательный CI-job `python3 -m unittest pilot.test_pilot`.
+Доказательство: 24/24 AdaptivePollingTests и полный набор Pilot 286/286 (13 skipped) — PASS; `git diff --check` — PASS.
+Открытый риск: живой стенд не затрагивался; изменение относится только к тестам и CI.
