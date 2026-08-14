@@ -54,7 +54,7 @@ FACTORY_BROKER_GROUPADD_LOG="$temporary/groupadd.log" \
 test -x "$temporary/out/factory-release-broker"
 grep -qx 'User=root' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'Group=factory-release' "$temporary/systemd/factory-release-broker.service"
-grep -qx 'NoNewPrivileges=true' "$temporary/systemd/factory-release-broker.service"
+grep -qx 'NoNewPrivileges=false' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'StateDirectory=factory/release-broker' "$temporary/systemd/factory-release-broker.service"
 grep -qx 'SupplementaryGroups=factory-release' "$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf"
 test ! -e "$temporary/systemd/factory-server.service.d/50-project-release-broker.conf"
