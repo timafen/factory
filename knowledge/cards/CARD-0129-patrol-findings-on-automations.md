@@ -1,12 +1,12 @@
 # CARD-0129 — Патрули показывают находки в «Автоматизациях»
 
-Implementation commit: 778179b70ab5839f5d7c53117f4be7faf323fd66 — патрули скрываются в обоих режимах «Работы», а последняя попытка Automation проверена через Store и HTTP API.
+Implementation commit: 8f0cf36a7da88607bf322863e3ce92786d7e4bac — патрули скрываются в обоих режимах «Работы», а последняя попытка Automation проверена через Store и HTTP API.
 
 ## HEAD
 
 - Статус: Implemented — ожидает повторный Review.
 - Ветка: `factory/201d3c5f-8d0-effdd4a6-7de`.
-- Implementation commit: `778179b70ab5839f5d7c53117f4be7faf323fd66` —
+- Implementation commit: `8f0cf36a7da88607bf322863e3ce92786d7e4bac` —
   патрули скрываются в обоих режимах «Работы», а последняя попытка Automation
   проверена через Store и HTTP API.
 - Спецификация: `knowledge/specs/patrol-findings-on-automations.md`.

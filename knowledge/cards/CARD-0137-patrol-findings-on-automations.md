@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented — ожидает повторный Review
+Status: BLOCKED — Verify выявил lint-warning и незафиксированный embedded UI
 Branch: factory/201d3c5f-8d0-effdd4a6-7de
-Implementation commit: 778179b70ab5839f5d7c53117f4be7faf323fd66 — патрули скрываются в обоих режимах «Работы», а результаты последней попытки подтверждены через Store и HTTP API
+Implementation commit: 8f0cf36a7da88607bf322863e3ce92786d7e4bac — патрули скрываются в обоих режимах «Работы», а результаты последней попытки подтверждены через Store и HTTP API
 What changed: Tasks получают устойчивый `work_class`; UI исключает patrol в списке и доске этапов, а находки понимают настоящие LF/CRLF. Последняя попытка проецирует retry, result/error и пустое состояние.
-Evidence: 25 целевых UI-тестов, целевые Go-тесты, typecheck и production build — PASS.
-Next action: повторный Review перед Verify.
+Evidence: полный Go-набор и 25 целевых UI-тестов прошли; `just ui-check` остановился на двух `react-refresh/only-export-components` warning, а `just test-browser` обнаружил отличающийся `web/dist` до запуска Playwright.
+Next action: вынести экспортируемые helpers из `Automations.tsx` и закоммитить результат `npm run build`, затем повторить Verify.
 
 ## LOG
 
@@ -28,3 +28,18 @@ Next action: повторный Review перед Verify.
 Исправлены все замечания повторного Review: режим «по этапам» не показывает
 патрули, разбор находок работает с LF/CRLF, Store и HTTP API проверены для
 пустой попытки, retry, error и result. Целевые проверки и production build прошли.
+
+### 2026-08-14 — Verify
+
+| Критерий / проверка | Команда | Результат |
+| --- | --- | --- |
+| Классификация, latest attempt, retry/result/error/empty | `just check` (Go-часть) | PASS: все Go-пакеты, включая `internal/controlplane`, прошли |
+| Патрули скрыты в обоих Work-режимах; обычные задачи сохранены; находки и итоги показаны | `cd web && npm test -- --run src/Work.test.ts src/WorkView.test.tsx src/Automations.test.tsx` | PASS: 25 тестов |
+| Контракт TypeScript | `cd web && npm run typecheck` | PASS |
+| Production build и embedded UI | `just test-browser` | FAIL: сборка меняет отслеживаемый `web/dist`; Playwright не запущен |
+| Lint | `just ui-check` | FAIL: 2 warning `react-refresh/only-export-components` в `Automations.tsx:1148,1155` |
+| Tooling/launcher | `env -u FACTORY_BUILD_DIR just test-tooling`; `just test-launcher` | PASS |
+
+Pinned comparison: base `997953e184cb76a4fb222c1c21bd210692953089`,
+candidate `fbba4615c1ee1d40b057bcca56d4b8a28de78ae1`. Рабочее дерево до
+проверки было чистым; тестовые build-артефакты удалены. Verdict: BLOCKED.
