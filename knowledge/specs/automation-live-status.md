@@ -142,7 +142,14 @@
 ГОТОВО-КОГДА: файл internal/controlplane/automation_status_test.go
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
+ГОТОВО-КОГДА: файл web/dist/assets/index-4UunqATt.js
+ГОТОВО-КОГДА: файл web/dist/assets/index-D1J-XOd9.css
+ГОТОВО-КОГДА: файл web/dist/index.html
+ГОТОВО-КОГДА: файл web/e2e/control-plane.spec.ts
+ГОТОВО-КОГДА: файл web/src/App.test.tsx
 ГОТОВО-КОГДА: файл web/src/types.ts
 ГОТОВО-КОГДА: файл web/src/api.ts
 ГОТОВО-КОГДА: файл web/src/Automations.tsx
+ГОТОВО-КОГДА: файл web/src/styles.css
+ГОТОВО-КОГДА: файл web/src/test/fixtures.ts
 ГОТОВО-КОГДА: команда go test ./internal/controlplane -run 'TestAutomationStatus'

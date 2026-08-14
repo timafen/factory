@@ -8,8 +8,6 @@ Status: Implemented — duplicate review closed; already in origin/main
 
 Branch: `main`
 
-Implementation commit: `14ab4d6e23d104673dc4f1238a5ad1c5d5eb064c`
-
 What changed: экран объединяет durable Automation, pilot, release broker, release-службы и janitor. Будущие timestamps systemd и janitor отклоняются, поэтому ложной «живой» активности нет.
 
 Evidence: Python snapshot tests → 4 PASS; `go test ./internal/controlplane` и `go build ./...` → PASS; UI → 180 PASS, typecheck, lint и build → PASS.
