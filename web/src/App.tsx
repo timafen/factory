@@ -103,7 +103,7 @@ export function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [delegateRequest, setDelegateRequest] = useState<{ workerID?: string } | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const pendingAnswers = usePendingAnswers();
+  const answerState = usePendingAnswers();
   const [taskHistory, setTaskHistory] = useState<Task[]>([]);
   const [taskHistoryCursor, setTaskHistoryCursor] = useState<string | null>();
   const previousTaskHeadCursor = useRef<string | null | undefined>(undefined);
@@ -237,9 +237,9 @@ export function App() {
             onClick={() => navigate({ page: "answer" })}
           >
             <MessageCircleQuestion size={17} /> Нужен ответ
-            {pendingAnswers > 0 && (
+            {answerState.open > 0 && (
               <span
-                title={`${pendingAnswers} вопрос(ов) ждут твоего ответа`}
+                title={`${answerState.open} вопрос(ов) ждут твоего ответа`}
                 style={{
                   marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px",
                   borderRadius: 999, background: "#c0392b", color: "#fff",
@@ -247,7 +247,13 @@ export function App() {
                   textAlign: "center", fontVariantNumeric: "tabular-nums",
                 }}
               >
-                {pendingAnswers}
+                {answerState.open}
+              </span>
+            )}
+            {answerState.open === 0 && answerState.reserved > 0 && (
+              <span title="Ответ принят; Factory ждёт зарезервированный слот"
+                    style={{ marginLeft: "auto", fontSize: 11, color: "#e0cf9f", whiteSpace: "nowrap" }}>
+                ответ принят
               </span>
             )}
           </button>
@@ -532,8 +538,8 @@ function withoutDeletedTasks(page: TaskPage, deletedTaskIDs: Set<string>): TaskP
 
 /** Сколько вопросов ждёт владельца. Опрашивается редко и только когда вкладка
  *  видима — цифра нужна живая, но не ценой лишней нагрузки. */
-function usePendingAnswers(): number {
-  const [n, setN] = useState(0);
+function usePendingAnswers(): { open: number; reserved: number } {
+  const [state, setState] = useState({ open: 0, reserved: 0 });
   useEffect(() => {
     let alive = true;
     const pull = async () => {
@@ -541,11 +547,15 @@ function usePendingAnswers(): number {
       try {
         const r = await fetch("/api/v1/questions");
         if (!r.ok) return;
-        const d = (await r.json()) as { questions?: { status?: string }[] };
+        const d = (await r.json()) as {
+          questions?: { status?: string; reservation?: unknown }[];
+        };
         const open = (d.questions ?? []).filter(
           (q) => q.status === "open",
         ).length;
-        if (alive) setN(open);
+        const reserved = (d.questions ?? []).filter((q) => Boolean(q.reservation)
+          && (q.status === "answered" || q.status === "no_worker")).length;
+        if (alive) setState({ open, reserved });
       } catch { /* тихо: цифра не критична */ }
     };
     void pull();
@@ -558,5 +568,5 @@ function usePendingAnswers(): number {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
-  return n;
+  return state;
 }

@@ -19,6 +19,7 @@ type Question = {
   answer?: string;
   answered_by?: string;
   escalation_reason?: string;
+  reservation?: { stage?: string; answered_at?: string };
 };
 
 export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
@@ -141,6 +142,8 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
 
   const all = questions.data ?? [];
   const list = all.filter((q) => q.status === "open").reverse();
+  const waiting = all.filter((q) => Boolean(q.reservation)
+    && (q.status === "answered" || q.status === "no_worker")).reverse();
   const auto = all.filter((q) => q.answered_by === "orchestrator").reverse().slice(0, 12);
   const done = all.filter((q) => q.status === "resolved").length;
 
@@ -156,7 +159,7 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
       </div>
 
       {questions.isPending && <div className="quiet-empty">Загружаю…</div>}
-      {!questions.isPending && list.length === 0 && (
+      {!questions.isPending && list.length === 0 && waiting.length === 0 && (
         <div className="quiet-empty">Вопросов к тебе нет — конвейер едет сам. 👌</div>
       )}
 
@@ -240,6 +243,36 @@ export function AnswerView({ onTask }: { onTask?: (id: string) => void }) {
           </div>
         );
       })}
+
+      {waiting.length > 0 && (
+        <section aria-label="Ответ принят — ожидает зарезервированный слот"
+                 style={{ background: "var(--surface, #171b24)", border: "1px solid #4a3f22", borderRadius: 12, padding: 16 }}>
+          <strong style={{ color: "#e0cf9f" }}>Ответ принят — ожидает зарезервированный слот</strong>
+          <p style={{ margin: "7px 0 12px", fontSize: 13, color: "var(--text-muted, #8a94a6)" }}>
+            Factory не ждёт нового решения: эта работа получит ближайший допустимый слот первой.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {waiting.map((q) => (
+              <div key={q.id} style={{ background: "var(--surface-2, #0f131a)", border: "1px solid var(--border, #262c38)", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#e0cf9f" }}>{q.resume_stage || q.stage}</span>
+                  <strong style={{ fontSize: 13 }}>{q.title}</strong>
+                  <span style={{ flex: 1 }} />
+                  {onTask && (
+                    <button className="button" style={{ fontSize: 11, padding: "1px 8px" }} onClick={() => onTask(q.task_id)}>
+                      задача ›
+                    </button>
+                  )}
+                </div>
+                {q.escalation_reason && (
+                  <p style={{ margin: "7px 0 0", fontSize: 13, color: "#e0cf9f" }}>{q.escalation_reason}</p>
+                )}
+                {q.answer && <p style={{ margin: "5px 0 0", fontSize: 12, color: "var(--text-muted, #8a94a6)" }}>Твой ответ: {q.answer}</p>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {auto.length > 0 && (
         <details style={{ marginTop: 8 }}>

@@ -145,6 +145,24 @@ it("keeps the paused card and shows the resume error", async () => {
   expect(screen.getByRole("button", { name: "Продолжить" })).toBeVisible();
 });
 
+it("shows an answered heavy work reservation as waiting for a slot, not for an owner", async () => {
+  const title = "Весь HTTPS-набор проходит с реальным service worker";
+  mockAPI({
+    questions: { questions: [{
+      task_id: "https", status: "answered",
+      reservation: { stage: "Implement + Test" },
+      escalation_reason: "ответ принят, ожидает зарезервированный слот из-за загрузки сервера",
+    }] },
+  });
+  view([task("https", `[auto] [3/5 Implement + Test] ${title}`, "failed")]);
+
+  const queued = await screen.findByRole("heading", { name: "В очереди" });
+  expect(queued.parentElement?.parentElement).toHaveTextContent("Ответ принят — слот зарезервирован");
+  expect(screen.getByText("Ответ владельца принят; эта работа ждёт зарезервированный слот.")).toBeVisible();
+  expect(screen.getByText("ответ принят, ожидает зарезервированный слот из-за загрузки сервера")).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Нужно твоё решение" })).not.toBeInTheDocument();
+});
+
 it("shows the reason for every repeated Review return", async () => {
   const tasks = [
     { ...task("review-1", "[auto] [4/5 Review] Повторные возвраты", "succeeded"), created_at: "2026-08-10T10:01:00Z" },

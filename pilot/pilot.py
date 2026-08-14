@@ -69,6 +69,14 @@ class ParallelWorkLimit(RuntimeError):
     """A pipeline handoff must wait until another work slot is free."""
 
 
+class AdmissionDeferred(RuntimeError):
+    """A new task is intentionally waiting for an explicit admission reason."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(f"{reason}: stage deferred")
+
+
 def api(path, body=None):
     req = urllib.request.Request(API + path)
     if body is not None:
@@ -527,10 +535,10 @@ def create_task(body, conf=None):
             and len(active_auto_works(active_tasks)) >= int(
                 (conf or {}).get("max_parallel_works", MAX_PARALLEL_WORKS))):
         raise ParallelWorkLimit("parallel_work_limit: stage deferred")
-    if conf and not host_load_admits(
-            conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
-            conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
-        raise RuntimeError("host_load_admission: stage deferred")
+    if conf:
+        admission = task_admission_result(conf, body)
+        if not admission["admitted"]:
+            raise AdmissionDeferred(admission["reason"])
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
     if str(body.get("title", "")).startswith(PREFIX):
@@ -1853,12 +1861,12 @@ def final_ok(task_id, strict=False):
     return bool(rec["final_pass"])
 
 
-def supersede_stale_questions(tasks):
+def supersede_stale_questions(tasks, conf=None):
     """Вопрос, висящий на отменённой/упавшей задаче, блокирует эпик навсегда,
     хотя работа уже прошла эту стадию в другой задаче. Такие вопросы снимаем."""
     by_id = {t["id"]: t for t in tasks}
     for q in load_questions():
-        if q.get("status") != "open":
+        if q.get("status") not in ("open", "answered", "no_worker"):
             continue
         t = by_id.get(q.get("task_id"))
         if not t or t.get("state") not in ("cancelled", "failed"):
@@ -1871,6 +1879,7 @@ def supersede_stale_questions(tasks):
         if not newer or newer["id"] == t["id"]:
             continue
         q["status"] = "obsolete"
+        release_answer_reservation(conf, q)
         q["escalation_reason"] = (
             f"вопрос снят автоматически: эта работа уже прошла стадию "
             f"в задаче {newer['id'][:8]} ({newer.get('state')})")
@@ -5115,14 +5124,33 @@ def record_new_works(conf, tasks, max_age_min=180):
                 f"пропущено: {', '.join(skipped)}")
 
 
+def _answer_worker_is_compatible(worker, repository_id):
+    """A missing or unhealthy selected worker is a real no_worker condition."""
+    if not isinstance(worker, dict):
+        return False
+    if worker.get("online") is False:
+        return False
+    if worker.get("health") not in (None, "", "healthy"):
+        return False
+    return not worker_retention_full(worker, repository_id)
+
+
+def _answer_sort_key(question):
+    reservation = _reservation_from_question(question) or {}
+    return (reservation.get("answered_at") or str(question.get("answered_at") or ""),
+            str(question.get("id") or ""))
+
+
 def handle_answers(conf, workflows, workers, tasks):
-    """An answered question resumes its pipeline from resume_stage."""
+    """Resume answered work, reserving the next heavy slot before other starts."""
     stages = [s["workflow"] for s in conf["stages"]]
     applied = 0
-    for q in load_questions():
+    questions = sorted(load_questions(), key=_answer_sort_key)
+    refresh_answer_reservations(conf, questions)
+    for q in questions:
         if q.get("status") not in ("answered", "no_worker") or not q.get("answer"):
             continue
-        # re-read right before acting: an external writer (UI, one-off script)
+        # Re-read right before acting: an external writer (UI, one-off script)
         # may have changed the record since the listing was taken.
         fresh = load(f"{QUESTION_DIR}/{q['id']}.json", None)
         if (not fresh or fresh.get("status") not in ("answered", "no_worker")
@@ -5133,9 +5161,12 @@ def handle_answers(conf, workflows, workers, tasks):
         if (retry_not_before is not None
                 and retry_not_before > datetime.datetime.now(datetime.timezone.utc)):
             continue
+        if _reservation_from_question(q):
+            remember_answer_reservation(conf, q)
         src_task = next((t for t in tasks if t.get("id") == q.get("task_id")), None)
         closed_reason = work_lifecycle_block(q.get("title", ""), src_task, tasks)
         if closed_reason:
+            release_answer_reservation(conf, q)
             q["status"] = "resolved"
             q["escalation_reason"] = "не возобновлена: " + closed_reason
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
@@ -5143,10 +5174,43 @@ def handle_answers(conf, workflows, workers, tasks):
             continue
         stage = q.get("resume_stage")
         if stage not in stages:
+            release_answer_reservation(conf, q)
+            q["status"] = "resolved"
+            q["escalation_reason"] = "не возобновлена: этап больше не входит в workflow"
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer: unknown resume stage {stage!r} for {q['id']}")
             continue
         idx = stages.index(stage)
         nw = workflows.get(stage)
+        if not nw or not nw.get("enabled") or not nw.get("revision_id"):
+            release_answer_reservation(conf, q)
+            q["status"] = "resolved"
+            q["escalation_reason"] = "не возобновлена: нужный этап workflow отключён или недоступен"
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer: workflow unavailable for {stage}")
+            continue
+        # Защита от дублей: тот же ответ мог прийти по двум путям (вопрос от
+        # Review и повтор отменённой стадии) — второй раз задачу не создаём.
+        if is_stopped(conf, q.get("title", "")):
+            release_answer_reservation(conf, q)
+            q["status"] = "resolved"
+            q["escalation_reason"] = "работа остановлена владельцем — конвейер не возобновляется"
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer: '{q.get('title','')[:40]}' остановлена владельцем — не возобновляю")
+            continue
+
+        dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
+                              since=(src_task or {}).get("created_at"))
+        if dup:
+            release_answer_reservation(conf, q)
+            q["status"] = "resolved"
+            q["resumed_task_id"] = dup["id"]
+            q["escalation_reason"] = "ответ уже продолжен без повторной задачи"
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer: '{q['title'][:40]}' уже имеет задачу на стадии {stage} "
+                f"({dup['id'][:8]} {dup.get('state')}) — дубль не создаю")
+            continue
+
         cx_hint = q.get("complexity_hint") or "medium"
         # Модель, которая дважды не справилась с этапом, третий раз денег
         # не заслужила: третий заход отдаём исполнителю уровнем выше.
@@ -5182,9 +5246,23 @@ def handle_answers(conf, workflows, workers, tasks):
                 log(f"ESCALATE SKIP '{q.get('title','')[:40]}' {stage}: "
                     f"нет исполнителя сильнее {was} (кандидат={candidate})")
         worker = workers.get(selected_worker)
-        if not nw or not nw.get("enabled") or not worker:
-            log(f"answer: no workflow/worker for {stage}")
+        heavy = stage not in HOST_LOAD_LIGHT_STAGES
+        if not _answer_worker_is_compatible(worker, repository_id):
+            explanation = (
+                "ответ принят, ожидает зарезервированный слот: нет совместимого исполнителя"
+                if heavy else "ответ принят; нет совместимого исполнителя для запуска этапа"
+            )
+            if heavy:
+                reserve_answered_work(conf, q, "no_compatible_worker", explanation,
+                                      status="no_worker")
+            else:
+                q["status"] = "no_worker"
+                q["admission_reason"] = "no_compatible_worker"
+                q["escalation_reason"] = explanation
+            save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer: no compatible worker for {stage}")
             continue
+
         base = base_title(q.get("title", ""))
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base))
@@ -5224,81 +5302,98 @@ def handle_answers(conf, workflows, workers, tasks):
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
         }
-        # Защита от дублей: тот же ответ мог прийти по двум путям (вопрос от
-        # Review и повтор отменённой стадии) — второй раз задачу не создаём.
-        if is_stopped(conf, q.get("title", "")):
-            q["status"] = "resolved"
-            q["escalation_reason"] = "работа остановлена владельцем — конвейер не возобновляется"
+        # Mark this question while checking admission, otherwise its own
+        # restored reservation would look like a competing automatic start.
+        conf["_answer_reservation_in_progress"] = q["id"]
+        try:
+            admission = task_admission_result(conf, body)
+        finally:
+            conf.pop("_answer_reservation_in_progress", None)
+        if not admission["admitted"] and heavy:
+            if admission["reason"] == "host_load":
+                explanation = host_reservation_explanation(conf.get("_host_load_snapshot"))
+            else:
+                explanation = ("ответ принят, ожидает зарезервированный слот: "
+                               "сначала будет продолжена ранее отвеченная работа")
+            reserve_answered_work(conf, q, admission["reason"], explanation)
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
-            log(f"answer: '{q.get('title','')[:40]}' остановлена владельцем — не возобновляю")
-            continue
-
-        dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
-                              since=(src_task or {}).get("created_at"))
-        if dup:
-            q["status"] = "resolved"
-            q["resumed_task_id"] = dup["id"]
-            save(f"{QUESTION_DIR}/{q['id']}.json", q)
-            log(f"answer: '{q['title'][:40]}' уже имеет задачу на стадии {stage} "
-                f"({dup['id'][:8]} {dup.get('state')}) — дубль не создаю")
+            log(f"answer reservation q={q['id']} reason={admission['reason']}")
             continue
 
         tries = int(q.get("resume_tries", 0))
         if tries >= 5:
-            # Ответ уже есть — хозяин тут ни при чём. Исполнителей нет чаще
-            # всего из-за лимита подписки, а он проходит сам. Поэтому не
-            # сдаёмся навсегда, а пробуем раз в десять минут, честно
-            # подписав состояние: «жду свободного исполнителя».
+            # Не подменяем временные ошибки и дневной потолок статусом no_worker:
+            # тот означает только реальную несовместимость исполнителя.
             last = str(q.get("last_error") or "")
             cap_hit = "day_task_cap" in last or "work_day_cap" in last
-            if q.get("status") != "no_worker":
-                q["status"] = "no_worker"
-                q["escalation_reason"] = (
-                    "ответ есть; упёрлись в дневной потолок задач — жду, пока окно освободится"
-                    if cap_hit else
-                    "ответ есть; жду свободного исполнителя (лимит подписки или воркеры недоступны)")
-                save(f"{QUESTION_DIR}/{q['id']}.json", q)
-                log(f"answer resume: {q['id']} ждёт ({'потолок' if cap_hit else 'исполнителя'}) "
-                    f"после {tries} попыток :: {last[:80]}")
-                if cap_hit:
-                    notify(conf, "Уперлись в дневной потолок задач",
-                           f"{q['title']}\nОтвет есть, но на сегодня выбран потолок числа задач. "
-                           "Продолжу сам, как только окно освободится. Потолок правится "
-                           "в настройках: day_task_cap.",
-                           tags="hourglass", click=f"{UI_BASE}/settings")
-                else:
-                    notify(conf, "Ответ есть, исполнителей нет — жду",
-                           f"{q['title']}\nПродолжу сам, как только освободится исполнитель для {stage}.",
-                           tags="hourglass", click=f"{UI_BASE}/work")
+            q["status"] = "answered"
+            q["admission_reason"] = "retry_backoff"
+            q["escalation_reason"] = (
+                "ответ принят; упёрлись в дневной потолок задач — повторю, когда окно освободится"
+                if cap_hit else "ответ принят; Factory повторит запуск после временной ошибки")
             if time.time() - float(q.get("last_resume_try") or 0) < 600:
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
                 continue
             q["last_resume_try"] = time.time()
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            if cap_hit:
+                notify(conf, "Уперлись в дневной потолок задач",
+                       f"{q['title']}\nОтвет есть, но на сегодня выбран потолок числа задач. "
+                       "Продолжу сам, как только окно освободится. Потолок правится "
+                       "в настройках: day_task_cap.",
+                       tags="hourglass", click=f"{UI_BASE}/settings")
         try:
             correction_kind = {
                 "Review": "review_return",
                 "Verify": "verify_return",
             }.get(q.get("stage"), "answer_resume")
+            conf["_answer_reservation_in_progress"] = q["id"]
             r = create_child_task(
                 body, src_task or {"id": q.get("task_id")}, conf,
                 correction_kind)
             tid = r.get("task", {}).get("id")
+            release_answer_reservation(conf, q)
             q["status"] = "resolved"
             q["resumed_task_id"] = tid
+            q["admission_reason"] = "started"
+            q["escalation_reason"] = "ответ принят; работа поставлена в очередь"
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"ANSWER APPLIED q={q['id']} -> {stage} new_task={tid}")
             applied += 1
             notify(conf, "Ответ принят, работа продолжена",
                    f"{q['title']}\nСтадия: {stage}", tags="arrow_forward",
                    click=f"{UI_BASE}/tasks/{tid}")
+        except AdmissionDeferred as error:
+            if heavy:
+                explanation = (host_reservation_explanation(conf.get("_host_load_snapshot"))
+                               if error.reason == "host_load" else
+                               "ответ принят, ожидает зарезервированный слот")
+                reserve_answered_work(conf, q, error.reason, explanation)
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            else:
+                q["admission_reason"] = error.reason
+                q["escalation_reason"] = "ответ принят; запуск отложен защитой загрузки сервера"
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer admission deferred for {q['id']}: {error.reason}")
         except ParallelWorkLimit:
+            if heavy:
+                reserve_answered_work(
+                    conf, q, "reserved_answered_work",
+                    "ответ принят, ожидает зарезервированный слот: заняты все рабочие места",
+                )
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer resume deferred for {q['id']}: заняты все слоты работ")
             break
         except Exception as e:
             q["resume_tries"] = tries + 1
             q["last_error"] = repr(e)[:200]
+            q["status"] = "answered"
+            q["admission_reason"] = "resume_error"
+            q["escalation_reason"] = "ответ принят; Factory повторит запуск после временной ошибки"
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer resume failed for {q['id']} (попытка {tries+1}/5): {e}")
+        finally:
+            conf.pop("_answer_reservation_in_progress", None)
     return applied
 
 
@@ -6949,21 +7044,160 @@ def stage_from_title(title):
     return match.group(1).strip() if match else ""
 
 
-def host_load_admits(tasks, stage, load, respect_host_load=True):
-    """Decide whether a pipeline stage may start under the current host load."""
+def host_load_admission(tasks, stage, load, respect_host_load=True):
+    """Return the explicit host-load admission decision for one stage."""
     if not respect_host_load or not load or load.get("state") != "over":
-        return True
+        return {"admitted": True, "reason": ""}
     if any((load.get(resource) or {}).get("state") == "over"
            for resource in ("memory", "disk")):
-        return False
+        return {"admitted": False, "reason": "host_load"}
     # Pipeline continuations share one CPU reservation. Counting task rows
     # would briefly consume two slots during a handoff, while using a title
     # would merge two independent, equally named works.
     active = len({task_work_id(task) for task in (tasks or [])
                   if task.get("state") in HOST_LOAD_ACTIVE_STATES})
     if active < HOST_LOAD_MINIMUM_ACTIVE:
-        return True
-    return stage in HOST_LOAD_LIGHT_STAGES
+        return {"admitted": True, "reason": ""}
+    return {"admitted": stage in HOST_LOAD_LIGHT_STAGES,
+            "reason": "" if stage in HOST_LOAD_LIGHT_STAGES else "host_load"}
+
+
+def host_load_admits(tasks, stage, load, respect_host_load=True):
+    """Backward-compatible boolean view of :func:`host_load_admission`."""
+    return host_load_admission(tasks, stage, load, respect_host_load)["admitted"]
+
+
+def is_heavy_automatic_stage(body):
+    """Whether a body starts a heavy automatic stage subject to reservation."""
+    title = str((body or {}).get("title") or "")
+    stage = stage_from_title(title)
+    return bool(title.startswith(PREFIX) and stage and stage not in HOST_LOAD_LIGHT_STAGES)
+
+
+def _reservation_from_question(question):
+    """Normalize one durable answered-work reservation for ordering and admission."""
+    if not isinstance(question, dict):
+        return None
+    if question.get("status") not in ("answered", "no_worker"):
+        return None
+    if not question.get("answer") or question.get("resumed_task_id"):
+        return None
+    raw = question.get("reservation")
+    if not isinstance(raw, dict):
+        return None
+    question_id = str(question.get("id") or "")
+    stage = str(raw.get("stage") or question.get("resume_stage") or "")
+    if not question_id or not stage:
+        return None
+    return {
+        "question_id": question_id,
+        "task_id": str(raw.get("task_id") or question.get("task_id") or ""),
+        "work_id": str(raw.get("work_id") or question.get("work_id")
+                       or question.get("task_id") or ""),
+        "stage": stage,
+        "answered_at": str(raw.get("answered_at") or question.get("answered_at")
+                           or raw.get("created_at") or question.get("asked_at") or ""),
+    }
+
+
+def _reservation_sort_key(reservation):
+    return (reservation.get("answered_at") or "", reservation.get("question_id") or "")
+
+
+def refresh_answer_reservations(conf, questions=None):
+    """Restore the small in-process reservation view from durable questions."""
+    if not isinstance(conf, dict):
+        return []
+    records = questions if questions is not None else load_questions()
+    reservations = [_reservation_from_question(question) for question in (records or [])]
+    conf["_answer_reservations"] = sorted(
+        [reservation for reservation in reservations if reservation],
+        key=_reservation_sort_key,
+    )
+    return conf["_answer_reservations"]
+
+
+def answer_reservations(conf):
+    """Return current reservations, lazily restoring them outside a full cycle."""
+    if not isinstance(conf, dict):
+        return []
+    if not isinstance(conf.get("_answer_reservations"), list):
+        return refresh_answer_reservations(conf)
+    return conf["_answer_reservations"]
+
+
+def remember_answer_reservation(conf, question):
+    """Update the in-memory view after an atomic question-file write."""
+    reservation = _reservation_from_question(question)
+    if not reservation or not isinstance(conf, dict):
+        return
+    current = [item for item in answer_reservations(conf)
+               if item.get("question_id") != reservation["question_id"]]
+    current.append(reservation)
+    conf["_answer_reservations"] = sorted(current, key=_reservation_sort_key)
+
+
+def forget_answer_reservation(conf, question):
+    if not isinstance(conf, dict):
+        return
+    question_id = str((question or {}).get("id") or "")
+    conf["_answer_reservations"] = [
+        item for item in answer_reservations(conf)
+        if item.get("question_id") != question_id
+    ]
+
+
+def reserve_answered_work(conf, question, admission_reason, explanation,
+                          status="answered"):
+    """Persist a durable priority reservation on an already answered question."""
+    raw = question.get("reservation")
+    reservation = dict(raw) if isinstance(raw, dict) else {}
+    reservation.setdefault("question_id", question.get("id") or "")
+    reservation.setdefault("task_id", question.get("task_id") or "")
+    reservation.setdefault("work_id", question.get("work_id") or question.get("task_id") or "")
+    reservation["stage"] = question.get("resume_stage") or reservation.get("stage") or ""
+    reservation.setdefault(
+        "answered_at",
+        question.get("answered_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    )
+    question["reservation"] = reservation
+    question["status"] = status
+    question["admission_reason"] = admission_reason
+    question["escalation_reason"] = explanation
+    remember_answer_reservation(conf, question)
+
+
+def release_answer_reservation(conf, question):
+    """Remove a reservation once its question can no longer claim a slot."""
+    question.pop("reservation", None)
+    forget_answer_reservation(conf, question)
+
+
+def host_reservation_explanation(load):
+    """Owner-facing cause; the machine-readable admission reason stays host_load."""
+    emergency = [resource for resource in ("memory", "disk")
+                 if (load or {}).get(resource, {}).get("state") == "over"]
+    if emergency:
+        return ("ответ принят, ожидает зарезервированный слот: аварийная загрузка "
+                + " и ".join("памяти" if item == "memory" else "диска" for item in emergency)
+                + " пока не допускает запуск")
+    return "ответ принят, ожидает зарезервированный слот из-за загрузки сервера"
+
+
+def task_admission_result(conf, body):
+    """One admission result shared by ordinary starts and answered reservations."""
+    host = host_load_admission(
+        conf.get("_host_load_tasks"), stage_from_title((body or {}).get("title", "")),
+        conf.get("_host_load_snapshot"), conf.get("respect_host_load", True),
+    )
+    if not is_heavy_automatic_stage(body):
+        return host
+    reservations = answer_reservations(conf)
+    if reservations:
+        active_reservation = str(conf.get("_answer_reservation_in_progress") or "")
+        if active_reservation != reservations[0].get("question_id"):
+            return {"admitted": False, "reason": "reserved_answered_work"}
+    return host
 
 
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
@@ -7121,7 +7355,16 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         if w.get("health") == "healthy":
             d["healthy"] += 1
 
-    questions = [q for q in load_questions() if q.get("status") in ("open", "stuck")]
+    all_questions = load_questions()
+    open_questions = [q for q in all_questions if q.get("status") == "open"]
+    reserved_questions = [
+        q for q in all_questions
+        if _reservation_from_question(q)
+    ]
+    questions = [
+        q for q in all_questions
+        if q.get("status") in ("open", "stuck") or _reservation_from_question(q)
+    ]
 
     data = {
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -7130,9 +7373,16 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
                         for t in by_state.get("running", [])[:5]],
             "running_count": len(by_state.get("running", [])),
             "queued_count": len(by_state.get("queued", [])),
-            "questions": [{"id": q.get("id"), "title": (q.get("title") or "")[:70],
-                           "question": (q.get("question") or "")[:140]} for q in questions[:5]],
-            "questions_count": len(questions),
+            "questions": [{
+                "id": q.get("id"), "title": (q.get("title") or "")[:70],
+                "question": (q.get("question") or "")[:140],
+                "status": q.get("status") or "",
+                "escalation_reason": (q.get("escalation_reason") or "")[:220],
+                "reserved": bool(_reservation_from_question(q)),
+            } for q in questions[:5]],
+            # Only unanswered owner questions feed the badge/headline count.
+            "questions_count": len(open_questions),
+            "reserved_answers_count": len(reserved_questions),
         },
         "spend": {k: (round(v, 2) if isinstance(v, float) else v) for k, v in spend.items()},
         "brain": brain_block(conf),
@@ -8430,6 +8680,19 @@ def cycle(conf, state):
     except Exception as e:
         log("host_load_error", repr(e))
 
+    # An owner answer is a durable promise for the nearest permissible heavy
+    # slot. Restore it before any automatic producer, then try it first.
+    try:
+        refresh_answer_reservations(conf)
+    except Exception as e:
+        log("answer_reservation_restore_error", repr(e))
+    try:
+        answered = handle_answers(conf, workflows, workers, tasks)
+        activity["answer_applied"] = (
+            answered is True or (type(answered) is int and answered > 0))
+    except Exception as e:
+        log("answer_error", repr(e))
+
     # A merge conflict is pipeline work, not a reason to hammer GitHub or ask
     # the owner. Return the same branch to Implement, then require Review and
     # Verify again before another immutable merge intent is created.
@@ -8466,7 +8729,7 @@ def cycle(conf, state):
 
     # Снять вопросы, повисшие на отменённых задачах, иначе эпик стоит вечно.
     try:
-        supersede_stale_questions(tasks)
+        supersede_stale_questions(tasks, conf)
     except Exception as e:
         log("supersede_error", repr(e))
 
@@ -8476,14 +8739,6 @@ def cycle(conf, state):
         cleanup_orphaned_paused_pipelines(conf, tasks)
     except Exception as e:
         log("paused_pipeline_cleanup_outer_error", repr(e))
-
-    # Owner answers resume stopped pipelines.
-    try:
-        answered = handle_answers(conf, workflows, workers, tasks)
-        activity["answer_applied"] = (
-            answered is True or (type(answered) is int and answered > 0))
-    except Exception as e:
-        log("answer_error", repr(e))
 
     # Sequential epics: start the next subtask once the current one is finished.
     try:

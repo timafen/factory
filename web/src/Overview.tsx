@@ -11,8 +11,12 @@ type Dash = {
     running?: { id: string; title: string }[];
     running_count?: number;
     queued_count?: number;
-    questions?: { id: string; title: string; question: string }[];
+    questions?: {
+      id: string; title: string; question: string; status?: string;
+      escalation_reason?: string; reserved?: boolean;
+    }[];
     questions_count?: number;
+    reserved_answers_count?: number;
   };
   spend?: {
     day_usd?: number; week_usd?: number; day_tokens?: number; week_tokens?: number;
@@ -478,11 +482,14 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
   }, []);
 
   const q = d.now?.questions_count ?? 0;
+  const reservedAnswers = d.now?.reserved_answers_count ?? 0;
   const running = d.now?.running_count ?? 0;
   const queued = d.now?.queued_count ?? 0;
 
   const headline = q > 0
     ? { text: `Ждёт твоего ответа: ${q}`, tone: "warn" as const, icon: <MessageCircleQuestion size={22} /> }
+    : reservedAnswers > 0
+      ? { text: "Ответ принят — ожидает зарезервированный слот", tone: "warn" as const, icon: <Loader2 size={22} /> }
     : running > 0
       ? { text: "Всё идёт — твоего участия не нужно", tone: "ok" as const, icon: <Activity size={22} /> }
       : queued > 0
@@ -512,8 +519,8 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
       {/* 1. Всё ли идёт */}
       <section
         style={{ ...card, borderColor: headline.tone === "warn" ? "#5a4a2a" : "var(--border, #262c38)",
-                 cursor: q > 0 ? "pointer" : "default" }}
-        onClick={() => { if (q > 0) onNav?.("answer"); }}
+                 cursor: q > 0 || reservedAnswers > 0 ? "pointer" : "default" }}
+        onClick={() => { if (q > 0 || reservedAnswers > 0) onNav?.("answer"); }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ color: headline.tone === "warn" ? "#e0cf9f" : headline.tone === "ok" ? "#7ee2a8" : muted }}>
@@ -529,10 +536,14 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
           <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
             {(d.now?.questions ?? []).map((x) => (
               <div key={x.id} style={{ fontSize: 13, color: "#e0cf9f" }}>
-                ❓ {x.title} — {x.question}
+                {x.reserved ? "✓" : "❓"} {x.title} — {x.reserved
+                  ? (x.escalation_reason || "ответ принят, ожидает зарезервированный слот")
+                  : x.question}
               </div>
             ))}
-            <span style={{ fontSize: 12, color: muted }}>нажми, чтобы ответить ›</span>
+            <span style={{ fontSize: 12, color: muted }}>
+              {q > 0 ? "нажми, чтобы ответить ›" : "нажми, чтобы увидеть ожидание ›"}
+            </span>
           </div>
         )}
       </section>
