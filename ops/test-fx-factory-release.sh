@@ -598,12 +598,26 @@ exec "$@"
 EOF
   cat >"$case_dir/bin/systemctl" <<'EOF'
 #!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ]; then
+  case "$*" in
+    '-q is-active factory-server.service') exit 0 ;;
+    'show -p MainPID --value factory-server.service') echo 4242; exit 0 ;;
+  esac
+fi
 case "$*" in
   '-q is-active '*|'-q is-enabled '*) exit 1 ;;
   'show '*) exit 1 ;;
 esac
 echo "$1 $2" >>"$TEST_EVENTS"
 exit 0
+EOF
+  cat >"$case_dir/bin/readlink" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ] && [ "${1:-}" = /proc/4242/exe ]; then
+  printf '%s (deleted)\n' "$TEST_SERVER_BIN"
+  exit 0
+fi
+exec /usr/bin/readlink "$@"
 EOF
   cat >"$case_dir/bin/broker-systemctl" <<'EOF'
 #!/bin/bash
@@ -1260,6 +1274,17 @@ set -e
 [ ! -s "$disk_full/events" ] || fail "insufficient disk caused a service mutation"
 grep -F 'недостаточно свободного места или inode' "$disk_full/output" >/dev/null \
   || fail "disk refusal was not human-readable"
+
+deleted_inode="$temporary/deleted-inode"
+make_fixture "$deleted_inode" deleted-inode
+set +e
+run_release "$deleted_inode" deleted-inode
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "deleted inode was not rejected before release"
+[ ! -s "$deleted_inode/events" ] || fail "deleted inode caused a service mutation"
+grep -F 'процесс factory-server.service использует deleted-inode' "$deleted_inode/output" >/dev/null \
+  || fail "deleted inode refusal was not human-readable"
 
 rollback_case="$temporary/full-rollback"
 make_fixture "$rollback_case" parallel-success
