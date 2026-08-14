@@ -3302,17 +3302,21 @@ func TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay(t *testing.T) {
 	defer server.Close()
 	manager := &Manager{
 		client:  newClient(server.URL, server.Client()),
-		options: Options{LeaseRenewInterval: 40 * time.Millisecond, LeaseRetryInterval: 20 * time.Millisecond},
+		// Keep the same production schedule ratio, but make its 30% phase
+		// window wider than an ordinary loaded-CI scheduler stall. With a 40ms
+		// interval all ten correct timers can be released in one OS timeslice,
+		// turning this integration check into a load lottery.
+		options: Options{LeaseRenewInterval: time.Second, LeaseRetryInterval: 500 * time.Millisecond},
 	}
 	handles := make([]*attemptHandle, 0, 10)
 	for index := 0; index < 10; index++ {
-		handle := &attemptHandle{done: make(chan struct{}), heartbeatDone: make(chan struct{}), expiry: time.Now().Add(time.Second)}
+		handle := &attemptHandle{done: make(chan struct{}), heartbeatDone: make(chan struct{}), expiry: time.Now().Add(10 * time.Second)}
 		handles = append(handles, handle)
 		go manager.heartbeatAttempt(handle, fmt.Sprintf("attempt-%d", index), strings.Repeat("a", 64))
 	}
 	select {
 	case <-allStarted:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("not all attempts renewed")
 	}
 	mutex.Lock()
@@ -3327,7 +3331,7 @@ func TestConcurrentAttemptsStaggerLeaseRenewalsUnderDelay(t *testing.T) {
 	}
 	spread := max.Sub(min)
 	mutex.Unlock()
-	if spread < 5*time.Millisecond {
+	if spread < 25*time.Millisecond {
 		t.Fatalf("renewals remained a synchronous batch: spread %s", spread)
 	}
 	for _, handle := range handles {
