@@ -4,12 +4,13 @@ Implementation commit: 0fbbc0f6e4150d1b29f152b39b512700c50da353 — обычны
 
 ## HEAD
 
-- Статус: Implemented; целевые проверки PASS, полный Verify имеет внешние блокеры.
-- Ветка: `factory/f8a9cba3-553-0d3e07d9-468`.
+- Статус: Implemented; полный Verify PASS.
+- Ветка: `factory/f8b417b0-53b-e6bb48f7-669`.
 - Implementation commit: `0fbbc0f6e4150d1b29f152b39b512700c50da353` — ограничены обычные loop-rescue и обработан ошибочный результат `fx` без повторного admin_action.
-- Что изменено: после исчерпания `max_loop_rescues` обычный ответ не продлевает цикл, но разрешённое admin-действие сохраняет отдельный путь; ошибка `fx` передаётся старшей модели и остаётся эскалацией владельцу.
-- Evidence: целевые Python → PASS: 32/32; `go test ./internal/controlplane` → PASS; полный `go test ./...` и `go build ./...` → PASS; полный Pilot → 267 тестов, 2 исходных restart/provenance-сбоя; web-проверки → BLOCKED: отсутствуют `vitest`, `tsc`, `eslint`.
-- Следующее действие: после устранения внешних блокеров повторить Verify и проверить push этой ветки.
+- Что изменено: безопасные admin-вопросы сначала решает старшая модель; ошибка `fx` передаётся ей без повторного запуска команды, а обычные циклы остаются ограниченными.
+- Что проверено: restart/provenance-фикстура снова использует закреплённый SHA Verify; штатные web-зависимости восстановлены через `npm ci`.
+- Evidence: целевые Pilot → PASS: 23/23; полный Pilot → PASS: 267/267 (13 skipped); web → PASS: 179/179, typecheck, lint, build; `go test ./...`, `go build ./...`, `git diff --check` → PASS.
+- Следующее действие: влить опубликованную ветку в `main`.
 
 ## LOG
 
@@ -47,3 +48,12 @@ restart/provenance-сбоями вне admin-маршрута; web test/typechec
 полный SHA `0fbbc0f6e4150d1b29f152b39b512700c50da353`; изменения области задачи
 не конфликтовали с независимой правкой systemd. Повторный целевой прогон на
 перебазированной ветке: 32 Python-теста → PASS.
+
+### 2026-08-13 — Implement
+
+После ответа владельца restart/provenance-фикстура получила закреплённый SHA
+кандидата Verify и перестала зависеть от несуществующей удалённой тестовой
+ветки; исправление теста — `de3769ba4532d0a63ce7e88ca6615e58b1a7c472`.
+Штатные web-инструменты восстановлены командой `npm ci`. Полный Verify прошёл:
+Pilot 267/267 (13 skipped), web 179/179 вместе с typecheck/lint/build,
+`go test ./...`, `go build ./...` и `git diff --check` — PASS.
