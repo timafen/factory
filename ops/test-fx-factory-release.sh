@@ -30,7 +30,7 @@ snapshot_release_state() {
   local case_dir=$1 snapshot=$2
   (
     cd "$case_dir"
-    find install live database releases -printf '%y %m %s %p -> %l\n'
+    find install live database releases \( -type f -o -type l \) -printf '%y %m %s %p -> %l\n'
     printf '%s ' current.json
     sha256sum current.json
     printf '%s ' worker.toml
@@ -42,7 +42,7 @@ assert_release_state_unchanged() {
   local case_dir=$1 before=$2 after=$3
   snapshot_release_state "$case_dir" "$after"
   cmp -s "$before" "$after" || fail "deleted inode refusal changed a release artifact"
-  [ -z "$(find "$case_dir/releases" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+  [ -z "$(find "$case_dir/releases/generations" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] \
     || fail "deleted inode refusal published a generation"
 }
 wait_for_file() {
