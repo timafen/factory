@@ -1,14 +1,16 @@
-Implementation commit: 5d71cd19c9cd214ae7d5e7d3c9c17a94ab6acc5f — повторная установка проверяет замену бинаря и перезапуск активного release-broker
+Implementation commit: a0bf8e400b0a78dd6b6528812995b5c00ae722d7 — тест выпуска подтверждает порядок перезапуска активного release-broker после замены программы
 
 # CARD-0067 — Active release broker restarts after binary replacement
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/a1e4ebce-ff2-a5a6bbb7-88d`.
-- Implementation commit: `5d71cd19c9cd214ae7d5e7d3c9c17a94ab6acc5f` — тест повторной установки подтверждает замену бинаря до перезапуска активного сервиса.
-- Evidence summary: the target installer test passes both installation paths; static inspection and its `systemctl` double prove binary version 2 is in place before `restart`, with no repeated `enable --now`. `just ui-check`, `just test-tooling`, `just test-launcher`, and `just test-browser` pass; the full Go test command has one unrelated worker integration failure.
-- One next action: human merge decision, with follow-up on the unrelated worker integration failure.
+- Status: Implemented — ready for verification.
+- Branch: `factory/a2ef9eb7-5e3-e406e435-e8f`.
+- Implementation commit: `a0bf8e400b0a78dd6b6528812995b5c00ae722d7` — fixture закрепляет порядок обновления и перезапуска активного broker.
+- What changed: второй installer-проход требует, чтобы новая программа была установлена до `daemon-reload`, проверки активности и `restart factory-release-broker.service`.
+- What changed: fallback `enable --now` для уже активного broker остаётся запрещён; Pilot перезапускается после broker.
+- Evidence: `bash ops/test-install-project-release-broker.sh` → PASS; `go build ./cmd/factory-release-broker` → PASS.
+- One next action: выполнить независимую Verify-проверку перед слиянием.
 
 ## LOG
 
@@ -25,3 +27,9 @@ Added a second installer run with a new binary and an active-service response. T
 | Смежные installer-пути | `just test-tooling` | PASS: сборка, обновление Go и provision-проверки вместе с обоими installer-проходами. |
 | Остальной набор | `just ui-check`, `just test-launcher`, `just test-browser` | PASS: 145 UI-тестов и 19 браузерных сценариев; launcher проходит. |
 | Полные Go-тесты | `just check` | Незатронутый `internal/worker.TestLostClaimAndCompletionResponsesAreIdempotent` упал: `completion=false attempts=1`; остальные завершившиеся пакеты прошли. |
+
+### 2026-08-13 — Implement
+
+Уточнена целевая fixture: второй проход теперь проверяет точную последовательность `daemon-reload` → `is-active` → restart broker → restart Pilot. Это сохраняет доказательство того, что новая программа установлена до перезапуска, и исключает fallback `enable --now` для активного сервиса.
+
+Проверено: `bash -n ops/install-project-release-broker.sh ops/test-install-project-release-broker.sh`, `bash ops/test-install-project-release-broker.sh` и `go build ./cmd/factory-release-broker` завершились успешно.
