@@ -3035,7 +3035,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
 # это умеет машина за секунды. Дорогое Ревью получает уже проверенный факт.
 
 def gh_json(args, timeout=30, strict=False):
-    if list(args[:2]) == ["repo", "view"] and "--repo" not in args:
+    if (list(args[:2]) == ["repo", "view"] and
+            (len(args) < 3 or str(args[2]).startswith("-"))):
         raise RuntimeError(
             "GitHub action blocked: bare gh repo view has no origin-pinned repository")
     env = dict(os.environ, HOME=HOME)
@@ -3090,7 +3091,7 @@ def github_repository_from_origin(worktree):
 def gh_repo_view_from_origin(worktree):
     """Read repository diagnostics only with the target pinned from origin."""
     repo = github_repository_from_origin(worktree)
-    result = gh_json(["repo", "view", "--repo", repo, "--json", "nameWithOwner"], strict=True)
+    result = gh_json(["repo", "view", repo, "--json", "nameWithOwner"], strict=True)
     actual = str((result or {}).get("nameWithOwner") or "").strip()
     if actual != repo:
         raise RuntimeError(
