@@ -1,19 +1,25 @@
-Implementation commit: f32656d2959e8c57d2e61efd71d0e191e5775644 — экран исполнителей показывает живой парк и архив старых регистраций
+Implementation commit: 3fc4ac2d4436709c72d1823c69707598e85ce0f1 — экран исполнителей показывает живой парк и архив старых регистраций
 
 # CARD-0174: Живой парк исполнителей и архив регистраций
 
 ## HEAD
 
 Status: Implemented — ready for Review and Verify
-Branch: factory/18ec6f9c-96b-1d74c921-84d
+Branch: factory/6d670e5c-98c-7b66b0dc-eae
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: f32656d2959e8c57d2e61efd71d0e191e5775644 — экран
+Implementation commit: 3fc4ac2d4436709c72d1823c69707598e85ce0f1 — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: текущие и архивные регистрации разделены на экране по границе
 семи суток; встроенный `web/dist` пересобран после перебазирования.
-Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint`,
-`npm run test` (185 tests), `npm run build` — успешно.
+Evidence: `npm test -- --run src/Workers.test.tsx` (3 tests), `npm run lint`,
+`npm run build` — успешно; ветка сравнена с `origin/main` (только файлы задачи).
 One next action: Review и Verify принимают поставку.
+
+### 2026-08-15 — Implement
+
+Работа перенесена на свежий remote `main` (`9bbe9169eb3ddfe97d28df29ca641a3e1533913c`),
+карточка обновлена под текущую ветку и кодовый коммит. Целевые тесты экрана (3),
+lint и production-сборка прошли успешно; diff содержит только файлы задачи.
 
 ## LOG
 
