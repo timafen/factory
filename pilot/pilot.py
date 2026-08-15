@@ -5303,11 +5303,12 @@ def handle_answers(conf, workflows, workers, tasks):
 
 
 def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
-    """Give unfinished continuations every newly opened slot before Plan.
+    """Give unfinished continuations first claim, then fill idle slots from Plan.
 
-    A terminal handoff backlog means an already-started work is waiting for
-    its next stage.  Keep newly opened capacity reserved for that backlog
-    instead of admitting another root task which can starve the continuation.
+    Terminal handoffs are attempted before this refill and answered
+    continuations are attempted inside it before Plan.  Leaving a slot idle
+    after both attempts cannot help a load- or area-deferred continuation; it
+    only wastes an executor which can run an independent early stage.
     """
     tasks = api("/tasks?limit=100").get("tasks") or []
     # All admissions in this pass share the same authoritative snapshot.
@@ -9121,13 +9122,12 @@ def cycle(conf, state):
     # active delivery mechanism.  Legacy retry flags are audit-only.
 
     # A terminal handoff may free a slot after the first answer pass. Retry
-    # answered continuations before admitting Plan so a full Plan cannot
-    # starve an unfinished correction forever.
+    # answered continuations first, then let Plan use capacity that remains.
+    # A continuation deferred by load or an overlapping area does not benefit
+    # from an idle global slot, while a PC worker can still run an independent
+    # Triage or Specification task.
     try:
-        answered = refill_open_work_slots(
-            conf, workflows, workers,
-            admit_new_plan=not activity["terminal_backlog"],
-        )
+        answered = refill_open_work_slots(conf, workflows, workers)
         activity["answer_applied"] = (
             activity["answer_applied"]
             or answered is True

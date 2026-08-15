@@ -7415,7 +7415,7 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(len(created), 4)
         self.assertEqual(len(state["processed"]), 4)
         refill.assert_called_once()
-        self.assertFalse(refill.call_args.kwargs["admit_new_plan"])
+        self.assertTrue(refill.call_args.kwargs.get("admit_new_plan", True))
 
     def test_deferred_terminal_handoff_does_not_starve_next_terminal(self):
         conf = {
