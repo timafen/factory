@@ -766,8 +766,9 @@ if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new
 fi
 exec /bin/chmod "$@"
 EOF
-  cat >"$case_dir/bin/curl" <<'EOF'
+cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
+last_worker_event=$(grep -E '^(start|stop) factory-worker.service$' "$TEST_EVENTS" 2>/dev/null | tail -1 || true)
 case "$*" in
   *'/api/v1/dashboard'*)
     if [ "$TEST_MODE" = server-fail ]; then printf 503; else printf 200; fi ;;
@@ -777,11 +778,11 @@ case "$*" in
     elif [ "$TEST_MODE" = stale-healthy-worker ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     elif [ "$TEST_MODE" = heartbeat-during-stop ] \
-      && grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      && [ "$last_worker_event" = 'stop factory-worker.service' ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
-    elif grep -F 'start factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+    elif [ "$last_worker_event" = 'start factory-worker.service' ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:02Z"}'
-    elif grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+    elif [ "$last_worker_event" = 'stop factory-worker.service' ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
     else
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
@@ -923,7 +924,14 @@ start_release() {
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
-    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
+    FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
+    FACTORY_BROWSER_HELPER="$case_dir/browser-live/factory-browser-isolated" \
+    FACTORY_BROWSER_CONFIG="$case_dir/browser-live/factory-browser.conf" \
+    FACTORY_BROWSER_INSTALL_STATE="$case_dir/browser-live/factory-browser-install.state" \
+    FACTORY_BROWSER_SUDOERS="$case_dir/browser-live/sudoers" \
+    FACTORY_BROWSER_APPARMOR="$case_dir/browser-live/apparmor" \
+    FACTORY_BROWSER_READINESS_MARKER="$case_dir/browser-live/readiness.json" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_FX_BIN="$case_dir/install/fx" \
@@ -939,6 +947,7 @@ start_release() {
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
     FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE=1 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
