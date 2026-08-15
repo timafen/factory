@@ -1,19 +1,28 @@
-Implementation commit: b8c016200ce3889aba127ac6ccaaa37f58898cef — добавлена регрессия GH_REPO для назначенного timafen/factory
+Implementation commit: e0030e5276e80d19300e90c7e097aa5c1165b83c — managed cache закрепляет origin как проект GitHub CLI
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
 ## HEAD
 
-Status: Implemented
-Branch: factory/e466d9d5-7e1-4d9fd24a-b5c
+Status: Implemented and tested
+Branch: factory/b5f98fd2-dcd-2165fa40-d32
 Specification: `knowledge/specs/worker-gh-repository-context.md`
-What changed: для `github.com/timafen/factory` runtime получает ровно
-`GH_REPO=timafen/factory`, заменяя унаследованный `owainlewis/factory`.
-Evidence: три целевых worker-теста PASS (4.519s), включая сквозной путь
-claim → supervisor → runtime; `git diff --check` PASS.
+What changed: managed repository cache удаляет конфликтующий default у
+`upstream` и закрепляет `origin`, поэтому `gh repo view --json nameWithOwner`
+возвращает назначенный проект.
+Evidence: целевой cache-тест и три GH_REPO-теста PASS; `go test -count=1
+./...` и `go build ./...` PASS; remote default branch зафиксирован перед
+поставкой.
 One next action: Verify на свежем `origin/main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Повторно подтверждена поставка реализации `e0030e5276e80d19300e90c7e097aa5c1165b83c`:
+`repository_cache.go` настраивает `remote.origin.gh-resolved=base`, удаляет
+конфликтующий `upstream`, а `repository_coordination_test.go` проверяет точный
+вывод `gh repo view --json nameWithOwner` для `timafen/factory`.
 
 ### 2026-08-15 — Implement
 
