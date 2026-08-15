@@ -1259,7 +1259,17 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+deferred_pilot_restart_unit=''
+cancel_deferred_pilot_restart() {
+  [ -z "$deferred_pilot_restart_unit" ] || {
+    # --on-active creates a timer unit.  Stop both names: the service may
+    # already have been queued when rollback starts, while a missing one is
+    # harmless and must not prevent restoration of the previous generation.
+    systemctl stop "$deferred_pilot_restart_unit.timer" >/dev/null 2>&1 || true
+    systemctl stop "$deferred_pilot_restart_unit.service" >/dev/null 2>&1 || true
+  }
+}
+rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; cancel_deferred_pilot_restart; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
@@ -1316,7 +1326,8 @@ cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" 
   || rollback "правдивые metadata не опубликованы" 7
 if [ "$deferred_pilot_restart" = 1 ]; then
   step "ставлю безопасный отложенный перезапуск Пилота"
-  systemd-run --quiet --collect --unit="factory-pilot-restart-$$" --on-active=30s \
+  deferred_pilot_restart_unit="factory-pilot-restart-$$"
+  systemd-run --quiet --collect --unit="$deferred_pilot_restart_unit" --on-active=30s \
     /usr/bin/flock -n "$LOCK" /bin/systemctl restart "$PILOT_SERVICE" \
     || rollback "не смог отложить перезапуск Пилота" 7
 fi
