@@ -697,6 +697,65 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertTrue(snapshot["base_advanced"])
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
+    def test_stale_candidate_is_merged_with_fresh_main_before_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "README.md", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+            self.git(author, "checkout", "-qb", "factory/candidate", "main")
+            self.commit(author, "pilot/change.py", "candidate\n")
+            implementation = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "main-only.txt", "advanced\n")
+            current_main = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-q", "origin", "main")
+
+            result = pilot.refresh_stale_branch("file://" + remote,
+                                                "factory/candidate")
+
+            self.assertEqual(result["state"], "ok")
+            self.assertFalse(result["snapshot"]["base_advanced"])
+            self.assertEqual(result["snapshot"]["base_sha"], current_main)
+            refreshed = result["snapshot"]["candidate_sha"]
+            self.git(author, "fetch", "-q", "origin", "factory/candidate")
+            self.git(author, "merge-base", "--is-ancestor", implementation,
+                     refreshed)
+            self.assertEqual(result["branch"], "factory/candidate")
+
+    def test_conflicting_refresh_leaves_remote_candidate_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "shared.txt", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+            self.git(author, "checkout", "-qb", "factory/candidate", "main")
+            self.commit(author, "shared.txt", "candidate\n")
+            candidate = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "shared.txt", "main\n")
+            self.git(author, "push", "-q", "origin", "main")
+
+            result = pilot.refresh_stale_branch("file://" + remote,
+                                                "factory/candidate")
+
+            self.assertEqual(result["state"], "conflict")
+            self.assertEqual(self.git(tmp, "--git-dir", remote, "rev-parse",
+                                      "refs/heads/factory/candidate"), candidate)
+
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
         snapshot = pilot.fresh_branch_snapshot("file:///definitely/not/a/repository", "factory/candidate")
         self.assertEqual(snapshot["state"], "blocked")
@@ -710,6 +769,82 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
+
+    def test_review_gate_refreshes_stale_candidate_after_area_is_free(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 3, "ahead_by": 2, "files": files}
+        fresh = dict(stale, base_sha="d" * 40, candidate_sha="e" * 40,
+                     merge_base_sha="d" * 40, base_advanced=False,
+                     base_ahead_by=0)
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "ok", "branch": "factory/candidate", "snapshot": fresh}) as refresh:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertFalse(result["back"])
+        self.assertEqual(result["head"], "e" * 40)
+        refresh.assert_called_once_with("github.com/example/repo", "factory/candidate")
+        self.assertNotIn("Основная ветка продвинулась", result["note"])
+
+    def test_review_gate_waits_for_overlap_before_refreshing_stale_branch(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value={"pilot/pilot.py"}), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch") as refresh:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo", active_tasks=[])
+
+        self.assertTrue(result["wait"])
+        refresh.assert_not_called()
+
+    def test_review_gate_returns_conflicting_refresh_to_implement(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "conflict", "reason": "content conflict"}):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertTrue(result["back"])
+        self.assertIn("перед Ревью", result["note"])
+
+    def test_review_gate_blocks_when_stale_refresh_cannot_be_published(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "blocked", "reason": "push rejected"}):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertTrue(result["blocked"])
+        self.assertIn("push rejected", result["note"])
 
     def test_review_gate_returns_empty_pinned_delivery_with_one_message(self):
         snapshot = {
