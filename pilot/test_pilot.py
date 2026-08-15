@@ -9122,6 +9122,47 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         self.assertEqual(question["work_id"], "work-a")
         self.assertEqual(question["branch"], "factory/a")
 
+    def test_lifecycle_and_hard_budget_stop_do_not_cross_same_title_work(self):
+        title = "Одинаковый жизненный цикл"
+        tasks = [
+            {"id": "root-a", "work_id": "work-a", "state": "running",
+             "created_at": "2026-08-11T10:00:00Z",
+             "title": f"[auto] [1/2 Triage] {title}"},
+            {"id": "root-b", "work_id": "work-b", "state": "running",
+             "created_at": "2026-08-11T10:00:01Z",
+             "title": f"[auto] [1/2 Triage] {title}"},
+        ]
+        pilot.save(self.paths["ideas"], [
+            {"id": "idea-a", "title": title, "state": "planned",
+             "work_id": "work-a"},
+            {"id": "idea-b", "title": title, "state": "in_work",
+             "task_id": "root-b", "work_id": "work-b"},
+        ])
+
+        self.assertIn("запланировано", pilot.work_lifecycle_block(title, tasks[0], tasks))
+        self.assertEqual(pilot.work_lifecycle_block(title, tasks[1], tasks), "")
+
+        conf = {"stopped_pipelines": []}
+        pilot.stop_pipeline(conf, title, work_id="work-a")
+        pilot.note_budget_stop(title, work_id="work-a")
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertFalse(pilot.is_stopped(conf, title, work_id="work-b"))
+        self.assertTrue(pilot.budget_stopped(title, work_id="work-a"))
+        self.assertFalse(pilot.budget_stopped(title, work_id="work-b"))
+
+    def test_recovered_merge_intent_writes_and_restores_its_work_id_receipt(self):
+        title = "Одинаковый merge receipt"
+        state = {"merge_intents": {
+            "verify-a": {"phase": "merged", "base": title,
+                         "branch": "factory/a", "repository": "github.com/acme/repo",
+                         "commit_sha": "a" * 40, "work_id": "work-a"},
+        }}
+        with mock.patch.object(pilot, "deploy_after_merge", return_value={}):
+            pilot.recover_merge_intents({}, state)
+
+        self.assertIsNotNone(pilot.merge_receipt(title, work_id="work-a"))
+        self.assertIsNone(pilot.merge_receipt(title, work_id="work-b"))
+
 
 if __name__ == "__main__":
     unittest.main()
