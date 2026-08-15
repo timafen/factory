@@ -1,19 +1,27 @@
 # CARD-0170 — Безопасное удержание каталогов release-сборки
 
-Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
+Implementation commit: 12101a9be417202282b8ffab7c981b401322ebf2 — cleanup-fixture отделён от проверки поколений и доступен изолированно.
 
 ## HEAD
 
-Status: IMPLEMENTED
-Branch: factory/a83fc90f-150-892fa826-5a4
-Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
-What changed: release под lock удаляет лишь реальные `build-*` старше 24 часов;
-`--cleanup-dry-run` журналирует решения, не создавая выпуск.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS;
-`bash ops/test-fx-factory-release.sh` → PASS.
-Next action: провести review изменений перед слиянием.
+Status: BLOCKED — полный release-fixture не прошёл старое HUP-ожидание до cleanup.
+Branch: factory/e7eed68e-5ce-7d59dc30-a07
+Implementation commit: 12101a9be417202282b8ffab7c981b401322ebf2 — cleanup-fixture отделён от проверки поколений и доступен изолированно.
+What changed: fixture сохраняет пустой `generations/`, не создавая ложное
+непроверенное поколение; cleanup можно проверить режимом `build-cleanup`.
+Evidence: `FACTORY_TEST_ONLY=build-cleanup bash ops/test-fx-factory-release.sh` → PASS;
+`go test -timeout 5m ./...` и `just build` → PASS; полный release-fixture → FAIL
+на прежнем `signal-HUP-1/ui-running` до выполнения cleanup.
+Next action: повторить полный release-fixture при свободном хосте и только после PASS сливать.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлен новый cleanup-fixture: защищённый `generations/` остаётся пустым и
+больше не выглядит непроверенным поколением для preflight. Добавлен изолированный
+режим `build-cleanup`; он, Go-свита и сборка прошли. Два полных release-прогона
+остановились на существующем HUP-таймауте до cleanup при нагрузке хоста выше CPU.
 
 ### 2026-08-15 — Implement
 
