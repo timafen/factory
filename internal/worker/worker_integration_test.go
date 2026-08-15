@@ -298,10 +298,7 @@ var repositoryTemplate struct {
 }
 
 func TestMain(main *testing.M) {
-	if os.Getenv(interruptedTestHelperEnv) == "1" {
-		os.Exit(runInterruptedTestHelper(main))
-	}
-	code := main.Run()
+	code := runInterruptedTestLifecycle(main)
 	if repositoryTemplate.root != "" {
 		_ = os.RemoveAll(repositoryTemplate.root)
 	}
