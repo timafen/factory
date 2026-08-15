@@ -1,14 +1,14 @@
 # CARD-0093 — Первое записанное поколение выпуска Factory
 
-Implementation commit: d3873a8262288e8249e9e3dcc3ebfea86ef06326 — первый выпуск
+Implementation commit: b5c3c3bc379605e155414500c94a72a6cbe55919 — первый выпуск
 проверяет исходную точку, записывает полный bootstrap-комплект и отказывается
 от небезопасной истории до сборки или остановки служб.
 
 ## HEAD
 
 - Status: Implemented — готово к Review.
-- Branch: `factory/19c563f0-6f3-3c4b0d3b-34b`.
-- Implementation commit: d3873a8262288e8249e9e3dcc3ebfea86ef06326 — fail-closed
+- Branch: `factory/910b60bc-5fc-707047a7-630`.
+- Implementation commit: b5c3c3bc379605e155414500c94a72a6cbe55919 — fail-closed
   bootstrap первого recorded release с полным проверяемым rollback-комплектом.
 - What changed: preflight до сборки проверяет пустую/целую историю, metadata
   `0600`, `release_id`, SHA и живые rollback artifacts; bootstrap содержит
@@ -33,6 +33,12 @@ Implementation commit: d3873a8262288e8249e9e3dcc3ebfea86ef06326 — первый
 публикации проходит `verify_generation` и сохраняет полный SQLite-снимок.
 `bash ops/test-fx-factory-release.sh` завершился PASS, включая три fail-closed
 сценария и существующие crash/rollback-проверки.
+
+### 2026-08-14 — Implement
+
+После ребейза на свежий `main` защита первого поколения объединена с актуальной
+защитой test gate. `bash ops/test-fx-factory-release.sh` завершился PASS:
+bootstrap, metadata `0644`, отсутствие `release_id` и частичная история покрыты.
 
 ## Следующее действие
 
