@@ -1,21 +1,29 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: 2543db91194a5a459a43ceea687c93684df52e8c — rollback отменяет отложенный restart Пилота после сбоя финализации.
+Implementation commit: b7ecf32a5d1c3cea04ba693f24380ff2a32d5cb8 — rollback отменяет отложенный restart Пилота после сбоя финализации.
 
 ## HEAD
 
 - Status: Implemented — ready for review.
-- Branch: `factory/8e1c3a13-abf-0dfe5ba5-2b6`.
+- Branch: `factory/90162acc-818-0bac49ec-fd4`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: 2543db91194a5a459a43ceea687c93684df52e8c — rollback
+- Implementation commit: b7ecf32a5d1c3cea04ba693f24380ff2a32d5cb8 — rollback
   отменяет transient timer и service до восстановления прежнего поколения.
 - What changed: сбой после успешного `systemd-run` останавливает отложенный
   restart; обычный restart по-прежнему защищён общим release-lock.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
   `bash ops/test-fx-factory-release.sh` — PASS.
-- Next action: провести review и влить изменение.
+- Next action: влить проверенную поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После перебазирования на актуальный `origin/main` карточка привязана к
+существующему кодовому коммиту этой ветки. `bash -n
+ops/fx-factory-release ops/test-fx-factory-release.sh` и
+`bash ops/test-fx-factory-release.sh` прошли: покрыты порядок публикации
+метаданных, общий lock, отмена restart при rollback и неизменённый brain.
 
 ### 2026-08-15 — Implement
 
