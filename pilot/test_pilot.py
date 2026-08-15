@@ -2870,6 +2870,7 @@ class PipelineWatchTests(unittest.TestCase):
             "Встроенный патруль": {
                 "since": self.now - pilot.STALL_WAIT,
                 "nudges": pilot.STALL_NUDGES,
+                "stage": "Specification",
             }
         }
         with mock.patch.object(
@@ -2883,6 +2884,47 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.work_status["Встроенный патруль"]["state"], "stuck")
         self.assertEqual(len(self.notifications), 1)
         self.assertIn("после двух попыток", self.notifications[0][1])
+
+    def test_nudge_attempts_reset_after_work_reaches_the_next_stage(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch([self.task(stage="Implement")])
+
+        self.assertEqual(len(self.created), 0)
+        rec = self.memory["Встроенный патруль"]
+        self.assertEqual(rec["stage"], "Implement")
+        self.assertEqual(rec["nudges"], 0)
+        self.assertNotEqual(rec.get("why"), "give_up")
+
+        self.now += pilot.STALL_WAIT
+        self.watch([self.task(stage="Implement")])
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[3/3 Review]", self.created[0]["title"])
+
+    def test_legacy_give_up_record_is_retried_after_upgrade(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+            }
+        }
+
+        self.watch()
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["stage"], "Specification")
+        self.assertNotEqual(
+            self.memory["Встроенный патруль"].get("why"), "give_up")
 
 
 class CanonicalImplementationBranchTests(unittest.TestCase):
@@ -6007,6 +6049,30 @@ class OrchestratorWaitActionTests(unittest.TestCase):
                          "[auto] [1/1 Specification] Сетевая проверка")
         self.assertIn("автоматический повтор того же снимка", created[0]["context"])
         self.assertNotIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
+
+    def test_russian_dns_wait_is_also_an_infrastructure_retry(self):
+        verdict = {
+            "decision": "wait",
+            "reason": (
+                "Проверку нужно оставить до восстановления DNS-доступа к GitHub; "
+                "без свежего origin продолжать нельзя."
+            ),
+        }
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "load_limits", return_value={}):
+            self.assertFalse(pilot.route_question(
+                self.conf, "russian-dns-question", "Review", "Review",
+                "Сетевая проверка", "repo-id", "Проверка временно остановлена",
+                "Что делать дальше?", [], "GitHub сейчас недоступен",
+                attempts_so_far=1, branch="factory/network-check"))
+
+        question = pilot.load(
+            os.path.join(self.question_dir, "russian-dns-question.json"), {})
+        self.assertEqual(question["status"], "answered")
+        self.assertEqual(question["machine_action"], "retry_infrastructure")
+        self.assertEqual(question["resume_stage"], "Review")
+        self.assertNotIn("Сетевая проверка", self.conf["stopped_pipelines"])
 
     def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
         self.assertFalse(self.route({
