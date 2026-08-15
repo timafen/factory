@@ -115,12 +115,18 @@ PY
   /usr/bin/git -C "$FIXTURE_TREE" archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
   /bin/cp "$RELEASE" "$case_dir/repo/ops/fx-factory-release"
   /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
-  cat >"$case_dir/repo/ops/install-server-browser.sh" <<'BROWSER'
+cat >"$case_dir/repo/ops/install-server-browser.sh" <<'BROWSER'
 #!/bin/bash
 echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+if [ "${1:-}" = --restore-live-state ]; then
+  echo browser-live-state-restored >>"$TEST_EVENTS"
+  exit 0
+fi
 [ "$TEST_MODE" != browser-install-fail ] || exit 1
 runtime=${FACTORY_BROWSER_RUNTIME:?missing browser runtime target}
 mkdir -p "$runtime/web/node_modules/playwright" "$runtime/internal/controlplane/report_scripts" "$runtime/ops"
+mkdir -p "${FACTORY_BROWSER_BACKUP_DIR:?missing browser rollback target}"
+touch "${FACTORY_BROWSER_BACKUP_DIR}/backup.ready"
 printf '{"name":"factory-release-browser-fixture"}\n' >"$runtime/web/package.json"
 printf '{"lockfileVersion":3}\n' >"$runtime/web/package-lock.json"
 printf '{"name":"playwright","main":"index.cjs"}\n' >"$runtime/web/node_modules/playwright/package.json"
@@ -134,7 +140,7 @@ JS
 /bin/cp "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/render.mjs" \
   "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/capture.mjs" \
   "$runtime/internal/controlplane/report_scripts/"
-/bin/cp "$TEST_RELEASE_SOURCE/ops/install-server-browser.sh" "$runtime/ops/"
+/bin/cp "$0" "$runtime/ops/install-server-browser.sh"
 chmod 755 "$runtime/ops/install-server-browser.sh"
 printf '{"passed_at":"2026-08-14T00:00:00Z","browser_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' \
   >"$runtime/browser-readiness.json"
@@ -475,10 +481,16 @@ if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
 fi
 if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
   echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+  if [ "${2:-}" = --restore-live-state ]; then
+    echo browser-live-state-restored >>"$TEST_EVENTS"
+    exit 0
+  fi
   [ "$TEST_MODE" != browser-install-fail ] || exit 1
   runtime=${FACTORY_BROWSER_RUNTIME:?missing browser runtime target}
   mkdir -p "$runtime/web/node_modules/playwright" \
     "$runtime/internal/controlplane/report_scripts" "$runtime/ops"
+  mkdir -p "${FACTORY_BROWSER_BACKUP_DIR:?missing browser rollback target}"
+  touch "${FACTORY_BROWSER_BACKUP_DIR}/backup.ready"
   printf '{"name":"factory-release-browser-fixture"}\n' >"$runtime/web/package.json"
   printf '{"lockfileVersion":3}\n' >"$runtime/web/package-lock.json"
   printf '{"name":"playwright","main":"index.cjs"}\n' \
@@ -493,7 +505,7 @@ JS
   /bin/cp "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/render.mjs" \
     "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/capture.mjs" \
     "$runtime/internal/controlplane/report_scripts/"
-  /bin/cp "$TEST_RELEASE_SOURCE/ops/install-server-browser.sh" "$runtime/ops/"
+  /bin/cp "$0" "$runtime/ops/install-server-browser.sh"
   chmod 755 "$runtime/ops/install-server-browser.sh"
   printf '{"passed_at":"2026-08-14T00:00:00Z","browser_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' \
     >"$runtime/browser-readiness.json"
@@ -1083,6 +1095,18 @@ run_release "$browser_failed" browser-install-fail || status=$?
   || fail "browser installer failure stopped or started running services"
 grep -F 'browser runtime не готов — работающий выпуск не изменён' "$browser_failed/output" >/dev/null \
   || fail "browser installer failure did not explain the safe abort"
+
+browser_smoke_failed="$temporary/browser-smoke-failure"
+make_fixture "$browser_smoke_failed" parallel-success
+status=0
+FACTORY_RELEASE_TEST_FAIL_AFTER_BROWSER_SMOKE=1 run_release "$browser_smoke_failed" parallel-success || status=$?
+[ "$status" -eq 4 ] || fail "browser smoke follow-up failure returned $status instead of 4"
+grep -Fx browser-live-state-restored "$browser_smoke_failed/events" >/dev/null \
+  || fail "browser live state was not restored before the prepared journal"
+[ ! -e "$browser_smoke_failed/releases/transaction" ] \
+  || fail "browser smoke follow-up failure wrote a prepared journal"
+! grep -E '^(stop|start) factory-(server|worker)' "$browser_smoke_failed/events" >/dev/null \
+  || fail "browser smoke follow-up failure changed running services"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup
