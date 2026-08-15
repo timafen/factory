@@ -7878,9 +7878,16 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
         if intent.get("phase") != "conflict":
             continue
+        conflict_head = intent.get("commit_sha", "")
+        repair_head = intent.get("repair_commit_sha", "")
         existing = next((task for task in tasks
                          if task.get("parent_task_id") == task_id
                          and task.get("correction_kind") == "merge_conflict_return"
+                         # A later Verify may report another conflict for the
+                         # same intent after its branch was updated.  Its
+                         # previous repair is history, not a reason to leave
+                         # the new conflict without an Implement task.
+                         and (not repair_head or repair_head == conflict_head)
                          and task.get("id")), None)
         if existing:
             intent.update({"phase": "repairing",
@@ -7931,7 +7938,7 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         )[:20000]
         try:
             created = create_child_task({
-                "request_key": f"merge-conflict-return:{task_id}:{intent.get('commit_sha', '')}",
+                "request_key": f"merge-conflict-return:{task_id}:{conflict_head}",
                 "title": (f"[auto] [{stage_number}/{len(stages)} {implementation}] "
                           f"{base}")[:200],
                 "context": context,
@@ -7947,7 +7954,8 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         if not repair_task_id:
             log(f"MERGE CONFLICT repair wait task={task_id}: create returned no task")
             continue
-        intent.update({"phase": "repairing", "repair_task_id": repair_task_id})
+        intent.update({"phase": "repairing", "repair_task_id": repair_task_id,
+                       "repair_commit_sha": conflict_head})
         save(STATE_PATH, state)
         log(f"MERGE CONFLICT returned task={task_id} -> {repair_task_id}")
         created_count += 1

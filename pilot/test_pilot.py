@@ -3884,6 +3884,31 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"],
                          "repair-existing")
 
+    def test_repeated_conflict_after_branch_update_starts_new_repair(self):
+        state = self.conflict_state()
+        intent = state["merge_intents"]["verify-1"]
+        intent.update({"commit_sha": "b" * 40,
+                       "repair_commit_sha": "a" * 40,
+                       "repair_task_id": "repair-old"})
+        old_correction = {
+            "id": "repair-old", "parent_task_id": "verify-1",
+            "correction_kind": "merge_conflict_return",
+        }
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-new"}}) as create:
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent, old_correction],
+                self.workflows, self.workers), 1)
+
+        self.assertEqual(create.call_args.args[0]["request_key"],
+                         "merge-conflict-return:verify-1:" + "b" * 40)
+        self.assertEqual(intent["phase"], "repairing")
+        self.assertEqual(intent["repair_task_id"], "repair-new")
+        self.assertEqual(intent["repair_commit_sha"], "b" * 40)
+
     def test_missing_parent_is_loaded_from_detail_api(self):
         state = self.conflict_state()
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
