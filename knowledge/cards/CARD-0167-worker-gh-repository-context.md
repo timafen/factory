@@ -1,23 +1,32 @@
-Implementation commit: 120b65abfcbb8b58ae4e7bf03aeb5a5565553e15 — определён проверяемый контракт передачи GitHub remote identity в окружение runtime
+Implementation commit: 2b46f2b009067488e7c743c2f1124d683f10befa — worker закрепляет GitHub CLI за репозиторием текущей задачи
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
 ## HEAD
 
-Status: Specified
-Branch: factory/dc8f3e6e-ba5-7c7dabd5-ca9
+Status: Implemented
+Branch: factory/8704e2dd-e6b-1479b9c9-320
 Specification: `knowledge/specs/worker-gh-repository-context.md`
-What changed: определены источник `claim.Repository.RemoteIdentity`, безопасная
-нормализация `GH_REPO`, обязательная перезапись унаследованного значения,
-политика отказа для invalid/non-GitHub/self-hosted identity и точная worker-регрессия.
-Evidence: фактический путь запуска сверён по
-`internal/worker/attempt_lifecycle.go` и `internal/worker/supervisor.go`;
-`go test -count=1 ./internal/worker` и `git diff --check` завершились с кодом 0
-на этой документационной поставке.
-One next action: реализовать спецификацию и добавить
-`TestWorkerRuntimeUsesClaimGitHubRepositoryContext`.
+What changed: identity из claim передаётся supervisor; runtime получает
+единственный `GH_REPO` только для валидного GitHub.com. Унаследованное
+или недостоверное значение всегда удаляется.
+Evidence: целевой integration test PASS (4.027s); весь `internal/worker`
+PASS (168.597s); `go build ./...` и `git diff --check` PASS.
+One next action: Verify на свежем `origin/main`.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Worker передаёт `claim.Repository.RemoteIdentity` через JSON-init supervisor и
+формирует общее для Codex/Claude Code runtime-окружение. Валидная
+`GitHub.com/Example/Cattle` даёт `GH_REPO=example/cattle`; пустые,
+malformed, file, GitLab и self-hosted identity не получают переменную.
+Чужое унаследованное значение удаляется.
+
+Доказательства: целевой integration test PASS; табличная
+environment-политика PASS; весь `internal/worker` PASS за 168.597s;
+`go build ./...` и `git diff --check` PASS.
 
 ### 2026-08-14 — Specification
 
