@@ -26,7 +26,7 @@ function mockAPI(data: Record<string, unknown>) {
   }));
 }
 
-function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (base: string) => void | Promise<void> } = {}) {
+function view(tasks: Task[], handlers: { onAnswer?: () => void; onResume?: (base: string) => void | Promise<void>; onSettings?: () => void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}><WorkView tasks={tasks} workers={[]} pending={false} error={null}
     fetching={false} updatedAt={Date.now()} onTask={() => undefined}
@@ -50,11 +50,12 @@ it("separates queued work from work running right now", async () => {
 
   expect(within(runningSection).getByText("Уже выполняется")).toBeVisible();
   expect(within(runningSection).queryByText("Ждёт исполнителя")).not.toBeInTheDocument();
-  expect(within(queuedSection).getAllByText("Ждёт исполнителя")).toHaveLength(2);
+  // Заголовок, плашка и единый итог карточки используют одну формулировку.
+  expect(within(queuedSection).getAllByText("Ждёт исполнителя")).toHaveLength(3);
   expect(within(queuedSection).queryByText("Уже выполняется")).not.toBeInTheDocument();
   expect(screen.getByText("Текущий этап поставлен в очередь и ещё не выполняется.")).toBeVisible();
   expect(screen.getByText("поставил помощник")).toBeVisible();
-  expect(screen.getAllByText("Ждёт исполнителя")).toHaveLength(2);
+  expect(screen.getAllByText("Ждёт исполнителя")).toHaveLength(3);
   expect(screen.getByText("Текущий этап ещё не начат")).toBeVisible();
 });
 
@@ -89,6 +90,7 @@ it("names the work screen and task queue by their meaning", async () => {
 it("separates owner decision, pause, dead end, automatic repair, and archive", async () => {
   const answer = vi.fn();
   const resume = vi.fn();
+  const settings = vi.fn();
   const tasks = [
     task("question", "[auto] [3/5 Implement + Test] Нужен выбор", "running"),
     task("paused", "[auto] [4/5 Review] Пауза владельца", "failed"),
@@ -105,7 +107,7 @@ it("separates owner decision, pause, dead end, automatic repair, and archive", a
       "Настоящий тупик": { state: "stuck", text: "следующий этап не запускается" },
     },
   });
-  view(tasks, { onAnswer: answer, onResume: resume });
+  view(tasks, { onAnswer: answer, onResume: resume, onSettings: settings });
 
   expect(await screen.findByRole("heading", { name: "Нужно твоё решение" })).toBeVisible();
   expect(screen.getByRole("heading", { name: "Поставлено на паузу" })).toBeVisible();
@@ -114,13 +116,16 @@ it("separates owner decision, pause, dead end, automatic repair, and archive", a
   expect(screen.getAllByText("Что случилось").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Дальше Factory").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Твоё участие").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Итог работы").length).toBeGreaterThan(0);
   expect(screen.queryByText("Не вышло / остановлено")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Ответить Factory →" }));
   fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+  fireEvent.click(screen.getByRole("button", { name: "Открыть настройки →" }));
   expect(answer).toHaveBeenCalledOnce();
   expect(resume).toHaveBeenCalledOnce();
   expect(resume).toHaveBeenCalledWith("Пауза владельца");
+  expect(settings).toHaveBeenCalledOnce();
 
   expect(screen.getByRole("button", { name: "Архив · 1" })).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Архив · 1" }));
