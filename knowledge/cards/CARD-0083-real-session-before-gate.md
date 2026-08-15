@@ -2,16 +2,24 @@
 
 ## HEAD
 
-Status: IMPLEMENTED.
-Branch: factory/ea5fa84f-fa8-17dfd9ea-064.
-Implementation commit: ab62450f9d291f8aa7ad3af74f0202d57e9e6bd7 — release-цепочка использует безопасный PATH, абсолютные tools и отдельную cgroup v2 для каждого Gate.
-What changed: cleanup теперь ограниченно останавливает и очищает потомков Gate; остаток превращает успешный gate в отказ без установки.
-What changed: тестовая фикстура broker использует актуальные переменные Pilot/legacy drop-in после перебазирования на main.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая PATH-shadow, orphan-after-success и escaped-setsid.
-Evidence: `(cd web && npx tsc -p tsconfig.app.json --noEmit)` и `git diff --check` → PASS.
-One next action: провести независимый review перед слиянием.
+Status: IMPLEMENTED — обе находки review исправлены, выпуск не выполнялся.
+Branch: factory/0044f851-d6c-1fe77d92-f72.
+Implementation commit: b283b55c125fb9eda2a414de693cf43bc931f0a9 — cgroup-helper доставляется атомарно, а Pilot suite снова блокирует установку через Gate.
+What changed: штатный installer обновляет `fx`, release-driver и cgroup-helper одной транзакцией с общим откатом.
+What changed: Pilot suite возвращён в обязательную Go-группу; отрицательный сценарий доказывает, что после его падения установка не начинается.
+Evidence: `bash ops/test-install-factory-control.sh` и `bash ops/test-fx-factory-release.sh` → PASS.
+Evidence: Go-фазы `just check`; затем `just ui-check test-tooling test-launcher`, Pilot (306 tests) и Go/UI builds → PASS.
+One next action: повторно провести независимый Review; выпуск до PASS не выполнять.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+После REQUEST CHANGES cgroup-helper включён в ту же атомарную транзакцию, что `fx`
+и release-driver; upgrade и отказ последнего шага подтверждают установку и полный
+откат. Pilot suite снова обязателен до release-сценария, а `pilot-test-fail`
+подтверждает отсутствие установки. Целевые shell/Pilot-наборы, полный project check
+и production-сборки прошли после rebase на свежий `main`; выпуск не запускался.
 
 ### 2026-08-14 — Implement
 
