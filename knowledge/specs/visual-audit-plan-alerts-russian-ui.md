@@ -234,7 +234,7 @@ production default.
 
 ## Card
 
-`knowledge/cards/CARD-0070-visual-audit-plan-alerts-russian-ui.md`
+`knowledge/cards/CARD-0073-visual-audit-plan-alerts-russian-ui.md`
 
 ГОТОВО-КОГДА: файл intake/plan.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
@@ -253,4 +253,4 @@ production default.
 ГОТОВО-КОГДА: файл web/src/styles.css
 ГОТОВО-КОГДА: файл web/src/App.test.tsx
 ГОТОВО-КОГДА: файл web/src/Settings.test.tsx
-ГОТОВО-КОГДА: команда npm --prefix web run test:browser -- --grep "audits intake plan and alerts on desktop and phone"
+ГОТОВО-КОГДА: команда npm --prefix web run test:browser -- --grep "shows the real intake Plan and Alerts"
