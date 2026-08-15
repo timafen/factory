@@ -1,22 +1,30 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: c695193793e93b9576602882918d0e206b859361 — generation-выпуск ставит restart Пилота после metadata под общим lock.
+Implementation commit: 679736aa7be56c37873cf83de6f4771b35ad229a — generation-выпуск ставит restart Пилота после metadata под общим lock.
 
 ## HEAD
 
 - Status: Verified PASS — awaiting human merge.
-- Branch: `factory/99fcf773-995-eff220e2-9f2`.
+- Branch: `factory/a3f73517-faf-01a878ca-879`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: c695193793e93b9576602882918d0e206b859361 — restart
+- Implementation commit: 679736aa7be56c37873cf83de6f4771b35ad229a — restart
   Пилота в generation-модели защищён общим lock.
 - What changed: обновлённый brain планирует restart после публикации
   `release-info`; неизменённый brain его не ставит.
-- Evidence: `bash ops/test-fx-factory-release.sh` — PASS в чистом Git-клоне;
-  полный набор подтвердил целевые проверки, а смежные UI и worker-сценарии
-  исчерпали собственные таймауты вне области изменения.
-- Next action: человек проверяет риски смежных таймаутов и вливает изменения.
+- Evidence: `bash ops/test-fx-factory-release.sh`, `go test ./... -count=1` и
+  `go build ./...` — PASS.
+- Next action: человек проверяет и вливает изменения.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Реализация повторно перенесена на свежий `main`: restart Пилота ставится только
+после публикации `release-info` и запускается под тем же неблокирующим lock,
+что и выпуск. Тест проверяет порядок, отказ при занятом lock, ровно один restart
+после освобождения lock, отсутствие restart при неизменённом brain и rollback
+после ошибки `systemd-run`. `bash ops/test-fx-factory-release.sh`,
+`go test ./... -count=1` и `go build ./...` прошли.
 
 ### 2026-08-11 — Specification
 
