@@ -8894,6 +8894,7 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         self.home = self.temp.name
         for name in ("questions", "epics", "verdicts"):
             os.makedirs(os.path.join(self.home, name))
+        os.makedirs(os.path.join(self.home, "pilot"))
         self.paths = {
             "ideas": os.path.join(self.home, "ideas.json"),
             "works": os.path.join(self.home, "works.json"),
@@ -8915,6 +8916,7 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
             mock.patch.object(pilot, "BUDGET_PATH", self.paths["budget"]),
             mock.patch.object(pilot, "BUDGET_STOPS", self.paths["budget_stops"]),
             mock.patch.object(pilot, "CONF_PATH", self.paths["config"]),
+            mock.patch.object(pilot, "HOME", self.home),
         ]
         for patch in self.patches:
             patch.start()
@@ -9120,6 +9122,54 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         self.assertFalse(pilot.is_stopped(conf, title, work_id="work-b"))
         self.assertTrue(pilot.budget_stopped(title, work_id="work-a"))
         self.assertFalse(pilot.budget_stopped(title, work_id="work-b"))
+
+    def test_archive_and_pause_cleanup_keep_same_title_work_ids_separate(self):
+        title = "Одинаковый архив"
+        tasks = [
+            {"id": "verify-a", "work_id": "work-a", "state": "succeeded",
+             "created_at": "2026-08-11T11:00:00Z",
+             "title": f"[auto] [2/2 Verify] {title}"},
+            {"id": "verify-b", "work_id": "work-b", "state": "succeeded",
+             "created_at": "2026-08-11T11:00:01Z",
+             "title": f"[auto] [2/2 Verify] {title}"},
+        ]
+        pilot.save(self.paths["ideas"], [
+            {"id": "idea-a", "title": title, "work_id": "work-a", "state": "in_work"},
+            {"id": "idea-b", "title": title, "work_id": "work-b", "state": "in_work"},
+        ])
+        with open(self.paths["merges"], "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"base": title, "work_id": "work-a",
+                                     "at": "2026-08-11T11:02:00Z"}) + "\n")
+        conf = {"stopped_pipelines": []}
+        pilot.cleanup_work_archive(conf, tasks)
+        states = {idea["id"]: idea["state"] for idea in pilot.ideas_all()}
+        self.assertEqual(states, {"idea-a": "done", "idea-b": "in_work"})
+
+        pilot.stop_pipeline(conf, title, work_id="work-a")
+        self.assertEqual(conf["stopped_pipelines"],
+                         [{"work_id": "work-a", "title": title}])
+        pilot.cleanup_orphaned_paused_pipelines(conf, [
+            dict(tasks[0], state="running"), dict(tasks[1], state="running")])
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertFalse(pilot.is_stopped(conf, title, work_id="work-b"))
+
+    def test_handoff_uses_own_baseline_and_delivery_artifact(self):
+        title = "Одинаковый handoff"
+        with mock.patch.object(pilot, "gh_json", side_effect=[
+                {"name": "factory/a", "commit": {"sha": "a" * 40}}, {"files": [{}]},
+                {"name": "factory/b", "commit": {"sha": "b" * 40}}, {"files": [{}]}]):
+            pilot.record_implementation_artifact(
+                title, "impl-a", "", "Branch: factory/a\nImplementation head: " + "a" * 40,
+                "", "repo", work_id="work-a")
+            pilot.record_implementation_artifact(
+                title, "impl-b", "", "Branch: factory/b\nImplementation head: " + "b" * 40,
+                "", "repo", work_id="work-b")
+        pilot.record_delivery_artifact(title, "factory/review-a", "c" * 40,
+                                        work_id="work-a")
+        self.assertEqual(pilot.selected_delivery(title, work_id="work-a"),
+                         ("factory/review-a", "c" * 40))
+        self.assertEqual(pilot.selected_delivery(title, work_id="work-b"),
+                         ("factory/b", "b" * 40))
 
     def test_recovered_merge_intent_writes_and_restores_its_work_id_receipt(self):
         title = "Одинаковый merge receipt"

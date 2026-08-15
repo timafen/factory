@@ -180,6 +180,26 @@ def work_storage_key(base, work_id="", task=None, tasks=None):
     return stable or base_title(base or "")
 
 
+def stopped_pipeline_entry(base, work_id=""):
+    """Persist a durable pause without exposing an opaque ID to the owner."""
+    stable = str(work_id or "").strip()
+    return ({"work_id": stable, "title": base_title(base or "")}
+            if stable else base_title(base or ""))
+
+
+def stopped_pipeline_matches(entry, base, work_id=""):
+    """Match durable pauses exactly; plain titles are legacy-only records."""
+    stable = str(work_id or "").strip()
+    if isinstance(entry, dict):
+        return bool(stable) and str(entry.get("work_id") or "").strip() == stable
+    return not stable and _same_work(entry, base)
+
+
+def stopped_pipeline_title(entry):
+    return (str(entry.get("title") or "") if isinstance(entry, dict)
+            else str(entry or ""))
+
+
 def task_is_root(task):
     task = task or {}
     return bool(task.get("work_id") and task.get("work_id") == task.get("id")
@@ -1004,7 +1024,8 @@ def reopen_work(base, generation, reason="Владелец явно запуст
     conf = load(CONF_PATH, None)
     if isinstance(conf, dict):
         stopped = list(conf.get("stopped_pipelines") or [])
-        kept = [name for name in stopped if not _same_work(name, base)]
+        kept = [entry for entry in stopped
+                if not stopped_pipeline_matches(entry, base)]
         if kept != stopped:
             conf["stopped_pipelines"] = kept
             save(CONF_PATH, conf)
@@ -1068,7 +1089,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
         created = task.get("created_at") or ""
         newer = [item for item in (tasks or [])
                  if item.get("id") != task.get("id")
-                 and _same_work(item.get("title"), base)
+                 and same_task_work(item, task)
                  and (item.get("created_at") or "") > created
                  and stage_no_of(item.get("title")) <= number]
         if number and created and newer:
@@ -1131,10 +1152,11 @@ def _merged_work():
                 except (TypeError, ValueError):
                     continue
                 base = str(rec.get("base") or "").strip()
+                key = str(rec.get("work_id") or "").strip() or base
                 at = _work_time(rec.get("at"))
-                if base and at and at > merged_at.get(base, datetime.datetime.min.replace(
+                if key and at and at > merged_at.get(key, datetime.datetime.min.replace(
                         tzinfo=datetime.timezone.utc)):
-                    merged_at[base] = at
+                    merged_at[key] = at
     except OSError:
         pass
     return merged_at
@@ -1152,7 +1174,6 @@ def cleanup_work_archive(conf, tasks):
     questions = load_questions()
     open_question_tasks = {q.get("task_id") for q in questions
                            if q.get("status") == "open"}
-    stopped = set(conf.get("stopped_pipelines") or [])
     merged = _merged_work()
     grouped = {}
     for task in tasks or []:
@@ -1214,8 +1235,10 @@ def cleanup_work_archive(conf, tasks):
             continue
         live = any(task.get("state") in PIPELINE_LIVE_STATES for task in group)
         open_question = any(task.get("id") in open_question_tasks for task in group)
-        status_state = (statuses.get(base) or {}).get("state")
-        protected = live or open_question or base in stopped or status_state == "stopped_owner"
+        status_state = (statuses.get(work_key) or {}).get("state")
+        protected = (live or open_question or is_stopped(
+            conf, base, work_key if work_key != base else "")
+                     or status_state == "stopped_owner")
         # A genuine dead end stays visible.  A newer live generation already
         # wins above and clears stale stuck state through pipeline_watch.
         if status_state == "stuck" and not live:
@@ -1227,9 +1250,9 @@ def cleanup_work_archive(conf, tasks):
         if group and all(_technical_cancel(task) for task in group):
             reason = "Отменённая служебная попытка helper/debug/patrol сохранена в истории."
         latest_created = _work_time(group[-1].get("created_at"))
-        if (base in merged and latest_created
+        if (work_key in merged and latest_created
                 and all(task.get("state") in WORK_TERMINAL_STATES for task in group)
-                and merged[base] >= latest_created):
+                and merged[work_key] >= latest_created):
             reason = "Работа уже влита; её терминальные стадии сохранены в истории."
         else:
             stages = {_work_stage(task) for task in group}
@@ -1252,10 +1275,12 @@ def cleanup_work_archive(conf, tasks):
 
         meta.update({"closed": closed_at, "closed_reason": reason,
                      "retention_until": retention_until})
-        statuses[base] = {"state": "archived", "text": reason,
+        statuses[work_key] = {"state": "archived", "text": reason,
                           "retention_until": retention_until}
         for idea in ideas_all():
-            if (_same_work(idea.get("title"), base)
+            if ((str(idea.get("work_id") or "").strip() == work_key
+                 if work_key != base else
+                 (not idea.get("work_id") and _same_work(idea.get("title"), base)))
                     and idea.get("state") in ("new", "planned", "in_work")):
                 set_idea(idea["id"], state="done", reason=reason)
         works_changed = True
@@ -1981,7 +2006,15 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
             for task in (tasks or [])
             if task.get("state") in ("preparing", "queued", "running")
         )
-        kept = [base for base in stopped if name(base) in active_names]
+        active_work_ids = {
+            str(item.get("work_id") or "").strip()
+            for item in list(ideas_all()) + list(tasks or [])
+            if item.get("state") in ("new", "planned", "in_work", "preparing", "queued", "running")
+            and item.get("work_id")
+        }
+        kept = [entry for entry in stopped if (
+            str(entry.get("work_id") or "").strip() in active_work_ids
+            if isinstance(entry, dict) else name(entry) in active_names)]
         if kept == stopped:
             return False
 
@@ -1990,7 +2023,7 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
         save(CONF_PATH, updated)
         conf["stopped_pipelines"] = kept
         log("PIPELINE PAUSES CLEANED " + repr(
-            [base for base in stopped if base not in kept]))
+            [stopped_pipeline_title(entry) for entry in stopped if entry not in kept]))
         return True
     except Exception as e:
         log("paused_pipeline_cleanup_error", repr(e))
@@ -2984,7 +3017,6 @@ def pipeline_watch(conf, tasks, workflows, workers):
         save(STALL_PATH, mem)
         log(f"watch_capacity_deferred count={capacity_deferred or 'all'}")
         return
-    stopped = set(conf.get("stopped_pipelines") or [])
     groups = {}
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", "") or "")
@@ -3016,7 +3048,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if any(t.get("state") in PIPELINE_LIVE_STATES for _, t in lst):
             mem.pop(work_key, None)
             continue
-        if base in stopped:
+        if is_stopped(conf, base, work_key if work_key != base else ""):
             rec = mem.get(work_key) or {}
             rec["why"] = "owner"
             rec.setdefault("since", now)
@@ -3062,8 +3094,10 @@ def pipeline_watch(conf, tasks, workflows, workers):
         if not nw or not nw.get("enabled") or not worker:
             continue
         title = f"[auto] [{far + 2}/{len(stages)} {nxt}] {base}"[:200]
-        fallback_branch = branch_from_history(tasks, base)
-        identity_lines = implementation_context_lines(base, fallback_branch)
+        source_work_id = task_durable_work_id(src, tasks)
+        fallback_branch = branch_from_history(tasks, base, work_id=source_work_id)
+        identity_lines = implementation_context_lines(
+            base, fallback_branch, work_id=source_work_id)
         try:
             created = create_child_task({"request_key": str(uuid.uuid4()), "title": title,
                          "context": ("Конвейер встал: предыдущий этап закончился, "
@@ -6053,9 +6087,9 @@ def stop_pipeline(conf, base, work_id=""):
     try:
         disk = load(CONF_PATH, {})
         sp = disk.get("stopped_pipelines") or []
-        key = work_storage_key(base, work_id)
-        if key and key not in sp:
-            sp.append(key)
+        entry = stopped_pipeline_entry(base, work_id)
+        if not any(stopped_pipeline_matches(item, base, work_id) for item in sp):
+            sp.append(entry)
             disk["stopped_pipelines"] = sp
             save(CONF_PATH, disk)
         conf["stopped_pipelines"] = sp
@@ -6133,7 +6167,7 @@ def budget_guard(conf, tasks, workers=None):
         # Запоминаем вершину заранее, пока задача ещё укладывается в бюджет.
         # Иначе первая проверка после перерасхода примет уже существующий
         # коммит за прогресс этой задачи и подарит ей несколько дорогих кругов.
-        branch = branch_from_history(tasks, base)
+        branch = branch_from_history(tasks, base, work_id=work_id)
         head = branch_head(branch)
         if not rec.get("last_head") and head:
             rec["last_head"] = head
@@ -7217,12 +7251,8 @@ def limits_view():
 def is_stopped(conf, base, work_id=""):
     """Работа, которую владелец закрыл насовсем. Пилот её не двигает и не
     перезапускает, что бы ни отвечал оркестратор."""
-    key = work_storage_key(base, work_id)
     for s in conf.get("stopped_pipelines") or []:
-        if work_id:
-            if str(s).strip() == key:
-                return True
-        elif _same_work(s, base):
+        if stopped_pipeline_matches(s, base, work_id):
             return True
     return False
 
@@ -8476,7 +8506,8 @@ def cycle(conf, state):
                            expl.get("question_ru", "Что делать дальше?"),
                            expl.get("options_ru", []),
                            f"ОШИБКА:\n{squeeze(err, 4000)}\n\nПОСЛЕДНИЙ ВЫВОД:\n{squeeze(res, 8000)}",
-                           attempts_so_far=done, repair_task=t)
+                           attempts_so_far=done, repair_task=t,
+                           work_id=task_durable_work_id(t, tasks))
             attach_question_work_id(t)
             log(f"stage_ended state={tstate} task={tid} stage={wf}")
             continue
@@ -8551,7 +8582,8 @@ def cycle(conf, state):
                             "Проверка не завершена: инфраструктура свежего сравнения веток недоступна.",
                             "Повторить Verify после восстановления доступа к репозиторию?",
                             ["Повтори проверку", "Покажи причину", "Останови работу"],
-                            verify_snapshot["note"], attempts_so_far=0, branch=branch)
+                            verify_snapshot["note"], attempts_so_far=0, branch=branch,
+                            work_id=task_durable_work_id(t, tasks))
                         continue
                     link = try_url(result, rid)
                     verified_head = verify_snapshot.get("snapshot", {}).get("candidate_sha", "")
@@ -8562,7 +8594,8 @@ def cycle(conf, state):
                             "Повторить Review для нового снимка ветки?",
                             ["Повтори Review", "Останови работу"],
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
-                            attempts_so_far=0, branch=branch)
+                            attempts_so_far=0, branch=branch,
+                            work_id=task_durable_work_id(t, tasks))
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
@@ -8595,7 +8628,9 @@ def cycle(conf, state):
                                                  "Покажи подробности", "Отмени эту задачу"],
                     squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
                     branch=selected_delivery(
-                        base, extract_branch(result, detail.get("context", "")))[0])
+                        base, extract_branch(result, detail.get("context", "")),
+                        work_id=task_durable_work_id(t, tasks))[0],
+                    work_id=task_durable_work_id(t, tasks))
                 attach_question_work_id(t)
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
@@ -8617,7 +8652,9 @@ def cycle(conf, state):
                            verdict.get("options_ru") or [], result,
                            attempts_so_far=stage_attempts(handoff_tasks, back, t),
                            branch=selected_delivery(
-                               base, extract_branch(result, detail.get("context", "")))[0])
+                               base, extract_branch(result, detail.get("context", "")),
+                               work_id=task_durable_work_id(t, tasks))[0],
+                           work_id=task_durable_work_id(t, tasks))
             attach_question_work_id(t)
             continue
 
@@ -8675,7 +8712,8 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
-        branch, implementation_head = selected_delivery(base, branch)
+        branch, implementation_head = selected_delivery(
+            base, branch, work_id=task_durable_work_id(t, tasks))
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -8844,7 +8882,8 @@ def cycle(conf, state):
                     "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
                     "Повторить проверку после восстановления доступа к репозиторию?",
                     ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
+                    g["note"], attempts_so_far=0, branch=branch,
+                    work_id=task_durable_work_id(t, tasks))
                 continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
