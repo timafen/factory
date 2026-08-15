@@ -2665,6 +2665,34 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotEqual(rec.get("why"), "nudge_failed")
         self.assertEqual(self.notifications, [])
 
+    def test_full_capacity_defers_without_requesting_each_stalled_work(self):
+        self.conf["max_parallel_works"] = 2
+        self.conf["_active_work_tasks"] = [
+            {
+                "id": "active-one", "work_id": "active-one",
+                "title": "[auto] [2/3 Implement] Первая занятая работа",
+                "state": "running",
+            },
+            {
+                "id": "active-two", "work_id": "active-two",
+                "title": "[auto] [2/3 Implement] Вторая занятая работа",
+                "state": "running",
+            },
+        ]
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": 0,
+            }
+        }
+
+        self.watch()
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Встроенный патруль"]["since"], self.now)
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 0)
+        self.assertEqual(self.notifications, [])
+
     def test_records_for_vanished_works_are_purged(self):
         self.memory = {
             "Призрак давно закрытой работы": {"since": 1, "nudges": 2, "why": "give_up"}
