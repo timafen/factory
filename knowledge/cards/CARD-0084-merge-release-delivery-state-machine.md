@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented + tested — stale delivery branch reconciled with current main.
+- Branch: `factory/0bf1726d-b91-fa2a3dc6-dd3`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+Implementation commit: 2414eb3a6e7802eaa3f66660d5ba7583cc2c2892 — реальный Pilot→broker цикл и восстановление выпуска проверяются через собранный Go broker и физический executor-fixture.
+- What changed: пять устаревших коммитов ветки отброшены при rebase, поскольку их реализация уже присутствует и дополнительно усилена в `main`; актуальная проверка восстановления сохранена без регрессии.
+- Evidence: целевые 10 Pilot→broker сценариев — PASS; `just check` в чистом build-окружении — PASS; `just build` — три бинарника собраны.
+- Next action: Review and merge the conflict-free card update.
 
 ## LOG
 
@@ -138,3 +138,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 | Прочие некорректные `.json`-записи fail-closed | тесты `TestDiskBrokerFailsClosedOnInvalidOperationState` и `TestDiskBrokerFailsClosedOnJSONDirectory` | OK: corrupt JSON, чужое имя, неверный adapter/status и каталог не восстанавливаются. |
 | Соседнее восстановление | тот же пакет | OK: terminal state сохраняется после restart, незавершённый запуск становится `failed`, повторный executor не запускается. |
 | Полный проектный регресс | `just check` | Форматирование, `vet`, `govulncheck`, `staticcheck` и `internal/releasebroker` OK; вне области timeout 5m: `internal/controlplane`, `internal/worker` (включая flaky worker integration tests). |
+
+### 2026-08-14 — Implement
+
+Устаревшая конфликтующая ветка перебазирована на `cc0320bd`; её пять коммитов
+не перенесены повторно, потому что реальный Pilot→broker цикл и последующие
+исправления уже являются частью `main`. Десять целевых recovery-сценариев,
+полный `just check` в чистом build-окружении и сборка трёх бинарников прошли.
