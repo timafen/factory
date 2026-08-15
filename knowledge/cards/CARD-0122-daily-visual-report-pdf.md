@@ -1,18 +1,25 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт готовности обязательных снимков и автоматически собирается после рестарта
+Implementation commit: e11a9570d6195557b9d99e6242a4a1ec030ce517 — ежедневный PDF получает browser runtime из штатного релиза
 
 ## HEAD
 
-- Status: IMPLEMENTED / VERIFY PASS
-- Branch: `factory/e8d83036-21a-49f5b4f9-956`
-- Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
+- Status: IMPLEMENTED / TARGETED VERIFY PASS
+- Branch: `factory/5c9a9ea0-456-55517af5-639`
+- Implementation commit: `e11a9570d6195557b9d99e6242a4a1ec030ce517`
 - What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
 - What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
 - Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
-- One next action: повторить Review поставки.
+- One next action: повторить полный release-fixture на стенде с ресурсом для всех crash-сценариев.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Browser runtime ежедневного PDF поставляется штатным release по immutable поколениям,
+а rollback возвращает прежний runtime pointer. Go запускает embedded capture/renderer
+с постоянными значениями launcher и payload; целевые Go-тесты, Node PDF 4/4 и TypeScript
+прошли. Полный release-fixture остановлен на длительной crash-ветке после timeout.
 
 ### 2026-08-13 — Implement
 
