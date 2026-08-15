@@ -4604,6 +4604,14 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
         self.assertEqual(self.conf["stopped_pipelines"], [])
         self.assertEqual(self.disk_config(), {"stopped_pipelines": [], "untouched": 7})
 
+    def test_external_pause_removal_refreshes_current_cycle_memory(self):
+        pilot.save(self.conf_path, {"stopped_pipelines": [], "untouched": 7})
+
+        self.assertTrue(self.cleanup())
+
+        self.assertEqual(self.conf["stopped_pipelines"], [])
+        self.assertEqual(self.disk_config(), {"stopped_pipelines": [], "untouched": 7})
+
     def test_only_open_plan_states_keep_the_pause(self):
         for state in ("new", "planned", "in_work", "done", "rejected"):
             with self.subTest(state=state):

@@ -1897,6 +1897,13 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
             raise ValueError("config is unavailable or invalid")
 
         stopped = list(disk.get("stopped_pipelines") or [])
+        memory_changed = stopped != list(conf.get("stopped_pipelines") or [])
+        if memory_changed:
+            # Settings and recovery scripts update the durable config while a
+            # cycle may still hold its earlier snapshot.  The file is the
+            # authority; otherwise this same cycle can immediately re-stop a
+            # pipeline that was just resumed.
+            conf["stopped_pipelines"] = list(stopped)
         active_names = {
             name(idea.get("title"))
             for idea in ideas_all()
@@ -1917,7 +1924,7 @@ def cleanup_orphaned_paused_pipelines(conf, tasks):
         )
         kept = [base for base in stopped if name(base) in active_names]
         if kept == stopped:
-            return False
+            return memory_changed
 
         updated = dict(disk)
         updated["stopped_pipelines"] = kept
