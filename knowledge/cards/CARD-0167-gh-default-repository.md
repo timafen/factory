@@ -1,16 +1,27 @@
-Implementation commit: отсутствует — этап Specification запрещает реализацию; перед Implement эта строка будет заменена полным SHA коммита кода.
+Implementation commit: e1e889bae49cadc7831cb61f03dba4a5f81724c7 — управляемый кэш назначает origin проектом по умолчанию для bare-команд gh.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
 ## HEAD
 
-- Статус: specification готова к реализации.
-- Ветка: `factory/91d6c8ed-24a-54d37d65-54e`.
-- Спецификация: `knowledge/specs/gh-default-repository.md`.
-- Область реализации: `internal/worker/repository_cache.go` и
-  `internal/worker/repository_coordination_test.go`.
-- Обязательная проверка: `go test ./internal/worker -run
-  '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$'` завершается с кодом 0.
+- Статус: Implement завершён, проверки зелёные.
+- Ветка: `factory/01544e63-3ad-19d68aeb-8f4`.
+- Implementation commit: `e1e889bae49cadc7831cb61f03dba4a5f81724c7`.
+- Что изменилось: кэш удаляет `remote.upstream.gh-resolved`, назначает
+  `remote.origin.gh-resolved=base` для новых и существующих кэшей и закрывает
+  выдачу репозитория при ошибке Git-конфигурации.
+- Evidence: целевой тест — PASS; `go test ./...` — PASS;
+  `go build ./...` — PASS.
+- Следующее действие: провести Review коммита реализации.
+
+## LOG
+
+### 2026-08-15 — Implement
+
+- Реализована идемпотентная настройка GitHub CLI до создания worktree.
+- Интеграционный тест подтверждает `timafen/factory` для bare `gh repo view`,
+  исправление старого кэша, неизменность remotes/tracking и fail-closed ошибку.
+- Целевая проверка, полный Go suite и сборка завершились успешно.
 
 ## Решение владельца
 
