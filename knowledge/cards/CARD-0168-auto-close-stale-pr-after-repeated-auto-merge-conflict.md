@@ -1,12 +1,12 @@
 # CARD-0168 — закрывать устаревший PR после повторного AUTO-MERGE-конфликта
 
-Implementation commit: 896f11b322005937c3f6efba5810987be831f968 — Pilot закрывает только подтверждённый устаревший PR после второго конфликта.
+Implementation commit: 964fa6df8dc57af1fa13391a7edf99a5a98bc04a — Pilot закрывает только подтверждённый устаревший PR после второго конфликта.
 
 ## HEAD
 
 Status: Implemented — ожидает Review.
 Branch: `factory/e1fdfd07-359-c2a5775b-221`.
-Implementation commit: 896f11b322005937c3f6efba5810987be831f968 — exact work marker, безопасное закрытие stale PR и регрессия.
+Implementation commit: 964fa6df8dc57af1fa13391a7edf99a5a98bc04a — exact work marker, безопасное закрытие stale PR и регрессия.
 What changed: новый PR Pilot получает marker immutable `work_id`; при втором
 conflict проверяется единственный открытый PR и единственный merged PR с тем же
 marker и base, после чего закрывается только текущий stale PR.
