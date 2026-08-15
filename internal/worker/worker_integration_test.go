@@ -73,6 +73,13 @@ case "$prompt" in
 	printf 'completed by fake Codex' > "$result"
 	echo '{"type":"item.completed","item":{"type":"agent_message","text":"completed"}}'
 	;;
+	*FAKE_MODE=github-context*)
+	[ "${GH_REPO:-}" = "example/cattle" ] || {
+		echo "unexpected GitHub repository context: ${GH_REPO:-unset}" >&2
+		exit 94
+	}
+	printf 'completed with assigned GitHub repository' > "$result"
+	;;
   *FAKE_MODE=not-ready-once*)
 	marker="$FACTORY_TEST_CODEX_LOG/not-ready-once.done"
 	if [ ! -f "$marker" ]; then
@@ -802,7 +809,8 @@ func TestGitHubSourceAccessIsAdvertisedOnlyAfterSuccessfulProbe(t *testing.T) {
 	}
 }
 
-func TestZeroRepositoryWorkerAcquiresCentrallyManagedGitHubRepository(t *testing.T) {
+func TestWorkerRuntimeUsesClaimGitHubRepositoryContext(t *testing.T) {
+	t.Setenv("GH_REPO", "owainlewis/factory")
 	upstream := createRepository(t, "cattle")
 	fixture := newServerFixture(t, nil)
 	managed, created, err := fixture.store.CreateManagedRepository(
@@ -878,7 +886,7 @@ exec "$FACTORY_TEST_REAL_GIT" "$@"
 
 	task, taskCreated, err := fixture.store.CreateTask(context.Background(), protocol.CreateTaskRequest{
 		RequestKey: "cattle-e2e", Title: "Cattle worker task",
-		Description: "Exercise managed repository acquisition.\nFAKE_MODE=success",
+		Description: "Exercise managed repository acquisition.\nFAKE_MODE=github-context",
 		Route: &protocol.TaskRoute{
 			RepositoryRemoteIdentity: managed.RemoteIdentity,
 			SourceAccess:             protocol.SourceAccess{Provider: "github", Hostname: "github.com"},
@@ -892,7 +900,7 @@ exec "$FACTORY_TEST_REAL_GIT" "$@"
 		t.Fatalf("assigned worker = %q, want %q", task.Execution.AssignedWorkerID, worker.ID)
 	}
 	task = waitForTaskState(t, fixture.store, task.Task.ID, "succeeded")
-	if len(task.Attempts) != 1 || task.Attempts[0].Result != "completed by fake Codex" {
+	if len(task.Attempts) != 1 || task.Attempts[0].Result != "completed with assigned GitHub repository" {
 		t.Fatalf("cattle task attempts = %#v", task.Attempts)
 	}
 	cachePath := filepath.Join(dataDirectory, "repositories", managed.ID)
