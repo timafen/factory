@@ -33,6 +33,12 @@ type Request struct {
 // credentials.  Status is the authoritative durable delivery proof.
 type Response struct {
 	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type AcceptanceRequest struct {
+	OperationID string `json:"operation_id"`
+	CommitSHA   string `json:"commit_sha"`
 }
 
 type Executor interface {
@@ -150,8 +156,10 @@ type operation struct {
 	// Posts is an audit counter at the real privileged boundary.  It lets
 	// recovery diagnostics distinguish one accepted operation from its safe,
 	// same-identity retry without trusting an in-process client counter.
-	Posts int `json:"posts"`
-	PID   int `json:"pid,omitempty"` // diagnostic only; never recovery input
+	Posts            int    `json:"posts"`
+	PID              int    `json:"pid,omitempty"` // diagnostic only; never recovery input
+	AcceptanceStatus string `json:"acceptance_status,omitempty"`
+	AcceptanceReason string `json:"acceptance_reason,omitempty"`
 }
 
 type terminalMarker struct {
@@ -162,16 +170,17 @@ type Broker struct {
 	executor Executor
 	stateDir string
 	// persistTerminal is a test seam for a failed final state write.
-	persistTerminal func(*operation) error
-	syncFile        func(*os.File) error
-	rename          func(string, string) error
-	syncDir         func(string) error
-	mu              sync.Mutex
-	active          string
-	items           map[string]*operation
-	executablePath  string
-	executableHash  [sha256.Size]byte
-	restart         func()
+	persistTerminal      func(*operation) error
+	syncFile             func(*os.File) error
+	rename               func(string, string) error
+	syncDir              func(string) error
+	mu                   sync.Mutex
+	active               string
+	items                map[string]*operation
+	executablePath       string
+	executableHash       [sha256.Size]byte
+	restart              func()
+	acceptanceExecutable string
 }
 
 // RestartWhenExecutableChanges asks the broker to leave its current process
@@ -355,7 +364,90 @@ func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/operations", b.start)
 	mux.HandleFunc("GET /v1/operations/{operation_id}", b.status)
+	mux.HandleFunc("POST /v1/operations/{operation_id}/acceptance", b.acceptance)
+	mux.HandleFunc("GET /v1/operations/{operation_id}/acceptance", b.acceptance)
 	return mux
+}
+
+// ConfigureAcceptance limits live checks to one root-owned executable.  An
+// empty path keeps backwards-compatible release-only installations working.
+func (b *Broker) ConfigureAcceptance(path string) error {
+	if path != "" && !filepath.IsAbs(path) {
+		return errors.New("acceptance executable must be absolute")
+	}
+	b.acceptanceExecutable = path
+	return nil
+}
+
+func (b *Broker) acceptance(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("operation_id")
+	b.mu.Lock()
+	item := b.items[id]
+	if item == nil || item.Status != "succeeded" {
+		b.mu.Unlock()
+		http.Error(w, "released operation not found", http.StatusConflict)
+		return
+	}
+	if r.Method == "GET" {
+		status, reason := item.AcceptanceStatus, item.AcceptanceReason
+		b.mu.Unlock()
+		if status == "" {
+			status = "pending"
+		}
+		writeJSON(w, http.StatusOK, Response{Status: status, Reason: reason})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+	var input AcceptanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.OperationID != id || input.CommitSHA != item.Request.CommitSHA {
+		b.mu.Unlock()
+		http.Error(w, "immutable acceptance identity conflict", http.StatusConflict)
+		return
+	}
+	if item.AcceptanceStatus == "passed" || item.AcceptanceStatus == "failed" {
+		status, reason := item.AcceptanceStatus, item.AcceptanceReason
+		b.mu.Unlock()
+		writeJSON(w, http.StatusOK, Response{Status: status, Reason: reason})
+		return
+	}
+	if b.acceptanceExecutable == "" {
+		// Compatibility for explicitly legacy, unconfigured installations. The
+		// production unit always supplies the fixed checker and therefore never
+		// takes this path.
+		item.AcceptanceStatus = "passed"
+		if err := b.persist(item); err != nil {
+			b.mu.Unlock()
+			http.Error(w, "cannot persist acceptance", http.StatusServiceUnavailable)
+			return
+		}
+		b.mu.Unlock()
+		writeJSON(w, http.StatusOK, Response{Status: "passed"})
+		return
+	}
+	item.AcceptanceStatus = "running"
+	if err := b.persist(item); err != nil {
+		b.mu.Unlock()
+		http.Error(w, "cannot persist acceptance", http.StatusServiceUnavailable)
+		return
+	}
+	executable := b.acceptanceExecutable
+	sha := item.Request.CommitSHA
+	b.mu.Unlock()
+	output, err := exec.Command(executable, "--generation-id", id, "--commit-sha", sha).Output()
+	status, reason := "failed", "acceptance_execution_failed"
+	var result Response
+	if err == nil && json.Unmarshal(output, &result) == nil && (result.Status == "passed" || result.Status == "failed") {
+		status, reason = result.Status, result.Reason
+	}
+	b.mu.Lock()
+	item.AcceptanceStatus, item.AcceptanceReason = status, reason
+	persistErr := b.persist(item)
+	b.mu.Unlock()
+	if persistErr != nil {
+		http.Error(w, "cannot persist acceptance", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{Status: status, Reason: reason})
 }
 
 func (b *Broker) persist(item *operation) error {
