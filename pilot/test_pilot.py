@@ -9152,6 +9152,44 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         self.assertTrue(pilot.budget_stopped(title, work_id="work-a"))
         self.assertFalse(pilot.budget_stopped(title, work_id="work-b"))
 
+    def test_budget_question_resumes_saved_work_when_source_disappears(self):
+        """A deleted source task must not bind an answer to its title twin."""
+        title = "Одинаковый вопрос"
+        conf = {
+            "stages": [{"workflow": "Specification", "worker": "worker"}],
+            "stopped_pipelines": [], "max_stage_attempts": 3,
+            "max_work_rounds": 8,
+        }
+        with mock.patch.object(pilot, "budget_stopped", return_value=True), \
+                mock.patch.object(pilot, "notify"):
+            self.assertTrue(pilot.route_question(
+                conf, "gone-source", "Triage", "Specification", title, "repo",
+                "закончился бюджет", "Продолжить?", [], "", work_id="work-a"))
+
+        question = pilot.load(os.path.join(self.paths["questions"], "gone-source.json"), {})
+        self.assertEqual(question["work_id"], "work-a")
+        question.update(status="answered", answer="Продолжай")
+        pilot.save(os.path.join(self.paths["questions"], "gone-source.json"), question)
+        created = []
+        twin = {
+            "id": "other-source", "work_id": "work-b", "state": "running",
+            "title": f"[auto] [2/5 Specification] {title}",
+        }
+        with mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "create_task",
+                                  side_effect=lambda body, _conf: created.append(body)
+                                  or {"task": {"id": "continued-a"}}):
+            self.assertEqual(pilot.handle_answers(
+                conf, {"Specification": {"enabled": True, "revision_id": "rev"}},
+                {"worker": {"id": "worker-id", "online": True,
+                            "health": "healthy", "capacity": 1, "active_count": 0}},
+                [twin]), 1)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["work_id"], "work-a")
+        resolved = pilot.load(os.path.join(self.paths["questions"], "gone-source.json"), {})
+        self.assertEqual(resolved["resumed_task_id"], "continued-a")
+
     def test_archive_and_pause_cleanup_keep_same_title_work_ids_separate(self):
         title = "Одинаковый архив"
         tasks = [

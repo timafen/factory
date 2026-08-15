@@ -1794,7 +1794,7 @@ def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT,
     return bounded
 
 
-def live_or_done_at(tasks, base, stage_no, since=None):
+def live_or_done_at(tasks, base, stage_no, since=None, work_id=""):
     """Задача по этой же работе на стадии stage_no или дальше, живая либо успешная.
     Единственный источник правды для защиты от дублей: и при продвижении по
     конвейеру, и при возобновлении после ответа владельца.
@@ -1802,7 +1802,8 @@ def live_or_done_at(tasks, base, stage_no, since=None):
     прошлого прогона дублем не считается и не мешает доработке."""
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
-        if not m or not same_task_work(t, base):
+        if not m or not (task_matches_work(t, base, work_id=work_id)
+                         if work_id else same_task_work(t, base)):
             continue
         if since and (t.get("created_at") or "") <= since:
             continue
@@ -4486,6 +4487,7 @@ def diag_sweep(conf, tasks):
                     ("Как поступить? Предложение диагностики: " + solution)
                     if solution else "Как поступить дальше?",
                     [], recent_stage_text(tasks, base),
+                    work_id=work_id,
                 )
                 rec["owner_only"] = True
                 rec["escalation_reason"] = (
@@ -4500,14 +4502,14 @@ def diag_sweep(conf, tasks):
 
 def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
                               repo_id, situation, question, options,
-                              prior_result, branch):
+                              prior_result, branch, work_id=""):
     """Persist an explicit Pilot pause without turning it into a resume answer."""
     if verdict.get("decision") != "wait":
         return False
     reason = str(verdict.get("reason") or "").strip()
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch,
-                         status="resolved")
+                         status="resolved", work_id=work_id)
     rec["answer"] = reason
     rec["answered_by"] = "orchestrator"
     rec["machine_action"] = "wait"
@@ -4563,7 +4565,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                 question, prior_result, repo_id)
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
-                question, options, prior_result, branch):
+                question, options, prior_result, branch, work_id):
             return False
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
@@ -4571,7 +4573,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                  accept_forward(stage, v.get("answer", "")) or resume_stage,
                                  base, repo_id,
                                  situation, question, options, prior_result, branch,
-                                 status="answered")
+                                 status="answered", work_id=work_id)
             rec["answer"] = v["answer"]
             rec["answered_by"] = "orchestrator"
             save(f"{QUESTION_DIR}/{task_id}.json", rec)
@@ -4586,7 +4588,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         pause_pipeline(conf, base)
         set_loop_baseline(base, attempts_so_far)
         rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                             question, options, prior_result, branch)
+                             question, options, prior_result, branch, work_id=work_id)
         rec["owner_only"] = True
         rec["escalation_reason"] = (
             "работа прошла этап «{st}» {n} раз(а) и снова вернулась. "
@@ -4604,7 +4606,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     if budget_stopped(base, work_id=work_id):
         rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                             question, options, prior_result, branch)
+                             question, options, prior_result, branch, work_id=work_id)
         rec["escalation_reason"] = (
             "работа остановлена по денежному потолку — перезапуск только "
             "по решению владельца, иначе следующий заход сожжёт столько же")
@@ -4628,7 +4630,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
-                    situation, question, options, prior_result, branch):
+                    situation, question, options, prior_result, branch, work_id):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 note_cap_rescue(base, stage)
@@ -4636,7 +4638,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                      accept_forward(stage, v.get("answer", "")) or resume_stage,
                                      base, repo_id,
                                      situation, question, options, prior_result, branch,
-                                     status="answered")
+                                     status="answered", work_id=work_id)
                 rec["answer"] = v["answer"]
                 rec["answered_by"] = "orchestrator"
                 save(f"{QUESTION_DIR}/{task_id}.json", rec)
@@ -4659,14 +4661,14 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
-                    situation, question, options, prior_result, branch):
+                    situation, question, options, prior_result, branch, work_id):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 rec = write_question(task_id, stage,
                                      accept_forward(stage, v.get("answer", "")) or resume_stage,
                                      base, repo_id,
                                      situation, question, options, prior_result, branch,
-                                     status="answered")
+                                     status="answered", work_id=work_id)
                 rec["answer"] = v["answer"]
                 rec["answered_by"] = "orchestrator"
                 save(f"{QUESTION_DIR}/{task_id}.json", rec)
@@ -4679,7 +4681,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                 return False
             why = v.get("reason") or "оркестратор сказал, что это решение владельца"
         rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                             question, options, prior_result, branch)
+                             question, options, prior_result, branch, work_id=work_id)
         rec["escalation_reason"] = (
             f"этап выполнялся {attempts_so_far} раз(а) и не прошёл; {why}")
         save(f"{QUESTION_DIR}/{task_id}.json", rec)
@@ -4695,10 +4697,10 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                   prior_result, repo_id)
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
-            situation, question, options, prior_result, branch):
+            situation, question, options, prior_result, branch, work_id):
         return False
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
-                         question, options, prior_result, branch)
+                         question, options, prior_result, branch, work_id=work_id)
     if verdict["decision"] == "answer":
         rec["status"] = "answered"          # handle_answers() resumes it next cycle
         rec["answer"] = verdict["answer"]
@@ -5234,6 +5236,8 @@ def handle_answers(conf, workflows, workers, tasks):
             "timeout_seconds": conf.get("timeout_seconds", 7200),
             "workflow_revision_id": nw["revision_id"],
         }
+        if work_id:
+            body["work_id"] = work_id
         # Защита от дублей: тот же ответ мог прийти по двум путям (вопрос от
         # Review и повтор отменённой стадии) — второй раз задачу не создаём.
         if is_stopped(conf, q.get("title", ""), work_id):
@@ -5244,7 +5248,8 @@ def handle_answers(conf, workflows, workers, tasks):
             continue
 
         dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
-                              since=(src_task or {}).get("created_at"))
+                              since=(src_task or {}).get("created_at"),
+                              work_id=work_id)
         if dup:
             q["status"] = "resolved"
             q["resumed_task_id"] = dup["id"]
