@@ -2,20 +2,20 @@
 
 ## HEAD
 
-Status: In progress — единый итог и действие владельца показаны в карточках работ.
+Status: In progress — фильтр решений владельца и русский detail-экран готовы; десять release-прогонов не начаты.
 
-Branch: `factory/6d49c9ff-fed-a46e8e4b-147`
+Branch: `factory/769ab244-93c-5d82e3e6-29d`
 
-Implementation commit: 06d7c868548dc8500a727e5052f57f39894d8dee — карточка работы показывает единый итог и ведёт владельца к нужному действию.
+Implementation commit: e8a24c0d2cc5e37c012ad352563dca9b5dbb0a2d — список показывает только работы, где нужно решение владельца, а detail-экран переведён на русский.
 
 What changed:
 
-- Карточка активной работы явно связывает итог, причину, следующий шаг Factory и участие владельца.
-- Вопрос открывает ответ Factory, пауза продолжается кнопкой, тупик ведёт в настройки Factory.
+- Фильтр «Нужно решение владельца» использует тот же итог работы, что и секции: только открытые вопросы и тупики.
+- Detail-задачи, действия удаления и browser-контракт используют русские подписи, включая «Завершено».
 
-Evidence: 183 web-теста; TypeScript, lint, production web build и `go build ./...` → успешно.
+Evidence: `web/src/WorkView.test.tsx` 8/8; TypeScript, lint и production web build → успешно.
 
-Next action: добавить фильтр «Нужно решение владельца» из того же view-model.
+Next action: реализовать хронологию/lead time и безопасное копирование диагностики, затем выполнить десять последовательных merge/release-прогонов.
 
 ## LOG
 
@@ -73,3 +73,11 @@ TypeScript, lint, production web build и `go build ./...` — все прове
 конкретное действие: ответить, продолжить или открыть настройки. Проверено:
 `Work.test.ts` и `WorkView.test.tsx` (22/22), полный web-набор (183/183),
 TypeScript, lint, production build и `go build ./...` прошли успешно.
+
+### 2026-08-15 — Implement
+
+Добавлен фильтр «Нужно решение владельца»: он показывает только открытые вопросы
+и настоящие тупики из общего view-model, не захватывая очередь без исполнителя.
+Русифицированы detail-задачи и destructive-действия; release-blocking browser
+ожидание переведено с `Succeeded` на «Завершено». Проверены `WorkView.test.tsx`
+(8/8), TypeScript, lint и production web build.
