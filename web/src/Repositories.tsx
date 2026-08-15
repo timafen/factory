@@ -54,7 +54,7 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
     if (remoteIdentity.trim()) create.mutate();
   };
 
-  if (repositories.isPending) return <LoadingState label="Loading repositories" />;
+  if (repositories.isPending) return <LoadingState label="Загружаем репозитории" />;
   if (!repositories.data) {
     return <ErrorState error={repositories.error} onRetry={() => void repositories.refetch()} />;
   }
@@ -63,7 +63,7 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
   return (
     <div className="page repositories-page">
       <ViewHeader
-        title="Managed repositories"
+        title="Репозитории"
         fetching={repositories.isFetching}
         updatedAt={repositories.dataUpdatedAt}
         onRefresh={() => void repositories.refetch()}
@@ -71,10 +71,10 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
       {repositories.error && <StaleBanner error={repositories.error} />}
 
       <section className="panel repository-add-panel">
-        <PanelHeading title="Add GitHub repository" aside="Enabled on add" />
+        <PanelHeading title="Добавить репозиторий GitHub" aside="Включится сразу" />
         <form className="repository-add-form" onSubmit={submit}>
           <div className="field">
-            <label htmlFor="repository-identity">Canonical identity</label>
+            <label htmlFor="repository-identity">Канонический адрес</label>
             <input
               id="repository-identity"
               value={remoteIdentity}
@@ -88,7 +88,7 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
               spellCheck={false}
               aria-invalid={Boolean(create.error)}
             />
-            <span className="field-hint">GitHub is the only managed provider in this release.</span>
+            <span className="field-hint">В этой версии поддерживаются только управляемые репозитории GitHub.</span>
           </div>
           <button
             className="button button-primary"
@@ -96,15 +96,15 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
             disabled={!remoteIdentity.trim() || create.isPending}
           >
             {create.isPending ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}
-            Add repository
+            Добавить репозиторий
           </button>
         </form>
         <InlineError error={create.error} />
         {duplicate && (
           <div className="repository-duplicate" role="status">
-            <span><strong>{duplicate.remote_identity}</strong> is already managed.</span>
+            <span><strong>{duplicate.remote_identity}</strong> уже подключён.</span>
             <button className="button button-secondary" onClick={() => onRepository(duplicate.id)}>
-              Open existing repository
+              Открыть репозиторий
             </button>
           </div>
         )}
@@ -113,15 +113,15 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
       {repositories.data.length === 0 ? (
         <EmptyState
           icon={<GitBranch size={22} />}
-          title="No managed repositories"
-          description="Add a GitHub repository above so healthy workers can acquire routed work for it."
+          title="Нет управляемых репозиториев"
+          description="Добавьте репозиторий GitHub, чтобы доступные исполнители могли получать его задачи."
         />
       ) : (
         <>
-          <div className="repository-summary" aria-label="Repository summary">
-            <span>{repositories.data.length} total</span>
-            <span className="healthy-text">{enabled} enabled</span>
-            <span>{repositories.data.length - enabled} disabled</span>
+          <div className="repository-summary" aria-label="Сводка репозиториев">
+            <span>{repositories.data.length} всего</span>
+            <span className="healthy-text">{enabled} включено</span>
+            <span>{repositories.data.length - enabled} выключено</span>
           </div>
           <div className="managed-repository-list">
             {repositories.data.map((repository) => (
@@ -133,10 +133,10 @@ export function RepositoriesView({ onRepository }: { onRepository: (id: string) 
                 <GitBranch size={17} aria-hidden="true" />
                 <span>
                   <strong>{repository.remote_identity}</strong>
-                  <small>Updated {timeAgo(repository.updated_at)}</small>
+                  <small>Обновлён {timeAgo(repository.updated_at)}</small>
                 </span>
                 <span className={`status-badge ${repository.enabled ? "status-succeeded" : "status-cancelled"}`}>
-                  <span className="status-dot" />{repository.enabled ? "Enabled" : "Disabled"}
+                  <span className="status-dot" />{repository.enabled ? "Включён" : "Выключен"}
                 </span>
               </button>
             ))}
@@ -179,7 +179,7 @@ export function RepositoryDetail({
     },
   });
 
-  if (repository.isPending || readiness.isPending) return <LoadingState label="Loading repository" />;
+  if (repository.isPending || readiness.isPending) return <LoadingState label="Загружаем репозиторий" />;
   if (!repository.data || !readiness.data) {
     return (
       <ErrorState
@@ -196,31 +196,31 @@ export function RepositoryDetail({
 
   return (
     <div className="page detail-page">
-      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> All repositories</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> Все репозитории</button>
       <div className="detail-heading repository-detail-heading">
         <div>
-          <span className="eyebrow">Managed GitHub repository</span>
+          <span className="eyebrow">Управляемый репозиторий GitHub</span>
           <h1>{data.remote_identity}</h1>
-          <p>Added {new Date(data.created_at).toLocaleString()}</p>
+          <p>Добавлен {new Date(data.created_at).toLocaleString()}</p>
         </div>
         <div className="detail-actions">
           {confirming ? (
             <div className="confirm-action">
               <span>
-                Disabling rejects new routed work. Queued and active assignments keep their frozen repository.
+                Отключение запретит новые назначения. Задачи в очереди и работе сохранят зафиксированный репозиторий.
               </span>
-              <button className="button button-secondary" onClick={() => setConfirming(false)}>Keep enabled</button>
+              <button className="button button-secondary" onClick={() => setConfirming(false)}>Оставить включённым</button>
               <button
                 className="button button-danger"
                 onClick={() => toggle.mutate(false)}
                 disabled={toggle.isPending}
               >
-                Disable routing
+                Отключить маршрутизацию
               </button>
             </div>
           ) : data.enabled ? (
             <button className="button button-danger-secondary" onClick={() => setConfirming(true)}>
-              Disable repository
+              Отключить репозиторий
             </button>
           ) : (
             <button
@@ -228,7 +228,7 @@ export function RepositoryDetail({
               onClick={() => toggle.mutate(true)}
               disabled={toggle.isPending}
             >
-              Enable repository
+              Включить репозиторий
             </button>
           )}
         </div>
@@ -242,24 +242,24 @@ export function RepositoryDetail({
         <div>
           <strong>
             {!data.enabled
-              ? "Routing disabled"
+              ? "Маршрутизация отключена"
               : readiness.data.routing_ready
-                ? `${readyWorkers.length} worker${readyWorkers.length === 1 ? " is" : "s are"} ready to acquire routed work`
-                : "No worker can currently acquire routed work"}
+                ? `${readyWorkers.length} исполнителей готовы получать задачи`
+                : "Сейчас ни один исполнитель не может получить задачу"}
           </strong>
           <span>
             {!data.enabled
-              ? "New routed tasks are rejected until this repository is enabled."
-              : "The control plane applies the same current worker, reservation, cache, and retention facts used for routing."}
+              ? "Новые задачи отклоняются, пока репозиторий не включён."
+              : "Панель использует актуальные сведения об исполнителях, резервировании, кэше и сохранённых копиях."}
           </span>
         </div>
       </section>
 
       <div className="repository-detail-layout">
         <section className="panel">
-          <PanelHeading title="Worker readiness" aside={`${facts.length} registered`} />
+          <PanelHeading title="Готовность исполнителей" aside={`${facts.length} зарегистрировано`} />
           {facts.length === 0 ? (
-            <div className="quiet-empty">No workers are registered.</div>
+            <div className="quiet-empty">Нет зарегистрированных исполнителей.</div>
           ) : (
             <div className="repository-worker-list">
               {facts.map((fact) => (
@@ -270,10 +270,10 @@ export function RepositoryDetail({
                     <small>{fact.reason}</small>
                   </span>
                   <span className="repository-worker-facts">
-                    {fact.cached && <span className="tag">Cached</span>}
-                    {fact.advertised && <span className="tag">Advertised</span>}
+                    {fact.cached && <span className="tag">В кэше</span>}
+                    {fact.advertised && <span className="tag">Объявлен</span>}
                     <span className={fact.ready ? "healthy-text" : "danger-text"}>
-                      {fact.ready ? "Ready" : "Not ready"}
+                      {fact.ready ? "Готов" : "Не готов"}
                     </span>
                   </span>
                 </div>
@@ -283,16 +283,16 @@ export function RepositoryDetail({
         </section>
 
         <aside className="panel repository-profile-panel">
-          <PanelHeading title="Repository" />
+          <PanelHeading title="Репозиторий" />
           <dl className="metadata">
-            <div><dt>Status</dt><dd>{data.enabled ? "Enabled" : "Disabled"}</dd></div>
-            <div><dt>Ready</dt><dd>{readyWorkers.length} workers</dd></div>
-            <div><dt>Cached</dt><dd>{cachedWorkers.length} workers</dd></div>
-            <div><dt>Advertised</dt><dd>{advertisedWorkers.length} workers</dd></div>
-            <div><dt>Updated</dt><dd>{timeAgo(data.updated_at)}</dd></div>
+            <div><dt>Статус</dt><dd>{data.enabled ? "Включён" : "Выключен"}</dd></div>
+            <div><dt>Готовы</dt><dd>{readyWorkers.length} исполнителей</dd></div>
+            <div><dt>В кэше</dt><dd>{cachedWorkers.length} исполнителей</dd></div>
+            <div><dt>Объявлено</dt><dd>{advertisedWorkers.length} исполнителей</dd></div>
+            <div><dt>Обновлён</dt><dd>{timeAgo(data.updated_at)}</dd></div>
           </dl>
           <div className="profile-divider" />
-          <span className="profile-label">Repository ID</span>
+          <span className="profile-label">ID репозитория</span>
           <span className="worker-id" title={data.id}>{data.id}</span>
         </aside>
       </div>
