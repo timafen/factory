@@ -1,19 +1,27 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: 9245a67dbe88dc22e29619fec9e1f1d26fcfea13 — API подтверждает почасовой лимит автоматических задач.
+Implementation commit: f1602fe3fe0345ad875ae6936183547527b93a44 — все автоматические пути откладываются при общем почасовом лимите, а существующая база получает миграцию 031.
 
 ## HEAD
 
-- Status: Implement + Test — готово.
-- Branch: `factory/6e3e8670-a6d-3a52c612-2fb`.
-- Implementation commit: `9245a67dbe88dc22e29619fec9e1f1d26fcfea13` — API возвращает `hourly_task_cap` после десятой автоматической задачи.
+- Status: Implement + Test — готово к повторному Review.
+- Branch: `factory/93c96453-c06-f41a1dd3-8b3`.
+- Implementation commit: `f1602fe3fe0345ad875ae6936183547527b93a44` — миграция 031 и единый defer всех автоматических созданий.
 - What changed: control plane атомарно ограничивает автоматические задачи скользящим часом; replay и ручные задачи не расходуют квоту.
-- What changed: Pilot откладывает повтор до освобождения окна и уведомляет владельца один раз; HTTP-контракт покрыт тестом.
-- Evidence: `go test ./internal/controlplane -run 'Test(CreateTaskHourlyTaskCap|HTTPCreateTaskHourlyTaskCap)' -count=1` → PASS.
-- Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS (17 тестов).
-- Next action: Передать ветку на Verify.
+- What changed: Plan, `pipeline_watch`, возвраты и продолжения разделяют одну часовую паузу и одно уведомление владельцу.
+- Evidence: целевые Go-тесты → PASS; обновление существующей базы 030→031 → PASS.
+- Evidence: `python3 -m unittest pilot.test_pilot` → PASS (337 тестов, 13 пропущено); `just build` → PASS.
+- Evidence: `just test` → один внешний сбой `internal/worker`; отдельный повтор этого теста → PASS.
+- Next action: Повторить Review на свежем сравнении с `origin/main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Конфликт миграции устранён: почасовой лимит устанавливается номером 031, а
+тест обновляет уже существующую базу уровня 030. Общая пауза Pilot покрывает
+Plan, `pipeline_watch`, возвраты и продолжения; 337 Pilot-тестов и сборка
+прошли, внешний нестабильный worker-тест прошёл отдельным повтором.
 
 ### 2026-08-15 — Implement
 
