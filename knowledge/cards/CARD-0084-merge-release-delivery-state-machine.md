@@ -1,16 +1,16 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 43dd2febd696a2d63a7d9f96573f4d8b5168b610 — ошибка финальной записи выпуска возвращается как неуспех, а исходные указатели восстанавливаются.
+Implementation commit: b6c4f9becd7066836ee310160ab22d5d1ca1cdec — ошибка финальной записи выпуска возвращается как неуспех, а исходные указатели восстанавливаются.
 
 ## HEAD
 
 - Status: Implemented — ошибка финальной записи и восстановление указателей проверены после перебазирования на свежий `main`.
-- Branch: `factory/b449401e-a0e-3e67be00-7f4`.
+- Branch: `factory/e04a892c-c76-c99f5482-d5f`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 43dd2febd696a2d63a7d9f96573f4d8b5168b610 — ошибка финальной записи выпуска возвращается как неуспех, а исходные указатели восстанавливаются.
+- Implementation commit: b6c4f9becd7066836ee310160ab22d5d1ca1cdec — ошибка финальной записи выпуска возвращается как неуспех, а исходные указатели восстанавливаются.
 - What changed: при отказе финальной записи сохраняются и возвращаются исходные `current` и `previous`; fixture проверяет возможность ручного отката.
 - Evidence: `bash ops/test-fx-factory-release.sh`, `just test` и `just build` — PASS; `go test -count=1 ./internal/releasebroker` и `bash -n` — PASS.
-- Next action: передать ветку на повторную проверку.
+- Next action: проверить доставленную ветку и принять изменение.
 
 ## LOG
 
@@ -174,3 +174,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 `previous` и установленного комплекта. `bash ops/test-fx-factory-release.sh`,
 `go test -count=1 ./internal/releasebroker`, полный `just test` и `just build`
 прошли успешно после rebase на свежий `main`.
+
+### 2026-08-15 — Implement
+
+Реализация перебазирована на `origin/main` `99388d3b`; при разрешении конфликта
+сохранена новая гарантия базы — обычный откат создаёт отсутствующий `previous`,
+а сбой финальной записи по-прежнему точно восстанавливает оба прежних указателя.
+Целевые shell/Go-проверки, полный `just test` и `just build` прошли успешно.
