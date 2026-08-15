@@ -7744,18 +7744,27 @@ pilot.save(pilot.STATE_PATH, state)
     def test_outbox_and_notification_journals_are_immutable(self):
         state = {}
         notifications = os.path.join(self.temporary.name, "notifications.jsonl")
+        wait = self.wait()
+        wait["merge_receipt"].update({
+            "actor": "owner", "actor_id": None, "rounds": 3,
+        })
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
                 mock.patch.object(pilot, "mark_final"), \
                 mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
-            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, wait)
             pilot.poll_delivery_state({}, state)
             restored = pilot.load(self.state_path, {})
             pilot.poll_delivery_state({}, restored)
         with open(self.receipts, encoding="utf-8") as stream:
-            self.assertEqual(len(stream.readlines()), 1)
+            receipts = [json.loads(line) for line in stream]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(
+            (receipts[0]["actor"], receipts[0]["actor_id"], receipts[0]["rounds"]),
+            ("owner", None, 3),
+        )
         with open(self.outbox, encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
         with open(notifications, encoding="utf-8") as stream:
