@@ -3065,11 +3065,11 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         tasks = [{
             "id": "implement", "title": f"[auto] [1/3 Implement + Test] {base}",
             "state": "succeeded", "created_at": "2026-08-11T10:00:00Z",
-            "repository_id": "repo-id",
+            "repository_id": "repo-id", "work_id": "work-1",
         }]
         details = {
             "implement": {
-                "task": {"repository_id": "repo-id"},
+                "task": {"repository_id": "repo-id", "work_id": "work-1"},
                 "workflow": {"title": "Implement + Test"},
                 "context": f"Card: {card}",
                 "attempts": [{"result": (
@@ -3110,10 +3110,12 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
                 "id": task_id, "title": body["title"], "state": "created",
                 "created_at": "2026-08-11T10:0%d:00Z" % (len(created) + 1),
                 "repository_id": "repo-id", "context": body["context"],
+                "work_id": "work-1",
             }
             tasks.append(task)
             details[task_id] = {
-                "task": {"repository_id": "repo-id", "context": body["context"]},
+                "task": {"repository_id": "repo-id", "context": body["context"],
+                         "work_id": "work-1"},
                 "workflow": {"title": stage}, "context": body["context"],
                 "attempts": [],
             }
@@ -3221,16 +3223,49 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertEqual(len(created), 2)
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
             self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], delivery_head)
+            self.assertEqual(state["merge_intents"]["verify"]["work_id"], "work-1")
+            self.assertEqual(state["merge_intents"]["verify"]["target_branch"], "main")
             self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
             fresh.assert_called_once_with("github.com/acme/repo", rebuilt)
 
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
+        merge.assert_called_once_with(
+            "github.com/acme/repo", rebuilt, base, delivery_head, "work-1")
 
 
 class ImmutableMergeTests(unittest.TestCase):
+    def test_pull_request_body_contains_one_durable_work_marker(self):
+        expected = "a" * 40
+        current = {"commit": {"sha": expected}}
+        created = subprocess.CompletedProcess([], 0, "", "")
+        merged = subprocess.CompletedProcess([], 0, "merged", "")
+        with mock.patch.object(pilot, "gh_json", return_value=current), \
+                mock.patch("subprocess.run", side_effect=[created, merged]) as run:
+            ok, _ = pilot.gh_merge(
+                "github.com/acme/repo", "factory/candidate", "Работа",
+                expected, "work-123")
+
+        self.assertTrue(ok)
+        create_args = run.call_args_list[0].args[0]
+        body = create_args[create_args.index("--body") + 1]
+        marker = "<!-- factory-work-id:work-123 -->"
+        self.assertEqual(body.count(marker), 1)
+        self.assertEqual(pilot.pr_factory_work_id(body), "work-123")
+
+    def test_invalid_work_id_never_creates_unmarked_pull_request(self):
+        with mock.patch.object(pilot, "gh_json") as github, \
+                mock.patch("subprocess.run") as run:
+            ok, message = pilot.gh_merge(
+                "github.com/acme/repo", "factory/candidate", "Работа",
+                "a" * 40, "invalid work id")
+
+        self.assertFalse(ok)
+        self.assertIn("work_id", message)
+        github.assert_not_called()
+        run.assert_not_called()
+
     def test_force_push_after_verify_blocks_merge(self):
         with mock.patch.object(pilot, "gh_json", return_value={
                 "commit": {"sha": "f" * 40}}), \
@@ -3765,6 +3800,154 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         intent = dict(self.intent)
         intent.update({"phase": "conflict", "merge_error": "merge conflict details"})
         return {"merge_intents": {"verify-1": intent}}
+
+    def duplicate_conflict_state(self):
+        state = self.conflict_state()
+        state["merge_intents"]["verify-1"].update({
+            "rounds": 2, "work_id": "work-1", "target_branch": "main",
+        })
+        return state
+
+    def duplicate_pulls(self, current_body=None, merged_body=None,
+                        merged_base="main"):
+        marker = pilot.factory_work_marker("work-1")
+        current = {
+            "number": 41, "state": "open", "title": "Одинаковая работа",
+            "body": marker if current_body is None else current_body,
+            "base": {"ref": "main"}, "head": {"ref": "factory/topic"},
+            "html_url": "https://github.com/acme/repo/pull/41",
+        }
+        merged = {
+            "number": 40, "state": "closed", "title": "Одинаковая работа",
+            "body": marker if merged_body is None else merged_body,
+            "base": {"ref": merged_base}, "head": {"ref": "factory/other"},
+            "merged_at": "2026-08-14T12:00:00Z",
+            "html_url": "https://github.com/acme/repo/pull/40",
+        }
+        return current, merged
+
+    def duplicate_github(self, current, merged, close_response=True):
+        calls = []
+
+        def github(args, strict=False):
+            calls.append(list(args))
+            joined = " ".join(args)
+            if "pulls?state=open" in joined:
+                return [dict(current)]
+            if "pulls?state=closed" in joined:
+                return [dict(merged)]
+            if args == ["api", "repos/acme/repo/pulls/41"]:
+                return dict(current)
+            if "--method PATCH" in joined:
+                if not close_response:
+                    return None
+                return dict(current, state="closed")
+            if "comments?per_page=100" in joined:
+                return []
+            if "--method POST" in joined and "comments" in joined:
+                return {"id": 501, "body": args[-1][5:]}
+            raise AssertionError(args)
+
+        return github, calls
+
+    def test_second_conflict_closes_stale_pr_when_matching_work_was_merged(self):
+        state = self.duplicate_conflict_state()
+        current, merged = self.duplicate_pulls()
+        github, calls = self.duplicate_github(current, merged)
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "create_child_task") as create:
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers), 0)
+            calls_after_close = len(calls)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers), 0)
+
+        intent = state["merge_intents"]["verify-1"]
+        self.assertEqual(intent["phase"], "superseded")
+        self.assertEqual(intent["stale_pr_number"], 41)
+        self.assertEqual(intent["superseded_by_pr"], 40)
+        self.assertEqual(intent["superseded_by_url"], merged["html_url"])
+        self.assertIn("same durable work_id", intent["audit_reason"])
+        self.assertEqual(len(calls), calls_after_close)
+        self.assertEqual(sum("--method PATCH" in " ".join(call)
+                             for call in calls), 1)
+        self.assertEqual(sum("--method POST" in " ".join(call)
+                             for call in calls), 1)
+        create.assert_not_called()
+
+    def test_untrusted_duplicate_prs_continue_normal_repair(self):
+        marker = pilot.factory_work_marker("work-1")
+        cases = (
+            ("different_work", marker,
+             pilot.factory_work_marker("work-2"), "main"),
+            ("missing_marker", marker, "обычное описание", "main"),
+            ("double_marker", marker, marker + "\n" + marker, "main"),
+            ("corrupt_marker", marker,
+             "<!-- factory-work-id:work-1 --", "main"),
+            ("human_current", "описание человеческого PR", marker, "main"),
+            ("different_base", marker, marker, "release"),
+        )
+        for name, current_body, merged_body, merged_base in cases:
+            with self.subTest(name=name):
+                state = self.duplicate_conflict_state()
+                current, merged = self.duplicate_pulls(
+                    current_body, merged_body, merged_base)
+                github, calls = self.duplicate_github(current, merged)
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                        mock.patch.object(pilot, "gh_json", side_effect=github), \
+                        mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                        mock.patch.object(
+                            pilot, "create_child_task",
+                            return_value={"task": {"id": "repair-1"}}) as create:
+                    created = pilot.resume_merge_conflicts(
+                        self.conf, state, [self.parent], self.workflows, self.workers)
+
+                self.assertEqual(created, 1)
+                self.assertEqual(
+                    state["merge_intents"]["verify-1"]["phase"], "repairing")
+                self.assertFalse(any("--method PATCH" in " ".join(call)
+                                     for call in calls))
+                create.assert_called_once()
+
+    def test_github_lookup_failure_fails_closed_and_uses_repair(self):
+        state = self.duplicate_conflict_state()
+
+        def github(args, strict=False):
+            if "pulls?state=open" in " ".join(args):
+                return None
+            return []
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-1"}}) as create:
+            created = pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers)
+
+        self.assertEqual(created, 1)
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "repairing")
+        create.assert_called_once()
+
+    def test_close_failure_is_retryable_without_comment_or_repair(self):
+        state = self.duplicate_conflict_state()
+        current, merged = self.duplicate_pulls()
+        github, calls = self.duplicate_github(
+            current, merged, close_response=False)
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "create_child_task") as create:
+            created = pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers)
+
+        self.assertEqual(created, 0)
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"],
+                         "superseding")
+        self.assertFalse(any("--method POST" in " ".join(call)
+                             for call in calls))
+        create.assert_not_called()
 
     def test_content_conflict_is_journaled_and_not_retried_each_cycle(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}

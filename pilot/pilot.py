@@ -635,19 +635,46 @@ def _note_admitted_task(conf, response, body):
             tasks.append(task)
 
 
-def gh_merge(repo_identity, branch, title, expected_head=""):
+WORK_ID_MARKER_RE = re.compile(
+    r"<!-- factory-work-id:([^\s<>]{1,256}) -->")
+
+
+def factory_work_marker(work_id):
+    """Return the exact marker used to bind a Pilot PR to durable work."""
+    value = work_id if isinstance(work_id, str) else ""
+    if not value or not re.fullmatch(r"[^\s<>]{1,256}", value):
+        return ""
+    return f"<!-- factory-work-id:{value} -->"
+
+
+def pr_factory_work_id(body):
+    """Read one strict marker; malformed or repeated markers are untrusted."""
+    body = body if isinstance(body, str) else ""
+    matches = WORK_ID_MARKER_RE.findall(body)
+    if len(matches) != 1 or body.count("<!-- factory-work-id:") != 1:
+        return ""
+    return matches[0]
+
+
+def gh_merge(repo_identity, branch, title, expected_head="", work_id=""):
     """Open (best-effort) and squash-merge the branch into the default branch."""
     repo = repo_identity.split("github.com/")[-1]
+    marker = factory_work_marker(work_id)
+    if work_id and not marker:
+        return False, "invalid durable work_id"
     if expected_head:
         current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
         actual = ((current or {}).get("commit") or {}).get("sha", "")
         if actual != expected_head:
             return False, "delivery branch changed after Verify"
     env = dict(os.environ, HOME=HOME)
+    body = "Automated by the Factory pipeline after Verify PASS."
+    if marker:
+        body += "\n\n" + marker
     subprocess.run(
         ["gh", "pr", "create", "--repo", repo, "--head", branch,
          "--title", title or branch,
-         "--body", "Automated by the Factory pipeline after Verify PASS."],
+         "--body", body],
         capture_output=True, text=True, env=env, timeout=120)
     if expected_head:
         current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
@@ -7789,6 +7816,150 @@ def _merge_rounds(tasks, reference):
     return max(counts, default=0)
 
 
+def _github_response(args):
+    """Strict GitHub request used where a soft failure could close a PR."""
+    try:
+        response = gh_json(args, strict=True)
+    except Exception as error:
+        log(f"SUPERSEDE github error: {error}")
+        return None
+    return response
+
+
+def _superseded_comment_marker(task_id, merged_number):
+    return f"<!-- factory-superseded:{task_id}:{merged_number} -->"
+
+
+def _resume_superseding_pull_request(state, task_id, intent):
+    """Finish a durably chosen close/comment without repeating mutations."""
+    repo = intent.get("repository", "").split("github.com/")[-1]
+    stale_number = intent.get("stale_pr_number")
+    merged_number = intent.get("superseded_by_pr")
+    if (not repo or not isinstance(stale_number, int)
+            or not isinstance(merged_number, int)):
+        return False
+    pull_path = f"repos/{repo}/pulls/{stale_number}"
+    if not intent.get("stale_pr_closed_at"):
+        current = _github_response(["api", pull_path])
+        if not isinstance(current, dict):
+            return False
+        state_name = current.get("state")
+        if state_name == "open":
+            if (((current.get("base") or {}).get("ref")
+                 != intent.get("target_branch"))
+                    or ((current.get("head") or {}).get("ref")
+                        != intent.get("branch"))
+                    or pr_factory_work_id(current.get("body"))
+                        != intent.get("work_id")):
+                return False
+            current = _github_response(
+                ["api", "--method", "PATCH", pull_path, "-f", "state=closed"])
+            if not isinstance(current, dict) or current.get("state") != "closed":
+                return False
+        elif state_name != "closed":
+            return False
+        intent["stale_pr_closed_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        save(STATE_PATH, state)
+
+    comment_marker = _superseded_comment_marker(task_id, merged_number)
+    if not intent.get("superseded_comment_id"):
+        comments_path = f"repos/{repo}/issues/{stale_number}/comments"
+        comments = _github_response(["api", f"{comments_path}?per_page=100"])
+        if not isinstance(comments, list):
+            return False
+        existing = next((item for item in comments
+                         if isinstance(item, dict)
+                         and comment_marker in (item.get("body") or "")), None)
+        if existing is None:
+            merged_url = intent.get("superseded_by_url") or (
+                f"https://github.com/{repo}/pull/{merged_number}")
+            body = (
+                "Закрыто автоматически: эта же работа уже влита в целевую "
+                f"ветку через PR {merged_url}.\n\n{comment_marker}")
+            existing = _github_response([
+                "api", "--method", "POST", comments_path, "-f", f"body={body}"])
+            if not isinstance(existing, dict) or not existing.get("id"):
+                return False
+        intent["superseded_comment_id"] = existing.get("id")
+        save(STATE_PATH, state)
+
+    intent.update({
+        "phase": "superseded",
+        "superseded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "audit_reason": "same durable work_id was merged into the same base branch",
+    })
+    save(STATE_PATH, state)
+    log(f"AUTO-MERGE stale PR closed task={task_id} pr={stale_number} "
+        f"merged_by={merged_number}")
+    return True
+
+
+def _supersede_merged_duplicate(state, task_id, intent):
+    """Choose a merged exact-work duplicate, then durably close this Pilot PR."""
+    if intent.get("phase") == "superseding":
+        return _resume_superseding_pull_request(state, task_id, intent)
+    work_id = intent.get("work_id")
+    try:
+        rounds = int(intent.get("rounds") or 0)
+    except (TypeError, ValueError):
+        return False
+    if (intent.get("phase") != "conflict"
+            or rounds < 2
+            or not factory_work_marker(work_id)):
+        return False
+    repo = intent.get("repository", "").split("github.com/")[-1]
+    branch, base = intent.get("branch", ""), intent.get("target_branch", "")
+    if not repo or not branch or not base or "/" not in repo:
+        return False
+    owner = repo.split("/", 1)[0]
+    head_query = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    base_query = urllib.parse.quote(base, safe="")
+    current_pulls = _github_response([
+        "api", f"repos/{repo}/pulls?state=open&head={head_query}"
+        f"&base={base_query}&per_page=100"])
+    merged_pulls = _github_response([
+        "api", f"repos/{repo}/pulls?state=closed&base={base_query}"
+        "&sort=updated&direction=desc&per_page=100"])
+    if not isinstance(current_pulls, list) or not isinstance(merged_pulls, list):
+        return False
+    current_matches = [pull for pull in current_pulls
+                       if isinstance(pull, dict)
+                       and pull.get("state") == "open"
+                       and ((pull.get("base") or {}).get("ref") == base)
+                       and ((pull.get("head") or {}).get("ref") == branch)
+                       and pr_factory_work_id(pull.get("body")) == work_id]
+    if len(current_matches) != 1:
+        return False
+    current = current_matches[0]
+    if not isinstance(current.get("number"), int):
+        return False
+    candidates = [pull for pull in merged_pulls
+                  if isinstance(pull, dict)
+                  and isinstance(pull.get("number"), int)
+                  and pull.get("number") != current.get("number")
+                  and pull.get("merged_at")
+                  and ((pull.get("base") or {}).get("ref") == base)
+                  and pr_factory_work_id(pull.get("body")) == work_id]
+    if not candidates:
+        return False
+    merged = candidates[0]
+    merged_url = merged.get("html_url")
+    if not isinstance(merged_url, str) or not merged_url:
+        return False
+    intent.update({
+        "phase": "superseding",
+        "stale_pr_number": current["number"],
+        "stale_pr_url": current.get("html_url") or "",
+        "superseded_by_pr": merged["number"],
+        "superseded_by_url": merged_url,
+        "superseded_by_merged_at": merged.get("merged_at"),
+        "superseding_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    save(STATE_PATH, state)
+    return _resume_superseding_pull_request(state, task_id, intent)
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -7802,7 +7973,8 @@ def recover_merge_intents(conf, state):
         # A content conflict cannot heal by repeating the same merge request.
         # A separate correction task rebases the same branch and sends it
         # through Review and Verify again.
-        if intent.get("phase") in ("conflict", "repairing", "superseded", "stale"):
+        if intent.get("phase") in (
+                "conflict", "repairing", "superseding", "superseded", "stale"):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
@@ -7829,8 +8001,11 @@ def recover_merge_intents(conf, state):
                 intent["actor"] = "automatic"
                 intent["phase"] = "merging"
                 save(STATE_PATH, state)
-                ok, output = gh_merge(repo, branch, intent.get("base", branch),
-                                      expected_head)
+                merge_args = (repo, branch, intent.get("base", branch), expected_head)
+                if intent.get("work_id"):
+                    ok, output = gh_merge(*merge_args, intent["work_id"])
+                else:
+                    ok, output = gh_merge(*merge_args)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
@@ -7880,6 +8055,13 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
     the already-reviewed branch, and must pass Review and Verify again after it
     catches up with current main.
     """
+    created_count = 0
+    for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
+        if intent.get("phase") not in ("conflict", "superseding"):
+            continue
+        if _supersede_merged_duplicate(state, task_id, intent):
+            continue
+
     stages = [item.get("workflow") for item in conf.get("stages", [])]
     implementation = "Implement + Test"
     if implementation not in stages:
@@ -7887,7 +8069,6 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
     workflow = workflows.get(implementation) or {}
     if not workflow.get("enabled") or not workflow.get("revision_id"):
         return 0
-    created_count = 0
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
         if intent.get("phase") != "conflict":
             continue
@@ -8396,9 +8577,13 @@ def cycle(conf, state):
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
                             attempts_so_far=0, branch=branch)
                         continue
+                    durable_work_id = ((detail.get("task") or {}).get("work_id")
+                                       or t.get("work_id") or "")
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
                         "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
+                        "target_branch": verify_snapshot.get("default_branch") or "main",
+                        "work_id": durable_work_id,
                         "actor_id": None,
                         "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
