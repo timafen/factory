@@ -3049,6 +3049,9 @@ def pipeline_watch(conf, tasks, workflows, workers):
 # это умеет машина за секунды. Дорогое Ревью получает уже проверенный факт.
 
 def gh_json(args, timeout=30, strict=False):
+    if list(args[:2]) == ["repo", "view"] and "--repo" not in args:
+        raise RuntimeError(
+            "GitHub action blocked: bare gh repo view has no origin-pinned repository")
     env = dict(os.environ, HOME=HOME)
     r = subprocess.run(["gh"] + args, capture_output=True, text=True,
                        env=env, timeout=timeout)
@@ -3066,6 +3069,47 @@ def gh_json(args, timeout=30, strict=False):
         if strict:
             raise RuntimeError("gh returned invalid JSON") from e
         return None
+
+
+GITHUB_ORIGIN = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([^/\s:]+)/([^/\s]+?)(?:\.git)?/?$")
+
+
+def github_repository_from_origin(worktree):
+    """Resolve the only GitHub repository a worktree is allowed to address.
+
+    ``gh`` keeps a user-level default repository, which may belong to another
+    checkout.  A pipeline action must therefore derive its target from this
+    worktree's ``origin`` and never from a bare ``gh repo view`` response.
+    """
+    if not worktree:
+        raise RuntimeError("GitHub action blocked: worktree is required to resolve origin")
+    try:
+        remote = subprocess.run(
+            ["git", "-C", worktree, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, HOME=HOME, GIT_TERMINAL_PROMPT="0"))
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        raise RuntimeError("GitHub action blocked: cannot read origin: " + str(e)) from e
+    if remote.returncode:
+        detail = (remote.stderr or remote.stdout or "origin is unavailable").strip()
+        raise RuntimeError("GitHub action blocked: cannot read origin: " + detail[:240])
+    url = remote.stdout.strip()
+    match = GITHUB_ORIGIN.fullmatch(url)
+    if not match:
+        raise RuntimeError("GitHub action blocked: origin is not a GitHub owner/repository URL")
+    return match.group(1) + "/" + match.group(2)
+
+
+def gh_repo_view_from_origin(worktree):
+    """Read repository diagnostics only with the target pinned from origin."""
+    repo = github_repository_from_origin(worktree)
+    result = gh_json(["repo", "view", "--repo", repo, "--json", "nameWithOwner"], strict=True)
+    actual = str((result or {}).get("nameWithOwner") or "").strip()
+    if actual != repo:
+        raise RuntimeError(
+            "GitHub action blocked: gh reported %r, but origin resolves to %r" % (actual, repo))
+    return repo
 
 
 # --------------------------------------------------- обещания «готово, когда»
