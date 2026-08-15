@@ -1,18 +1,25 @@
-Implementation commit: 74eac0559890da5b8b52707061e5b9017789c79f — кэш назначает upstream GitHub CLI default, сохраняя origin.
+Implementation commit: 9e08beee281bbcfc6547ab7bac58e396f2b6bda0 — кэш назначает upstream GitHub CLI default, сохраняя origin.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
 ## HEAD
 
 - Status: Implemented
-- Branch: `factory/8c401f07-2c6-808aca56-426`.
-- Implementation commit: `74eac0559890da5b8b52707061e5b9017789c79f`.
+- Branch: `factory/301b8b3a-e68-31829ae9-9d8`.
+- Implementation commit: `9e08beee281bbcfc6547ab7bac58e396f2b6bda0`.
 - What changed: новые и существующие кэши снимают `gh-resolved` с `origin` и
   назначают `remote.upstream.gh-resolved=base`, не меняя URL и tracking.
 - Evidence: `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS; bare `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
 - Next action: Verify проверяет diff и выпуск после rebase на свежий `main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+- После переноса и rebase на свежий `origin/main` карточка указывает на
+  фактический кодовый коммит этой ветки; настройка `upstream` и тест не менялись.
+- `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1`,
+  `go test ./...` и `go build ./...` — PASS.
 
 ### 2026-08-15 — Implement
 
