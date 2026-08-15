@@ -123,7 +123,7 @@ exec "$FACTORY_TEST_REAL_GIT" \
 }
 
 func TestManagedRepositoryCacheSetsGitHubDefaultRepository(t *testing.T) {
-	t.Run("new and existing cache", func(t *testing.T) {
+	t.Run("timafen origin wins over owainlewis upstream in new and existing cache", func(t *testing.T) {
 		fixture := newManagedAcquisitionFixture(t, "normal")
 		repository, err := fixture.manager.acquireManagedRepository(context.Background(), fixture.first)
 		if err != nil {
