@@ -5872,12 +5872,33 @@ class CertainDecisionTests(unittest.TestCase):
             self.assertEqual(decision["next_complexity"], "medium")
             self.assertTrue(decision["verdict_ru"])
 
-    def test_ambiguous_or_negative_verdict_still_uses_the_model(self):
+    def test_exact_negative_verdicts_do_not_call_the_model_again(self):
+        cases = (
+            ("Triage", "CLOSE\nalready shipped", "stop", "close", ""),
+            ("Triage", "DUPLICATE\nsame work", "stop", "close", ""),
+            ("Review", "REQUEST CHANGES\nfix the assertion", "return", "return",
+             "Implement + Test"),
+            ("Verify", "BLOCKED\nsmoke failed", "return", "return",
+             "Implement + Test"),
+            ("Specification", "BLOCKED\nowner choice", "stop", "owner", ""),
+        )
+        for stage, result, action, route, return_stage in cases:
+            with self.subTest(stage=stage, result=result), \
+                    mock.patch.object(
+                        pilot, "brain",
+                        side_effect=AssertionError("model must not be called")):
+                decision = pilot.decide(
+                    {}, stage, "next", "Work", result, "repo")
+            self.assertEqual(decision["action"], action)
+            self.assertEqual(decision["fixed_route"], route)
+            self.assertEqual(decision["return_stage"], return_stage)
+
+    def test_ambiguous_verdict_still_uses_the_model(self):
         answer = json.dumps({
             "action": "stop", "reason": "needs context", "handoff": "",
             "next_complexity": "medium", "verdict_ru": "Нужны подробности.",
         })
-        for result in ("Result: APPROVE", "BLOCKED\nDNS is unavailable"):
+        for result in ("Result: APPROVE", "REQUEST CHANGES maybe"):
             with self.subTest(result=result), \
                     mock.patch.object(
                         pilot, "brain", return_value=(answer, "test")) as brain:
@@ -5885,6 +5906,42 @@ class CertainDecisionTests(unittest.TestCase):
                     {}, "Review", "Verify", "Work", result, "repo")
             self.assertEqual(decision["action"], "stop")
             brain.assert_called_once()
+
+    @mock.patch.object(pilot, "create_child_task")
+    @mock.patch.object(pilot, "stage_worker", return_value="worker")
+    def test_fixed_review_return_uses_stable_child_request(
+            self, _stage_worker, create_child):
+        create_child.return_value = {"task": {"id": "correction"}}
+        source = {
+            "id": "review-task",
+            "title": "[auto] [4/5 Review] Controlled work",
+        }
+        detail = {
+            "task": {"repository_id": "repo"},
+            "workflow": {"title": "Review"},
+            "context": "Branch: factory/controlled",
+        }
+        workflows = {
+            "Implement + Test": {
+                "enabled": True,
+                "revision_id": "implement-revision",
+            },
+        }
+        workers = {"worker": {"id": "worker-id"}}
+
+        result = pilot.create_fixed_stage_return(
+            {"timeout_seconds": 60}, source, detail, workflows, workers,
+            ["Triage", "Specification", "Implement + Test", "Review", "Verify"],
+            "REQUEST CHANGES\nBranch: factory/controlled", "Implement + Test")
+
+        self.assertEqual(result["task"]["id"], "correction")
+        body, parent, _conf, correction_kind = create_child.call_args.args
+        self.assertEqual(
+            body["request_key"],
+            pilot.continuation_request_key("review-task", "implement-revision"))
+        self.assertEqual(parent, source)
+        self.assertEqual(correction_kind, "review_return")
+        self.assertIn("[3/5 Implement + Test]", body["title"])
 
     def test_stage_rules_require_exact_fast_handoff_verdicts(self):
         self.assertIn("READY TO IMPLEMENT", pilot.agent_rules(stage="Specification"))

@@ -5367,7 +5367,12 @@ def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
 
 
 def certain_positive_decision(stage, result):
-    """Route only an exact positive workflow verdict without a second model."""
+    """Route an exact V0 workflow verdict without a second model.
+
+    The historical name is kept because callers and tests import it. V0 uses
+    a finite transition table: a machine verdict is never re-interpreted by a
+    second agent.
+    """
     first = next((line.strip() for line in (result or "").splitlines()
                   if line.strip()), "")
     first = re.sub(r"^[#>*-]+\s*", "", first).rstrip(" .:").upper()
@@ -5395,8 +5400,45 @@ def certain_positive_decision(stage, result):
             "Финальная проверка пройдена; слияние и выпуск продолжатся автоматически."),
     }
     selected = messages.get((stage, first))
+    fixed_route = "advance"
+    return_stage = ""
     if not selected:
-        return None
+        close_verdicts = {
+            ("Triage", "CLOSE"),
+            ("Triage", "DUPLICATE"),
+            ("Triage", "CLOSE / DUPLICATE"),
+        }
+        owner_verdicts = {
+            ("Triage", "NEEDS INFORMATION"),
+            ("Triage", "WAIT"),
+            ("Triage", "BLOCKED"),
+            ("Specification", "BLOCKED"),
+            ("Implement + Test", "BLOCKED"),
+            ("Review", "BLOCKED"),
+        }
+        return_verdicts = {
+            ("Review", "REQUEST CHANGES"): "Implement + Test",
+            ("Verify", "BLOCKED"): "Implement + Test",
+        }
+        key = (stage, first)
+        if key in close_verdicts:
+            selected = ("stop", "Разбор закрыл работу без следующей стадии.")
+            fixed_route = "close"
+        elif key in owner_verdicts:
+            selected = (
+                "stop",
+                "Этап остановлен точным машинным вердиктом; требуется решение владельца.",
+            )
+            fixed_route = "owner"
+        elif key in return_verdicts:
+            selected = (
+                "return",
+                "Проверка вернула работу на исправление без повторной оценки моделью.",
+            )
+            fixed_route = "return"
+            return_stage = return_verdicts[key]
+        else:
+            return None
     action, summary = selected
     return {
         "action": action,
@@ -5404,7 +5446,52 @@ def certain_positive_decision(stage, result):
         "handoff": "",
         "next_complexity": "medium",
         "verdict_ru": summary,
+        "fixed_route": fixed_route,
+        "return_stage": return_stage,
+        "machine_verdict": first,
     }
+
+
+def create_fixed_stage_return(conf, source_task, detail, workflows, workers,
+                              stages, result, return_stage):
+    """Create one idempotent correction for exact Review/Verify verdicts."""
+    source_id = (source_task or {}).get("id") or ""
+    workflow = workflows.get(return_stage) or {}
+    if not source_id or return_stage not in stages or not workflow.get("enabled"):
+        raise RuntimeError(f"fixed return cannot route to {return_stage!r}")
+    repository_id = (detail.get("task") or {}).get("repository_id") or ""
+    worker_name = stage_worker(
+        conf, return_stage, "medium", workers, repository_id=repository_id)
+    worker = workers.get(worker_name)
+    if not worker:
+        raise RuntimeError(f"fixed return worker missing for {return_stage!r}")
+    base = base_title((source_task or {}).get("title") or "")
+    stage_number = stages.index(return_stage) + 1
+    branch = extract_branch(result, detail.get("context") or "")
+    branch_line = f"Branch: {branch}\n" if branch else ""
+    context = (
+        f"Pipeline: {base}\nPrevious stage: "
+        f"{(detail.get('workflow') or {}).get('title') or ''}\n"
+        f"{branch_line}Machine verdict:\n{result[:12000]}\n\n"
+        "Исправь только замечания проверки, сохрани ту же ветку и верни "
+        "точный машинный вердикт этапа."
+    )
+    body = {
+        "request_key": continuation_request_key(
+            source_id, workflow.get("revision_id") or ""),
+        "title": f"[auto] [{stage_number}/{len(stages)} {return_stage}] {base}"[:200],
+        "context": context[:20000],
+        "worker_id": worker["id"],
+        "repository_id": repository_id,
+        "timeout_seconds": conf.get("timeout_seconds", 7200),
+        "workflow_revision_id": workflow["revision_id"],
+    }
+    correction_kind = (
+        "review_return"
+        if (detail.get("workflow") or {}).get("title") == "Review"
+        else "verify_return"
+    )
+    return create_child_task(body, source_task, conf, correction_kind)
 
 
 def decide(conf, stage, next_stage, title, result, repo_id=""):
@@ -8791,6 +8878,39 @@ def cycle(conf, state):
                     detail["task"].get("repository_id") or "")
             except Exception as e:
                 log("verdict_save_error", repr(e))
+
+        fixed_route = verdict.get("fixed_route")
+        if fixed_route == "return":
+            try:
+                created = create_fixed_stage_return(
+                    conf, t, detail, workflows, workers, stages, result,
+                    verdict.get("return_stage") or "Implement + Test")
+                created_id = ((created or {}).get("task") or {}).get("id", "")
+                log(f"FIXED RETURN task={tid} stage={wf} -> {created_id}")
+            except Exception as e:
+                retry_terminal_task(conf, state, tid)
+                log("fixed_stage_return_error", repr(e))
+            continue
+        if fixed_route == "owner":
+            base = base_title(title)
+            rid = detail["task"].get("repository_id") or ""
+            resume_stage = resume_stage_for(stages, wf, next_stage)
+            rec = write_question(
+                tid, wf, resume_stage, base, rid,
+                verdict.get("reason") or "Этап остановлен машинным вердиктом.",
+                "Как продолжить эту работу?",
+                ["Продолжить после уточнения", "Остановить работу"],
+                result,
+                selected_delivery(
+                    base, extract_branch(result, detail.get("context", "")))[0],
+            )
+            rec["owner_only"] = True
+            rec["machine_verdict"] = verdict.get("machine_verdict") or ""
+            save(f"{QUESTION_DIR}/{tid}.json", rec)
+            pause_pipeline(conf, base)
+            attach_question_work_id(t)
+            log(f"FIXED OWNER WAIT task={tid} stage={wf}")
+            continue
 
         if not next_stage:
             # end of pipeline (Verify): auto-merge on PASS, then optional staging deploy
