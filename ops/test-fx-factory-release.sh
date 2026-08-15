@@ -898,6 +898,7 @@ start_release() {
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
     FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE=1 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
