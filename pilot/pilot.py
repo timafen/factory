@@ -7834,15 +7834,13 @@ def _supersede_conflicted_pr(intent):
     if len(candidates) != 1 or not candidates[0].get("number"):
         return False
     replacement = candidates[0]
-    intent.update({"phase": "superseding", "superseded_by": replacement["number"],
-                   "superseded_url": replacement.get("html_url", ""),
-                   "supersede_reason": "same work already merged by another PR",
-                   "superseding_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     ok, output = gh_close_pr(repo, stale.get("number"), replacement["number"])
     if not ok:
         log(f"AUTO-MERGE stale PR close failed: {output[:200]}")
         return False
-    intent.update({"phase": "superseded",
+    intent.update({"phase": "superseded", "superseded_by": replacement["number"],
+                   "superseded_url": replacement.get("html_url", ""),
+                   "supersede_reason": "same work already merged by another PR",
                    "closed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     return True
 
