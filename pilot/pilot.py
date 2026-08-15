@@ -635,7 +635,17 @@ def _note_admitted_task(conf, response, body):
             tasks.append(task)
 
 
-def gh_merge(repo_identity, branch, title, expected_head=""):
+def _work_marker(work_id):
+    return f"<!-- factory-work-id:{work_id} -->" if work_id else ""
+
+
+def _marked_work_id(body):
+    """Return a work id only when the immutable marker appears exactly once."""
+    markers = re.findall(r"<!--\s*factory-work-id:([^<>\s]+)\s*-->", body or "")
+    return markers[0] if len(markers) == 1 else ""
+
+
+def gh_merge(repo_identity, branch, title, expected_head="", work_id=""):
     """Open (best-effort) and squash-merge the branch into the default branch."""
     repo = repo_identity.split("github.com/")[-1]
     if expected_head:
@@ -647,7 +657,7 @@ def gh_merge(repo_identity, branch, title, expected_head=""):
     subprocess.run(
         ["gh", "pr", "create", "--repo", repo, "--head", branch,
          "--title", title or branch,
-         "--body", "Automated by the Factory pipeline after Verify PASS."],
+         "--body", "Automated by the Factory pipeline after Verify PASS.\n" + _work_marker(work_id)],
         capture_output=True, text=True, env=env, timeout=120)
     if expected_head:
         current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
@@ -664,6 +674,16 @@ def gh_merge(repo_identity, branch, title, expected_head=""):
         merge_args,
         capture_output=True, text=True, env=env, timeout=180)
     return r.returncode == 0, (r.stdout + r.stderr).strip()
+
+
+def gh_close_pr(repo, number, superseded_by):
+    """Close a stale Pilot PR with a durable, human-readable audit comment."""
+    env = dict(os.environ, HOME=HOME)
+    comment = f"Closed: this work was merged by PR #{superseded_by}."
+    result = subprocess.run(
+        ["gh", "pr", "close", str(number), "--repo", repo, "--comment", comment],
+        capture_output=True, text=True, env=env, timeout=120)
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
 # ---------------------------------------------------------------- planner ----
@@ -1682,6 +1702,20 @@ def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
         reverse=True,
     )
     return urgent + rest
+
+
+def rotate_terminal_handoffs(tasks, cursor, processed, recovery_ids=()):
+    """Rotate fairly without moving an earlier delivery stage behind a later one."""
+    tasks = list(tasks or [])
+    cursor_index = next((index for index, task in enumerate(tasks)
+                         if task.get("id") == cursor), None)
+    if cursor_index is None:
+        return tasks
+    rotated = tasks[cursor_index + 1:] + tasks[:cursor_index + 1]
+    # Reapply stage priority after rotation. Stable sorting preserves the
+    # round-robin order inside one stage, while Verify/Review stay ahead of
+    # Implement/Specification/Triage.
+    return prioritize_terminal_handoffs(rotated, processed, recovery_ids)
 
 
 def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT,
@@ -5497,12 +5531,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
         }
         previous = meta.get("implementation_artifact") or {}
         meta["implementation_artifact"] = artifact
-        # Re-reading the same completed Implement task happens after a
-        # watcher restart.  It must keep review_gate's rebuilt delivery
-        # branch.  Only a genuinely different implementation can invalidate
-        # that selected branch for this generation.
-        identity = ("branch", "head", "task_id", "generation")
-        if any(previous.get(key) != artifact[key] for key in identity):
+        # Re-reading the same completed Implement task happens after
+        # review_gate has refreshed its branch onto a newer main.  The remote
+        # head then legitimately differs from the original Implement report,
+        # but the gate-selected delivery head is still the authority for
+        # Review, Verify, and merge.  Only a genuinely different Implement
+        # task/branch/generation may invalidate that selection.
+        implementation_identity = ("branch", "task_id", "generation")
+        if any(previous.get(key) != artifact[key]
+               for key in implementation_identity):
             meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
@@ -5548,6 +5585,22 @@ def record_delivery_artifact(base, branch, head):
     meta["delivery_artifact"] = artifact
     save(WORKS_PATH, works)
     return artifact
+
+
+def pin_reviewed_delivery(base, repo_identity, branch, result):
+    """Restore the immutable delivery pin from a completed, still-current Review."""
+    match = SPECIFICATION_HEAD_LINE.search(result or "")
+    reviewed_head = (match.group(1).lower() if match else "")
+    repo = (repo_identity or "").split("github.com/")[-1]
+    if not repo or not branch or not FULL_GIT_SHA.fullmatch(reviewed_head):
+        return {}, "Review не указал точный HEAD проверенной ветки."
+    info = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
+    current_head = (((info or {}).get("commit") or {}).get("sha") or "").lower()
+    if not FULL_GIT_SHA.fullmatch(current_head):
+        return {}, "Не удалось подтвердить текущий HEAD проверенной ветки."
+    if current_head != reviewed_head:
+        return {}, "Ветка изменилась после Review; нужен Review нового снимка."
+    return record_delivery_artifact(base, branch, current_head), ""
 
 
 def selected_delivery(base, branch=""):
@@ -7907,6 +7960,55 @@ def _merge_rounds(tasks, reference):
     return max(counts, default=0)
 
 
+def _supersede_conflicted_pr(intent):
+    """Close only our stale PR when a separately merged PR proves the work landed.
+
+    Every uncertain GitHub response returns False, preserving the ordinary
+    correction path.  The snapshot fields are deliberately never inferred from
+    a title or branch name.
+    """
+    work_id = intent.get("work_id", "")
+    repo = intent.get("repository", "").split("github.com/")[-1]
+    branch, base = intent.get("branch", ""), intent.get("base_branch", "")
+    if not work_id or not repo or not branch or not base:
+        return False
+    try:
+        owner = repo.split("/", 1)[0]
+        head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+        current = gh_json(["api", f"repos/{repo}/pulls?state=open&head={head}&per_page=100"])
+        pulls = gh_json(["api", f"repos/{repo}/pulls?state=all&per_page=100"])
+    except Exception as error:
+        log(f"AUTO-MERGE supersede lookup failed: {error}")
+        return False
+    if not isinstance(current, list) or not isinstance(pulls, list):
+        return False
+    matching = [pull for pull in current
+                if (pull.get("state") == "open"
+                    and (pull.get("head") or {}).get("ref") == branch
+                    and (pull.get("base") or {}).get("ref") == base
+                    and _marked_work_id(pull.get("body", "")) == work_id)]
+    if len(matching) != 1:
+        return False
+    stale = matching[0]
+    candidates = [pull for pull in pulls
+                  if (pull.get("number") != stale.get("number")
+                      and pull.get("merged_at")
+                      and (pull.get("base") or {}).get("ref") == base
+                      and _marked_work_id(pull.get("body", "")) == work_id)]
+    if len(candidates) != 1 or not candidates[0].get("number"):
+        return False
+    replacement = candidates[0]
+    ok, output = gh_close_pr(repo, stale.get("number"), replacement["number"])
+    if not ok:
+        log(f"AUTO-MERGE stale PR close failed: {output[:200]}")
+        return False
+    intent.update({"phase": "superseded", "superseded_by": replacement["number"],
+                   "superseded_url": replacement.get("html_url", ""),
+                   "supersede_reason": "same work already merged by another PR",
+                   "closed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    return True
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -7920,7 +8022,7 @@ def recover_merge_intents(conf, state):
         # A content conflict cannot heal by repeating the same merge request.
         # A separate correction task rebases the same branch and sends it
         # through Review and Verify again.
-        if intent.get("phase") in ("conflict", "repairing", "superseded", "stale"):
+        if intent.get("phase") in ("conflict", "repairing", "superseding", "superseded", "stale"):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
         if not repo or not branch:
@@ -7947,17 +8049,23 @@ def recover_merge_intents(conf, state):
                 intent["actor"] = "automatic"
                 intent["phase"] = "merging"
                 save(STATE_PATH, state)
-                ok, output = gh_merge(repo, branch, intent.get("base", branch),
-                                      expected_head)
+                merge_args = (repo, branch, intent.get("base", branch), expected_head)
+                if intent.get("work_id"):
+                    merge_args += (intent["work_id"],)
+                ok, output = gh_merge(*merge_args)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
+                        conflicts = int(intent.get("conflict_count") or 0) + 1
                         intent.update({
                             "phase": "conflict",
                             "merge_error": (output or "")[:2000],
+                            "conflict_count": conflicts,
                             "conflict_at": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         })
+                        if conflicts >= 2 and _supersede_conflicted_pr(intent):
+                            log(f"AUTO-MERGE stale PR superseded task={task_id}")
                         save(STATE_PATH, state)
                     continue
                 merged = True
@@ -8329,11 +8437,8 @@ def cycle(conf, state):
     # sort lets a capacity-deferred late stage jump back to the front on every
     # cycle and starve earlier-stage continuations forever.
     terminal_cursor = state.get("terminal_cursor")
-    cursor_index = next((index for index, task in enumerate(terminal_tasks)
-                         if task.get("id") == terminal_cursor), None)
-    if cursor_index is not None:
-        terminal_tasks = (terminal_tasks[cursor_index + 1:]
-                          + terminal_tasks[:cursor_index + 1])
+    terminal_tasks = rotate_terminal_handoffs(
+        terminal_tasks, terminal_cursor, state.get("processed"), recovery_ids)
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
@@ -8514,10 +8619,16 @@ def cycle(conf, state):
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
                             attempts_so_far=0, branch=branch)
                         continue
+                    work_id = detail["task"].get("work_id") or ""
+                    prior_conflicts = max(
+                        (int(item.get("conflict_count") or 0)
+                         for item in state.setdefault("merge_intents", {}).values()
+                         if work_id and item.get("work_id") == work_id), default=0)
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
                         "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
-                        "actor_id": None,
+                        "actor_id": None, "work_id": work_id, "base_branch": "main",
+                        "conflict_count": prior_conflicts,
                         "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
@@ -8624,6 +8735,23 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
+        if wf == "Review" and next_stage == "Verify" and branch:
+            rid_p = detail["task"].get("repository_id") or ""
+            try:
+                pinned, pin_error = pin_reviewed_delivery(
+                    base, repo_identity_by_id.get(rid_p, ""), branch, result)
+            except Exception as e:
+                retry_terminal_task(conf, state, tid)
+                log("review_delivery_pin_error", repr(e))
+                continue
+            if not pinned:
+                route_question(
+                    conf, tid, "Review", "Review", base, rid_p,
+                    pin_error,
+                    "Повторить Review для текущего снимка ветки?",
+                    ["Повтори Review", "Останови работу"],
+                    pin_error, attempts_so_far=0, branch=branch)
+                continue
         branch, implementation_head = selected_delivery(base, branch)
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"

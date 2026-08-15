@@ -2168,7 +2168,8 @@ def run_full_cycle(fixture):
         stack.enter_context(mock.patch.object(
             pilot, "pushed_branch", return_value="factory/correction"))
         stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
-        stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+        stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={
+            "ahead_by": 1, "commit": {"sha": "a" * 40}}))
         stack.enter_context(mock.patch.object(
             pilot, "broker_operation", return_value={"status": "succeeded"}))
         stack.enter_context(mock.patch.object(
@@ -2219,7 +2220,7 @@ elif action == "full_cycle_after_restart":
         raise AssertionError("restart lost durable Pilot state")
     run_full_cycle(fixture)
     review = latest_stage(fixture, "Review")
-    set_succeeded(fixture, review["id"], "APPROVE")
+    set_succeeded(fixture, review["id"], "APPROVE\nHEAD: " + "a" * 40)
     run_full_cycle(fixture)
     verify = latest_stage(fixture, "Verify")
     set_succeeded(fixture, verify["id"], "PASS\nTRY: none")
@@ -2986,7 +2987,7 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             "generation": "generation-1",
         }
         delivery = {
-            "branch": "factory/real-clean", "head": "f" * 40,
+            "branch": "factory/real-clean", "head": "e" * 40,
             "selected_at": "2026-08-11T10:01:00Z",
             "generation": "generation-1",
         }
@@ -3005,6 +3006,68 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
 
         self.assertEqual(artifact["branch"], "factory/real")
         self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
+
+    def test_refreshed_head_from_same_implementation_keeps_delivery_pin(self):
+        original_head = "a" * 40
+        refreshed_head = "b" * 40
+        delivery = {
+            "branch": "factory/real", "head": refreshed_head,
+            "selected_at": "2026-08-11T10:01:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/real", "head": original_head,
+                "task_id": "implement-task",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+            "delivery_artifact": delivery,
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head=refreshed_head)):
+            artifact = pilot.record_implementation_artifact(
+                "Настоящая работа", "implement-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/real", "", "github.com/timafen/factory")
+
+        self.assertEqual(artifact["head"], refreshed_head)
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
+
+    def test_completed_review_restores_missing_delivery_pin(self):
+        reviewed_head = "b" * 40
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/real", "head": "a" * 40,
+                "task_id": "implement-task",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head=reviewed_head)):
+            artifact, reason = pilot.pin_reviewed_delivery(
+                "Настоящая работа", "github.com/timafen/factory",
+                "factory/real", f"APPROVE\nHEAD: {reviewed_head}")
+
+        self.assertEqual(reason, "")
+        self.assertEqual(artifact["head"], reviewed_head)
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), artifact)
+
+    def test_changed_branch_cannot_be_pinned_by_old_review(self):
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head="c" * 40)):
+            artifact, reason = pilot.pin_reviewed_delivery(
+                "Настоящая работа", "github.com/timafen/factory",
+                "factory/real", "HEAD: " + "b" * 40)
+
+        self.assertEqual(artifact, {})
+        self.assertIn("изменилась после Review", reason)
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), {})
 
     def test_new_implementation_invalidates_delivery_branch(self):
         pilot.save(self.works_path, {"Настоящая работа": {
@@ -3207,7 +3270,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
 
             tasks[-1]["state"] = "succeeded"
-            details["review"]["attempts"] = [{"result": "PASS"}]
+            details["review"]["attempts"] = [{
+                "result": f"PASS\nHEAD: {delivery_head}",
+            }]
             pilot.cycle(conf, state)
             self.assertIn(f"Branch: {rebuilt}", created[1]["context"])
 
@@ -3785,6 +3850,78 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(merge.call_count, 1)
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
         self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
+
+    def test_second_conflict_closes_current_pr_when_same_work_was_merged(self):
+        """A second conflict must not leave a duplicate PR after equivalent delivery."""
+        state = {"merge_intents": {"verify-1": dict(
+            self.intent, work_id="work-1", base_branch="main", conflict_count=1)}}
+        current = {"number": 11, "state": "open", "body": "<!-- factory-work-id:work-1 -->",
+                   "head": {"ref": "factory/topic"}, "base": {"ref": "main"}}
+        merged = {"number": 12, "merged_at": "2026-08-15T12:00:00Z",
+                  "body": "<!-- factory-work-id:work-1 -->", "html_url": "https://example/pr/12",
+                  "base": {"ref": "main"}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "state=open&head=" in args[-1]:
+                return [current]
+            if "state=all&per_page=100" in args[-1]:
+                return [current, merged]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=False), \
+                mock.patch.object(pilot, "gh_merge", return_value=(False, "merge conflicts")), \
+                mock.patch.object(pilot, "gh_close_pr", return_value=(True, "closed")) as close:
+            pilot.recover_merge_intents({}, state)
+            pilot.recover_merge_intents({}, state)
+
+        intent = state["merge_intents"]["verify-1"]
+        close.assert_called_once_with("acme/repo", 11, 12)
+        self.assertEqual(intent["phase"], "superseded")
+        self.assertEqual(intent["superseded_by"], 12)
+        self.assertIn("same work already merged", intent["supersede_reason"])
+
+    def test_failed_stale_pr_close_remains_recoverable(self):
+        """A GitHub close failure must leave the conflict eligible for repair."""
+        state = {"merge_intents": {"verify-1": dict(
+            self.intent, work_id="work-1", base_branch="main", conflict_count=1)}}
+        current = {"number": 11, "state": "open", "body": "<!-- factory-work-id:work-1 -->",
+                   "head": {"ref": "factory/topic"}, "base": {"ref": "main"}}
+        merged = {"number": 12, "merged_at": "2026-08-15T12:00:00Z",
+                  "body": "<!-- factory-work-id:work-1 -->", "html_url": "https://example/pr/12",
+                  "base": {"ref": "main"}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "state=open&head=" in args[-1]:
+                return [current]
+            if "state=all&per_page=100" in args[-1]:
+                return [current, merged]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=False), \
+                mock.patch.object(pilot, "gh_merge", return_value=(False, "merge conflicts")), \
+                mock.patch.object(pilot, "gh_close_pr", return_value=(False, "GitHub unavailable")), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-after-close-failure"}}) as create:
+            pilot.recover_merge_intents({}, state)
+            intent = state["merge_intents"]["verify-1"]
+            self.assertEqual(intent["phase"], "conflict")
+            self.assertNotIn("superseded_by", intent)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers), 1)
+
+        create.assert_called_once()
+        self.assertEqual(intent["phase"], "repairing")
+        self.assertEqual(intent["repair_task_id"], "repair-after-close-failure")
 
     def test_force_push_before_recovery_blocks_merge_and_delivery(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}
@@ -5575,6 +5712,25 @@ class TerminalHandoffPriorityTests(unittest.TestCase):
                          ["fresh", "processed"])
         self.assertEqual([task["id"] for task in recovery],
                          ["processed", "fresh"])
+
+    def test_round_robin_cursor_never_demotes_verify_behind_earlier_stage(self):
+        tasks = [
+            {"id": "verify-new", "title": "[auto] [5/5 Verify] Ready",
+             "state": "succeeded"},
+            {"id": "verify-cursor", "title": "[auto] [5/5 Verify] Previous",
+             "state": "succeeded"},
+            {"id": "implement", "title": "[auto] [3/5 Implement + Test] Old",
+             "state": "succeeded"},
+            {"id": "spec", "title": "[auto] [2/5 Specification] Old",
+             "state": "succeeded"},
+        ]
+        ordered = pilot.prioritize_terminal_handoffs(tasks, [])
+
+        rotated = pilot.rotate_terminal_handoffs(
+            ordered, "verify-cursor", processed=[])
+
+        self.assertEqual([task["id"] for task in rotated],
+                         ["verify-new", "verify-cursor", "implement", "spec"])
 
 
 class AnswerEscalationTests(unittest.TestCase):
