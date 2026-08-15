@@ -66,7 +66,19 @@ class GitHubOriginIdentityTests(unittest.TestCase):
             self.assertEqual(pilot.gh_repo_view_from_origin("/worktree"),
                              "timafen/factory")
         self.assertEqual(gh.call_args.args[0], [
-            "repo", "view", "--repo", "timafen/factory", "--json", "nameWithOwner"])
+            "repo", "view", "timafen/factory", "--json", "nameWithOwner"])
+
+    def test_repo_view_uses_the_supported_positional_cli_contract(self):
+        origin = subprocess.CompletedProcess(
+            ["git"], 0, "git@github.com:timafen/factory.git\n", "")
+        viewed = subprocess.CompletedProcess(
+            ["gh"], 0, '{"nameWithOwner":"timafen/factory"}\n', "")
+        with mock.patch("subprocess.run", side_effect=[origin, viewed]) as run:
+            self.assertEqual(pilot.gh_repo_view_from_origin("/worktree"),
+                             "timafen/factory")
+
+        self.assertEqual(run.call_args_list[1].args[0], [
+            "gh", "repo", "view", "timafen/factory", "--json", "nameWithOwner"])
 
     def test_foreign_repo_response_blocks_before_it_can_be_used(self):
         with self.origin("https://github.com/timafen/factory.git"), \
