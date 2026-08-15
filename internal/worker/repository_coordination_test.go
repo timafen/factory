@@ -47,9 +47,20 @@ set -eu
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   exit 0
 fi
+if [ "${1:-}" = "repo" ] && [ "${2:-}" = "view" ]; then
+  [ "$("$FACTORY_TEST_REAL_GIT" config --get remote.origin.gh-resolved)" = "base" ]
+  if "$FACTORY_TEST_REAL_GIT" config --get remote.upstream.gh-resolved >/dev/null 2>&1; then
+    exit 92
+  fi
+  origin=$("$FACTORY_TEST_REAL_GIT" remote get-url origin)
+  slug=${origin#https://github.com/}
+  slug=${slug%.git}
+  printf '{"nameWithOwner":"%s"}\n' "$slug"
+  exit 0
+fi
 slug="${3:-}"
 case "$slug" in
-  example/first) origin="$FACTORY_TEST_FIRST_ORIGIN"; name=first ;;
+  timafen/factory) origin="$FACTORY_TEST_FIRST_ORIGIN"; name=first ;;
   example/second) origin="$FACTORY_TEST_SECOND_ORIGIN"; name=second ;;
   *) exit 91 ;;
 esac
@@ -66,6 +77,8 @@ case "$FACTORY_TEST_CLONE_MODE:$name" in
 esac
 "$FACTORY_TEST_REAL_GIT" clone --no-checkout "$origin" "$4"
 "$FACTORY_TEST_REAL_GIT" -C "$4" remote set-url origin "https://github.com/$slug.git"
+"$FACTORY_TEST_REAL_GIT" -C "$4" remote add upstream "https://github.com/owainlewis/factory.git"
+"$FACTORY_TEST_REAL_GIT" -C "$4" config remote.upstream.gh-resolved base
 if [ "$FACTORY_TEST_CLONE_MODE:$name" = "cleanup-error:first" ]; then
   touch "$(dirname "$4")/unexpected"
 fi
@@ -76,6 +89,9 @@ fi
 	gitPath := filepath.Join(toolDirectory, "git")
 	gitScript := `#!/bin/sh
 set -eu
+if [ "$FACTORY_TEST_CLONE_MODE" = "config-error" ] && [ "${1:-}" = "config" ]; then
+  exit 86
+fi
 if [ "${1:-}" = "remote" ] && [ "${2:-}" = "get-url" ] && [ "${3:-}" = "origin" ]; then
 	  exec "$FACTORY_TEST_REAL_GIT" "$@"
 fi
@@ -96,13 +112,86 @@ exec "$FACTORY_TEST_REAL_GIT" \
 		manager: manager,
 		syncDir: syncDirectory,
 		first: protocol.Repository{
-			ID: fixtureUUID(801), Key: "github.com/example/first",
-			RemoteIdentity: "github.com/example/first",
+			ID: fixtureUUID(801), Key: "github.com/timafen/factory",
+			RemoteIdentity: "github.com/timafen/factory",
 		},
 		second: protocol.Repository{
 			ID: fixtureUUID(802), Key: "github.com/example/second",
 			RemoteIdentity: "github.com/example/second",
 		},
+	}
+}
+
+func TestManagedRepositoryCacheSetsGitHubDefaultRepository(t *testing.T) {
+	t.Run("new and existing cache", func(t *testing.T) {
+		fixture := newManagedAcquisitionFixture(t, "normal")
+		repository, err := fixture.manager.acquireManagedRepository(context.Background(), fixture.first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cachePath := filepath.Join(fixture.manager.dataDirectory, "repositories", fixture.first.ID)
+		assertManagedRepositoryGitHubDefaults(t, cachePath)
+
+		// Recreate the old conflicting state and prove that cache reuse repairs it.
+		runGitTest(t, cachePath, "config", "remote.upstream.gh-resolved", "base")
+		repository, err = fixture.manager.acquireManagedRepository(context.Background(), fixture.first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertManagedRepositoryGitHubDefaults(t, cachePath)
+
+		worktreePath := filepath.Join(t.TempDir(), "worktree")
+		if err := addPreparedWorktree(context.Background(), fixture.manager.options.GitExecutable, repository, worktree{
+			Path: worktreePath, Branch: "factory/test-gh-default", BaseCommit: repository.BaseCommit,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(fixture.manager.options.GitHubExecutable,
+			"repo", "view", "--json", "nameWithOwner")
+		command.Dir = worktreePath
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bare gh repo view: %v\n%s", err, output)
+		}
+		if got, want := strings.TrimSpace(string(output)), `{"nameWithOwner":"timafen/factory"}`; got != want {
+			t.Fatalf("bare gh repository = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("configuration failure", func(t *testing.T) {
+		fixture := newManagedAcquisitionFixture(t, "config-error")
+		_, err := fixture.manager.acquireManagedRepository(context.Background(), fixture.first)
+		if err == nil || !strings.Contains(err.Error(), "configure cloned managed repository GitHub default") {
+			t.Fatalf("configuration error = %v", err)
+		}
+		cachePath := filepath.Join(fixture.manager.dataDirectory, "repositories", fixture.first.ID)
+		if _, statErr := os.Stat(cachePath); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("cache installed after configuration failure: %v", statErr)
+		}
+	})
+}
+
+func assertManagedRepositoryGitHubDefaults(t *testing.T, cachePath string) {
+	t.Helper()
+	if got := runGitTest(t, cachePath, "config", "--get", "remote.origin.gh-resolved"); got != "base" {
+		t.Fatalf("origin gh-resolved = %q", got)
+	}
+	command := exec.Command("git", "config", "--get-all", "remote.upstream.gh-resolved")
+	command.Dir = cachePath
+	if output, err := command.CombinedOutput(); err == nil || len(output) != 0 {
+		t.Fatalf("upstream gh-resolved remains: %v, %q", err, output)
+	}
+	checks := map[string]string{
+		"remote.origin.url":   "https://github.com/timafen/factory.git",
+		"remote.upstream.url": "https://github.com/owainlewis/factory.git",
+		"remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*",
+		"branch.main.remote":  "origin",
+		"branch.main.merge":   "refs/heads/main",
+	}
+	for key, want := range checks {
+		if got := runGitTest(t, cachePath, "config", "--get", key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
 	}
 }
 
