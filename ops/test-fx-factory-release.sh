@@ -483,7 +483,718 @@ if [[ "${1:-}" = */ops/test-fx-factory-release.sh ]] \
   || [ "${1:-}" = ops/test-fx-factory-release.sh ]; then
   echo 'path-bash-gate-invoked' >>"$TEST_SPOOF_EVENTS"
   echo "bash $1" >>"$TEST_GATES"
-  if [ "$TEST…8334 tokens truncated…history"
+  if [ "$TEST_MODE" = gate-result-spoof ]; then
+    for ((i = 0; i < 400; i++)); do
+      grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null 2>&1 && break
+      /bin/sleep 0.005
+    done
+    grep -Fx 'replayed-success' "$TEST_SPOOF_EVENTS" >/dev/null || exit 20
+    exit 1
+  fi
+  [ "$TEST_MODE" != release-test-fail ] && [ "$TEST_MODE" != forked-gate-fail ]
+  exit
+fi
+if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
+  echo "bash ops/install-factory-control.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != control-install-fail ]
+  exit
+fi
+if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
+  echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != browser-install-fail ]
+  exit
+fi
+if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
+  echo "bash ops/provision-codex-auth.sh" >>"$TEST_GATES"
+  [ "$TEST_MODE" != auth-provision-fail ]
+  exit
+fi
+exec /bin/bash "$@"
+EOF
+  cat >"$case_dir/trusted/setsid" <<'EOF'
+#!/bin/bash
+saw_fork=0
+saw_wait=0
+while [ "${1:-}" = --fork ] || [ "${1:-}" = --wait ]; do
+  [ "$1" != --fork ] || saw_fork=1
+  [ "$1" != --wait ] || saw_wait=1
+  shift
+done
+if [ "$TEST_MODE" = forged-gate-result ]; then
+  for argument in "$@"; do
+    case "$argument" in
+      *.session)
+        printf 'state=finished status=0\n' >"$argument.result"
+        printf 'forged-gate-result\n' >>"$TEST_SPOOF_EVENTS"
+        ;;
+    esac
+  done
+fi
+case "$TEST_MODE" in
+  forked-gates-success|forked-gate-fail|forged-gate-result|signal-forked-gates)
+    printf 'setsid-forked\n' >>"$TEST_HANDSHAKE_EVENTS"
+    [ "$saw_fork:$saw_wait" = 1:1 ] \
+      || { printf 'setsid-missing-wait\n' >>"$TEST_HANDSHAKE_EVENTS"; exit 125; }
+    printf 'setsid-waits\n' >>"$TEST_HANDSHAKE_EVENTS"
+    exec /usr/bin/setsid --fork --wait "$@"
+    ;;
+  signal-before-ready)
+    printf 'setsid-before-ready\n' >>"$TEST_HANDSHAKE_EVENTS"
+    /usr/bin/setsid --fork --wait /bin/bash -c '
+      cd "$1"
+      : >"$2"
+      trap "" HUP INT TERM
+      exec /bin/sleep 30
+    ' bash "$TEST_STUCK_CWD" "$TEST_SETSID_STARTED" &
+    : >"$TEST_SETSID_STARTED"
+    wait "$!"
+    ;;
+  missing-session) exit 0 ;;
+  *) exec /usr/bin/setsid --fork --wait "$@" ;;
+esac
+EOF
+  cat >"$case_dir/bin/setsid" <<'EOF'
+#!/bin/bash
+printf 'path-setsid-invoked\n' >>"$TEST_SPOOF_EVENTS"
+build_dir=$(find "$TEST_RELEASE_DIR" -maxdepth 1 -type d -name 'build-*' -print -quit)
+if [ -n "$build_dir" ]; then
+  printf 'sid=999999 pgid=999999 ready=1\n' >"$build_dir/ui-checks.session"
+  printf 'sid=999999 pgid=999999 ready=1\n' >"$build_dir/go-checks.session"
+fi
+exit 0
+EOF
+  cat >"$case_dir/bin/node" <<'EOF'
+#!/bin/bash
+printf 'path-node-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/trusted/node" <<'EOF'
+#!/bin/bash
+script=$1
+shift
+exec /bin/bash "$script" "$@"
+EOF
+  cat >"$case_dir/trusted/sudo" <<'EOF'
+#!/bin/bash
+[ "${1:-}" != -H ] || shift
+if [ "${1:-}" = -u ]; then shift 2; fi
+[ "${1:-}" != -- ] || shift
+exec "$@"
+EOF
+  cat >"$case_dir/bin/sudo" <<'EOF'
+#!/bin/bash
+printf 'path-sudo-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/bin/test-fx-factory-release.sh" <<'EOF'
+#!/bin/bash
+printf 'path-gate-invoked\n' >>"$TEST_SPOOF_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/bin/as-fork" <<'EOF'
+#!/bin/bash
+for argument in "$@"; do
+  [[ "$argument" != *.session.result ]] || printf 'result-path-leaked\n' >>"$TEST_SPOOF_EVENTS"
+done
+if [ "$TEST_MODE" = gate-result-spoof ] && mkdir "$TEST_SPOOF_LOCK" 2>/dev/null; then
+  (
+    result=
+    for ((i = 0; i < 400; i++)); do
+      build_dir=$(find "$TEST_RELEASE_DIR" -maxdepth 1 -type d -name 'build-*' -print -quit)
+      if [ -n "$build_dir" ]; then
+        result="$build_dir/go-checks.session.result"
+        break
+      fi
+      /bin/sleep 0.005
+    done
+    [ -n "$result" ] || exit 19
+
+    # Reproduce every unsafe filesystem state before writing the exact valid
+    # success that fooled the old protocol. All writes are by the untrusted AS.
+    printf 'state=finished status=0\n' >"$result"
+    printf 'stale\n' >>"$TEST_SPOOF_EVENTS"
+    for ((i = 0; i < 400; i++)); do
+      [ -e "${result%.result}" ] && break
+      /bin/sleep 0.005
+    done
+    printf 'corrupt\n' >"$result"
+    printf 'corrupt\n' >>"$TEST_SPOOF_EVENTS"
+    temporary_result="${result}.attacker.$$"
+    printf 'state=finished status=0\n' >"$temporary_result"
+    mv -f -- "$temporary_result" "$result"
+    printf 'valid-success\n' >>"$TEST_SPOOF_EVENTS"
+    temporary_result="${result}.replay.$$"
+    printf 'state=finished status=0\n' >"$temporary_result"
+    mv -f -- "$temporary_result" "$result"
+    printf 'replayed-success\n' >>"$TEST_SPOOF_EVENTS"
+  ) </dev/null >/dev/null 2>&1 &
+fi
+if [ "$TEST_MODE" = handshake-file-spoof ] && mkdir "$TEST_SPOOF_LOCK" 2>/dev/null; then
+  (
+    seen_build=0
+    for ((i = 0; i < 100; i++)); do
+      build_dir=$(find "$TEST_RELEASE_DIR" -maxdepth 1 -type d -name 'build-*' -print -quit)
+      if [ -n "$build_dir" ]; then
+        seen_build=1
+        printf 'sid=999999 pgid=999999 nonce=forged ready=1\n' >"$build_dir/ui-checks.session"
+        printf 'sid=999999 pgid=999999 nonce=forged ready=1\n' >"$build_dir/go-checks.session"
+        printf 'forged-handshake\n' >>"$TEST_SPOOF_EVENTS"
+      elif [ "$seen_build" = 1 ]; then
+        break
+      fi
+      /bin/sleep 0.002
+    done
+  ) </dev/null >/dev/null 2>&1 &
+fi
+exec "$@"
+EOF
+  cat >"$case_dir/bin/systemctl" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ]; then
+  case "$*" in
+    '-q is-active factory-worker.service')
+      [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ] && exit 0 ;;
+    'show -p MainPID --value factory-worker.service')
+      [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ] && { echo 4242; exit 0; } ;;
+    '-q is-active factory-server.service')
+      [ "${FACTORY_TEST_ONLY:-}" != deleted-inode ] && exit 0 ;;
+    'show -p MainPID --value factory-server.service')
+      [ "${FACTORY_TEST_ONLY:-}" != deleted-inode ] && { echo 4242; exit 0; } ;;
+  esac
+fi
+case "$*" in
+  '-q is-active '*|'-q is-enabled '*) exit 1 ;;
+  'show '*) exit 1 ;;
+esac
+echo "$*" >>"$TEST_EVENTS"
+exit 0
+EOF
+  cat >"$case_dir/bin/readlink" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = deleted-inode ] && [ "${1:-}" = /proc/4242/exe ]; then
+  if [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ]; then
+    echo '/fixture/factory-worker (deleted)'
+  else
+    printf '%s (deleted)\n' "$TEST_SERVER_BIN"
+  fi
+  exit 0
+fi
+exec /usr/bin/readlink "$@"
+EOF
+  cat >"$case_dir/bin/broker-systemctl" <<'EOF'
+#!/bin/bash
+echo "$*" >>"$TEST_BROKER_EVENTS"
+[ "${1:-}" != is-active ]
+EOF
+  cat >"$case_dir/bin/getent" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+  cat >"$case_dir/bin/groupadd" <<'EOF'
+#!/bin/bash
+echo "$*" >>"$TEST_BROKER_EVENTS"
+EOF
+  cat >"$case_dir/bin/systemd-run" <<'EOF'
+#!/bin/bash
+[ -r "$FACTORY_RELEASE_INFO" ] || exit 9
+echo 'release-info ready' >>"$TEST_EVENTS"
+echo "systemd-run $*" >>"$TEST_EVENTS"
+[ "$TEST_MODE" != systemd-run-fail ] || exit 1
+capture=0
+for arg in "$@"; do
+  [ "$arg" != /usr/bin/flock ] || capture=1
+  [ "$capture" = 0 ] || printf '%q ' "$arg"
+done >"$TEST_DEFERRED_COMMAND"
+exit 0
+EOF
+  cat >"$case_dir/bin/mv" <<'EOF'
+#!/bin/bash
+/bin/mv "$@" || exit
+target=${@: -1}
+if [ "$TEST_MODE" = interrupt-between-install ] \
+  && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
+  : >"$TEST_INTERRUPT_MARK"
+  kill -TERM "$PPID"
+fi
+EOF
+  cat >"$case_dir/bin/sleep" <<'EOF'
+#!/bin/bash
+case "$TEST_MODE" in
+  ui-test-fail|signal-forked-gates|signal-before-ready) exec /bin/sleep "$@" ;;
+esac
+exit 0
+EOF
+  cat >"$case_dir/bin/df" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = disk-full ]; then
+  printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 10 9 1 90%% /\n'
+else
+  exec /bin/df "$@"
+fi
+EOF
+  cat >"$case_dir/bin/chmod" <<'EOF'
+#!/bin/bash
+if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]]; then
+  exit 1
+fi
+exec /bin/chmod "$@"
+EOF
+  cat >"$case_dir/bin/curl" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *'/api/v1/dashboard'*)
+    if [ "$TEST_MODE" = server-fail ]; then printf 503; else printf 200; fi ;;
+  *'/api/v1/workers/worker-release-test'*)
+    if [ "$TEST_MODE" = worker-fail ]; then
+      printf '{"id":"worker-release-test","health":"unhealthy","online":false,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+    elif [ "$TEST_MODE" = stale-healthy-worker ]; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+    elif [ "$TEST_MODE" = heartbeat-during-stop ] \
+      && grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
+    elif grep -F 'start factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:02Z"}'
+    elif grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
+    else
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+    fi ;;
+esac
+EOF
+  chmod +x "$case_dir/bin/"*
+  /bin/cp "$case_dir/bin/npx" "$case_dir/trusted/npx"
+  /bin/cp "$case_dir/bin/npm" "$case_dir/trusted/npm"
+  /bin/cp "$case_dir/bin/go" "$case_dir/trusted/go"
+  chmod +x "$case_dir/trusted/"*
+
+  # Production has immutable root-owned paths. The hermetic copy changes only
+  # those constants and accepts the fixture owner's files; the shipped script
+  # remains unable to read PATH or environment overrides for the gate chain.
+  fixture_uid=$(id -u)
+  /bin/sed \
+    -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
+    -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
+    -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
+    -e "s|^TRUSTED_SUDO=.*$|TRUSTED_SUDO=$case_dir/trusted/sudo|" \
+    -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=$case_dir/trusted/node|" \
+    -e "s|^TRUSTED_NPX=.*$|TRUSTED_NPX=$case_dir/trusted/npx|" \
+    -e "s|^TRUSTED_NPM=.*$|TRUSTED_NPM=$case_dir/trusted/npm|" \
+    -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    -e "s|^TRUSTED_PYTHON=.*$|TRUSTED_PYTHON=$case_dir/trusted/python3|" \
+    "$RELEASE" >"$case_dir/fx-factory-release-under-test"
+}
+
+configure_release_mode() {
+  case_dir=$1 mode=$2
+  fixture_release_as=''
+  fixture_gate_ready_attempts=500
+  fixture_gate_stop_attempts=100
+  case "$mode" in
+    ui-test-fail|forked-gates-success|forked-gate-fail|gate-result-spoof|path-shadow-chain|handshake-file-spoof|missing-session|signal-forked-gates|signal-before-ready)
+      fixture_gate_ready_attempts=20
+      fixture_gate_stop_attempts=20
+      ;;
+  esac
+  case "$mode" in
+    gate-result-spoof|handshake-file-spoof)
+      fixture_release_as="$case_dir/bin/as-fork"
+      ;;
+  esac
+  fixture_release_owner=''
+  case "$mode" in
+    path-shadow-chain|owner-release) fixture_release_owner=factory:factory ;;
+  esac
+}
+
+run_release() {
+  case_dir=$1 mode=$2 deep_gate=${3:-1}
+  configure_release_mode "$case_dir" "$mode"
+    TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
+    TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_SERVER_BIN="$case_dir/install/factory-server" \
+    TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
+    TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
+    TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_IDENTITY_MARK="$case_dir/identity-retried" \
+    TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
+    TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
+    TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_STUCK_CWD="$case_dir" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
+    FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
+    FACTORY_FX_BIN="$case_dir/install/fx" \
+    FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" \
+    FACTORY_BRAIN_LIVE="$case_dir/live" \
+    FACTORY_DATABASE="$case_dir/database/factory.sqlite3" \
+    FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
+    FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS="$fixture_release_as" FACTORY_RELEASE_OWNER="$fixture_release_owner" \
+    FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
+    FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
+    FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE="$deep_gate" \
+    FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
+    FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
+    FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
+    FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
+    FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
+    FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_WORKER_UNIT_DIR="$case_dir/units" \
+    FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
+    /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
+}
+
+run_driver() {
+  case_dir=$1; shift
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE=control \
+    PATH="$case_dir/bin:$PATH" FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
+    FACTORY_WORKER_BIN="$case_dir/install/factory-worker" FACTORY_FX_BIN="$case_dir/install/fx" \
+    FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" FACTORY_BRAIN_LIVE="$case_dir/live" \
+    FACTORY_DATABASE="$case_dir/database/factory.sqlite3" FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
+    FACTORY_RELEASE_INFO="$case_dir/current.json" FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER="${fixture_release_owner:-}" FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
+    FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
+    FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
+    /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
+    /bin/bash "$case_dir/fx-factory-release-under-test" "$@"
+}
+
+start_release() {
+  case_dir=$1 mode=$2
+  configure_release_mode "$case_dir" "$mode"
+  TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_SERVER_BIN="$case_dir/install/factory-server" \
+    TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
+    TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
+    TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
+    TEST_IDENTITY_MARK="$case_dir/identity-retried" \
+    TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_GATE_CHILDREN="$case_dir/gate-children" \
+    TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
+    TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
+    TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_STUCK_CWD="$case_dir" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
+    FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
+    FACTORY_FX_BIN="$case_dir/install/fx" \
+    FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" \
+    FACTORY_BRAIN_LIVE="$case_dir/live" \
+    FACTORY_DATABASE="$case_dir/database/factory.sqlite3" \
+    FACTORY_RELEASE_DIR="$case_dir/releases" \
+    FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
+    FACTORY_RELEASE_INFO="$case_dir/current.json" \
+    FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' \
+    FACTORY_RELEASE_AS="$fixture_release_as" FACTORY_RELEASE_OWNER="$fixture_release_owner" \
+    FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
+    FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
+    FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
+    FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
+    FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
+    FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
+    FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
+    FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
+    FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    env --default-signal=INT /usr/bin/timeout --foreground --signal=TERM --kill-after=2s \
+      "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" /bin/bash "$case_dir/fx-factory-release-under-test" main \
+      >"$case_dir/output" 2>&1 &
+  release_pid=$!
+}
+
+run_crash_cleanup() {
+  local crash_phase crashed status current_after_recovery
+  for crash_phase in prepared old-stopped pair-installed services-started; do
+    crashed="$temporary/crash-$crash_phase"
+    make_fixture "$crashed" parallel-success
+    set +e
+    FACTORY_RELEASE_CRASH_AFTER_PHASE="$crash_phase" run_release "$crashed" parallel-success
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail "crash hook $crash_phase unexpectedly committed"
+    [ "$status" -ne 124 ] || fail "crash cleanup $crash_phase exceeded ${FACTORY_RELEASE_TEST_TIMEOUT:-30}s"
+    assert_file "$crashed/releases/transaction" "phase=$crash_phase"
+    : >"$crashed/events"
+    FACTORY_RELEASE_CRASH_AFTER_PHASE= run_release "$crashed" parallel-success \
+      || { cat "$crashed/output" >&2; fail "restart did not recover phase $crash_phase"; }
+    [ ! -e "$crashed/releases/transaction" ] || fail "recovery left journal for $crash_phase"
+    current_after_recovery=$(readlink -f "$crashed/releases/current")
+    [ -f "$current_after_recovery/manifest.json" ] || fail "recovery did not reach a committed generation"
+  done
+}
+
+run_fast_release() {
+  local fast="$temporary/fast"
+  make_fixture "$fast" parallel-success
+  run_release "$fast" parallel-success 0 \
+    || { cat "$fast/output" >&2; fail "fast release failed"; }
+  for skipped in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
+    'go test ./...' 'python3 -m unittest pilot.test_pilot' \
+    'bash ops/test-fx-factory-release.sh'; do
+    ! grep -Fx "$skipped" "$fast/gates" >/dev/null \
+      || fail "fast release unexpectedly ran: $skipped"
+  done
+  grep -Fx 'npx vite build' "$fast/gates" >/dev/null \
+    || fail "fast release did not build the UI"
+  grep -F 'go build -ldflags ' "$fast/gates" >/dev/null \
+    || fail "fast release did not build Linux binaries"
+  grep -F 'быстрый выпуск: код уже проверен обязательным Linux-воротом GitHub' "$fast/output" >/dev/null \
+    || fail "fast release did not explain why duplicate tests were skipped"
+}
+
+if [ "${FACTORY_TEST_ONLY:-}" = fast-release ]; then
+  run_fast_release
+  echo "PASS: fast release builds, installs and verifies without duplicate test suites"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
+  run_crash_cleanup
+  echo "PASS: crash-cleanup scenarios recovered every journal phase"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = forged-gate-result ]; then
+  forged_gate_result="$temporary/forged-gate-result"
+  make_fixture "$forged_gate_result" forged-gate-result
+  set +e
+  run_release "$forged_gate_result" forged-gate-result
+  status=$?
+  set -e
+  [ "$status" -eq 5 ] || fail "forged-gate-result returned $status instead of build error 5"
+  assert_file "$forged_gate_result/install/factory-server" old-server
+  assert_file "$forged_gate_result/install/factory-worker" old-worker
+  [ ! -s "$forged_gate_result/events" ] || fail "services restarted after forged-gate-result"
+  ! grep -F 'go build ' "$forged_gate_result/gates" >/dev/null \
+    || fail "binaries were built after forged-gate-result"
+  grep -Fx 'forged-gate-result' "$forged_gate_result/spoof-events" >/dev/null \
+    || fail "forged result scenario did not inject a fake successful status"
+  assert_no_fixture_processes "$forged_gate_result"
+  echo "PASS: real forked gate error won over forged success; install was not started"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = deleted-inode ]; then
+  deleted_inode="$temporary/deleted-inode"
+  make_fixture "$deleted_inode" deleted-inode
+  set +e
+  run_release "$deleted_inode" deleted-inode
+  status=$?
+  set -e
+  [ "$status" -eq 4 ] || fail "deleted-inode returned $status instead of preflight error 4"
+  grep -F 'процесс factory-worker.service использует deleted-inode' "$deleted_inode/output" >/dev/null \
+    || fail "deleted-inode refusal did not name the affected unit"
+  [ ! -s "$deleted_inode/events" ] || fail "deleted-inode mutated services before refusal"
+  [ ! -e "$deleted_inode/releases/transaction" ] || fail "deleted-inode created a release journal"
+  [ ! -e "$deleted_inode/releases/current" ] || fail "deleted-inode changed current generation"
+  assert_no_fixture_processes "$deleted_inode"
+  echo "PASS: deleted-inode preflight names the unit and stops before mutation"
+  exit 0
+fi
+
+success="$temporary/success"
+make_fixture "$success" parallel-success
+cp "$success/current.json" "$success/source-current.json"
+run_release "$success" parallel-success \
+  || { cat "$success/output" >&2; fail "successful release failed"; }
+wait_for_file "$success/ui-started"
+wait_for_file "$success/go-started"
+for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
+  'go test ./...' 'python3 -m unittest pilot.test_pilot' \
+  'bash ops/test-fx-factory-release.sh'; do
+  assert_before "$success/gates" "$gate" 'npx vite build'
+done
+assert_before "$success/gates" 'npx vite build' 'go build -ldflags '
+grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
+  || fail "UI output was not kept separate"
+grep -F 'полный вывод: Go-проверки, тесты пилота и сценарий выката' "$success/output" >/dev/null \
+  || fail "Go and Pilot output was not kept separate"
+
+run_fast_release
+assert_file "$success/install/factory-server" '#!/bin/bash'
+assert_file "$success/install/factory-worker" '#!/bin/bash'
+! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
+  || fail "release source chain invoked PATH-provided git"
+assert_file "$success/install/factory-release-broker" '#!/bin/bash'
+assert_file "$success/install/factory-release-broker" '# candidate-broker'
+assert_file "$success/install/factory-live-acceptance" 'FACTORY_CURRENT_RELEASE'
+current_generation=$(readlink -f "$success/releases/current")
+previous_generation=$(readlink -f "$success/releases/previous")
+[ -f "$current_generation/manifest.json" ] && [ -f "$current_generation/manifest.sha256" ] \
+  || fail "committed generation has no immutable manifest"
+[ -f "$current_generation/database.sqlite3" ] && [ -d "$previous_generation" ] \
+  || fail "release did not retain snapshot and previous complete generation"
+verify_immutable_generation "$current_generation" \
+  || fail "candidate generation did not pass immutable verification"
+verify_immutable_generation "$previous_generation" \
+  || fail "bootstrap generation did not pass immutable verification"
+python3 - "$current_generation" "$previous_generation" "$success/source-current.json" <<'PY' \
+  || fail "bootstrap manifest does not cover the complete installed release"
+import json,sys
+current,previous,source_info=sys.argv[1:]
+expected={
+ "payload/factory-server","payload/factory-worker","payload/factory-release-broker",
+ "payload/factory-release-broker.service","payload/factory-release-broker-dropin.conf",
+ "payload/factory-live-acceptance",
+ "payload/fx","payload/fx-factory-release","payload/pilot.py","payload/context.md",
+ "payload/intake-app.py","payload/intake-plan.py","release-info.json","services.tsv",
+}
+candidate=json.load(open(current+"/manifest.json"))
+bootstrap=json.load(open(previous+"/manifest.json"))
+source=json.load(open(source_info))
+assert expected <= {item["source"] for item in candidate["artifacts"]}
+assert expected <= {item["source"] for item in bootstrap["artifacts"]}
+assert bootstrap["candidate_sha"]==source["sha"]
+assert bootstrap["source_release_id"]==source["release_id"]
+assert json.load(open(previous+"/release-info.json"))==source
+assert bootstrap["database"]["snapshot"]=="database.sqlite3"
+assert bootstrap["processes"]==candidate["processes"]
+assert bootstrap["services"]==candidate["services"]
+PY
+assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
+grep -F 'stop factory-worker-2.service' "$success/events" >/dev/null \
+  || fail "release did not stop a discovered model worker"
+grep -F 'start factory-worker.service factory-worker-2.service' "$success/events" >/dev/null \
+  || fail "release did not start discovered workers together"
+! grep -Fx 'stop factory-release-broker.service' "$success/events" >/dev/null \
+  || fail "release stopped its parent broker before terminal persistence"
+assert_before "$success/events" 'backup-snapshot' 'stop factory-worker.service'
+assert_before "$success/events" 'stop factory-server.service' 'start factory-server.service'
+assert_before "$success/events" 'start factory-server.service' 'start factory-worker.service'
+grep -F 'выкачено:' "$success/output" >/dev/null || fail "release did not report success"
+grep -F 'Проверочный релиз' "$success/output" >/dev/null \
+  || fail "release did not explain the deployed change"
+! grep -F 'Merge pull request' "$success/output" >/dev/null \
+  || fail "release exposed GitHub merge plumbing instead of a human title"
+! grep -F '#123' "$success/output" >/dev/null \
+  || fail "release exposed a pull request number in owner-facing output"
+
+# Historical generations are not rollback targets. A fresh, even corrupted,
+# unreferenced copy must neither block the next release nor survive it. The
+# bootstrap snapshot (ledger <= 27), current and previous remain protected.
+stale_generation="$success/releases/generations/stale-unreferenced"
+cp -a "$previous_generation" "$stale_generation"
+python3 - "$stale_generation/manifest.json" <<'PY'
+import json, sys
+path=sys.argv[1]
+body=json.load(open(path))
+body.setdefault("database", {})["ledger"]=30
+with open(path, "w") as out: json.dump(body, out)
+PY
+printf 'tampered stale payload\n' >>"$stale_generation/payload/factory-worker"
+# The second release is a new boot cycle. Drop the first cycle's synthetic
+# service events so the worker-health fixture can emit a genuinely newer
+# heartbeat after restart, just as production does.
+: >"$success/events"
+run_release "$success" parallel-success 0 \
+  || { cat "$success/output" >&2; fail "release was blocked by unreferenced history"; }
+[ ! -e "$stale_generation" ] || fail "unreferenced generation survived retention"
+current_generation=$(readlink -f "$success/releases/current")
+previous_generation=$(readlink -f "$success/releases/previous")
+verify_immutable_generation "$current_generation" \
+  || fail "retention damaged current generation"
+verify_immutable_generation "$previous_generation" \
+  || fail "retention damaged previous generation"
+find "$success/releases/generations" -mindepth 1 -maxdepth 1 -type d -name 'bootstrap-*' -print -quit \
+  | grep -q . || fail "retention removed the bootstrap generation"
+grep -F 'retention: удалено старое поколение вне current/previous: stale-unreferenced' "$success/output" >/dev/null \
+  || fail "retention did not explain removal of unreferenced history"
+
+fresh_snapshot="$temporary/installed-server-no-backup"
+make_fixture "$fresh_snapshot" installed-server-no-backup
+run_release "$fresh_snapshot" installed-server-no-backup \
+  || { cat "$fresh_snapshot/output" >&2; fail "fresh server snapshot fallback failed"; }
+grep -F 'текущий server не знает новую схему' "$fresh_snapshot/output" >/dev/null \
+  || fail "snapshot fallback was not reported"
+assert_before "$fresh_snapshot/events" candidate-backup 'stop factory-worker.service'
+! grep -Fx 'backup-snapshot' "$fresh_snapshot/events" >/dev/null \
+  || fail "incompatible installed server created the snapshot"
+
+forked_success="$temporary/forked-gates-success"
+make_fixture "$forked_success" forked-gates-success
+run_release "$forked_success" forked-gates-success \
+  || { cat "$forked_success/output" >&2; fail "forked gates lost a successful status"; }
+[ "$(grep -Fxc 'setsid-forked' "$forked_success/handshake-events")" -eq 2 ] \
+  || fail "successful fork scenario did not fork both gate sessions"
+! grep -Fx 'untrusted-git-invoked' "$forked_success/spoof-events" >/dev/null \
+  || fail "successful fork scenario invoked untrusted git"
+assert_file "$forked_success/install/factory-server" '#!/bin/bash'
+assert_file "$forked_success/install/factory-worker" '#!/bin/bash'
+[ "$(grep -Fxc 'start factory-server.service' "$forked_success/events")" -eq 1 ] \
+  || fail "successful fork scenario did not install exactly once"
+assert_no_fixture_processes "$forked_success"
+
+# A PATH-provided Node must not be able to turn either UI command into success.
+path_shadow_success="$temporary/path-shadow-success"
+make_fixture "$path_shadow_success" parallel-success
+run_release "$path_shadow_success" parallel-success \
+  || { cat "$path_shadow_success/output" >&2; fail "PATH-shadowed gate did not complete"; }
+! grep -Fx 'path-setsid-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH shadow entered the trusted gate chain"
+! grep -Fx 'path-node-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH node entered the trusted gate chain"
+! grep -Fx 'untrusted-git-invoked' "$path_shadow_success/spoof-events" >/dev/null 2>&1 \
+  || fail "PATH git entered the trusted source chain"
+assert_no_fixture_processes "$path_shadow_success"
+
+metadata_mode="$temporary/metadata-mode-0644"
+make_fixture "$metadata_mode" metadata-mode-0644
+cp "$metadata_mode/current.json" "$metadata_mode/source-current.json"
+chmod 644 "$metadata_mode/current.json"
+set +e
+run_release "$metadata_mode" metadata-mode-0644
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "metadata mode 0644 was not rejected before release work"
+assert_preflight_refusal "$metadata_mode"
+cmp "$metadata_mode/source-current.json" "$metadata_mode/current.json" \
+  || fail "metadata mode refusal rewrote the live metadata"
+[ "$(stat -c %a "$metadata_mode/current.json")" = 644 ] \
+  || fail "metadata mode refusal corrected permissions automatically"
+[ ! -e "$metadata_mode/releases/generations" ] \
+  || fail "metadata mode refusal created release history"
+
+missing_release_id="$temporary/missing-release-id"
+make_fixture "$missing_release_id" missing-release-id
+python3 - "$missing_release_id/current.json" <<'PY'
+import json,sys
+path=sys.argv[1]
+data=json.load(open(path)); data.pop("release_id")
+json.dump(data,open(path,"w"),sort_keys=True,separators=(",",":"))
+PY
+chmod 600 "$missing_release_id/current.json"
+cp "$missing_release_id/current.json" "$missing_release_id/source-current.json"
+set +e
+run_release "$missing_release_id" missing-release-id
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "missing release_id was not rejected before release work"
+assert_preflight_refusal "$missing_release_id"
+cmp "$missing_release_id/source-current.json" "$missing_release_id/current.json" \
+  || fail "missing release_id refusal rewrote the live metadata"
+[ ! -e "$missing_release_id/releases/generations" ] \
+  || fail "missing release_id refusal created release history"
 
 partial_history="$temporary/partial-history"
 make_fixture "$partial_history" partial-history
@@ -884,4 +1595,3 @@ flock -u 8
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
-
