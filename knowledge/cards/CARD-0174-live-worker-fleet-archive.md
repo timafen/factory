@@ -4,19 +4,27 @@ Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран �
 
 ## HEAD
 
-Status: Implemented — browser verified
-Branch: factory/0624f95c-27d-b4474d54-baf
+Status: Implemented — ready for Review and Verify
+Branch: factory/47fbf262-f67-afb6c67a-20a
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран
+Implementation commit: f3646fb72679a05a7a144c006f88fdd41118f87f — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
-What changed: сводка учитывает только heartbeat младше 7 суток; архив
-раскрывается отдельно и сохраняет переход в карточку исполнителя.
-Evidence: `cd web && npx tsc -p tsconfig.app.json --noEmit`, `npm test --
---run`, `npm run build`, `npm run lint` — TypeScript, 184 теста, сборка и lint
-успешны.
-One next action: Review проверяет изменения и принимает поставку.
+What changed: lint проходит без исключений; встроенный `web/dist` собран из
+исходников; браузерный путь открывает карточку архивного исполнителя.
+Evidence: `just ui-check`, `just test-browser-critical`, `just build`, `just
+format-check`, `just vet`, `just boundary`, `just test`, `python3 -m unittest
+pilot.test_pilot` — успешно.
+One next action: Review и Verify повторно принимают поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлена обязательная проверка интерфейса: служебная функция архива больше
+не экспортируется как компонент. Production-ассеты пересобраны и добавлены в
+поставку. Критический браузерный сценарий теперь открывает `Archive Mac` из
+раскрытого архива до продолжения проверки текущего исполнителя. Полный набор
+проверок UI, браузера, Go и pilot завершился успешно.
 
 ### 2026-08-15 — Implement
 
