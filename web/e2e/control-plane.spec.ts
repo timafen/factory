@@ -1132,10 +1132,10 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(page.getByRole("tabpanel")).toContainText("github.com/example/factory");
 
   await profileTabs.getByRole("tab", { name: "Настройки" }).click();
-  await expect(page.getByRole("heading", { name: "Execution" })).toBeVisible();
-  await expect(page.getByText("Read only")).toBeVisible();
-  await expect(page.getByRole("meter", { name: "Worker concurrency" })).toHaveAttribute("max", "2");
-  await expect(page.getByRole("tabpanel")).toContainText("restart the worker");
+  await expect(page.getByRole("heading", { name: "Выполнение" })).toBeVisible();
+  await expect(page.getByText("Только чтение")).toBeVisible();
+  await expect(page.getByRole("meter", { name: "Параллельность исполнителя" })).toHaveAttribute("max", "2");
+  await expect(page.getByRole("tabpanel")).toContainText("перезапустите исполнитель");
   const assign = page.getByRole("button", { name: "Назначить работу" });
   await assign.click();
   await expect(page.getByRole("dialog").getByLabel("Worker")).toHaveValue(workerOnline);
