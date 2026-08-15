@@ -234,7 +234,7 @@ production default.
 
 ## Card
 
-`knowledge/cards/CARD-0073-visual-audit-plan-alerts-russian-ui.md`
+`knowledge/cards/CARD-0174-visual-audit-plan-alerts-russian-ui.md`
 
 ГОТОВО-КОГДА: файл intake/plan.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
