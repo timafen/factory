@@ -1,18 +1,26 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+Implementation commit: 5c2117c3bcca847c4f55b5d756c887eeb7af9bc1 — broker после смены PID наблюдает durable-статус продолжающего работать release wrapper без повторного запуска выпуска.
 
 ## HEAD
 
-- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
-- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
+- Status: Implemented and tested — awaiting review.
+- Branch: `factory/bd01670b-231-7eb5a06a-640`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
-- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
+- Implementation commit: 5c2117c3bcca847c4f55b5d756c887eeb7af9bc1 — настоящий restart broker сохраняет один продолжающийся выпуск.
+- What changed: broker получает каталог статусов delivery driver; восстановленный процесс сохраняет `running`, читает terminal-статус wrapper и публикует его в своей durable-записи.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 11 PASS; `just build` — PASS; полный Go-набор — PASS.
+- Next action: провести pinned three-dot review изолированной поставки.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Изменение CARD-0084 перенесено отдельным кодовым коммитом на свежий
+`origin/main`. Fixture убивает настоящий процесс broker, оставляет release
+wrapper работать, запускает новый broker и подтверждает завершение без второго
+физического выпуска. Целевые Go-тесты, 11 process-сценариев Pilot, сборка и
+полный Go-набор прошли.
 
 ### 2026-08-14 — Implement
 
