@@ -2987,7 +2987,7 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             "generation": "generation-1",
         }
         delivery = {
-            "branch": "factory/real-clean", "head": "f" * 40,
+            "branch": "factory/real-clean", "head": "e" * 40,
             "selected_at": "2026-08-11T10:01:00Z",
             "generation": "generation-1",
         }
@@ -3005,6 +3005,35 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
                 "BRANCH: factory/real", "", "github.com/timafen/factory")
 
         self.assertEqual(artifact["branch"], "factory/real")
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
+
+    def test_refreshed_head_from_same_implementation_keeps_delivery_pin(self):
+        original_head = "a" * 40
+        refreshed_head = "b" * 40
+        delivery = {
+            "branch": "factory/real", "head": refreshed_head,
+            "selected_at": "2026-08-11T10:01:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/real", "head": original_head,
+                "task_id": "implement-task",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+            "delivery_artifact": delivery,
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head=refreshed_head)):
+            artifact = pilot.record_implementation_artifact(
+                "Настоящая работа", "implement-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/real", "", "github.com/timafen/factory")
+
+        self.assertEqual(artifact["head"], refreshed_head)
         self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
 
     def test_new_implementation_invalidates_delivery_branch(self):
