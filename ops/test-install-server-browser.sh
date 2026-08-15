@@ -277,6 +277,17 @@ cat >"$test_bin/apparmor_parser" <<'SH'
 printf 'apparmor-parser=%s\n' "$*" >>"$TEST_BROWSER_EVENTS"
 [ "${TEST_APPARMOR_FAIL:-0}" != 1 ]
 SH
+cat >"$test_bin/mv" <<'SH'
+#!/bin/bash
+/bin/mv "$@" || exit
+target=${!#}
+if [ -n "${TEST_INSTALLER_SIGNAL:-}" ] \
+  && [ "$target" = "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox" ] \
+  && [ ! -e "$TEST_INSTALLER_SIGNAL_MARK" ]; then
+  : >"$TEST_INSTALLER_SIGNAL_MARK"
+  kill -"$TEST_INSTALLER_SIGNAL" "$PPID"
+fi
+SH
 chmod 755 "$test_bin/"*
 
 cat >"$test_bin/ip" <<'SH'
@@ -761,5 +772,46 @@ grep -Fx 'previous launcher' "$rollback/libexec/factory-browser-sandbox" >/dev/n
   || fail "ошибка smoke оставила новый sudoers"
 [ ! -e "$rollback/apparmor.d/factory-browser" ] \
   || fail "ошибка smoke оставила новый AppArmor profile"
+
+for signal in HUP INT TERM; do
+  interrupted="$temporary/interrupted-$signal"
+  mkdir -p "$interrupted/libexec" "$interrupted/sudoers" "$interrupted/apparmor.d" \
+    "$interrupted/data-home/pilot"
+  printf 'previous launcher\n' >"$interrupted/libexec/factory-browser-sandbox"
+  printf 'previous helper\n' >"$interrupted/libexec/factory-browser-isolated"
+  printf 'previous config\n' >"$interrupted/libexec/factory-browser.conf"
+  printf 'previous state\n' >"$interrupted/libexec/factory-browser-install.state"
+  printf 'previous sudoers\n' >"$interrupted/sudoers/factory-browser"
+  printf 'previous profile\n' >"$interrupted/apparmor.d/factory-browser"
+  printf 'previous readiness\n' >"$interrupted/data-home/pilot/browser-readiness.json"
+  status=0
+  TEST_INSTALLER_SIGNAL="$signal" TEST_INSTALLER_SIGNAL_MARK="$interrupted/signaled" \
+    TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+    PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+    FACTORY_DATA_HOME="$interrupted/data-home" \
+    FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_LIBEXEC="$interrupted/libexec" \
+    FACTORY_BROWSER_BACKUP_DIR="$interrupted/persistent-backup" \
+    FACTORY_BROWSER_SUDOERS="$interrupted/sudoers/factory-browser" \
+    FACTORY_BROWSER_APPARMOR="$interrupted/apparmor.d/factory-browser" \
+    FACTORY_BROWSER_SCREENSHOT="$interrupted/screenshot.png" \
+    bash "$linked_installer" >"$interrupted/output" 2>&1 || status=$?
+  case "$signal:$status" in HUP:129|INT:130|TERM:143) ;; \
+    *) fail "сигнал $signal вернул $status и не сохранил свой код" ;; esac
+  [ -e "$interrupted/signaled" ] \
+    || fail "сигнал $signal не был отправлен после замены live launcher"
+  for restored in \
+    "$interrupted/libexec/factory-browser-sandbox:previous launcher" \
+    "$interrupted/libexec/factory-browser-isolated:previous helper" \
+    "$interrupted/libexec/factory-browser.conf:previous config" \
+    "$interrupted/libexec/factory-browser-install.state:previous state" \
+    "$interrupted/sudoers/factory-browser:previous sudoers" \
+    "$interrupted/apparmor.d/factory-browser:previous profile" \
+    "$interrupted/data-home/pilot/browser-readiness.json:previous readiness"; do
+    grep -Fx "${restored#*:}" "${restored%%:*}" >/dev/null \
+      || fail "сигнал $signal не восстановил ${restored%%:*}"
+  done
+  [ ! -e "$interrupted/persistent-backup" ] \
+    || fail "сигнал $signal оставил незавершённый persistent backup"
+done
 
 echo "PASS: installer не рестартует службы, чинит sandbox, проверяет allowlist и откатывает комплект"

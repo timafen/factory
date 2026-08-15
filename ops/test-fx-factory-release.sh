@@ -166,6 +166,11 @@ if [ "${1:-}" = --restore-live-state ]; then
   exit 0
 fi
 [ "$TEST_MODE" != browser-install-fail ] || exit 1
+if [ "$TEST_MODE" = browser-install-interrupted ]; then
+  mkdir -p "${FACTORY_BROWSER_BACKUP_DIR:?missing browser rollback target}"
+  touch "$FACTORY_BROWSER_BACKUP_DIR/backup.ready"
+  exit 143
+fi
 runtime=${FACTORY_BROWSER_RUNTIME:?missing browser runtime target}
 mkdir -p "$runtime/web/node_modules/playwright" "$runtime/internal/controlplane/report_scripts" "$runtime/ops"
 mkdir -p "${FACTORY_BROWSER_BACKUP_DIR:?missing browser rollback target}"
@@ -1159,6 +1164,16 @@ run_release "$browser_failed" browser-install-fail || status=$?
 grep -F 'browser runtime не готов — работающий выпуск не изменён' "$browser_failed/output" >/dev/null \
   || fail "browser installer failure did not explain the safe abort"
 
+browser_interrupted="$temporary/browser-install-interrupted"
+make_fixture "$browser_interrupted" browser-install-interrupted
+status=0
+run_release "$browser_interrupted" browser-install-interrupted || status=$?
+[ "$status" -eq 4 ] || fail "interrupted browser installer returned $status instead of release error 4"
+grep -Fx browser-live-state-restored "$browser_interrupted/events" >/dev/null \
+  || fail "release cleanup ignored backup.ready left by an interrupted browser installer"
+! grep -E '^(stop|start) factory-(server|worker)' "$browser_interrupted/events" >/dev/null \
+  || fail "interrupted browser installer changed running services"
+
 browser_smoke_failed="$temporary/browser-smoke-failure"
 make_fixture "$browser_smoke_failed" parallel-success
 status=0
@@ -1170,6 +1185,22 @@ grep -Fx browser-live-state-restored "$browser_smoke_failed/events" >/dev/null \
   || fail "browser smoke follow-up failure wrote a prepared journal"
 ! grep -E '^(stop|start) factory-(server|worker)' "$browser_smoke_failed/events" >/dev/null \
   || fail "browser smoke follow-up failure changed running services"
+
+generation_move_failed="$temporary/generation-move-failure"
+make_fixture "$generation_move_failed" parallel-success
+status=0
+FACTORY_RELEASE_TEST_FAIL_AFTER_GENERATION_MOVE=1 \
+  run_release "$generation_move_failed" parallel-success || status=$?
+[ "$status" -eq 4 ] || fail "generation move follow-up failure returned $status instead of 4"
+grep -Fx browser-live-state-restored "$generation_move_failed/events" >/dev/null \
+  || fail "browser live state was not restored after the generation move"
+[ ! -e "$generation_move_failed/releases/transaction" ] \
+  || fail "generation move follow-up failure wrote a prepared journal"
+generation_count=$(find "$generation_move_failed/releases/generations" -mindepth 1 -maxdepth 1 -type d | wc -l)
+[ "$generation_count" -eq 1 ] \
+  || fail "generation move follow-up failure left an incoming orphan generation"
+! grep -E '^(stop|start) factory-(server|worker)' "$generation_move_failed/events" >/dev/null \
+  || fail "generation move follow-up failure changed running services"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup

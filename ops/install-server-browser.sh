@@ -48,7 +48,8 @@ state_value() {
 step() { printf '== %s\n' "$*"; }
 
 rollback() {
-  status=$?
+  status=${1:-$?}
+  trap - EXIT HUP INT TERM
   if [ "$changed" = 1 ]; then
     # The replacement profile may already be active when the live smoke fails.
     # Remove it before restoring the previous on-disk profile.
@@ -70,7 +71,10 @@ rollback() {
   [ "$persistent_backup_created" = 0 ] || rm -rf -- "$PERSISTENT_BACKUP"
   exit "$status"
 }
-trap rollback ERR
+trap 'rollback $?' EXIT
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run this installer as root" >&2
@@ -335,6 +339,6 @@ fi
 changed=0
 rm -rf -- "$backup"
 backup=
-trap - ERR
+trap - EXIT HUP INT TERM
 
 printf 'Factory server browser installed: %s\n' "$browser"
