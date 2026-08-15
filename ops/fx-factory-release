@@ -288,8 +288,28 @@ print(values[-1] if values else 0)
 PY
 }
 
-rollback_to_generation() { # generation, owner-facing reason
+restore_release_pointer() {
+  local target=$1 link=$2
+  if [ -n "$target" ]; then
+    ln -sfn "$target" "$link.new" && mv -Tf "$link.new" "$link"
+  else
+    rm -f -- "$link.new" || return
+    if [ -L "$link" ]; then
+      rm -f -- "$link"
+    elif [ -e "$link" ]; then
+      return 1
+    fi
+  fi
+}
+
+rollback_to_generation() { # generation, reason, original current, original previous
   local target=$1 reason=$2 live_ledger generation_ledger
+  local restore_pointers=0 original_current= original_previous=
+  if [ "$#" -ge 4 ]; then
+    restore_pointers=1
+    original_current=$3
+    original_previous=$4
+  fi
   fail "$reason — возвращаю полный прежний комплект"
   stop_factory_units || true
   install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
@@ -298,17 +318,27 @@ rollback_to_generation() { # generation, owner-facing reason
   live_ledger=$(database_ledger "$DATABASE") || return
   generation_ledger=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("database",{}).get("ledger",-1))' "$target/manifest.json")
   if [ "$generation_ledger" -ge 0 ] && [ "$live_ledger" -gt "$generation_ledger" ]; then
-    [ -z "${previous:-}" ] || { ln -sfn "$previous" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
-    ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
+    if [ "$restore_pointers" = 1 ]; then
+      restore_release_pointer "$original_previous" "$PREVIOUS" || return
+      restore_release_pointer "$original_current" "$CURRENT" || return
+    else
+      [ -z "${previous:-}" ] || { ln -sfn "$previous" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
+      ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
+    fi
     write_journal db_restore_required "$target" "${previous:-}"
     fail "код возвращён, но база новее ($live_ledger > $generation_ledger); службы остановлены. Выполните отдельный fx factory restore-db"
     return 9
   fi
   restore_service_state "$target/services.tsv" || return
   verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
-  ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
-  if [ ! -e "$PREVIOUS" ] && [ ! -L "$PREVIOUS" ]; then
-    ln -sfn "$target" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" || return
+  if [ "$restore_pointers" = 1 ]; then
+    restore_release_pointer "$original_previous" "$PREVIOUS" || return
+    restore_release_pointer "$original_current" "$CURRENT" || return
+  else
+    ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
+    if [ ! -e "$PREVIOUS" ] && [ ! -L "$PREVIOUS" ]; then
+      ln -sfn "$target" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" || return
+    fi
   fi
   rm -f "$JOURNAL"
   sync_path "$REL"
@@ -1249,7 +1279,7 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+rollback() { local why=$1 status=$2; shift 2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why" "$@"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
@@ -1304,10 +1334,12 @@ write_journal services-started "$generation_path" "$old_generation" || rollback 
 cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
   && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" \
   || rollback "правдивые metadata не опубликованы" 7
+original_current=$(readlink -f "$CURRENT" 2>/dev/null || true)
+original_previous=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
 ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" \
   && ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT" \
   && write_journal committed "$generation_path" "$old_generation" \
-  || rollback "финальная запись выпуска не сохранена" 7
+  || rollback "финальная запись выпуска не сохранена" 7 "$original_current" "$original_previous"
 rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
 cleanup

@@ -1241,6 +1241,15 @@ done
 
 final_write_failed="$temporary/final-release-record-write-fail"
 make_fixture "$final_write_failed" final-release-record-write-fail
+run_release "$final_write_failed" parallel-success \
+  || { cat "$final_write_failed/output" >&2; fail "final release record fixture setup failed"; }
+expected_current=$(readlink -f "$final_write_failed/releases/current")
+expected_previous=$(readlink -f "$final_write_failed/releases/previous")
+expected_server=$(sha256sum "$final_write_failed/install/factory-server" | awk '{print $1}')
+expected_worker=$(sha256sum "$final_write_failed/install/factory-worker" | awk '{print $1}')
+# The fixture derives its synthetic heartbeat from the service event log;
+# start the failing release with a fresh observation window.
+: >"$final_write_failed/events"
 set +e
 run_release "$final_write_failed" final-release-record-write-fail
 status=$?
@@ -1250,8 +1259,14 @@ set -e
 [ -e "$final_write_failed/releases/final-write-failed" ] \
   || fail "final release record failure fixture did not reach the final write"
 assert_file "$final_write_failed/output" 'финальная запись выпуска не сохранена'
-assert_file "$final_write_failed/install/factory-server" old-server
-assert_file "$final_write_failed/install/factory-worker" old-worker
+[ "$(sha256sum "$final_write_failed/install/factory-server" | awk '{print $1}')" = "$expected_server" ] \
+  || fail "final release record failure changed the restored server"
+[ "$(sha256sum "$final_write_failed/install/factory-worker" | awk '{print $1}')" = "$expected_worker" ] \
+  || fail "final release record failure changed the restored worker"
+[ "$(readlink -f "$final_write_failed/releases/current")" = "$expected_current" ] \
+  || fail "final release record failure changed current generation"
+[ "$(readlink -f "$final_write_failed/releases/previous")" = "$expected_previous" ] \
+  || fail "final release record failure lost previous generation"
 ! grep -F '== выкачено:' "$final_write_failed/output" >/dev/null \
   || fail "final release record write failure was reported as success"
 assert_no_fixture_processes "$final_write_failed"
