@@ -1,13 +1,13 @@
-Implementation commit: ce1c7fb9ec44f19959167b50a9f12c99968d6ddd — определена проверяемая граница живого парка и архива исполнителей
+Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран исполнителей показывает живой парк и архив старых регистраций
 
 # CARD-0174: Живой парк исполнителей и архив регистраций
 
 ## HEAD
 
 Status: Implemented — browser verified
-Branch: factory/b83d9faf-a60-47f1e5cf-912
+Branch: factory/0361812a-75d-baade529-efb
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: eceb760379eb8b69d2059913bb65a543c5383af8 — экран
+Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: сводка учитывает только heartbeat младше 7 суток; архив
 раскрывается отдельно и сохраняет переход в карточку исполнителя.
@@ -17,6 +17,12 @@ Evidence: `cd web && npm exec playwright test e2e/control-plane.spec.ts --grep
 One next action: Review проверяет изменения и принимает поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После перебазирования на свежий `main` карточка теперь ссылается на реальный
+коммит реализации этой ветки. Он содержит изменения экрана и тестов, а не
+только документацию; SHA обновлён после rebase.
 
 ### 2026-08-15 — Implement
 
