@@ -5,7 +5,7 @@ Implementation commit: 33bd5a6fd41210cd71000629d4c3ed2424816b1a — закреп
 ## HEAD
 
 - Status: Implemented
-- Ветка: `factory/575fab6f-10f-d3e2c4a8-6bd`.
+- Ветка: `factory/80c66ee4-e6e-5f29b750-ad5`.
 - Implementation commit: `33bd5a6fd41210cd71000629d4c3ed2424816b1a`.
 - Что изменилось: кэш удаляет `remote.upstream.gh-resolved`, назначает
   `remote.origin.gh-resolved=base` для новых и существующих кэшей и закрывает
@@ -13,9 +13,17 @@ Implementation commit: 33bd5a6fd41210cd71000629d4c3ed2424816b1a — закреп
 - Evidence: целевой тест, `go test ./...` и `go build ./...` — PASS; bare
   `gh repo view --json nameWithOwner` ожидает `timafen/factory`, тогда как
   fixture сохраняет `owainlewis/factory` в роли upstream.
-- Следующее действие: повторить Verify с исправленным критерием приёмки.
+- Следующее действие: Verify подтверждает выпуск по критерию `timafen/factory`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+- Утверждённое владельцем исправление критерия подтверждено без изменения
+  реализации: `timafen/factory` остаётся GitHub CLI default, а `owainlewis/factory`
+  — upstream.
+- `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1`,
+  `go test ./...` и `go build ./...` — PASS.
 
 ### 2026-08-15 — Implement
 
