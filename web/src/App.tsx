@@ -362,7 +362,7 @@ export function App() {
             {route.page === "answer" && "Нужен ответ"}
             {route.page === "work" && "Работа"}
             {route.page === "workers" && "Исполнители"}
-            {route.page === "task" && "Task detail"}
+            {route.page === "task" && "Подробности задачи"}
             {route.page === "worker" && "Worker detail"}
             {route.page === "repositories" && "Repositories"}
             {route.page === "projects" && "Безопасные проекты"}

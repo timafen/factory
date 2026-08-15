@@ -1,4 +1,4 @@
-import { ChevronRight, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
+import { ChevronRight, Filter, LayoutGrid, ListChecks, Plus, Rows3 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { runtimeLabel, taskStates, timeAgo } from "./format";
 import { ProjectTag, useProjectName } from "./project";
@@ -389,6 +389,7 @@ export function WorkView({
   const [questions, setQuestions] = useState<Question[]>([]);
   const [history, setHistory] = useState<Record<string, string>>({});
   const [byStage, setByStage] = useState(false);
+  const [ownerOnly, setOwnerOnly] = useState(false);
   const [open, setOpen] = useState<string>("");
   const [resuming, setResuming] = useState("");
   const [resumeError, setResumeError] = useState("");
@@ -444,6 +445,9 @@ export function WorkView({
 
   const workerMap = new Map((workers ?? []).map((w) => [w.id, w]));
   const groups = build(tasks ?? [], verdicts, questions, works, statuses, promises);
+  // Фильтр обязан опираться на тот же итог, что и секции, иначе список и
+  // карточка начинают спорить о том, требуется ли участие владельца.
+  const visibleGroups = ownerOnly ? groups.filter((g) => g.status.kind === "decision" || g.status.kind === "stuck") : groups;
 
   return (
     <div className="page page-work">
@@ -458,6 +462,9 @@ export function WorkView({
         <button className="button" onClick={() => setByStage((v) => !v)}>
           {byStage ? <><Rows3 size={14} /> Показать по работам</> : <><LayoutGrid size={14} /> Показать по этапам</>}
         </button>
+        {!byStage && <button className="button" aria-pressed={ownerOnly} onClick={() => setOwnerOnly((v) => !v)}>
+          <Filter size={14} /> {ownerOnly ? "Показать все работы" : "Нужно решение владельца"}
+        </button>}
       </div>
 
       {(tasks ?? []).length === 0 ? (
@@ -472,7 +479,7 @@ export function WorkView({
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
           {SECTIONS.map((sec) => {
-            const rows = groups.filter((g) => sectionOf(g) === sec.key);
+            const rows = visibleGroups.filter((g) => sectionOf(g) === sec.key);
             if (!rows.length) return null;
             return (
               <div key={sec.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -500,7 +507,7 @@ export function WorkView({
           })}
 
           {(() => {
-            const old = groups.filter((g) => sectionOf(g) === "archive");
+            const old = visibleGroups.filter((g) => sectionOf(g) === "archive");
             if (!old.length) return null;
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

@@ -132,6 +132,24 @@ it("separates owner decision, pause, dead end, automatic repair, and archive", a
   expect(screen.getByText("Отменённая")).toBeVisible();
 });
 
+it("filters exactly open owner questions and stuck work", async () => {
+  mockAPI({
+    questions: { questions: [{ task_id: "question", status: "open" }] },
+    statuses: { "Тупик": { state: "stuck", text: "ожидается решение" } },
+  });
+  view([
+    task("question", "[auto] [3/5 Implement + Test] Открытый вопрос", "running"),
+    task("stuck", "[auto] [4/5 Review] Тупик", "failed"),
+    task("queued", "[auto] [3/5 Implement + Test] Нет исполнителя", "queued"),
+  ]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Нужно решение владельца" }));
+  expect(screen.getByText("Открытый вопрос")).toBeVisible();
+  expect(screen.getByText("Тупик")).toBeVisible();
+  expect(screen.queryByText("Нет исполнителя")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Показать все работы" })).toHaveAttribute("aria-pressed", "true");
+});
+
 it("uses one mobile-column explanation card", async () => {
   mockAPI({});
   view([task("running", "[auto] [3/5 Implement + Test] Узкая карточка", "running")]);

@@ -384,7 +384,7 @@ describe("App", () => {
   it.each([
     ["queued", "Queued"],
     ["running", "Running"],
-    ["succeeded", "Succeeded"],
+    ["succeeded", "Завершено"],
     ["failed", "Failed"],
     ["cancelled", "Cancelled"],
   ] as const)("shows a linked %s task as the Automation Run state", async (taskState, label) => {
@@ -965,12 +965,12 @@ describe("App", () => {
 
     expect(await screen.findByRole("heading", { name: "succeeded task" })).toBeVisible();
     expect(await screen.findByText("Terminal event")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    expect(screen.getByText(/Permanently delete this task, prompt, attempts, and events/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    expect(screen.getByText(/Безвозвратно удалить задачу, промпт, попытки и события/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Keep history" }));
-    expect(screen.queryByRole("button", { name: "Confirm delete" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(screen.queryByRole("button", { name: "Подтвердить удаление" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    await user.click(screen.getByRole("button", { name: "Подтвердить удаление" }));
 
     expect(await screen.findByText("queued task")).toBeVisible();
     expect(screen.queryByText("succeeded task")).not.toBeInTheDocument();
@@ -991,7 +991,7 @@ describe("App", () => {
     mockControlPlane();
     renderApp();
     expect(await screen.findByRole("heading", { name: "running task" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Delete history" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Удалить историю" })).not.toBeInTheDocument();
   });
 
   it("does not restore deleted work when an older history request finishes late", async () => {
@@ -1003,8 +1003,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Показать по этапам" }));
     await user.click(screen.getByText("succeeded task"));
     expect(await screen.findByRole("heading", { name: "succeeded task" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete history" }));
-    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await user.click(screen.getByRole("button", { name: "Удалить историю" }));
+    await user.click(screen.getByRole("button", { name: "Подтвердить удаление" }));
 
     expect(await screen.findByText("queued task")).toBeVisible();
     await vi.waitFor(() => {
@@ -1035,7 +1035,7 @@ describe("App", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
 
     expect(await screen.findByRole("heading", { name: "Ship the UI" })).toBeVisible();
-    expect(screen.getByText("Progress will appear when the worker starts this task.")).toBeVisible();
+    expect(screen.getByText("Ход работы появится, когда исполнитель начнёт задачу.")).toBeVisible();
     const createCall = fetch.mock.calls.find(([, init]) => init?.method === "POST");
     expect(createCall).toBeDefined();
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
