@@ -26,7 +26,7 @@ const (
 	LeaseDuration                   = 30 * time.Second
 	EmptyClaimTTL                   = 5 * time.Minute
 	WorkerOnlineWindow              = 30 * time.Second
-	MaxRetainedPerRepo              = 10
+	MaxRetainedPerRepo              = 16 // preserves saved results while a four-slot worker stays full
 	MaxManagedRepositories          = 1000
 	MaxRepositoryCacheEntries       = 100
 	DefaultTaskPageSize             = 50

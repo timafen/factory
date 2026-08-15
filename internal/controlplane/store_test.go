@@ -3575,7 +3575,7 @@ func TestClaimOrderingRepositoryFilteringAndReplay(t *testing.T) {
 	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return fixed }
 	worker := registerTestWorker(t, store, workerA, 2,
-		protocol.RepositoryRegistration{Key: "full", RemoteIdentity: "github.com/example/full", RetainedCount: 10},
+		protocol.RepositoryRegistration{Key: "full", RemoteIdentity: "github.com/example/full", RetainedCount: protocol.MaxRetainedPerRepo},
 		protocol.RepositoryRegistration{Key: "open", RemoteIdentity: "github.com/example/open"},
 	)
 	repositories := map[string]string{}
