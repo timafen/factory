@@ -85,6 +85,8 @@ worktree. В нём же проверяются конфигурационные
 Она фиксирует границы: только подготовка кэша и целевой worker-тест; UI,
 содержимое remotes и Git tracking не входят в работу.
 
+## Проверяемая граница реализации
+
 ГОТОВО-КОГДА: файл internal/worker/repository_cache.go
 ГОТОВО-КОГДА: файл internal/worker/repository_coordination_test.go
 ГОТОВО-КОГДА: команда go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$'
