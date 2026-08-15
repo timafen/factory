@@ -38,7 +38,7 @@ const workerTabLabel: Record<WorkerTab, string> = {
   settings: "Settings",
 };
 
-export function isArchivedWorker(worker: Worker, now = Date.now()) {
+function isArchivedWorker(worker: Worker, now = Date.now()) {
   const heartbeat = Date.parse(worker.last_heartbeat);
   return Number.isFinite(heartbeat) && heartbeat <= now && now - heartbeat >= archiveWindowMs;
 }
