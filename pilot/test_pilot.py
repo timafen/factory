@@ -2169,7 +2169,8 @@ def run_full_cycle(fixture):
         stack.enter_context(mock.patch.object(
             pilot, "pushed_branch", return_value="factory/correction"))
         stack.enter_context(mock.patch.object(pilot, "merge_recorded", return_value=False))
-        stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={"ahead_by": 1}))
+        stack.enter_context(mock.patch.object(pilot, "gh_json", return_value={
+            "ahead_by": 1, "commit": {"sha": "a" * 40}}))
         stack.enter_context(mock.patch.object(
             pilot, "broker_operation", return_value={"status": "succeeded"}))
         stack.enter_context(mock.patch.object(
@@ -2220,7 +2221,7 @@ elif action == "full_cycle_after_restart":
         raise AssertionError("restart lost durable Pilot state")
     run_full_cycle(fixture)
     review = latest_stage(fixture, "Review")
-    set_succeeded(fixture, review["id"], "APPROVE")
+    set_succeeded(fixture, review["id"], "APPROVE\nHEAD: " + "a" * 40)
     run_full_cycle(fixture)
     verify = latest_stage(fixture, "Verify")
     set_succeeded(fixture, verify["id"], "PASS\nTRY: none")
