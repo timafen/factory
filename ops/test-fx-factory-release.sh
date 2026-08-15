@@ -555,6 +555,15 @@ EOF
   /bin/cp "$case_dir/bin/npx" "$case_dir/trusted/npx"
   /bin/cp "$case_dir/bin/npm" "$case_dir/trusted/npm"
   /bin/cp "$case_dir/bin/go" "$case_dir/trusted/go"
+  cat >"$case_dir/trusted/python3" <<'EOF'
+#!/bin/bash
+if [ "$*" = '-m unittest pilot.test_pilot' ]; then
+  echo "python3 $*" >>"$TEST_GATES"
+  [ "$TEST_MODE" != pilot-test-fail ]
+  exit
+fi
+exec /usr/bin/python3 "$@"
+EOF
   chmod +x "$case_dir/trusted/"*
 
   # Production has immutable root-owned paths. The hermetic copy changes only
@@ -572,6 +581,7 @@ EOF
     -e "s|^TRUSTED_NPX_CLI=.*$|TRUSTED_NPX_CLI=$case_dir/trusted/npx|" \
     -e "s|^TRUSTED_NPM_CLI=.*$|TRUSTED_NPM_CLI=$case_dir/trusted/npm|" \
     -e "s|^TRUSTED_GO=.*$|TRUSTED_GO=$case_dir/trusted/go|" \
+    -e "s|^TRUSTED_PYTHON=.*$|TRUSTED_PYTHON=$case_dir/trusted/python3|" \
     -e "s|^TRUSTED_GATE_CGROUP=.*$|TRUSTED_GATE_CGROUP=$case_dir/trusted/factory-gate-cgroup|" \
     -e "s|^TRUSTED_SYSTEMCTL=.*$|TRUSTED_SYSTEMCTL=$case_dir/bin/systemctl|" \
     -e "s|^TRUSTED_SLEEP=.*$|TRUSTED_SLEEP=$case_dir/bin/sleep|" \
@@ -697,13 +707,14 @@ for hostile_tool in dirname mkdir flock chown bash; do
     || fail "successful release used hostile PATH wrapper: $hostile_tool"
 done
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
-  'go test ./...' 'bash ops/test-fx-factory-release.sh'; do
+  'go test ./...' 'python3 -m unittest pilot.test_pilot' \
+  'bash ops/test-fx-factory-release.sh'; do
   assert_before "$success/gates" "$gate" 'npx vite build'
 done
 assert_before "$success/gates" 'npx vite build' 'go build -o '
 grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/null \
   || fail "UI output was not kept separate"
-grep -F 'полный вывод: Go-проверки и сценарий выката' "$success/output" >/dev/null \
+grep -F 'полный вывод: Go-проверки, тесты пилота и сценарий выката' "$success/output" >/dev/null \
   || fail "Go output was not kept separate"
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
@@ -839,7 +850,7 @@ assert_file "$build_failed/install/factory-worker" old-worker
 [ ! -s "$build_failed/events" ] || fail "services restarted after a build failure"
 assert_no_fixture_processes "$build_failed"
 
-for mode in ui-test-fail go-test-fail release-test-fail; do
+for mode in ui-test-fail go-test-fail pilot-test-fail release-test-fail; do
   gate_failed="$temporary/$mode"
   make_fixture "$gate_failed" "$mode"
   set +e
@@ -854,6 +865,12 @@ for mode in ui-test-fail go-test-fail release-test-fail; do
     || fail "binaries were built after $mode"
   assert_no_fixture_processes "$gate_failed"
 done
+grep -Fx 'python3 -m unittest pilot.test_pilot' "$temporary/pilot-test-fail/gates" >/dev/null \
+  || fail "pilot failure scenario did not run the Pilot test suite"
+! grep -Fx 'bash ops/install-factory-control.sh' "$temporary/pilot-test-fail/gates" >/dev/null \
+  || fail "control installation ran after the Pilot test suite failed"
+! grep -Fx 'bash ops/test-fx-factory-release.sh' "$temporary/pilot-test-fail/gates" >/dev/null \
+  || fail "release scenario gate ran after the Pilot test suite failed"
 grep -Fx 'go-stopped' "$temporary/ui-test-fail/gate-children" >/dev/null \
   || fail "a failed UI group did not stop and reap the Go group"
 
