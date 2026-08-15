@@ -9553,10 +9553,12 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         with mock.patch.object(pilot, "notify"):
             self.assertTrue(pilot.resolve_orchestrator_wait(
                 conf, wait, "wait-a", "Review", "Verify", title, "repo",
-                "нужна пауза", "Продолжить?", [], "", "factory/a", "work-a"))
+                "нужна пауза", "Продолжить?", [], "", "factory/a",
+                work_id="work-a"))
             self.assertTrue(pilot.resolve_orchestrator_wait(
                 conf, wait, "wait-b", "Review", "Verify", title, "repo",
-                "нужна пауза", "Продолжить?", [], "", "factory/b", "work-b"))
+                "нужна пауза", "Продолжить?", [], "", "factory/b",
+                work_id="work-b"))
 
         self.assertEqual(conf["stopped_pipelines"], [
             {"work_id": "work-a", "title": title},
