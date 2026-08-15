@@ -809,9 +809,10 @@ func TestGitHubSourceAccessIsAdvertisedOnlyAfterSuccessfulProbe(t *testing.T) {
 	}
 }
 
-func TestWorkerRuntimeUsesClaimGitHubRepositoryContext(t *testing.T) {
+func TestZeroRepositoryWorkerAcquiresCentrallyManagedGitHubRepository(t *testing.T) {
 	t.Setenv("GH_REPO", "owainlewis/factory")
 	upstream := createRepository(t, "cattle")
+	foreign := createRepository(t, "foreign-cattle")
 	fixture := newServerFixture(t, nil)
 	managed, created, err := fixture.store.CreateManagedRepository(
 		context.Background(),
@@ -830,6 +831,7 @@ func TestWorkerRuntimeUsesClaimGitHubRepositoryContext(t *testing.T) {
 	gitPath := filepath.Join(toolDirectory, "git")
 	t.Setenv("FACTORY_TEST_REAL_GIT", realGit)
 	t.Setenv("FACTORY_TEST_GH_ORIGIN", upstream.origin)
+	t.Setenv("FACTORY_TEST_GH_UPSTREAM", foreign.origin)
 	githubScript := `#!/bin/sh
 set -eu
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
@@ -838,22 +840,15 @@ fi
 if [ "${1:-}" != "repo" ] || [ "${2:-}" != "clone" ] || [ "${3:-}" != "example/cattle" ]; then
   exit 91
 fi
-"$FACTORY_TEST_REAL_GIT" clone --no-checkout "$FACTORY_TEST_GH_ORIGIN" "$4"
-"$FACTORY_TEST_REAL_GIT" -C "$4" remote set-url origin https://github.com/example/cattle.git
+"$FACTORY_TEST_REAL_GIT" clone --no-checkout "$FACTORY_TEST_GH_UPSTREAM" "$4"
+"$FACTORY_TEST_REAL_GIT" -C "$4" remote rename origin upstream
+"$FACTORY_TEST_REAL_GIT" -C "$4" remote add origin https://github.com/someone-else/cattle.git
 `
 	if err := os.WriteFile(githubPath, []byte(githubScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	gitScript := `#!/bin/sh
 set -eu
-if [ "${1:-}" = "remote" ] && [ "${2:-}" = "get-url" ] && [ "${3:-}" = "origin" ]; then
-  case "$PWD" in
-    */repositories/*)
-      echo https://github.com/example/cattle.git
-      exit 0
-      ;;
-  esac
-fi
 if [ "${1:-}" = "fetch" ] || [ "${1:-}" = "ls-remote" ]; then
   exec "$FACTORY_TEST_REAL_GIT" -c "url.$FACTORY_TEST_GH_ORIGIN.insteadOf=https://github.com/example/cattle.git" "$@"
 fi
@@ -906,6 +901,12 @@ exec "$FACTORY_TEST_REAL_GIT" "$@"
 	cachePath := filepath.Join(dataDirectory, "repositories", managed.ID)
 	if info, err := os.Stat(cachePath); err != nil || !info.IsDir() {
 		t.Fatalf("managed repository cache = %v, err %v", info, err)
+	}
+	if origin := runGitTest(t, cachePath, "remote", "get-url", "origin"); origin != "https://github.com/example/cattle.git" {
+		t.Fatalf("managed repository origin = %q", origin)
+	}
+	if actualUpstream := runGitTest(t, cachePath, "remote", "get-url", "upstream"); actualUpstream != foreign.origin {
+		t.Fatalf("managed repository upstream = %q, want %q", actualUpstream, foreign.origin)
 	}
 	sentinel := runGitTest(t, cachePath, "rev-parse", "HEAD")
 	runGitTest(t, cachePath, "branch", "vendor/main", sentinel)
@@ -1045,6 +1046,69 @@ func TestFailedManagedRepositoryCloneLeavesNoCacheEntry(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dataDirectory, "repositories", repositoryID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed clone left cache entry: %v", err)
+	}
+}
+
+func TestFailedManagedRepositoryOriginNormalizationLeavesNoCacheEntry(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mode      string
+		operation string
+	}{
+		{name: "missing origin", mode: "add", operation: "add cloned managed repository origin"},
+		{name: "wrong origin", mode: "set-url", operation: "replace cloned managed repository origin"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := createRepository(t, "normalization-failure-"+test.mode)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			toolDirectory := t.TempDir()
+			githubPath := filepath.Join(toolDirectory, "gh")
+			gitPath := filepath.Join(toolDirectory, "git")
+			t.Setenv("FACTORY_TEST_REAL_GIT", realGit)
+			t.Setenv("FACTORY_TEST_GH_SOURCE", source.origin)
+			t.Setenv("FACTORY_TEST_ORIGIN_FAILURE", test.mode)
+			githubScript := `#!/bin/sh
+set -eu
+"$FACTORY_TEST_REAL_GIT" clone --no-checkout "$FACTORY_TEST_GH_SOURCE" "$4"
+if [ "$FACTORY_TEST_ORIGIN_FAILURE" = "add" ]; then
+  "$FACTORY_TEST_REAL_GIT" -C "$4" remote rename origin upstream
+fi
+`
+			if err := os.WriteFile(githubPath, []byte(githubScript), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			gitScript := `#!/bin/sh
+set -eu
+if [ "${1:-}" = "remote" ] && [ "${2:-}" = "$FACTORY_TEST_ORIGIN_FAILURE" ]; then
+  echo "refused origin normalization" >&2
+  exit 42
+fi
+exec "$FACTORY_TEST_REAL_GIT" "$@"
+`
+			if err := os.WriteFile(gitPath, []byte(gitScript), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			dataDirectory := filepath.Join(t.TempDir(), "worker")
+			manager := &Manager{
+				dataDirectory: dataDirectory,
+				options:       Options{GitExecutable: gitPath, GitHubExecutable: githubPath},
+			}
+			repositoryID := fixtureUUID(510)
+			_, err = manager.acquireManagedRepository(context.Background(), protocol.Repository{
+				ID: repositoryID, Key: "github.com/example/failure",
+				RemoteIdentity: "github.com/example/failure",
+			})
+			if err == nil || !strings.Contains(err.Error(), test.operation) ||
+				!strings.Contains(err.Error(), "refused origin normalization") {
+				t.Fatalf("origin normalization failure = %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(dataDirectory, "repositories", repositoryID)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed origin normalization left cache entry: %v", err)
+			}
+		})
 	}
 }
 

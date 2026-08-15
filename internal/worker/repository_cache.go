@@ -233,6 +233,9 @@ func (manager *Manager) cloneManagedRepository(
 	if err != nil {
 		return false, commandFailure("clone managed GitHub repository", stdout, stderr, err)
 	}
+	if err := normalizeManagedRepositoryOrigin(ctx, manager.options.GitExecutable, clonePath, slug); err != nil {
+		return false, err
+	}
 	repository, err := resolveRepository(slug, clonePath, manager.options.GitExecutable)
 	if err != nil {
 		return false, fmt.Errorf("validate cloned managed repository: %w", err)
@@ -250,4 +253,30 @@ func (manager *Manager) cloneManagedRepository(
 	}
 	temporaryRoot = ""
 	return true, nil
+}
+
+func normalizeManagedRepositoryOrigin(ctx context.Context, gitExecutable, clonePath, slug string) error {
+	stdout, stderr, err := runCommand(ctx, gitExecutable, clonePath, 64<<10, "remote")
+	if err != nil {
+		return commandFailure("list cloned managed repository remotes", stdout, stderr, err)
+	}
+	hasOrigin := false
+	for _, remote := range strings.Fields(string(stdout)) {
+		if remote == "origin" {
+			hasOrigin = true
+			break
+		}
+	}
+	expectedURL := "https://github.com/" + slug + ".git"
+	arguments := []string{"remote", "add", "origin", expectedURL}
+	action := "add cloned managed repository origin"
+	if hasOrigin {
+		arguments = []string{"remote", "set-url", "origin", expectedURL}
+		action = "replace cloned managed repository origin"
+	}
+	stdout, stderr, err = runCommand(ctx, gitExecutable, clonePath, 64<<10, arguments...)
+	if err != nil {
+		return commandFailure(action, stdout, stderr, err)
+	}
+	return nil
 }
