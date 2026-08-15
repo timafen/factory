@@ -28,11 +28,23 @@ type commandDailyReportRenderer struct{ script string }
 
 func (r commandDailyReportRenderer) Render(ctx context.Context, document, output string) error {
 	command := exec.CommandContext(ctx, "node", r.script, output)
+	command.Env = browserRuntimeEnvironment()
 	command.Stdin = strings.NewReader(document)
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("render PDF: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func browserRuntimeEnvironment() []string {
+	env := os.Environ()
+	if _, ok := os.LookupEnv("FACTORY_BROWSER_LAUNCHER"); !ok {
+		env = append(env, "FACTORY_BROWSER_LAUNCHER=/usr/local/libexec/factory/factory-browser-sandbox")
+	}
+	if _, ok := os.LookupEnv("FACTORY_BROWSER_PAYLOAD"); !ok {
+		env = append(env, "FACTORY_BROWSER_PAYLOAD=/opt/factory-data/releases/factory/browser-runtime/current")
+	}
+	return env
 }
 
 // DailyReportService uses the same durable background-service pattern as the

@@ -34,6 +34,7 @@ func (capturer commandVisualCapturer) Capture(ctx context.Context, target protoc
 		return err
 	}
 	command := exec.CommandContext(ctx, "node", capturer.script, string(input), output)
+	command.Env = browserRuntimeEnvironment()
 	if body, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("capture page: %w: %s", err, strings.TrimSpace(string(body)))
 	}
