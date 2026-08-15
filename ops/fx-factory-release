@@ -113,6 +113,9 @@ restart_workers() { local service; while read -r service; do systemctl restart "
 
 cleanup_build_directories() {
   local release_root candidate candidate_root candidate_parent mtime now age name
+  # На первом выпуске корня ещё нет: очищать нечего. Ссылку (включая
+  # dangling symlink) отсутствующим каталогом не считаем и проверяем ниже.
+  [ -e "$REL" ] || [ -L "$REL" ] || return 0
   release_root=$(readlink -f -- "$REL") || { fail "не смог определить канонический каталог релизов"; return 1; }
   [ -d "$release_root" ] && [ ! -L "$REL" ] \
     || { fail "каталог релизов не является безопасным реальным каталогом"; return 1; }

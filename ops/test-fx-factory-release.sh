@@ -953,9 +953,31 @@ run_fast_release() {
     || fail "fast release did not explain why duplicate tests were skipped"
 }
 
+run_first_cleanup() {
+  local first_cleanup="$temporary/cleanup-first-release"
+  make_fixture "$first_cleanup" parallel-success
+  /bin/rm -rf -- "$first_cleanup/releases"
+  run_release "$first_cleanup" parallel-success 1 --cleanup-dry-run \
+    || { cat "$first_cleanup/output" >&2; fail "cleanup dry-run rejected missing release directory"; }
+  [ ! -e "$first_cleanup/releases" ] \
+    || fail "cleanup dry-run created the missing release directory"
+  [ ! -s "$first_cleanup/gates" ] || fail "first cleanup dry-run started release gates"
+  [ ! -s "$first_cleanup/events" ] || fail "first cleanup dry-run touched services"
+  run_release "$first_cleanup" parallel-success \
+    || { cat "$first_cleanup/output" >&2; fail "first release with missing release directory failed"; }
+  [ -L "$first_cleanup/releases/current" ] \
+    || fail "first release did not publish current after creating release directory"
+}
+
 if [ "${FACTORY_TEST_ONLY:-}" = fast-release ]; then
   run_fast_release
   echo "PASS: fast release builds, installs and verifies without duplicate test suites"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = cleanup-first-release ]; then
+  run_first_cleanup
+  echo "PASS: cleanup accepts a missing release directory before the first release"
   exit 0
 fi
 
@@ -1542,6 +1564,8 @@ flock -u 8
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
+
+run_first_cleanup
 
 cleanup="$temporary/cleanup"
 make_fixture "$cleanup" parallel-success
