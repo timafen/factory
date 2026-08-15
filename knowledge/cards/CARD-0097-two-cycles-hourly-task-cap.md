@@ -1,19 +1,26 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: ec50c36fb263dd8637d4820ee3a9d69be8ee13b2 — Pilot ждёт следующей допустимой попытки, а лимит проверен конкурентно.
+Implementation commit: 9245a67dbe88dc22e29619fec9e1f1d26fcfea13 — API подтверждает почасовой лимит автоматических задач.
 
 ## HEAD
 
 - Status: Implement + Test — готово.
-- Branch: `factory/d329a8f9-09f-c8e8d9e4-835`.
-- Implementation commit: `ec50c36fb263dd8637d4820ee3a9d69be8ee13b2` — Pilot не вызывает создание до сохранённого срока, а control plane проверен при гонке.
-- What changed: сохраняется `hourly_cap_retry_at`; следующий цикл пропускается, а после срока задача создаётся.
-- What changed: добавлен `TestCreateTaskHourlyTaskCapConcurrent` с двумя горутинами и пределом в 10 задач.
-- Evidence: `go test ./internal/controlplane -run 'TestCreateTaskHourlyTaskCap(ReplayAndWindow|Concurrent)$'` → PASS.
+- Branch: `factory/6e3e8670-a6d-3a52c612-2fb`.
+- Implementation commit: `9245a67dbe88dc22e29619fec9e1f1d26fcfea13` — API возвращает `hourly_task_cap` после десятой автоматической задачи.
+- What changed: control plane атомарно ограничивает автоматические задачи скользящим часом; replay и ручные задачи не расходуют квоту.
+- What changed: Pilot откладывает повтор до освобождения окна и уведомляет владельца один раз; HTTP-контракт покрыт тестом.
+- Evidence: `go test ./internal/controlplane -run 'Test(CreateTaskHourlyTaskCap|HTTPCreateTaskHourlyTaskCap)' -count=1` → PASS.
 - Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS (17 тестов).
 - Next action: Передать ветку на Verify.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После десяти автоматических задач HTTP API возвращает `409` с кодом
+`hourly_task_cap`; это закрывает внешний контракт общего скользящего лимита.
+Полные Go- и Pilot-наборы прошли; web-набор имеет шесть падений в
+`web/src/App.test.tsx`, вне области изменения. Сборка `just build` прошла.
 
 ### 2026-08-12 — Implement
 
