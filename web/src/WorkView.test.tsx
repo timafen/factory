@@ -45,7 +45,7 @@ it("separates queued work from work running right now", async () => {
 
   const runningSection = (await screen.findByRole("heading", { name: "В работе прямо сейчас" }))
     .parentElement?.parentElement as HTMLElement;
-  const queuedSection = screen.getByRole("heading", { name: "Ожидают исполнителя" })
+  const queuedSection = screen.getByRole("heading", { name: "В очереди" })
     .parentElement?.parentElement as HTMLElement;
 
   expect(within(runningSection).getByText("Уже выполняется")).toBeVisible();

@@ -384,7 +384,7 @@ const SECTIONS: { key: Exclude<WorkKind, "archive">; title: string;
   { key: "paused", title: "Поставлено на паузу", hint: "Продолжение включается в настройках", accent: "#8a94a6" },
   { key: "repairing", title: "Исправляется автоматически", hint: "Factory уже выполняет повторную попытку", accent: "#8ec5ff" },
   { key: "active", title: "В работе прямо сейчас", hint: "Исполнитель уже выполняет этап", accent: "#8ec5ff" },
-  { key: "queued", title: "Ожидают исполнителя", hint: "Текущий этап ещё не начат", accent: "#cf9b4e" },
+  { key: "queued", title: "В очереди", hint: "Текущий этап ещё не начат", accent: "#cf9b4e" },
   { key: "done", title: "Сделано", hint: "Проверка приняла результат", accent: "#7ee2a8" },
 ];
 

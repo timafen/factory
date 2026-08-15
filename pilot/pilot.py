@@ -8729,7 +8729,7 @@ def cycle(conf, state):
 
     # Снять вопросы, повисшие на отменённых задачах, иначе эпик стоит вечно.
     try:
-        supersede_stale_questions(tasks, conf)
+        supersede_stale_questions(tasks)
     except Exception as e:
         log("supersede_error", repr(e))
 
