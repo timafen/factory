@@ -1,20 +1,27 @@
-Implementation commit: 03afbb395aead09040d63be3591fb842ad47a4d3 — worker закрепляет GitHub CLI за репозиторием текущей задачи
+Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker закрепляет GitHub CLI за репозиторием текущей задачи
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
 ## HEAD
 
-Status: Implemented
-Branch: factory/8704e2dd-e6b-1479b9c9-320
+Status: Implemented and retested
+Branch: factory/ecca0a56-b55-ccda0cc6-2a5
 Specification: `knowledge/specs/worker-gh-repository-context.md`
 What changed: identity из claim передаётся supervisor; runtime получает
 единственный `GH_REPO` только для валидного GitHub.com. Унаследованное
 или недостоверное значение всегда удаляется.
-Evidence: целевой integration test PASS (4.027s); весь `internal/worker`
-PASS (168.597s); `go build ./...` и `git diff --check` PASS.
-One next action: Verify на свежем `origin/main`.
+Evidence: целевой integration test PASS (1.900s); весь `internal/worker`
+PASS (133.798s); `go build ./...` PASS.
+One next action: Review доставленной ветки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Реализация из PR #257 уже находится в `main` и повторно проверена:
+сквозной тест доказал замену чужого `GH_REPO` на репозиторий
+задачи, весь worker-пакет и сборка прошли. Ссылка Implementation commit
+исправлена на реальный squash-коммит в истории `main`.
 
 ### 2026-08-14 — Implement
 
