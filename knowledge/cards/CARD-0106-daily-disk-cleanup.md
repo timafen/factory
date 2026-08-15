@@ -4,11 +4,11 @@ Implementation commit: 5984acbd488fbc9cf91220af9564ae19ae8e3628 — активн
 
 ## HEAD
 
-- Status: Implemented and tested
-- Branch: `factory/a550b3bd-4be-cb3cf4ab-356`
+- Status: Implemented
+- Branch: `factory/3f8960f6-1e1-b0b3b189-af9`
 - Implementation commit: `5984acbd488fbc9cf91220af9564ae19ae8e3628`
 - What changed: активная рабочая область определяется по `data_directory` из worker TOML; при неизвестном пути ежедневная очистка безопасно останавливается. Service запускает janitor с root и ограниченной записью в нужные каталоги.
-- Evidence: `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh && bash ops/test-factory-janitor.sh` → 8 сценариев PASS; `git diff --check` → PASS.
+- Evidence: `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh && bash ops/test-factory-janitor.sh` → 8 сценариев PASS; `just build && just ui-build 0` → PASS.
 - Next action: установить и включить `factory-janitor.timer` на целевом хосте после проверки оператором.
 
 ## LOG
@@ -38,3 +38,11 @@ Implementation commit: 5984acbd488fbc9cf91220af9564ae19ae8e3628 — активн
 retained-результатов здорового воркера и его уведомление владельцу; ежедневная
 очистка по-прежнему удаляет только повторно подтверждённые безопасные кандидаты.
 `bash ops/test-factory-janitor.sh` и полный `just check` завершились успешно.
+
+### 2026-08-15 — Implement
+
+После переноса реализации в назначенную ветку повторно подтверждены синтаксис
+shell-сценариев и все 8 целевых сценариев janitor. Статус HEAD приведён к
+стабильному значению `Implemented`, которое использует машинная проверка.
+Go-проверки, 181 UI-тест и обе сборки прошли; общий tooling-рецепт отдельно
+останавливается на существующем рассогласовании `go.mod` и `SECURITY.md`.
