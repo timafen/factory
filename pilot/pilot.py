@@ -8311,17 +8311,8 @@ def cycle(conf, state):
     ]
 
     tasks = api("/tasks?limit=100").get("tasks") or []
-    # The normal cycle only needs a small current snapshot.  Restart recovery
-    # is different: its durable set may include an older task past that page.
-    # Read each absent ID authoritatively instead of silently losing its handoff.
-    recovery_details = load_restart_recovery_tasks(conf, tasks)
-    new_terminal = remember_new_terminal_tasks(conf, state, tasks)
-    try:
-        collect_automation_findings(state, tasks)
-    except Exception as e:
-        # A transient read or Plan write failure must not mark the run as
-        # processed. The next cycle retries it through the durable cursor.
-        log("automation_findings_error", repr(e))
+    recovery_details = {}
+    new_terminal = False
     workers = best_workers(api("/workers")["workers"])
     repo_identity_by_id = {r["id"]: r["remote_identity"]
                            for r in (api("/repositories").get("repositories") or [])}
@@ -8396,6 +8387,18 @@ def cycle(conf, state):
         except Exception as e:
             log("startup_work_slot_refill_error", repr(e))
 
+    # Restart recovery may need authoritative detail reads for terminal tasks
+    # which already fell out of the current page.  Useful slots must be filled
+    # before those reads, not after them.
+    recovery_details = load_restart_recovery_tasks(conf, tasks)
+    new_terminal = remember_new_terminal_tasks(conf, state, tasks)
+    try:
+        collect_automation_findings(state, tasks)
+    except Exception as e:
+        # A transient read or Plan write failure must not mark the run as
+        # processed. The next cycle retries it through the durable cursor.
+        log("automation_findings_error", repr(e))
+
     # Four thousand historical tasks take well over a minute to page through.
     # Fresh work and handoffs use the current page every cycle; archive cleanup
     # and the full dashboard need the complete history only periodically.
@@ -8463,19 +8466,19 @@ def cycle(conf, state):
     except Exception as e:
         log("epic_error", repr(e))
 
-    # Finish durable repairs even after their original run disappeared from
-    # the normal live-task scan.
-    try:
-        reconcile_diag_repairs(conf, tasks)
-    except Exception as e:
-        log("diag_repair_reconcile_error", repr(e))
-
-    # Работа, которая крутится дольше порога, разбирается старшей моделью —
-    # независимо от того, задавал ли конвейер вопрос.
-    try:
-        diag_sweep(conf, tasks)
-    except Exception as e:
-        log("diag_sweep_outer_error", repr(e))
+    # Diagnostics may call a senior model for every old failed run. They are
+    # maintenance, not stage scheduling: running them on every 2-10 second
+    # poll used to leave freshly freed executors idle for minutes. Reconcile
+    # them together with the periodic full-history pass instead.
+    if isinstance(complete_tasks, list):
+        try:
+            reconcile_diag_repairs(conf, lifecycle_tasks)
+        except Exception as e:
+            log("diag_repair_reconcile_error", repr(e))
+        try:
+            diag_sweep(conf, lifecycle_tasks)
+        except Exception as e:
+            log("diag_sweep_outer_error", repr(e))
 
     # Очередь, доставшаяся заболевшему исполнителю, сама не рассосётся.
     try:
@@ -9213,8 +9216,18 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         if conf and conf.get("enabled", True):
             if recovery_ids is None:
                 recovery_watermark = state.get("terminal_handoff_watermark")
+                try:
+                    recovery_limit = max(
+                        int(conf.get("max_terminal_tasks_per_cycle",
+                                     MAX_TERMINAL_TASKS_PER_CYCLE)),
+                        1,
+                    )
+                except (TypeError, ValueError):
+                    recovery_limit = MAX_TERMINAL_TASKS_PER_CYCLE
+                recovery_limit = min(
+                    recovery_limit, RESTART_RECOVERY_RETENTION)
                 recovery_ids = (frozenset(
-                    (state.get("processed") or [])[-RESTART_RECOVERY_RETENTION:])
+                    (state.get("processed") or [])[-recovery_limit:])
                                 if recovery_watermark else frozenset())
                 recovery_watermark = recovery_watermark or ""
             else:
