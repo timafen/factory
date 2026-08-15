@@ -1,16 +1,17 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+Implementation commit: 06e2f41813bcd9e7c1665cc5deca6dd279622e23 — broker восстанавливает terminal status из durable marker реального release driver после restart.
 
 ## HEAD
 
-- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
-- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
+- Status: Implemented + tested — ready for Review.
+- Branch: `factory/f46d9200-57d-d6a3806d-f98`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
-- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
+- Implementation commit: 06e2f41813bcd9e7c1665cc5deca6dd279622e23 — broker восстанавливает terminal status из durable marker реального release driver после restart.
+- What changed: FX driver атомарно сохраняет terminal marker; broker читает его при старте и публикует terminal receipt без повторного executor.
+- What changed: добавлен процессный Unix broker→FX→Pilot тест: restart во время FX, затем receipt и Verify completion.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; shell fixtures — PASS.
+- Next action: Review real broker recovery evidence.
 
 ## LOG
 
@@ -162,3 +163,11 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 не перенесены повторно, потому что реальный Pilot→broker цикл и последующие
 исправления уже являются частью `main`. Десять целевых recovery-сценариев,
 полный `just check` в чистом build-окружении и сборка трёх бинарников прошли.
+
+### 2026-08-14 — Implement
+
+После restart broker больше не превращает `launching`/`running` в `failed`,
+если фиксированный release driver уже атомарно сохранил свой terminal result.
+Процессный Unix fixture останавливает broker во время настоящего FX, ждёт
+driver marker, запускает broker заново и подтверждает один physical launch,
+receipt и завершение Verify; Go, Pilot и shell fixtures прошли.
