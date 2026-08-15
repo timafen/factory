@@ -175,7 +175,7 @@ type Broker struct {
 }
 
 // RestartWhenExecutableChanges asks the broker to leave its current process
-// only after a successful operation has been durably committed. The service
+// only after a terminal operation has been durably committed. The service
 // manager can then start the executable which the release installed in place
 // of the running image without interrupting the delivery receipt.
 func (b *Broker) RestartWhenExecutableChanges(path string, restart func()) error {
@@ -533,10 +533,10 @@ func (b *Broker) execute(item *operation) {
 		b.active = ""
 	}
 	restart := b.restart
-	if !terminalCommitted || status != "succeeded" || !b.executableChanged() {
+	if !terminalCommitted || !b.executableChanged() {
 		restart = nil
 	} else {
-		// At most one successful operation may request this process restart.
+		// At most one terminal operation may request this process restart.
 		b.restart = nil
 	}
 	b.mu.Unlock()
