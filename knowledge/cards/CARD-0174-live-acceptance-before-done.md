@@ -4,7 +4,7 @@ Implementation commit: df6aceb59d0f990e1fd7316bfac99e3047c905f2 — broker пу�
 
 ## HEAD
 
-- Status: Implemented — готово к выпуску и живой приёмке.
+- Status: Blocked — штатный выпуск остановлен до мутаций инфраструктурой.
 - Branch: `factory/fa145a84-05f-669c58d2-270`.
 - Implementation commit: `df6aceb59d0f990e1fd7316bfac99e3047c905f2`.
 - What changed: POST живой приёмки durable сохраняет `running`, запускает
@@ -12,10 +12,18 @@ Implementation commit: df6aceb59d0f990e1fd7316bfac99e3047c905f2 — broker пу�
   публикуется только после записи. Успешный тестовый выпуск моделирует PASS
   приёмки и проверяет `finished_at` в dashboard-проекции.
 - Evidence: `just build`, `just format-check`, `just vet`, `just boundary`,
-  `just test`, `npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- Next action: перебазировать на свежий `main`, выпустить штатно и принять на production.
+  `just test`, `npx tsc -p tsconfig.app.json --noEmit` → PASS; штатный
+  `fx factory release` → остановлен до мутаций: broker использует deleted-inode.
+- Next action: безопасно перезапустить `factory-release-broker.service`, повторить release и живую приёмку.
 
 ## LOG
+
+### 2026-08-15 — Release blocked
+
+Проверенный результат интегрирован в `main`, но штатный `fx factory release`
+безопасно остановился до первой мутации: `factory-release-broker.service`
+использует deleted-inode. Production продолжает работать на прежней версии;
+живая приёмка не запускалась. Владельцу отправлено срочное уведомление в ntfy.
 
 ### 2026-08-15 — Implement
 
