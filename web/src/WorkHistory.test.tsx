@@ -52,7 +52,7 @@ it("keeps the work screen usable when the history API fails", async () => {
   renderHistory();
 
   fireEvent.click(screen.getByText("Понятная история"));
-  expect(await screen.findByText("отработала")).toBeVisible();
+  expect(await screen.findByText("задача выполнена")).toBeVisible();
   expect(screen.queryByText("Этап успешно завершён")).not.toBeInTheDocument();
 });
 
