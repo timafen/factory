@@ -71,6 +71,15 @@ BROWSER_RUNTIME_GENERATIONS="$BROWSER_RUNTIME_ROOT/generations"
 old_browser_current=''
 browser_published=0
 browser_stage=''
+browser_rollback=''
+browser_restore_required=0
+BROWSER_LAUNCHER="${FACTORY_BROWSER_LAUNCHER:-/usr/local/libexec/factory/factory-browser-sandbox}"
+BROWSER_HELPER="${FACTORY_BROWSER_HELPER:-/usr/local/libexec/factory/factory-browser-isolated}"
+BROWSER_CONFIG="${FACTORY_BROWSER_CONFIG:-/usr/local/libexec/factory/factory-browser.conf}"
+BROWSER_STATE="${FACTORY_BROWSER_INSTALL_STATE:-/usr/local/libexec/factory/factory-browser-install.state}"
+BROWSER_SUDOERS="${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}"
+BROWSER_APPARMOR="${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}"
+BROWSER_READINESS_MARKER="${FACTORY_BROWSER_READINESS_MARKER:-$BRAIN_LIVE/pilot/browser-readiness.json}"
 GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
@@ -318,6 +327,42 @@ rollback_to_generation() { # generation, owner-facing reason
   fi
   rm -f "$JOURNAL"
   sync_path "$REL"
+}
+
+snapshot_browser_runtime() {
+  local target name
+  browser_rollback=$(mktemp -d "$BROWSER_RUNTIME_ROOT/.rollback-$sha.XXXXXX") || return 1
+  for target in "$BROWSER_LAUNCHER" "$BROWSER_HELPER" "$BROWSER_CONFIG" "$BROWSER_STATE" "$BROWSER_SUDOERS" "$BROWSER_APPARMOR" "$BROWSER_READINESS_MARKER"; do
+    name=$(printf '%s' "$target" | sha256sum | awk '{print $1}')
+    [ ! -e "$target" ] && [ ! -L "$target" ] || cp -a -- "$target" "$browser_rollback/$name" || return 1
+  done
+}
+
+restore_browser_runtime() {
+  local target name
+  [ -n "$browser_rollback" ] && [ -d "$browser_rollback" ] || return 0
+  for target in "$BROWSER_LAUNCHER" "$BROWSER_HELPER" "$BROWSER_CONFIG" "$BROWSER_STATE" "$BROWSER_SUDOERS" "$BROWSER_APPARMOR" "$BROWSER_READINESS_MARKER"; do
+    name=$(printf '%s' "$target" | sha256sum | awk '{print $1}')
+    rm -f -- "$target" "$target.new"
+    [ ! -e "$browser_rollback/$name" ] && [ ! -L "$browser_rollback/$name" ] || cp -a -- "$browser_rollback/$name" "$target" || return 1
+  done
+}
+
+verify_browser_runtime() { # generation
+  local generation=$1 browser fingerprint
+  [ -d "$generation/web/node_modules/playwright" ] || return 1
+  browser=$(cd "$generation/web" && /usr/bin/node -e 'process.stdout.write(require("playwright").chromium.executablePath())') || return 1
+  [ -x "$browser" ] || { fail "Chromium browser executable отсутствует: $browser"; return 1; }
+  [ -x "$BROWSER_LAUNCHER" ] && [ -x "$BROWSER_HELPER" ] \
+    && [ -f "$BROWSER_CONFIG" ] && [ -f "$BROWSER_STATE" ] && [ -f "$BROWSER_READINESS_MARKER" ] \
+    || { fail "browser launcher, config, state или readiness marker отсутствует"; return 1; }
+  fingerprint=$(sha256sum "$browser" | awk '{print $1}')
+  grep -Fx "browser_sha=$fingerprint" "$BROWSER_STATE" >/dev/null \
+    && python3 - "$BROWSER_READINESS_MARKER" "$fingerprint" <<'PY'
+import json,sys
+with open(sys.argv[1]) as f: marker=json.load(f)
+raise SystemExit(marker.get("browser_fingerprint") != sys.argv[2])
+PY
 }
 case "$GATE_READY_ATTEMPTS:$GATE_STOP_ATTEMPTS" in
   *[!0-9:]*|:*|*:) fail "некорректный лимит ожидания test gate"; exit 4 ;;
@@ -597,8 +642,17 @@ cleanup() {
   wait_for_test_gates
   [ -z "$stage" ] || rm -rf "$stage"
   [ -z "$bootstrap" ] || rm -rf "$bootstrap"
+  if [ "$browser_restore_required" = 1 ]; then
+    restore_browser_runtime || true
+    if [ -n "$old_browser_current" ] && [ -d "$old_browser_current" ]; then
+      ln -sfn "$old_browser_current" "$BROWSER_RUNTIME_CURRENT"
+    else
+      rm -f -- "$BROWSER_RUNTIME_CURRENT"
+    fi
+  fi
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   [ -z "$browser_stage" ] || [ ! -e "$browser_stage" ] || rm -rf -- "$browser_stage"
+  [ -z "$browser_rollback" ] || [ ! -e "$browser_rollback" ] || rm -rf -- "$browser_rollback"
   rm -rf "$work"
 }
 on_release_exit() { cleanup; }
@@ -1071,6 +1125,8 @@ browser_stage="$BROWSER_RUNTIME_ROOT/.incoming-$sha.$$"
 browser_generation="$BROWSER_RUNTIME_GENERATIONS/$sha"
 old_browser_current=$(readlink -f "$BROWSER_RUNTIME_CURRENT" 2>/dev/null || true)
 [ -x "$browser_installer" ] || { fail "в кандидате нет browser installer"; cleanup; exit 4; }
+mkdir -p "$BROWSER_RUNTIME_ROOT" || { fail "не удалось подготовить browser runtime"; cleanup; exit 4; }
+snapshot_browser_runtime || { fail "не удалось сохранить прежний browser runtime для отката"; cleanup; exit 4; }
 if [ ! -d "$browser_generation" ]; then
   mkdir -p "$browser_stage/web/report" "$browser_stage/ops" "$BROWSER_RUNTIME_GENERATIONS" \
     || { fail "не удалось подготовить постоянный browser payload"; cleanup; exit 4; }
@@ -1081,20 +1137,25 @@ if [ ! -d "$browser_generation" ]; then
     || { fail "не удалось скопировать browser payload кандидата"; cleanup; exit 4; }
   chmod 755 "$browser_stage/ops/"* || { cleanup; exit 4; }
   FACTORY_BROWSER_SHARE="$browser_stage" \
-    FACTORY_BROWSER_PAYLOAD="$browser_stage" \
-    FACTORY_BROWSER_RUNTIME_ROOT="$BROWSER_RUNTIME_ROOT" \
+  FACTORY_BROWSER_PAYLOAD="$browser_stage" \
+  FACTORY_BROWSER_RUNTIME_ROOT="$BROWSER_RUNTIME_ROOT" \
+  FACTORY_BROWSER_LIBEXEC="$(dirname "$BROWSER_LAUNCHER")" \
+  FACTORY_BROWSER_SUDOERS="$BROWSER_SUDOERS" \
+  FACTORY_BROWSER_APPARMOR="$BROWSER_APPARMOR" \
+  FACTORY_BROWSER_READINESS_MARKER="$BROWSER_READINESS_MARKER" \
     "$TRUSTED_BASH" "$browser_installer" \
     || { fail "browser runtime не прошёл установку и smoke"; cleanup; exit 4; }
   mv -- "$browser_stage" "$browser_generation" \
     || { fail "не удалось опубликовать browser runtime поколение"; cleanup; exit 4; }
 else
-  step "browser runtime не изменился — переустановку пропускаю"
+  step "browser runtime не изменился — проверяю готовность без переустановки"
 fi
-[ -d "$browser_generation/web/node_modules" ] \
-  || { fail "browser runtime не содержит установленные Node-модули"; cleanup; exit 4; }
+verify_browser_runtime "$browser_generation" \
+  || { fail "browser runtime не готов: нужны Chromium, launcher, config, state и readiness marker"; cleanup; exit 4; }
 ln -sfn "$browser_generation" "$BROWSER_RUNTIME_CURRENT" \
   || { fail "не удалось выбрать browser runtime поколение"; cleanup; exit 4; }
 browser_published=1
+browser_restore_required=1
 
 step "проверяю работающий выпуск до первой мутации"
 processes="$work/processes.tsv"
@@ -1277,6 +1338,7 @@ rollback() {
   rollback_armed=0
   rollback_to_generation "$old_generation" "$why"
   result=$?
+  restore_browser_runtime || { fail "browser runtime не восстановлен полностью"; result=1; }
   if [ "$browser_published" = 1 ]; then
     if [ -n "$old_browser_current" ] && [ -d "$old_browser_current" ]; then
       ln -sfn "$old_browser_current" "$BROWSER_RUNTIME_CURRENT"
@@ -1284,6 +1346,7 @@ rollback() {
       rm -f -- "$BROWSER_RUNTIME_CURRENT"
     fi
   fi
+  browser_restore_required=0
   cleanup
   [ "$result" -eq 0 ] || status=$result
   exit "$status"
@@ -1346,6 +1409,7 @@ ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
 ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
 write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
 rollback_armed=0
+browser_restore_required=0
 rm -f "$JOURNAL"; sync_path "$REL"
 cleanup
 
