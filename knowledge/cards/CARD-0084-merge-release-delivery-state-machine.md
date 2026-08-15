@@ -1,18 +1,25 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 41da46bd0cf7f5f2cd1eade3914a1d845814ec5b — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+Implementation commit: 37af2af6a38d9737480bf3aa25bb8c87ef7c213f — release-driver сохраняет locked для rc=8 и безопасно повторяет выпуск с тем же operation ID.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
-- Branch: `factory/db058006-155-449252d4-bee`.
+- Branch: `factory/09a97d32-b1e-2eecc051-7b1`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `41da46bd0cf7f5f2cd1eade3914a1d845814ec5b` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
-- What changed: минимальная EXIT-ловушка ставится сразу после durable `launching`; lock и preflight ошибки оставляют `failed`, а новый delivery ID может выполнить повторный выпуск.
-- Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
+- Implementation commit: `37af2af6a38d9737480bf3aa25bb8c87ef7c213f` — release-driver сохраняет locked для rc=8 и безопасно повторяет выпуск с тем же operation ID.
+- What changed: EXIT-ловушка включается до durable `launching`; rc=8 сохраняет `locked`, а повтор того же ID проходит до `succeeded` без второго физического выпуска.
+- Evidence: `bash ops/test-fx-factory-release.sh` — PASS.
 - Next action: Провести повторный Review поставки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По утверждённому ответу владельца `locked` сохранён как итог lock-конкуренции,
+а повтор с тем же immutable operation ID заново захватывает lock и успешно
+завершается. EXIT-ловушка вооружается до первой durable-записи `launching`;
+shell-fixture подтвердил terminal `succeeded` и ровно один физический выпуск.
 
 ### 2026-08-15 — Implement
 
