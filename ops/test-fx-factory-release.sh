@@ -1285,6 +1285,10 @@ set -e
   || fail "failing fork scenario did not fork both gate sessions"
 [ "$(grep -Fxc 'setsid-waits' "$forked_failed/handshake-events")" -eq 2 ] \
   || fail "forked failure did not keep the launcher waiting for both gate statuses"
+# The release may continue only when Bash reaps one of the two launchers it
+# started.  The fixture's successful forged result is deliberately ignored.
+! grep -F 'ядро не вернуло статус известного launcher test gate' "$forked_failed/output" >/dev/null \
+  || fail "forked failure accepted an unknown launcher status"
 grep -Fx 'bash ops/test-fx-factory-release.sh' "$forked_failed/gates" >/dev/null \
   || fail "forked failure did not reach the actual release gate"
 grep -F 'завершилась с кодом 1' "$forked_failed/output" >/dev/null \

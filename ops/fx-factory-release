@@ -899,6 +899,21 @@ run_parallel_test_gates() {
 
   wait -n -p completed "${gate_pids[@]}"
   status=$?
+  # `wait -n` receives the exit code from the kernel for one of our direct
+  # `setsid --fork --wait` children. Do not treat an absent or unrelated PID
+  # as a successful Gate: only the two launchers registered above may unlock
+  # installation.
+  case "$completed" in
+    "${gate_pids[0]}"|"${gate_pids[1]}") ;;
+    *)
+      stop_test_gates
+      wait_for_test_gates
+      trap - HUP INT TERM
+      print_test_gate_logs
+      fail "ядро не вернуло статус известного launcher test gate"
+      return 1
+      ;;
+  esac
   if [ "$status" -ne 0 ]; then
     failed_name="параллельная группа проверок"
     if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
