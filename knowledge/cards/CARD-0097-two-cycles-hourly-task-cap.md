@@ -1,19 +1,26 @@
 # CARD-0097 — Два цикла ограничены десятью задачами в час
 
-Implementation commit: 9245a67dbe88dc22e29619fec9e1f1d26fcfea13 — API подтверждает почасовой лимит автоматических задач.
+Implementation commit: d547d52f6df87c4c87fd6510fbaeb698843848b4 — API подтверждает почасовой лимит автоматических задач.
 
 ## HEAD
 
-- Status: Implement + Test — готово.
-- Branch: `factory/6e3e8670-a6d-3a52c612-2fb`.
-- Implementation commit: `9245a67dbe88dc22e29619fec9e1f1d26fcfea13` — API возвращает `hourly_task_cap` после десятой автоматической задачи.
+- Status: Implement + Test — готово, web-gate пройден.
+- Branch: `factory/e58bf008-33b-db176492-81a`.
+- Implementation commit: `d547d52f6df87c4c87fd6510fbaeb698843848b4` — API возвращает `hourly_task_cap` после десятой автоматической задачи.
 - What changed: control plane атомарно ограничивает автоматические задачи скользящим часом; replay и ручные задачи не расходуют квоту.
 - What changed: Pilot откладывает повтор до освобождения окна и уведомляет владельца один раз; HTTP-контракт покрыт тестом.
 - Evidence: `go test ./internal/controlplane -run 'Test(CreateTaskHourlyTaskCap|HTTPCreateTaskHourlyTaskCap)' -count=1` → PASS.
 - Evidence: `python3 -m unittest pilot.test_pilot.PlanAutostartTest` → PASS (17 тестов).
+- Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `just ui-check`, `just ui-build 0`, `just test-browser` → PASS.
 - Next action: Передать ветку на Verify.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По утверждению владельца установлены зафиксированные зависимости `web/` через
+`npm ci` без изменения lock-файла. TypeScript-проверка, UI lint/компонентные
+тесты, сборка и браузерные сценарии прошли; сгенерированные файлы не добавлены.
 
 ### 2026-08-15 — Implement
 
