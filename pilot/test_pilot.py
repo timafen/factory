@@ -3588,6 +3588,55 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "repairing")
         self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"], "repair-1")
 
+    def test_repeated_auto_merge_conflict_creates_a_new_return(self):
+        state = {"merge_intents": {"verify-1": dict(self.intent)}}
+        created = []
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": state["merge_intents"]["verify-1"]["commit_sha"]}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
+        def create_child(*args):
+            created.append(args[0])
+            return {"task": {"id": f"repair-{len(created)}"}}
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(
+                    pilot, "gh_merge",
+                    side_effect=[(False, "merge conflict"), (False, "merge conflict")]), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "create_child_task", side_effect=create_child):
+            pilot.recover_merge_intents({}, state)
+            self.assertEqual(state["merge_intents"]["verify-1"]["merge_conflict_count"], 1)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers), 1)
+
+            first_return = dict(self.parent,
+                                id="repair-1",
+                                parent_task_id="verify-1",
+                                correction_kind="merge_conflict_return",
+                                request_key=created[0]["request_key"])
+            state["merge_intents"]["verify-1"].update({
+                "phase": "intent", "commit_sha": "b" * 40,
+            })
+            pilot.recover_merge_intents({}, state)
+            self.assertEqual(state["merge_intents"]["verify-1"]["merge_conflict_count"], 2)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent, first_return],
+                self.workflows, self.workers), 1)
+
+        self.assertEqual(len(created), 2)
+        self.assertNotEqual(created[0]["request_key"], created[1]["request_key"])
+        self.assertEqual(created[0]["request_key"],
+                         "merge-conflict-return:verify-1:" + "a" * 40)
+        self.assertEqual(created[1]["request_key"],
+                         "merge-conflict-return:verify-1:" + "b" * 40 + ":2")
+        self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"], "repair-2")
+
     def test_restart_links_existing_correction_without_duplicate(self):
         state = self.conflict_state()
         correction = {

@@ -7548,9 +7548,15 @@ def recover_merge_intents(conf, state):
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
+                        try:
+                            conflict_count = int(intent.get("merge_conflict_count") or 0)
+                        except (TypeError, ValueError):
+                            conflict_count = 0
+                        conflict_count = max(conflict_count, 0) + 1
                         intent.update({
                             "phase": "conflict",
                             "merge_error": (output or "")[:2000],
+                            "merge_conflict_count": conflict_count,
                             "conflict_at": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         })
@@ -7585,11 +7591,12 @@ def recover_merge_intents(conf, state):
 
 
 def resume_merge_conflicts(conf, state, tasks, workflows, workers):
-    """Return a conflicted release to the same pipeline exactly once.
+    """Return each merge-conflict generation to the same pipeline once.
 
     The correction keeps the original work id through parent provenance, uses
     the already-reviewed branch, and must pass Review and Verify again after it
-    catches up with current main.
+    catches up with current main. A repeated conflict gets a new durable
+    request key, while a restart of the same conflict reuses its key.
     """
     stages = [item.get("workflow") for item in conf.get("stages", [])]
     implementation = "Implement + Test"
@@ -7602,13 +7609,29 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
     for task_id, intent in list(state.setdefault("merge_intents", {}).items()):
         if intent.get("phase") != "conflict":
             continue
+        try:
+            conflict_count = int(intent.get("merge_conflict_count") or 1)
+        except (TypeError, ValueError):
+            conflict_count = 1
+        conflict_count = max(conflict_count, 1)
+        intent["merge_conflict_count"] = conflict_count
+        request_key = f"merge-conflict-return:{task_id}:{intent.get('commit_sha', '')}"
+        if conflict_count > 1:
+            request_key += f":{conflict_count}"
         existing = next((task for task in tasks
                          if task.get("parent_task_id") == task_id
                          and task.get("correction_kind") == "merge_conflict_return"
-                         and task.get("id")), None)
+                         and task.get("id")
+                         and (task.get("request_key") == request_key
+                              or (task.get("id") == intent.get("repair_task_id")
+                                  and intent.get("repair_request_key") == request_key)
+                              or (conflict_count == 1
+                                  and not task.get("request_key")
+                                  and not intent.get("repair_request_key")))), None)
         if existing:
             intent.update({"phase": "repairing",
-                           "repair_task_id": existing.get("id", "")})
+                           "repair_task_id": existing.get("id", ""),
+                           "repair_request_key": request_key})
             save(STATE_PATH, state)
             continue
         parent = next((task for task in tasks if task.get("id") == task_id), None)
@@ -7653,9 +7676,14 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
             "run again after this correction.\n\n"
             f"GitHub response:\n{intent.get('merge_error', '')}"
         )[:20000]
+        # Persist the generation key before the external create. If the
+        # process dies after the API accepts the request, the next cycle can
+        # still identify this generation instead of creating another return.
+        intent["repair_request_key"] = request_key
+        save(STATE_PATH, state)
         try:
             created = create_child_task({
-                "request_key": f"merge-conflict-return:{task_id}:{intent.get('commit_sha', '')}",
+                "request_key": request_key,
                 "title": (f"[auto] [{stage_number}/{len(stages)} {implementation}] "
                           f"{base}")[:200],
                 "context": context,
@@ -7671,7 +7699,8 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         if not repair_task_id:
             log(f"MERGE CONFLICT repair wait task={task_id}: create returned no task")
             continue
-        intent.update({"phase": "repairing", "repair_task_id": repair_task_id})
+        intent.update({"phase": "repairing", "repair_task_id": repair_task_id,
+                       "repair_request_key": request_key})
         save(STATE_PATH, state)
         log(f"MERGE CONFLICT returned task={task_id} -> {repair_task_id}")
         created_count += 1
@@ -8097,9 +8126,18 @@ def cycle(conf, state):
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
                             attempts_so_far=0, branch=branch)
                         continue
-                    state.setdefault("merge_intents", {})[tid] = {
+                    merge_intents = state.setdefault("merge_intents", {})
+                    previous_intent = merge_intents.get(tid) or {}
+                    new_intent = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
                         "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                    # A Verify task can be replayed after a conflict. Keep
+                    # the counter with that durable task so its next conflict
+                    # cannot reuse the first correction key.
+                    if previous_intent.get("merge_conflict_count"):
+                        new_intent["merge_conflict_count"] = previous_intent[
+                            "merge_conflict_count"]
+                    merge_intents[tid] = new_intent
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
