@@ -1,4 +1,4 @@
-Implementation commit: 70dcf6dcbe8ec22519cf10974409f501dc2a6873 — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
+Implementation commit: 031e6c9d63d3c174cce7067cd758979b664285bb — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
@@ -6,7 +6,7 @@ Implementation commit: 70dcf6dcbe8ec22519cf10974409f501dc2a6873 — служеб
 
 Status: Implemented — awaiting Review
 Branch: `factory/77de079d-588-9c3552f3-2ed`
-Implementation commit: `70dcf6dcbe8ec22519cf10974409f501dc2a6873`
+Implementation commit: `031e6c9d63d3c174cce7067cd758979b664285bb`
 What changed: generation parents и Chromium payload доступны группе служебного
 пользователя без права записи; installer проверен отдельной service identity.
 Cleanup возвращает browser live-state после любого сбоя между installer и prepared journal.
