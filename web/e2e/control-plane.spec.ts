@@ -1124,6 +1124,10 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(page.evaluate(() => document.querySelector("main")!.scrollWidth <= document.querySelector("main")!.clientWidth)).resolves.toBe(true);
   await page.screenshot({ path: "test-results/screenshots/workers-desktop.png", fullPage: true });
 
+  await offlineRow.click();
+  await expect(page.getByRole("heading", { name: "Archive Mac" })).toBeVisible();
+  await page.getByRole("button", { name: "All workers" }).click();
+  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
   await page.getByRole("button", { name: /Build Mac/ }).click();
   await expect(page.getByRole("heading", { name: "Build Mac" })).toBeVisible();
   await expect(workersNavigation).toHaveClass(/active/);
