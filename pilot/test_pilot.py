@@ -2327,6 +2327,32 @@ else:
             pilot.load(self.works_path, {})[self.root["id"]]["archived_attempts"],
             [receipt])
 
+    def test_merge_rounds_include_archived_attempts_of_current_generation_only(self):
+        archived = dict(
+            self.correction("review_return"), id="archived-implement",
+            state="succeeded")
+        current = dict(
+            self.correction("verify_return"), id="current-implement",
+            state="succeeded")
+        verify = {
+            "id": "current-verify", "work_id": self.root["id"],
+            "title": "[auto] [5/5 Verify] Исправить корзину",
+            "state": "succeeded", "created_at": "2026-08-11T20:03:00Z",
+        }
+        previous_generation = [dict(
+            archived, id=f"previous-{number}", work_id="previous-root")
+            for number in range(3)
+        ]
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину",
+            "archived_attempts": [{"task_id": archived["id"]}],
+        }})
+
+        self.assertEqual(
+            pilot._merge_rounds(
+                previous_generation + [archived, current, verify], verify),
+            2)
+
     def test_unarchived_terminal_attempt_still_spends_retry_limit(self):
         old = dict(
             self.correction("review_return"), id="old-attempt", state="failed")

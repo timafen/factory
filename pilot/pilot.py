@@ -7542,10 +7542,23 @@ def _merged_commit_sha(repo, branch, expected_head=""):
     return ""
 
 
-def _merge_rounds(tasks, base):
-    """Return the largest attempt count among the stages that form a round."""
-    return max((stage_attempts(tasks, stage, base) for stage in
-                ("Implement + Test", "Review", "Verify")), default=0)
+def _merge_rounds(tasks, reference):
+    """Return completed rounds for this work generation, including replacements.
+
+    Archived attempts no longer spend the retry limit in ``stage_attempts``,
+    but they remain real rounds for the delivery journal.  Durable ``work_id``
+    provenance keeps completed generations with the same title out.
+    """
+    counts = []
+    for stage in ("Implement + Test", "Review", "Verify"):
+        count = 0
+        for task in tasks:
+            match = STAGE_TITLE_RE.match(task.get("title", ""))
+            if (match and match.group(1).strip() == stage
+                    and same_task_work(task, reference)):
+                count += 1
+        counts.append(count)
+    return max(counts, default=0)
 
 
 def recover_merge_intents(conf, state):
@@ -8159,7 +8172,7 @@ def cycle(conf, state):
                         "phase": "intent", "base": base_title(title), "branch": branch,
                         "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
                         "actor_id": None,
-                        "rounds": max(1, _merge_rounds(tasks, base_title(title)))}
+                        "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
