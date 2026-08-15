@@ -1174,6 +1174,40 @@ final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_s
 grep -F 'не смог надёжно подтвердить успешный выпуск' "$final_status_failed/output" >/dev/null \
   || fail "final status write failure was not reported"
 
+# An existing status is authoritative: an unknown value must not be replaced
+# and must not permit another physical release.
+corrupt_delivery_status="$temporary/corrupt-delivery-status"
+corrupt_delivery_id=factory-1-badc0ffee0ddf00dba5eba11deadbeef
+make_fixture "$corrupt_delivery_status" corrupt-delivery-status
+mkdir -p "$corrupt_delivery_status/delivery-state"
+printf 'damaged-status\n' >"$corrupt_delivery_status/delivery-state/$corrupt_delivery_id.status"
+set +e
+FACTORY_DELIVERY_ID="$corrupt_delivery_id" run_release "$corrupt_delivery_status" corrupt-delivery-status
+corrupt_delivery_rc=$?
+set -e
+[ "$corrupt_delivery_rc" -eq 4 ] \
+  || fail "corrupt delivery status returned $corrupt_delivery_rc instead of 4"
+[ "$(tr -d '\r\n' <"$corrupt_delivery_status/delivery-state/$corrupt_delivery_id.status")" = damaged-status ] \
+  || fail "corrupt delivery status was overwritten"
+[ ! -s "$corrupt_delivery_status/events" ] \
+  || fail "corrupt delivery status started a physical release"
+
+# Once running is durable, a preflight refusal must publish failed before exit.
+running_preflight_failed="$temporary/running-preflight-failed"
+running_preflight_id=factory-1-0123456789abcdef0123456789abcdef
+make_fixture "$running_preflight_failed" running-preflight-failed
+chmod 644 "$running_preflight_failed/current.json"
+set +e
+FACTORY_DELIVERY_ID="$running_preflight_id" run_release "$running_preflight_failed" running-preflight-failed
+running_preflight_rc=$?
+set -e
+[ "$running_preflight_rc" -eq 4 ] \
+  || fail "running preflight refusal returned $running_preflight_rc instead of 4"
+[ "$(tr -d '\r\n' <"$running_preflight_failed/delivery-state/$running_preflight_id.status")" = failed ] \
+  || fail "running preflight refusal did not publish failed"
+[ ! -s "$running_preflight_failed/events" ] \
+  || fail "running preflight refusal started a physical release"
+
 metadata_mode="$temporary/metadata-mode-0644"
 make_fixture "$metadata_mode" metadata-mode-0644
 cp "$metadata_mode/current.json" "$metadata_mode/source-current.json"

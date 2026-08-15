@@ -170,6 +170,7 @@ if [ -n "$DELIVERY_ID" ]; then
       locked) delivery_status launching || { echo "!! cannot restart locked delivery" >&2; exit 4; } ;;
       failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
       running) echo "!! delivery outcome is uncertain; refusing to repeat physical release" >&2; exit 4 ;;
+      *) echo "!! delivery status is corrupt or unknown; refusing to repeat physical release" >&2; exit 4 ;;
     esac
   fi
   delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
@@ -579,18 +580,17 @@ flock -n 9 || {
 delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
 # From this point the broker has proof that the physical delivery may have
-# started.  Every ordinary exit therefore needs a durable terminal outcome;
-# rollback() below replaces this trap when it can report a more precise result.
+# started. Every ordinary exit needs a durable terminal outcome. The cleanup
+# trap below invokes this handler until rollback() can report a precise result.
 delivery_terminal_status=failed
 on_delivery_exit() {
-  local status=$?
+  local status=${1:-$?}
   trap - EXIT
   if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
   delivery_status "$delivery_terminal_status" \
     || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
   exit "$status"
 }
-trap on_delivery_exit EXIT
 
 umask 077
 
@@ -705,7 +705,11 @@ cleanup() {
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   rm -rf "$work"
 }
-on_release_exit() { cleanup; }
+on_release_exit() {
+  local status=$?
+  cleanup
+  on_delivery_exit "$status"
+}
 trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
