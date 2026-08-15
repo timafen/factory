@@ -405,7 +405,696 @@ validate_release_history() {
 
   if path_is_present "$REL"; then
     [ -d "$REL" ] && [ ! -L "$REL" ] \
-      || { preflight_fail "каталог выпусков повр…8254 tokens truncated…fail "одна из полных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+      || { preflight_fail "каталог выпусков повреждён или является ссылкой: $REL"; return 1; }
+    [ $((8#$(stat -c %a "$REL") & 8#022)) -eq 0 ] \
+      || { preflight_fail "каталог выпусков доступен для записи группе или другим: $REL"; return 1; }
+  fi
+  if path_is_present "$GENERATIONS"; then
+    [ -d "$GENERATIONS" ] && [ ! -L "$GENERATIONS" ] \
+      || { preflight_fail "история поколений повреждена или является ссылкой: $GENERATIONS"; return 1; }
+    [ $((8#$(stat -c %a "$GENERATIONS") & 8#022)) -eq 0 ] \
+      || { preflight_fail "история поколений доступна для записи группе или другим: $GENERATIONS"; return 1; }
+  fi
+  path_is_present "$CURRENT" && current_present=1
+  path_is_present "$PREVIOUS" && previous_present=1
+
+  if [ "$current_present" = 0 ] && [ "$previous_present" = 0 ]; then
+    if [ -d "$GENERATIONS" ]; then
+      first_generation=$(find "$GENERATIONS" -mindepth 1 -maxdepth 1 -print -quit)
+      [ -z "$first_generation" ] \
+        || { preflight_fail "в пустой истории найдено непроверенное поколение: $first_generation"; return 1; }
+    fi
+    bootstrap_release=1
+    return 0
+  fi
+
+  [ "$current_present" = 1 ] && [ "$previous_present" = 1 ] \
+    && [ -L "$CURRENT" ] && [ -L "$PREVIOUS" ] \
+    || { preflight_fail "обнаружена частичная история current/previous"; return 1; }
+  [ -d "$GENERATIONS" ] && [ ! -L "$GENERATIONS" ] \
+    || { preflight_fail "ссылки current/previous есть, но истории поколений нет"; return 1; }
+
+  generations_real=$(readlink -f "$GENERATIONS" 2>/dev/null || true)
+  current_generation=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  previous_generation=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
+  [ -n "$generations_real" ] && [ -n "$current_generation" ] && [ -n "$previous_generation" ] \
+    && [ "$(dirname "$current_generation")" = "$generations_real" ] \
+    && [ "$(dirname "$previous_generation")" = "$generations_real" ] \
+    || { preflight_fail "ссылки current/previous не указывают на опубликованные поколения"; return 1; }
+
+  for candidate in "$current_generation" "$previous_generation"; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] && verify_generation "$candidate" \
+      || { preflight_fail "ссылки current/previous не указывают на проверенные поколения"; return 1; }
+  done
+
+  # Only current and previous can be installed or rolled back to, and both were
+  # verified above. Older entries remain structurally constrained here, but
+  # hashing every historical SQLite snapshot made each release slower as the
+  # archive grew without adding rollback safety.
+  while IFS= read -r -d '' candidate; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] \
+      || { preflight_fail "в истории есть неатомарное поколение: $candidate"; return 1; }
+  done < <(find "$generations_real" -mindepth 1 -maxdepth 1 -print0)
+}
+
+validate_live_rollback_kit() {
+  local path expected expected_owner metadata
+  local -a metadata_parts
+  for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN" "$BROKER_UNIT" "$BROKER_DROPIN" \
+    "$BRAIN_LIVE/pilot/pilot.py" "$BRAIN_LIVE/pilot/context.md" \
+    "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py" "$DATABASE" "$INFO"; do
+    [ -f "$path" ] && [ ! -L "$path" ] \
+      || { preflight_fail "нет полного rollback artifact: $path"; return 1; }
+  done
+  for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN"; do
+    [ "$(stat -c %a "$path")" = 755 ] \
+      || { preflight_fail "неверный mode rollback artifact: $path"; return 1; }
+    if [ -n "$OWNER" ] && [ "$path" = "$SERVER_BIN" -o "$path" = "$WORKER_BIN" ]; then
+      [ "$(stat -c %U:%G "$path")" = "$OWNER" ] \
+        || { preflight_fail "неверный owner rollback artifact: $path"; return 1; }
+    fi
+  done
+  for expected in \
+    "$SERVER_BIN|$OWNER" "$WORKER_BIN|$OWNER" "$BROKER_BIN|$BROKER_OWNER" \
+    "$BROKER_UNIT|$BROKER_OWNER" "$BROKER_DROPIN|$BROKER_OWNER" \
+    "$FX_BIN|$CONTROL_OWNER" "$RELEASE_DRIVER|$CONTROL_OWNER" \
+    "$BRAIN_LIVE/pilot/pilot.py|$BRAIN_OWNER" "$BRAIN_LIVE/pilot/context.md|$BRAIN_OWNER" \
+    "$BRAIN_LIVE/intake/app.py|$BRAIN_OWNER" "$BRAIN_LIVE/intake/plan.py|$BRAIN_OWNER" \
+    "$INFO|$OWNER"; do
+    path=${expected%%|*}; expected_owner=${expected#*|}
+    [ -z "$expected_owner" ] || [ "$(stat -c %U:%G "$path")" = "$expected_owner" ] \
+      || { preflight_fail "неверный owner rollback artifact: $path"; return 1; }
+  done
+  for path in "$BROKER_UNIT" "$BROKER_DROPIN" "$BRAIN_LIVE/pilot/pilot.py" \
+    "$BRAIN_LIVE/pilot/context.md" "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py"; do
+    [ "$(stat -c %a "$path")" = 644 ] \
+      || { preflight_fail "неверный mode rollback artifact: $path"; return 1; }
+  done
+  [ "$(stat -c %a "$INFO")" = 600 ] \
+    || { preflight_fail "metadata текущего выпуска должна иметь mode 0600: $INFO"; return 1; }
+  for path in "$(dirname "$INFO")" "$(dirname "$SERVER_BIN")" "$(dirname "$DATABASE")" \
+    "$(dirname "$FX_BIN")" "$BRAIN_LIVE/pilot" "$BRAIN_LIVE/intake"; do
+    [ -d "$path" ] && [ ! -L "$path" ] \
+      || { preflight_fail "release path должен быть реальным каталогом без symlink: $path"; return 1; }
+    [ $((8#$(stat -c %a "$path") & 8#022)) -eq 0 ] \
+      || { preflight_fail "release path доступен для записи группе или другим: $path"; return 1; }
+  done
+  metadata=$(python3 - "$INFO" <<'PY'
+import json,re,sys
+try:
+    data=json.load(open(sys.argv[1]))
+    sha=data.get("sha")
+    release_id=data.get("release_id")
+    if not isinstance(sha,str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?",sha):
+        raise ValueError("sha")
+    if not isinstance(release_id,str) or not release_id.strip() or any(c in release_id for c in "\r\n\0"):
+        raise ValueError("release_id")
+    print(sha)
+    print(release_id)
+except Exception:
+    raise SystemExit(1)
+PY
+  ) || { preflight_fail "release-info не содержит корректные SHA и release_id"; return 1; }
+  mapfile -t metadata_parts <<<"$metadata"
+  current_sha=${metadata_parts[0]:-}
+  current_release_id=${metadata_parts[1]:-}
+  server_version=$("$SERVER_BIN" version 2>/dev/null || true)
+  worker_version=$("$WORKER_BIN" version 2>/dev/null || true)
+  [[ "$server_version" == *"$current_sha"* && "$worker_version" == *"$current_sha"* ]] \
+    || { preflight_fail "неизвестный или смешанный выпуск server/worker"; return 1; }
+}
+
+mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
+exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
+flock -n 9 || { fail "another Factory release is already running"; exit 8; }
+
+umask 077
+
+case "$ref" in
+  --status)
+    read_journal
+    current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
+    previous_path=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
+    current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$current_path/manifest.json" 2>/dev/null || echo '?')
+    previous_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("candidate_sha","?"))' "$previous_path/manifest.json" 2>/dev/null || echo '?')
+    echo "Factory: current=$current_sha previous=$previous_sha phase=${phase:-нет}"
+    [ -z "${generation:-}" ] || echo "manifest=$(manifest_hash "$generation" 2>/dev/null || echo '?') snapshot=$generation/database.sqlite3"
+    echo "Pilot остаётся в настроенном состоянии; эта команда ничего не включает"
+    exit 0
+    ;;
+  --rollback)
+    target=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
+    current_path=$(readlink -f "$CURRENT" 2>/dev/null || true)
+    [ -n "$target" ] && verify_generation "$target" || { fail "нет проверенного предыдущего поколения"; exit 4; }
+    previous=$current_path
+    write_journal prepared "$target" "$current_path" || exit 4
+    rollback_to_generation "$target" "откат Factory" || exit $?
+    [ -z "$current_path" ] || { ln -sfn "$current_path" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
+    echo "== полный откат к $(basename "$target") завершён; база не изменялась"
+    exit 0
+    ;;
+  --restore-db)
+    snapshot=${2:-}; expected_manifest=${3:-}; confirmation=${4:-}
+    [ -n "$snapshot" ] && [ -n "$expected_manifest" ] \
+      || { fail "нужны точный snapshot и hash manifest"; exit 2; }
+    generation_path=$(dirname "$snapshot")
+    verify_generation "$generation_path" || exit 4
+    [ "$(manifest_hash "$generation_path")" = "$expected_manifest" ] \
+      || { fail "hash manifest не совпадает"; exit 4; }
+    manifest_snapshot=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database"]["snapshot"])' "$generation_path/manifest.json") \
+      || { fail "manifest не содержит snapshot"; exit 4; }
+    manifest_snapshot_hash=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database"]["sha256"])' "$generation_path/manifest.json")
+    [ "$snapshot" = "$generation_path/$manifest_snapshot" ] \
+      && [ "$(sha256sum "$snapshot" | awk '{print $1}')" = "$manifest_snapshot_hash" ] \
+      || { fail "snapshot path/hash не совпадает с manifest"; exit 4; }
+    [ "$confirmation" = "RESTORE-FACTORY-DATABASE" ] \
+      || { fail "восстановление БД — отдельная опасная операция; добавьте точный token RESTORE-FACTORY-DATABASE"; exit 2; }
+    stop_factory_units || { fail "не удалось остановить все Factory-службы"; exit 6; }
+    restored="$DATABASE.restore.$$.new"
+    failed="$DATABASE.failed.$(date +%Y%m%dT%H%M%S)"
+    [ ! -e "$restored" ] && [ ! -e "$failed" ] || { fail "путь восстановления уже существует"; exit 4; }
+    "$generation_path/payload/factory-server" -database "$restored" -restore "$snapshot" \
+      || { fail "выбранный server не подтвердил восстановленную БД"; exit 6; }
+    database_ledger "$restored" >/dev/null || exit 6
+    mv "$DATABASE" "$failed" && mv "$DATABASE.v2-control-plane" "$failed.v2-control-plane" \
+      && mv "$restored" "$DATABASE" && mv "$restored.v2-control-plane" "$DATABASE.v2-control-plane" \
+      || { fail "atomic DB switch не завершён; службы оставлены остановленными"; exit 7; }
+    sync_path "$(dirname "$DATABASE")"
+    read_journal
+    [ "${phase:-}" = db_restore_required ] || { fail "БД восстановлена, но нет ожидающего journal; службы оставлены остановленными"; exit 9; }
+    restore_service_state "$generation/services.tsv" || exit 7
+    verify_generation_runtime "$generation" || exit 7
+    rm -f "$JOURNAL" && sync_path "$REL"
+    echo "== БД проверена и восстановлена; прежняя сохранена неизменяемо: $failed"
+    exit 0
+    ;;
+esac
+
+if [ -e "$JOURNAL" ]; then
+  read_journal
+  case "$phase" in
+    committed) rm -f "$JOURNAL" ;;
+    db_restore_required) fail "ожидается отдельное восстановление БД; новый выпуск запрещён"; exit 9 ;;
+    *) [ -n "$previous" ] || { fail "незавершённый journal без безопасной точки отката"; exit 9; }
+       rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
+  esac
+fi
+
+step "проверяю восстановимую исходную точку до сборки"
+validate_release_history && validate_live_rollback_kit || exit 4
+mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
+  || { fail "не смог подготовить папку релизов"; exit 4; }
+# 711, а не 700: gate script исполняет рабочий пользователь (as_user), ему нужен
+# проход по каталогу. Листинг чужим закрыт, файлы внутри root-owned и неизменяемые,
+# подлинность каждого дополнительно сверяется git hash-object.
+"$TRUSTED_MKDIR" -p -- "$TRUSTED_GATE_PARENT" \
+  && "$TRUSTED_CHMOD" 711 -- "$TRUSTED_GATE_PARENT" \
+  && [ "$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_PARENT")" = "$TRUSTED_OWNER_UID" ] \
+  && [ "$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_GATE_PARENT")" = 711 ] \
+  || { fail "не смог подготовить root-owned каталог gate (711: проход без листинга)"; exit 4; }
+mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
+  || { fail "не смог подготовить release-info"; exit 4; }
+
+work=$(as_user mktemp -d "$REL/build-XXXXXX") \
+  || { fail "не смог создать папку сборки"; exit 4; }
+gate_pids=()
+gate_pgids=()
+gate_ready=()
+gate_logs=()
+gate_names=()
+trusted_gate_dir=
+test_gates_stopped=1
+test_gates_reaped=1
+stage=''
+bootstrap=''
+cleanup() {
+  stop_test_gates
+  wait_for_test_gates
+  [ -z "$stage" ] || rm -rf "$stage"
+  [ -z "$bootstrap" ] || rm -rf "$bootstrap"
+  [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
+  rm -rf "$work"
+}
+on_release_exit() { cleanup; }
+trap on_release_exit EXIT
+
+# UI-проверки и Go-ворота независимы, но установка может начаться только после
+# их общего успеха. Реальную SID/PGID сообщает оболочка, уже запущенная через
+# setsid: PID внешнего launcher ненадёжен, потому что GNU setsid может forkнуть.
+# До атомарной записи handshake сама команда gate не стартует.
+# $AS не участвует в запуске gate: равноправный launcher мог бы подменить любой
+# файл или канал того же UID. Фиксированный identity launcher и setsid --fork --wait
+# образуют waitable-цепочку, чей одноразовый exit status сообщает само ядро.
+process_identity() { # process_identity <pid>; sets process_state/ppid/pgid/sid
+  local pid=$1 stat rest
+  process_state=''
+  process_ppid=''
+  process_pgid=''
+  process_sid=''
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r "/proc/$pid/stat" ] || return 1
+  IFS= read -r stat <"/proc/$pid/stat" || return 1
+  rest=${stat##*) }
+  read -r process_state process_ppid process_pgid process_sid _ <<<"$rest"
+  [ "$process_state" != Z ] || return 1
+  case "$process_ppid:$process_pgid:$process_sid" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+}
+
+read_test_gate_handshake() { # read_test_gate_handshake <file> <launcher> <nonce>
+  local handshake=$1 launcher=$2 expected_nonce=$3
+  local sid_field='' pgid_field='' nonce_field='' ready_field='' extra=''
+  gate_sid=''
+  gate_pgid=''
+  [ -s "$handshake" ] || return 1
+  IFS=' ' read -r sid_field pgid_field nonce_field ready_field extra <"$handshake" || return 1
+  case "$sid_field:$pgid_field:$nonce_field:$ready_field:$extra" in
+    sid=*:pgid=*:nonce=*:ready=1:) ;;
+    *) return 1 ;;
+  esac
+  gate_sid=${sid_field#sid=}
+  gate_pgid=${pgid_field#pgid=}
+  [ "${nonce_field#nonce=}" = "$expected_nonce" ] || return 1
+  case "$gate_sid:$gate_pgid" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+  [ "$gate_sid" = "$gate_pgid" ] || return 1
+  process_identity "$launcher" || return 1
+  process_identity "$gate_sid" || return 1
+  # --fork makes the launched setsid process a stable supervisor. Its one
+  # direct child must be the live session/process-group leader that published
+  # this launch's nonce. A numeric, stale or unrelated process is never ready.
+  [ "$process_ppid" = "$launcher" ] \
+    && [ "$process_pgid" = "$gate_pgid" ] \
+    && [ "$process_sid" = "$gate_sid" ] \
+    && test_gate_group_alive "$gate_pgid"
+}
+
+publish_test_gate_ack() { # publish_test_gate_ack <file> <nonce>
+  local ack=$1 nonce=$2 temporary_ack
+  temporary_ack=$($TRUSTED_MKTEMP "${ack}.tmp.XXXXXX") || return 1
+  if ! printf 'nonce=%s accepted=1\n' "$nonce" >"$temporary_ack" \
+    || ! "$TRUSTED_MV" -f -- "$temporary_ack" "$ack"; then
+    "$TRUSTED_RM" -f -- "$temporary_ack"
+    return 1
+  fi
+}
+
+wait_for_test_gate_handshake() { # wait_for_test_gate_handshake <file> <launcher> <nonce> <ack>
+  local handshake=$1 launcher=$2 nonce=$3 ack=$4 i
+  for ((i = 0; i < GATE_READY_ATTEMPTS; i++)); do
+    if read_test_gate_handshake "$handshake" "$launcher" "$nonce"; then
+      publish_test_gate_ack "$ack" "$nonce"
+      return
+    fi
+    process_identity "$launcher" || return 1
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  read_test_gate_handshake "$handshake" "$launcher" "$nonce" \
+    && publish_test_gate_ack "$ack" "$nonce"
+}
+
+test_gate_group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+
+wait_for_test_gate_group_exit() { # wait_for_test_gate_group_exit <pgid>
+  local pgid=$1 i
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    test_gate_group_alive "$pgid" || return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  ! test_gate_group_alive "$pgid"
+}
+
+wait_for_test_gate_pids_exit() { # wait_for_test_gate_pids_exit <pid...>
+  local i pid alive
+  for ((i = 0; i < GATE_STOP_ATTEMPTS; i++)); do
+    alive=0
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+    done
+    [ "$alive" = 0 ] && return 0
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+  for pid in "$@"; do
+    kill -0 "$pid" 2>/dev/null && return 1
+  done
+  return 0
+}
+
+test_gate_launcher_tree() { # test_gate_launcher_tree <launcher-pid>
+  local parent=$1 child
+  printf '%s\n' "$parent"
+  while read -r child; do
+    [ -n "$child" ] || continue
+    test_gate_launcher_tree "$child"
+  done < <("$TRUSTED_PS" -eo pid=,ppid= \
+    | "$TRUSTED_AWK" -v parent="$parent" '$2 == parent {print $1}')
+}
+
+reap_test_gate_launcher() { # reap_test_gate_launcher <launcher-pid>
+  local launcher=$1
+  if ! wait_for_test_gate_pids_exit "$launcher"; then
+    kill -KILL "$launcher" 2>/dev/null || true
+    wait_for_test_gate_pids_exit "$launcher" || true
+  fi
+  wait "$launcher" 2>/dev/null || true
+}
+
+stop_unready_test_gate_launcher() { # stop_unready_test_gate_launcher <launcher-pid>
+  local launcher=$1 i
+  local -a tree=()
+  mapfile -t tree < <(test_gate_launcher_tree "$launcher")
+  for ((i = ${#tree[@]} - 1; i >= 0; i--)); do
+    kill -TERM "${tree[$i]}" 2>/dev/null || true
+  done
+  if ! wait_for_test_gate_pids_exit "${tree[@]}"; then
+    for ((i = ${#tree[@]} - 1; i >= 0; i--)); do
+      kill -KILL "${tree[$i]}" 2>/dev/null || true
+    done
+    wait_for_test_gate_pids_exit "${tree[@]}" || true
+  fi
+  wait "$launcher" 2>/dev/null || true
+}
+
+stop_ready_test_gate() { # stop_ready_test_gate <launcher-pid> <pgid>
+  local launcher=$1 pgid=$2
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  if ! wait_for_test_gate_group_exit "$pgid"; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+    wait_for_test_gate_group_exit "$pgid" || true
+  fi
+  reap_test_gate_launcher "$launcher"
+}
+
+start_test_gate() { # start_test_gate <имя> <журнал> <handshake> <команда...>
+  local name=$1 log=$2 handshake=$3 launcher nonce ack
+  shift 3
+  ack="${handshake}.ack"
+  nonce=$("$TRUSTED_OD" -An -N16 -tx1 /dev/urandom) || return 1
+  nonce=${nonce//[[:space:]]/}
+  [ "${#nonce}" -eq 32 ] || return 1
+  "$TRUSTED_RM" -f -- "$handshake" "$ack"
+  "$TRUSTED_SETSID" --fork --wait "$TRUSTED_BASH" -c '
+    handshake=$1
+    ack=$2
+    nonce=$3
+    poll_delay=$4
+    trusted_mktemp=$5
+    trusted_mv=$6
+    trusted_rm=$7
+    trusted_sleep=$8
+    shift 8
+    trap - HUP INT TERM
+    stat=$(<"/proc/$$/stat") || exit 125
+    rest=${stat##*) }
+    read -r state ppid pgid sid _ <<<"$rest"
+    case "$sid:$pgid" in
+      *[!0-9:]*|:*|*:) exit 125 ;;
+    esac
+    [ "$sid" = "$pgid" ] || exit 125
+    temporary_handshake=$("$trusted_mktemp" "${handshake}.tmp.XXXXXX") || exit 125
+    if ! printf "sid=%s pgid=%s nonce=%s ready=1\\n" "$sid" "$pgid" "$nonce" >"$temporary_handshake" \
+      || ! "$trusted_mv" -f -- "$temporary_handshake" "$handshake"; then
+      "$trusted_rm" -f -- "$temporary_handshake"
+      exit 125
+    fi
+
+    accepted=
+    for ((i = 0; i < 500; i++)); do
+      nonce_field= accepted_field= extra=
+      if [ -s "$ack" ]; then
+        IFS=" " read -r nonce_field accepted_field extra <"$ack" || true
+      fi
+      if [ "$nonce_field" = "nonce=$nonce" ] \
+        && [ "$accepted_field" = accepted=1 ] && [ -z "$extra" ]; then
+        accepted=1
+        break
+      fi
+      "$trusted_sleep" "$poll_delay"
+    done
+    [ "$accepted" = 1 ] || exit 125
+
+    exec "$@"
+  ' "$TRUSTED_BASH" "$handshake" "$ack" "$nonce" "$GATE_POLL_DELAY" \
+    "$TRUSTED_MKTEMP" "$TRUSTED_MV" "$TRUSTED_RM" "$TRUSTED_SLEEP" \
+    "${gate_identity[@]}" "$@" >"$log" 2>&1 &
+  launcher=$!
+  gate_pids+=("$launcher")
+  gate_pgids+=("")
+  gate_ready+=(0)
+  gate_logs+=("$log")
+  gate_names+=("$name")
+  if wait_for_test_gate_handshake "$handshake" "$launcher" "$nonce" "$ack"; then
+    gate_pgids[${#gate_pgids[@]}-1]=$gate_pgid
+    gate_ready[${#gate_ready[@]}-1]=1
+    return 0
+  fi
+  fail "не дождался handshake реальной session для $name"
+  return 1
+}
+
+stop_test_gates() {
+  local i launcher
+  [ "$test_gates_stopped" = 0 ] || return 0
+  test_gates_stopped=1
+  for i in "${!gate_pids[@]}"; do
+    launcher=${gate_pids[$i]}
+    if [ "${gate_ready[$i]}" = 1 ]; then
+      stop_ready_test_gate "$launcher" "${gate_pgids[$i]}"
+    else
+      stop_unready_test_gate_launcher "$launcher"
+    fi
+  done
+}
+
+wait_for_test_gates() {
+  local launcher
+  [ "$test_gates_reaped" = 0 ] || return 0
+  for launcher in "${gate_pids[@]}"; do
+    reap_test_gate_launcher "$launcher"
+  done
+  test_gates_reaped=1
+}
+
+wait_for_test_gate_descendants() { # wait_for_test_gate_descendants <pgid>
+  local pgid=$1
+  while test_gate_group_alive "$pgid"; do
+    "$TRUSTED_SLEEP" "$GATE_POLL_DELAY"
+  done
+}
+
+print_test_gate_logs() {
+  local i
+  for i in "${!gate_logs[@]}"; do
+    step "полный вывод: ${gate_names[$i]}"
+    cat "${gate_logs[$i]}"
+  done
+}
+
+on_test_gate_signal() {
+  local signal=$1
+  trap - HUP INT TERM
+  stop_test_gates
+  wait_for_test_gates
+  print_test_gate_logs
+  cleanup
+  exit 130
+}
+
+run_parallel_test_gates() {
+  local completed status failed_name completed_index other_index
+  gate_pids=()
+  gate_pgids=()
+  gate_ready=()
+  gate_logs=()
+  gate_names=()
+  test_gates_stopped=0
+  test_gates_reaped=0
+
+  # A shell started as a background job can inherit ignored SIGINT. Reset it
+  # before installing our handler so INT follows the same cleanup path.
+  trap - HUP INT TERM
+  trap 'on_test_gate_signal HUP' HUP
+  trap 'on_test_gate_signal INT' INT
+  trap 'on_test_gate_signal TERM' TERM
+
+  if ! start_test_gate "UI-проверки" "$work/ui-checks.log" "$work/ui-checks.session" \
+    "$TRUSTED_BASH" -c 'cd "$1" && "$2" "$3" tsc -p tsconfig.app.json --noEmit && "$2" "$4" test' \
+    "$TRUSTED_BASH" "$work/src/web" "$TRUSTED_NODE" "$TRUSTED_NPX" "$TRUSTED_NPM"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    return 1
+  fi
+  if ! start_test_gate "Go-проверки, тесты пилота и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
+    "$TRUSTED_BASH" -c 'umask 077; cd "$1" && "$2" test ./... && "$3" -m unittest pilot.test_pilot && "$4" "$5"' \
+    "$TRUSTED_BASH" "$work/src" "$TRUSTED_GO" "$TRUSTED_PYTHON" "$TRUSTED_BASH" "$trusted_gate_script"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    return 1
+  fi
+
+  wait -n -p completed "${gate_pids[@]}"
+  status=$?
+  # `wait -n` receives the exit code from the kernel for one of our direct
+  # `setsid --fork --wait` children. Do not treat an absent or unrelated PID
+  # as a successful Gate: only the two launchers registered above may unlock
+  # installation.
+  case "$completed" in
+    "${gate_pids[0]}"|"${gate_pids[1]}") ;;
+    *)
+      stop_test_gates
+      wait_for_test_gates
+      trap - HUP INT TERM
+      print_test_gate_logs
+      fail "ядро не вернуло статус известного launcher test gate"
+      return 1
+      ;;
+  esac
+  if [ "$status" -ne 0 ]; then
+    failed_name="параллельная группа проверок"
+    if [ "$completed" = "${gate_pids[0]}" ]; then failed_name="${gate_names[0]}"; fi
+    if [ "$completed" = "${gate_pids[1]}" ]; then failed_name="${gate_names[1]}"; fi
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    fail "$failed_name завершилась с кодом $status"
+    return 1
+  fi
+
+  completed_index=1
+  [ "$completed" = "${gate_pids[0]}" ] && completed_index=0
+  if ! wait_for_test_gate_descendants "${gate_pgids[$completed_index]}"; then
+    stop_test_gates
+    wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
+    fail "не смог подтвердить завершение process group ${gate_names[$completed_index]}"
+    return 1
+  fi
+
+  other_index=0
+  [ "$completed_index" = 0 ] && other_index=1
+  wait "${gate_pids[$other_index]}"
+  status=$?
+  if [ "$status" -eq 0 ] \
+    && ! wait_for_test_gate_descendants "${gate_pgids[$other_index]}"; then
+    status=1
+  fi
+  if [ "$status" -ne 0 ]; then
+    stop_test_gates
+    wait_for_test_gates
+    fail "${gate_names[$other_index]} завершилась с кодом $status"
+  fi
+  trap - HUP INT TERM
+  print_test_gate_logs
+  if [ "$status" -eq 0 ]; then
+    test_gates_stopped=1
+    test_gates_reaped=1
+  fi
+  [ "$status" -eq 0 ]
+}
+
+step "беру исходники: $ref"
+# Клонирует рабочий пользователь: сборка, npm и ворота идут от его имени и
+# обязаны читать дерево. Приватность сохраняет umask 077 внутри as_user_private:
+# посторонним (агентам) дерево по-прежнему закрыто. Клон под root ломал
+# выпуск на первом же npm ci: рабочий пользователь не мог войти в src/web.
+as_user_private "$TRUSTED_GIT" clone --quiet "$REPO" "$work/src" \
+  || { fail "не смог забрать репозиторий с GitHub"; cleanup; exit 4; }
+as_user_private "$TRUSTED_GIT" -C "$work/src" checkout --quiet -B fx-build "origin/$ref" 2>/dev/null \
+  || as_user_private "$TRUSTED_GIT" -C "$work/src" checkout --quiet "$ref" 2>/dev/null \
+  || { fail "нет такой точки сборки: $ref"; cleanup; exit 4; }
+sha=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" rev-parse HEAD) \
+  || { fail "не смог определить commit кандидата"; cleanup; exit 4; }
+expected_gate_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  rev-parse "$sha:ops/test-fx-factory-release.sh") \
+  || { fail "в кандидате нет обязательного gate script"; cleanup; exit 4; }
+expected_gate_release_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  rev-parse "$sha:ops/fx-factory-release") \
+  || { fail "в кандидате нет обязательного release helper для gate"; cleanup; exit 4; }
+trusted_gate_dir=$("$TRUSTED_MKTEMP" -d "$TRUSTED_GATE_PARENT/trusted-gate-XXXXXX") \
+  || { fail "не смог создать доверенный каталог gate"; cleanup; exit 4; }
+trusted_gate_root="$trusted_gate_dir"
+trusted_gate_script="$trusted_gate_root/ops/test-fx-factory-release.sh"
+if ! "$TRUSTED_MKDIR" -p -- "$trusted_gate_root/ops/systemd" "$trusted_gate_root/pilot" "$trusted_gate_root/intake" \
+  || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    show "$sha:ops/test-fx-factory-release.sh" >"$trusted_gate_script" \
+  || ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    show "$sha:ops/fx-factory-release" >"$trusted_gate_root/ops/fx-factory-release" \
+  || ! "$TRUSTED_CHMOD" 555 "$trusted_gate_script" "$trusted_gate_root/ops/fx-factory-release" \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_script")" != "$expected_gate_blob" ] \
+  || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/ops/fx-factory-release")" != "$expected_gate_release_blob" ]; then
+  fail "gate script не совпадает с криптографически проверенным Git-объектом"
+  cleanup
+  exit 4
+fi
+trusted_systemd_files=0
+while IFS= read -r -d '' trusted_gate_path; do
+  case "$trusted_gate_path" in ops/systemd/*) ;; *) fail "некорректный путь доверенного systemd tree"; cleanup; exit 4 ;; esac
+  trusted_gate_relative=${trusted_gate_path#ops/}
+  expected_systemd_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    rev-parse "$sha:$trusted_gate_path") || { fail "не смог проверить systemd tree для gate"; cleanup; exit 4; }
+  if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+      show "$sha:$trusted_gate_path" >"$trusted_gate_root/ops/$trusted_gate_relative" \
+    || ! "$TRUSTED_CHMOD" 444 "$trusted_gate_root/ops/$trusted_gate_relative" \
+    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/ops/$trusted_gate_relative")" != "$expected_systemd_blob" ]; then
+    fail "не смог извлечь доверенное дерево systemd для gate"
+    cleanup
+    exit 4
+  fi
+  trusted_systemd_files=$((trusted_systemd_files + 1))
+done < <("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+  ls-tree -r -z --name-only "$sha" -- ops/systemd)
+[ "$trusted_systemd_files" -gt 0 ] \
+  || { fail "в кандидате нет обязательного дерева systemd для gate"; cleanup; exit 4; }
+for trusted_gate_path in ops/install-project-release-broker.sh ops/factory-live-acceptance ops/fx pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
+  expected_gate_dependency_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+    rev-parse "$sha:$trusted_gate_path") || { fail "в кандидате нет обязательной зависимости gate: $trusted_gate_path"; cleanup; exit 4; }
+  if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
+      show "$sha:$trusted_gate_path" >"$trusted_gate_root/$trusted_gate_path" \
+    || [ "$("$TRUSTED_GIT" hash-object "$trusted_gate_root/$trusted_gate_path")" != "$expected_gate_dependency_blob" ]; then
+    fail "не смог извлечь доверенную зависимость gate: $trusted_gate_path"
+    cleanup
+    exit 4
+  fi
+done
+"$TRUSTED_CHMOD" 555 "$trusted_gate_root/ops/install-project-release-broker.sh" "$trusted_gate_root/ops/factory-live-acceptance" "$trusted_gate_root/ops/fx" \
+  && "$TRUSTED_CHMOD" 444 "$trusted_gate_root/pilot/pilot.py" "$trusted_gate_root/pilot/context.md" \
+    "$trusted_gate_root/intake/app.py" "$trusted_gate_root/intake/plan.py" \
+  && "$TRUSTED_CHMOD" 711 "$trusted_gate_dir" "$trusted_gate_root/ops" "$trusted_gate_root/ops/systemd" \
+    "$trusted_gate_root/pilot" "$trusted_gate_root/intake" \
+  || { fail "не смог закрыть доверенный каталог gate"; cleanup; exit 4; }
+if { [ "$("$TRUSTED_STAT" -Lc %u -- "$trusted_gate_dir")" != "$TRUSTED_OWNER_UID" ] \
+  || [ "$("$TRUSTED_STAT" -Lc %a -- "$trusted_gate_dir")" != 711 ]; }; then
+  fail "доверенный каталог gate допускает изменение рабочим пользователем"
+  cleanup
+  exit 4
+fi
+subject=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" log -1 --pretty=%s)
+case "$subject" in
+  "Merge pull request #"*)
+    merged_title=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" log -1 --pretty=%B \
+      | sed '1d; /^[[:space:]]*$/d' | head -n 1)
+    [ -z "$merged_title" ] || subject=$merged_title
+    ;;
+esac
+subject=$(printf '%s' "$subject" | sed -E 's/[[:space:]]+\(#[0-9]+\)$//')
+[ -n "$subject" ] || subject="Обновление Factory"
+step "собираю изменение: $subject"
+
+step "ставлю зависимости интерфейса"
+as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
+  || { fail "npm ci не прошёл"; cleanup; exit 4; }
+if [ "${FACTORY_RELEASE_DEEP_GATE:-0}" = 1 ]; then
+  step "вручную запускаю полный набор проверок выпуска"
+  run_parallel_test_gates \
+    || { fail "одна из полных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
 else
   step "быстрый выпуск: код уже проверен обязательным Linux-воротом GitHub"
 fi
@@ -685,4 +1374,3 @@ done < <(find "$GENERATIONS" -mindepth 1 -maxdepth 1 -type d -print)
 sync_path "$GENERATIONS"
 echo "== выкачено: $subject; current=$sha previous=$current_sha snapshot=$(basename "$generation_path")/database.sqlite3 manifest=$(manifest_hash "$generation_path")"
 exit 0
-
