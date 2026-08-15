@@ -1,4 +1,4 @@
-Implementation commit: c454b985e60446f07c66b15318432193e3c1e38a — healthy retained эскалируется без остановки, а тест очистки unhealthy retained использует точный путь worktree.
+Implementation commit: 3c18ef8c9c19269475176a08c2b667ce09b25c23 — healthy retained эскалируется без остановки, а тест очистки unhealthy retained использует точный путь worktree.
 
 # CARD-0093 — Эскалация retained worktree здорового исполнителя
 
@@ -6,7 +6,7 @@ Implementation commit: c454b985e60446f07c66b15318432193e3c1e38a — healthy reta
 
 - Status: Implemented — checks and build pass
 - Branch: `factory/4ba42919-8a6-eea8bfd8-3d7`
-- Implementation commit: `c454b985e60446f07c66b15318432193e3c1e38a`
+- Implementation commit: `3c18ef8c9c19269475176a08c2b667ce09b25c23`
 - Specification: `knowledge/specs/healthy-retained-worktree-escalation.md`
 - What changed: healthy online retained получает одну durable-эскалацию на
   точный снимок; online unhealthy retained теперь переносится в карантин и
