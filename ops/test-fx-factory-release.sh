@@ -800,7 +800,7 @@ configure_release_mode() {
 }
 
 run_release() {
-  case_dir=$1 mode=$2 deep_gate=${3:-1}
+  case_dir=$1 mode=$2 deep_gate=${3:-1} release_ref=${4:-main}
   configure_release_mode "$case_dir" "$mode"
     TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
@@ -845,7 +845,7 @@ run_release() {
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
-    /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
+    /bin/bash "$case_dir/fx-factory-release-under-test" "$release_ref" >"$case_dir/output" 2>&1
 }
 
 run_driver() {
@@ -1542,5 +1542,37 @@ flock -u 8
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
+
+cleanup="$temporary/cleanup"
+make_fixture "$cleanup" parallel-success
+mkdir -p "$cleanup/releases/build-old" "$cleanup/releases/build-fresh" \
+  "$cleanup/releases/generations/build-protected" "$cleanup/releases/.generation-protected" \
+  "$cleanup/releases/other-prefix"
+mkdir -p "$cleanup/external-build"
+ln -s "$cleanup/external-build" "$cleanup/releases/build-link"
+touch -d '2 days ago' "$cleanup/releases/build-old"
+touch -d '1 hour ago' "$cleanup/releases/build-fresh"
+run_release "$cleanup" parallel-success 1 --cleanup-dry-run \
+  || { cat "$cleanup/output" >&2; fail "cleanup dry-run failed"; }
+[ -d "$cleanup/releases/build-old" ] || fail "dry-run removed old build"
+[ -d "$cleanup/releases/build-fresh" ] || fail "dry-run removed fresh build"
+[ -L "$cleanup/releases/build-link" ] || fail "dry-run removed build symlink"
+[ -d "$cleanup/releases/generations/build-protected" ] || fail "dry-run touched generations"
+[ -d "$cleanup/releases/.generation-protected" ] || fail "dry-run touched generation prefix"
+[ -d "$cleanup/releases/other-prefix" ] || fail "dry-run touched other prefix"
+assert_file "$cleanup/output" 'cleanup build=build-old decision=would-delete'
+assert_file "$cleanup/output" 'cleanup build=build-fresh decision=skip reason=fresh'
+assert_file "$cleanup/output" 'cleanup build=build-link decision=skip reason=symlink'
+[ ! -s "$cleanup/gates" ] || fail "dry-run started release gates"
+[ ! -s "$cleanup/events" ] || fail "dry-run touched services"
+run_release "$cleanup" parallel-success \
+  || { cat "$cleanup/output" >&2; fail "cleanup release failed"; }
+[ ! -e "$cleanup/releases/build-old" ] || fail "release retained old build"
+[ -d "$cleanup/releases/build-fresh" ] || fail "release removed fresh build"
+[ -L "$cleanup/releases/build-link" ] || fail "release removed build symlink"
+[ -d "$cleanup/releases/generations/build-protected" ] || fail "release touched generations"
+[ -d "$cleanup/releases/.generation-protected" ] || fail "release touched generation prefix"
+[ -d "$cleanup/releases/other-prefix" ] || fail "release touched other prefix"
+assert_file "$cleanup/output" 'cleanup build=build-old decision=deleted'
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
