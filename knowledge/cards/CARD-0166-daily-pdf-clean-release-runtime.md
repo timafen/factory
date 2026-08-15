@@ -1,18 +1,17 @@
-Implementation commit: cb10e2e182e8b8e185087c9b0a22369b365c7472 — повторный откат транзакционно восстанавливает browser-среду
+Implementation commit: 1093c5e1b48dad0eb4dfb741c72729a66ca52b31 — закрыты окна отката browser-среды до journal и при сигналах installer
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
-Status: Implemented and verified
-Branch: `factory/db641bfe-a22-70413f54-5a3`
-Implementation commit: cb10e2e182e8b8e185087c9b0a22369b365c7472 — повторный откат транзакционно восстанавливает browser-среду
-What changed: поставка перенесена на свежий `main`; повторное применение browser-поколения
-получает rollback backup, а fixture проверяет идемпотентный installer и новый heartbeat.
-Evidence: `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS;
-`go test ./...` → PASS; `npm test` → 181/181 PASS;
-`npm run lint` и `npm run build` → PASS; report tests → 5/5 PASS.
-One next action: merge the verified branch; do not run a production release in this stage.
+Status: Ready for Review
+Branch: `factory/2fbfd5a8-4ec-d5e4220b-7d3`
+Implementation commit: 1093c5e1b48dad0eb4dfb741c72729a66ca52b31 — закрыты окна отката browser-среды до journal и при сигналах installer
+What changed: cleanup отслеживает поколение после переноса и восстанавливает любой
+`backup.ready`; installer откатывает live-файлы при EXIT, HUP, INT и TERM.
+Evidence: release fixture → PASS, включая сбой до `prepared` journal;
+installer fixture → PASS для HUP/INT/TERM; TypeScript, Go, web tests, lint и build → PASS.
+One next action: repeat Review; do not run a live release until Verify PASS.
 
 ## LOG
 
@@ -72,3 +71,12 @@ UI gate исправлен после возврата владельцем: п�
 а fixture поддерживает повторное применение installer и монотонный heartbeat.
 Проверки: release fixture — PASS; Go suite — PASS; web — 181/181, lint и build PASS;
 installer — PASS; PDF report tests — 5/5 PASS. Боевой выпуск не запускался.
+
+### 2026-08-15 — Implement
+
+Закрыты два окна восстановления из Review: после переноса поколения cleanup следует
+за фактическим путём до записи `prepared` journal, а installer держит rollback на
+EXIT/HUP/INT/TERM до полного успеха. Fixture проверяет отсутствие поколения-сироты,
+восстановление любого `backup.ready` и возврат всех live browser-файлов на трёх
+сигналах. Release и installer fixtures, TypeScript, Go, web tests, lint и build — PASS.
+Живой выпуск не выполнялся до Verify PASS.
