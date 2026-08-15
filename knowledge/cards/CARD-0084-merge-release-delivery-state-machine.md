@@ -1,16 +1,26 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
+Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+
 ## HEAD
 
-- Status: Implemented — восстановленная защита подтверждена на свежем `main`.
-- Branch: `factory/d60e1ac5-6ed-eeac3ef8-fdd`.
+- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
+- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: d780a62dbbca8c3b87926c8bdd678aa82873c766 — повторный restart подтверждает durable failure без второго выпуска.
+- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
 - What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS; `git diff --check` — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA.
+- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
+- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Перебазировано на `origin/main` `f1db2b40`; implementation commit после
+перебазирования закреплён отдельной строкой. Полный Go-регресс прошёл; первая
+общая проверка остановилась из-за отсутствующего локального `eslint`, после
+штатного `npm ci` UI lint и typecheck прошли. Риск: `npm audit` сообщает две
+high-severity зависимости, не затрагивающие эту поставку.
 
 ### 2026-08-14 — Implement
 
