@@ -60,6 +60,8 @@ case "$*" in
       "$destination/ops/install-project-release-broker.sh"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
       "$destination/ops/systemd/factory-release-broker.service"
+    /bin/cp "$TEST_CGROUP_TEMPLATE" \
+      "$destination/ops/factory-gate-cgroup"
     cat >"$destination/ops/install-brain.sh" <<'BRAIN'
 #!/bin/bash
 echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_RESTART_MARKER:-}" >>"$TEST_GATES"
@@ -75,6 +77,9 @@ AUTH
     cat >"$destination/ops/install-factory-control.sh" <<'CONTROL'
 #!/bin/bash
 echo "bash ops/install-factory-control.sh" >>"$TEST_GATES"
+printf 'new fx\n' >"$FACTORY_FX_BIN"
+printf 'new release driver\n' >"$FACTORY_RELEASE_DRIVER"
+[ -z "${FACTORY_GATE_CGROUP_HELPER:-}" ] || printf 'new cgroup helper\n' >"$FACTORY_GATE_CGROUP_HELPER"
 [ "$TEST_MODE" != control-install-fail ]
 CONTROL
     cat >"$destination/ops/install-server-browser.sh" <<'BROWSER'
@@ -589,6 +594,7 @@ EOF
     -e "s|^TRUSTED_MV=.*$|TRUSTED_MV=$case_dir/bin/mv|" \
     -e "s|^TRUSTED_CHMOD=.*$|TRUSTED_CHMOD=$case_dir/bin/chmod|" \
     -e "s|^TRUSTED_SYSTEMD_RUN=.*$|TRUSTED_SYSTEMD_RUN=$case_dir/bin/systemd-run|" \
+    -e 's/"\$TRUSTED_INSTALL" -o root -g root -m 755/"$TRUSTED_INSTALL" -m 755/' \
     "$RELEASE" >"$case_dir/fx-factory-release-under-test"
 }
 
@@ -616,7 +622,7 @@ run_release() {
   case_dir=$1 mode=$2
   configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
-    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_CGROUP_TEMPLATE="${TEST_CGROUP_TEMPLATE:-$case_dir/trusted/factory-gate-cgroup}" TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -648,6 +654,9 @@ run_release() {
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
+    FACTORY_FX_BIN="$case_dir/install/fx" \
+    FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" \
+    FACTORY_GATE_CGROUP_HELPER="$case_dir/trusted/factory-gate-cgroup" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
@@ -658,7 +667,7 @@ start_release() {
   case_dir=$1 mode=$2
   configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
-    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_CGROUP_TEMPLATE="$case_dir/trusted/factory-gate-cgroup" TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -690,6 +699,9 @@ start_release() {
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
     FACTORY_RELEASE_BROKER_GROUPADD="$case_dir/bin/groupadd" \
+    FACTORY_FX_BIN="$case_dir/install/fx" \
+    FACTORY_RELEASE_DRIVER="$case_dir/install/fx-factory-release" \
+    FACTORY_GATE_CGROUP_HELPER="$case_dir/trusted/factory-gate-cgroup" \
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
     env --default-signal=INT /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1 &
@@ -698,6 +710,9 @@ start_release() {
 
 success="$temporary/success"
 make_fixture "$success" parallel-success
+cp "$success/trusted/factory-gate-cgroup" "$success/cgroup-template"
+rm "$success/trusted/factory-gate-cgroup"
+TEST_CGROUP_TEMPLATE="$success/cgroup-template" \
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
 wait_for_file "$success/ui-started"
@@ -719,6 +734,7 @@ grep -F 'полный вывод: Go-проверки, тесты пилота �
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 assert_file "$success/install/factory-release-broker" '#!/bin/bash'
+assert_file "$success/trusted/factory-gate-cgroup" 'new cgroup helper'
 assert_file "$success/install/factory-release-broker.service" 'Group=factory-release'
 assert_file "$success/install/50-project-release-broker.conf" 'SupplementaryGroups=factory-release'
 assert_file "$success/broker-events" '--system factory-release'
@@ -793,6 +809,15 @@ for mode in server-fail worker-fail stale-healthy-worker heartbeat-during-stop w
   fi
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
+  if [ "$mode" = control-install-fail ] || [ "$mode" = browser-install-fail ]; then
+    [ ! -e "$failed/install/factory-release-broker" ] \
+      || fail "$mode left the new broker behind after rollback"
+    [ ! -e "$failed/install/factory-release-broker.service" ] \
+      || fail "$mode left the new broker unit behind after rollback"
+    [ ! -e "$failed/install/fx" ] && [ ! -e "$failed/install/fx-factory-release" ] \
+      || fail "$mode left updated control commands behind after rollback"
+    assert_file "$failed/trusted/factory-gate-cgroup" 'name=$2'
+  fi
   tail -n 3 "$failed/events" | diff -u - <(printf '%s\n' \
     'restart factory-server.service' 'restart factory-worker.service' 'restart factory-worker-2.service') >/dev/null \
     || fail "$mode rollback restart order is wrong"

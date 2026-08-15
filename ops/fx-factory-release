@@ -47,6 +47,12 @@ TRUSTED_NPX_CLI=/usr/lib/node_modules/npm/bin/npx-cli.js
 TRUSTED_NPM_CLI=/usr/lib/node_modules/npm/bin/npm-cli.js
 TRUSTED_GO=/usr/bin/go
 TRUSTED_GATE_CGROUP=/usr/local/libexec/factory-gate-cgroup
+CONTROL_FX_TARGET=${FACTORY_FX_BIN:-/usr/local/bin/fx}
+CONTROL_RELEASE_TARGET=${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}
+BROKER_BIN_TARGET=${FACTORY_RELEASE_BROKER_BIN:-/opt/factory-data/bin/factory-release-broker}
+BROKER_UNIT_TARGET=${FACTORY_RELEASE_BROKER_UNIT:-/etc/systemd/system/factory-release-broker.service}
+BROKER_PILOT_DROPIN_TARGET=${FACTORY_RELEASE_BROKER_PILOT_DROPIN:-/etc/systemd/system/factory-pilot.service.d/50-project-release-broker.conf}
+BROKER_LEGACY_DROPIN_TARGET=${FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN:-/etc/systemd/system/factory-server.service.d/50-project-release-broker.conf}
 TRUSTED_DIRNAME=/usr/bin/dirname
 TRUSTED_FLOCK=/usr/bin/flock
 TRUSTED_CHOWN=/usr/bin/chown
@@ -100,7 +106,7 @@ for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
 
-for trusted_executable in "$TRUSTED_GATE_CGROUP" "$TRUSTED_DIRNAME" "$TRUSTED_FLOCK" \
+for trusted_executable in "$TRUSTED_DIRNAME" "$TRUSTED_FLOCK" \
   "$TRUSTED_CHOWN" "$TRUSTED_SYSTEMCTL" "$TRUSTED_CAT" "$TRUSTED_SED" "$TRUSTED_HEAD" \
   "$TRUSTED_CP" "$TRUSTED_CURL" "$TRUSTED_INSTALL" "$TRUSTED_LS" "$TRUSTED_TAIL" "$TRUSTED_XARGS" \
   "$TRUSTED_TR" "$TRUSTED_CUT" "$TRUSTED_PYTHON" "$TRUSTED_DATE" "$TRUSTED_SYSTEMD_RUN"; do
@@ -631,6 +637,42 @@ if [ ! -f "$trusted_gate_script" ] || [ -L "$trusted_gate_script" ] \
   cleanup
   exit 4
 fi
+
+# Capture every mutable delivery target before bootstrap: a first release may
+# create the helper, while an upgrade must be able to put its old copy back.
+transaction_targets=(
+  "$BROKER_BIN_TARGET" "$BROKER_UNIT_TARGET" "$BROKER_PILOT_DROPIN_TARGET" "$BROKER_LEGACY_DROPIN_TARGET"
+  "$CONTROL_FX_TARGET" "$CONTROL_RELEASE_TARGET" "$TRUSTED_GATE_CGROUP"
+)
+transaction_existed=()
+for ((transaction_i=0; transaction_i<${#transaction_targets[@]}; transaction_i++)); do
+  transaction_target=${transaction_targets[$transaction_i]}
+  if [ -e "$transaction_target" ] || [ -L "$transaction_target" ]; then
+    "$TRUSTED_CP" -a -- "$transaction_target" "$work/transaction-$transaction_i.prev" \
+      || { fail "не смог сохранить $transaction_target для отката"; cleanup; exit 4; }
+    transaction_existed[$transaction_i]=1
+  else
+    transaction_existed[$transaction_i]=0
+  fi
+done
+
+# A newly provisioned host has no helper yet.  Install it only from the
+# root-owned, immutable checkout and validate the installed copy before the
+# first Gate session can use it.
+bootstrap_gate_cgroup="$source_dir/ops/factory-gate-cgroup"
+if [ ! -f "$bootstrap_gate_cgroup" ] || [ -L "$bootstrap_gate_cgroup" ] \
+  || [ "$("$TRUSTED_STAT" -Lc %u -- "$bootstrap_gate_cgroup" 2>/dev/null)" != "$TRUSTED_OWNER_UID" ]; then
+  fail "cgroup-helper не прошёл проверку доверенного пути"
+  cleanup
+  exit 4
+fi
+if ! validate_trusted_executable "$TRUSTED_GATE_CGROUP"; then
+  "$TRUSTED_INSTALL" -o root -g root -m 755 -- "$bootstrap_gate_cgroup" "$TRUSTED_GATE_CGROUP.new" \
+    && "$TRUSTED_MV" -f -- "$TRUSTED_GATE_CGROUP.new" "$TRUSTED_GATE_CGROUP" \
+    || { fail "не смог безопасно установить cgroup-helper до Gate"; cleanup; exit 4; }
+fi
+validate_trusted_executable "$TRUSTED_GATE_CGROUP" \
+  || { fail "установленный cgroup-helper не является доверенным"; cleanup; exit 4; }
 sha=$("$TRUSTED_GIT" -C "$source_dir" rev-parse HEAD)
 subject=$("$TRUSTED_GIT" -C "$source_dir" log -1 --pretty=%s)
 case "$subject" in
@@ -671,11 +713,6 @@ as_user "$TRUSTED_BASH" -c 'cd "$1" && "$2" build -o "$3" ./cmd/factory-server' 
     "$TRUSTED_BASH" "$source_dir" "$TRUSTED_GO" "$work/factory-release-broker" \
   || { fail "сборка сервера, воркера или release-broker не прошла"; cleanup; exit 5; }
 
-step "ставлю привилегированный broker выпусков"
-"$TRUSTED_BASH" "$source_dir/ops/install-project-release-broker.sh" \
-  "$work/factory-release-broker" "$source_dir/ops/systemd/factory-release-broker.service" \
-  || { fail "release-broker не установлен безопасно"; cleanup; exit 5; }
-
 step "проверяю и обновляю ссылки авторизации Codex"
 "$TRUSTED_ENV" -u CODEX_HOME "$TRUSTED_BASH" "$source_dir/ops/provision-codex-auth.sh" \
   || { fail "авторизация Codex не прошла безопасную проверку — релиз не поеду"; cleanup; exit 5; }
@@ -698,7 +735,7 @@ fi
 rollback() {
   trap - EXIT HUP INT TERM
   rollback_armed=0
-  fail "$1 — возвращаю предыдущие сервер и воркер"
+  fail "$1 — возвращаю предыдущий выпуск целиком"
   "$TRUSTED_CP" -f "$work/factory-server.prev" "$SERVER_BIN.new" \
     && "$TRUSTED_MV" -f "$SERVER_BIN.new" "$SERVER_BIN"
   "$TRUSTED_CP" -f "$work/factory-worker.prev" "$WORKER_BIN.new" \
@@ -709,6 +746,18 @@ rollback() {
   else
     "$TRUSTED_RM" -f "$INFO"
   fi
+  for ((transaction_i=${#transaction_targets[@]}-1; transaction_i>=0; transaction_i--)); do
+    transaction_target=${transaction_targets[$transaction_i]}
+    if [ "${transaction_existed[$transaction_i]}" = 1 ]; then
+      "$TRUSTED_RM" -f -- "$transaction_target"
+      "$TRUSTED_MV" -f -- "$work/transaction-$transaction_i.prev" "$transaction_target"
+    else
+      "$TRUSTED_RM" -f -- "$transaction_target"
+    fi
+  done
+  "$TRUSTED_SYSTEMCTL" daemon-reload || true
+  "$TRUSTED_SYSTEMCTL" restart factory-release-broker.service || true
+  "$TRUSTED_SYSTEMCTL" restart "$PILOT_SERVICE" || true
   "$TRUSTED_SYSTEMCTL" restart "$SERVER_SERVICE" || true
   restart_workers || true
   cleanup
@@ -789,6 +838,11 @@ raise SystemExit(not ok)' \
   [ "$attempt" -gt "$REGISTER_ATTEMPTS" ] || "$TRUSTED_SLEEP" "$REGISTER_DELAY"
 done
 [ "$registered" = 1 ] || rollback "воркер $worker_id не зарегистрировался здоровым" 6
+
+step "ставлю привилегированный broker выпусков"
+"$TRUSTED_BASH" "$source_dir/ops/install-project-release-broker.sh" \
+  "$work/factory-release-broker" "$source_dir/ops/systemd/factory-release-broker.service" \
+  || rollback "release-broker не установлен безопасно" 7
 
 step "обновляю штатные команды управления Фабрикой"
 "$TRUSTED_BASH" "$source_dir/ops/install-factory-control.sh" "$source_dir" \
