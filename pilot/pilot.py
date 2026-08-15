@@ -1627,7 +1627,8 @@ def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
     return urgent + rest
 
 
-def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT):
+def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT,
+                                    pinned_ids=()):
     """Keep the live handoff scan bounded to the newest task-list window.
 
     ``all_tasks()`` is still used as the source of truth for duplicate and
@@ -1639,7 +1640,17 @@ def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT)
         limit = max(int(limit), 1)
     except (TypeError, ValueError):
         limit = TERMINAL_HANDOFF_HISTORY_LIMIT
-    return list((tasks or [])[:limit])
+    tasks = list(tasks or [])
+    bounded = tasks[:limit]
+    pinned_ids = set(pinned_ids or ())
+    if not pinned_ids:
+        return bounded
+    included = {task.get("id") for task in bounded}
+    bounded.extend(
+        task for task in tasks[limit:]
+        if task.get("id") in pinned_ids and task.get("id") not in included
+    )
+    return bounded
 
 
 def live_or_done_at(tasks, base, stage_no, since=None):
@@ -1723,6 +1734,9 @@ def retry_terminal_task(conf, state, task_id):
     """Requeue a terminal task without advancing a startup recovery cursor."""
     if task_id in state["processed"]:
         state["processed"].remove(task_id)
+    retry_ids = state.setdefault("terminal_retry_ids", [])
+    if task_id not in retry_ids:
+        retry_ids.append(task_id)
     if task_id in (conf.get("_restart_recovery_ids") or ()):
         conf["_restart_recovery_retry"] = True
 
@@ -7714,6 +7728,15 @@ def cycle(conf, state):
     if not isinstance(overlap_wait_decisions, dict):
         overlap_wait_decisions = {}
         state["overlap_wait_decisions"] = overlap_wait_decisions
+    terminal_retry_ids = state.setdefault("terminal_retry_ids", [])
+    if not isinstance(terminal_retry_ids, list):
+        terminal_retry_ids = []
+        state["terminal_retry_ids"] = terminal_retry_ids
+    processed_ids = set(state.get("processed") or ())
+    terminal_retry_ids[:] = [
+        task_id for task_id in terminal_retry_ids
+        if task_id and task_id not in processed_ids
+    ]
 
     tasks = api("/tasks?limit=100").get("tasks") or []
     # The normal cycle only needs a small current snapshot.  Restart recovery
@@ -7920,6 +7943,7 @@ def cycle(conf, state):
         handoff_tasks,
         conf.get("terminal_handoff_history_limit",
                  TERMINAL_HANDOFF_HISTORY_LIMIT),
+        set(terminal_retry_ids) | set(overlap_wait_decisions) | set(recovery_ids),
     )
     # A full Plan can leave dozens of completed early stages behind. Continue
     # work nearest to delivery first; otherwise a fresh Implement/Review/Verify

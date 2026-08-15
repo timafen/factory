@@ -5694,12 +5694,23 @@ class AdaptivePollingTests(unittest.TestCase):
     def test_terminal_handoff_history_keeps_second_page_without_replaying_archive(self):
         tasks = [{"id": f"task-{number}"} for number in range(350)]
 
-        bounded = pilot.recent_terminal_handoff_history(tasks)
+        bounded = pilot.recent_terminal_handoff_history(
+            tasks, pinned_ids={"task-300"})
 
-        self.assertEqual(len(bounded), 200)
+        self.assertEqual(len(bounded), 201)
         self.assertEqual(bounded[100]["id"], "task-100")
-        self.assertEqual(bounded[-1]["id"], "task-199")
+        self.assertEqual(bounded[199]["id"], "task-199")
+        self.assertEqual(bounded[-1]["id"], "task-300")
         self.assertNotIn("task-200", {task["id"] for task in bounded})
+
+    def test_retry_terminal_task_keeps_deferred_handoff_pinned(self):
+        state = {"processed": ["deferred"]}
+
+        pilot.retry_terminal_task({}, state, "deferred")
+        pilot.retry_terminal_task({}, state, "deferred")
+
+        self.assertEqual(state["processed"], [])
+        self.assertEqual(state["terminal_retry_ids"], ["deferred"])
 
     def test_restart_recovery_skips_unavailable_ids_individually(self):
         conf = {
