@@ -17,6 +17,6 @@ export async function renderReport(html, outputPath, launcher = process.env.FACT
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const outputPath = process.argv[2];
   if (!outputPath) throw new Error("output PDF path is required");
-  const html = await readFile(0, "utf8");
+  const html = await readFile("/dev/stdin", "utf8");
   await renderReport(html, outputPath);
 }

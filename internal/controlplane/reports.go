@@ -26,13 +26,37 @@ type dailyReportRenderer interface {
 
 type commandDailyReportRenderer struct{ script string }
 
+const (
+	factoryBrowserLauncher = "/usr/local/libexec/factory/factory-browser-sandbox"
+	factoryBrowserPayload  = "/opt/factory-data/releases/factory/browser-runtime/current"
+)
+
 func (r commandDailyReportRenderer) Render(ctx context.Context, document, output string) error {
 	command := exec.CommandContext(ctx, "node", r.script, output)
 	command.Stdin = strings.NewReader(document)
+	// The report scripts are materialized in the data directory, while their
+	// Playwright payload belongs to the release.  Make both production paths
+	// explicit so a server service never relies on a removed checkout or its
+	// inherited environment.
+	command.Env = browserRendererEnvironment()
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("render PDF: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func browserRendererEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, item := range os.Environ() {
+		if strings.HasPrefix(item, "FACTORY_BROWSER_LAUNCHER=") || strings.HasPrefix(item, "FACTORY_BROWSER_PAYLOAD=") {
+			continue
+		}
+		environment = append(environment, item)
+	}
+	return append(environment,
+		"FACTORY_BROWSER_LAUNCHER="+factoryBrowserLauncher,
+		"FACTORY_BROWSER_PAYLOAD="+factoryBrowserPayload,
+	)
 }
 
 // DailyReportService uses the same durable background-service pattern as the

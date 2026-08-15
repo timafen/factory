@@ -147,7 +147,7 @@ cat >"$case_dir/bin/browser-installer" <<'EOF'
 echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
 [ "$TEST_MODE" != browser-install-fail ] || exit 7
 mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_SHARE/chromium" "$FACTORY_BROWSER_LIBEXEC"
-printf 'exports.chromium={executablePath:()=>require("path").resolve(__dirname,"../../../chromium/chrome")};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
+printf 'const fs=require("node:fs"); exports.chromium={executablePath:()=>require("path").resolve(__dirname,"../../../chromium/chrome"),launch:async()=>({newPage:async()=>({route:async()=>{},setContent:async()=>{},pdf:async({path})=>fs.writeFileSync(path,"%%PDF-fixture")}),close:async()=>{}})};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
 printf '#!/bin/bash\nexit 0\n' >"$FACTORY_BROWSER_SHARE/chromium/chrome"
 chmod 755 "$FACTORY_BROWSER_SHARE/chromium/chrome"
 cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
@@ -1125,6 +1125,19 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+# The server process must render from the released payload, not from the build
+# checkout.  Remove that checkout before running the actual production script.
+browser_payload=$(readlink -f "$success/releases/browser-runtime/current")
+[ -d "$browser_payload" ] || fail "release did not select a persistent browser payload"
+rm -rf -- "$success/repo"
+printf '<html><body>daily report</body></html>' | \
+  FACTORY_BROWSER_LAUNCHER="$success/browser-live/factory-browser-sandbox" \
+  FACTORY_BROWSER_PAYLOAD="$browser_payload" \
+  /usr/bin/node "$browser_payload/web/report/render.mjs" "$success/after-checkout-removal.pdf" \
+  || fail "production renderer failed after checkout removal"
+head -c 5 "$success/after-checkout-removal.pdf" | grep -Fx '%PDF-' >/dev/null \
+  || fail "production renderer did not create a PDF after checkout removal"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup
