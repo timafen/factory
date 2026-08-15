@@ -144,7 +144,10 @@ func openStore(ctx context.Context, path string, existingOnly bool, hostMaxConcu
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(8)
+	// SQLite permits a single writer. Keeping the pool to one connection makes
+	// concurrent heartbeats wait in database/sql instead of competing for a
+	// write lock until their HTTP request expires.
+	db.SetMaxOpenConns(1)
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
 	// Production explicitly points FACTORY_DATA_HOME at /opt/factory-data. Local
