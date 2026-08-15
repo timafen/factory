@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented in main — conflict reconciliation verified
-Branch: factory/26abe1c1-71d-c1ee55f7-009
+Status: Ready to merge — conflict reconciliation verified
+Branch: factory/a9e0ac99-ca2-92c15d85-625
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
 What changed: предыдущая ветка перебазирована на свежий `main`; устаревшие конфликтующие
 изменения исключены, потому что актуальный `main` уже содержит их расширенную реализацию.
-Evidence: 24 целевых Python-теста, 181 UI-тест и `just build` прошли; полный Go-набор зелёный.
+Evidence: 23 целевых теста после rebase, полный `go test ./...` и 5/5 browser-critical прошли.
 One next action: merge this reconciliation record into `main`.
 
 ## LOG
@@ -87,3 +87,12 @@ One next action: merge this reconciliation record into `main`.
 резервы и handoff подтверждены 24 целевыми тестами; полный Go-набор, 181 UI-тест
 и сборка прошли. Вне области остаются две ошибки текущего `main` в tooling-gate:
 `FACTORY_V2_BUILD_DIR` и несогласованный минимум Go в `SECURITY.md`.
+
+### 2026-08-15 — Implement
+
+После остановленной Verify повторены два обязательных gate без короткого лимита.
+`go test ./...` завершил все пакеты с exit 0, включая долгие controlplane и worker;
+browser-critical с временными файлами внутри рабочего каталога и Chromium Playwright
+завершил все пять release-blocking сценариев за 1,4 минуты. Риск непроверенных
+долгих или браузерных путей снят. После rebase 23 целевых теста номера и handoff
+также завершились успешно.
