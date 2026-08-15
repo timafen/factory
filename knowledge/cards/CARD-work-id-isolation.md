@@ -1,16 +1,20 @@
-Implementation commit: 1692747ff71a369e4ff1c2463d08f577ac9d19a5 — вопросы и возобновления сохраняют work_id
+Implementation commit: 51ef24c2dbe442574990add8e5d042a85e00ec8d — паузы и loop-stop изолированы по work_id
 
 ## HEAD
 
-Status: Implemented — Review повторён
-Branch: factory/2bf978ed-b20-44c65b97-386
-Implementation commit: 1692747ff71a369e4ff1c2463d08f577ac9d19a5
-What changed: все ветки `route_question`, включая budget-stop, retry и orchestrator wait, сохраняют durable `work_id`.
-What changed: ответ при исчезнувшем source task не подхватывает одноимённую работу; созданное продолжение получает сохранённый ID.
-Evidence: `python3 -m unittest -v pilot.test_pilot` → 349 OK, 13 skipped; `go build ./...` → OK.
-One next action: влить поставку после финальной проверки CI.
+Status: Implemented — готово к повторному Review
+Branch: factory/25b0d37f-78c-0abab1b3-f08
+Implementation commit: 51ef24c2dbe442574990add8e5d042a85e00ec8d
+What changed: `pause_pipeline` и все её пути сохраняют durable `work_id`; одноимённые работы имеют отдельные паузы.
+What changed: baseline loop-stop разделён по work_id, поэтому одна работа не даёт другой лишние попытки.
+Evidence: `GOCACHE=/tmp/factory-go-build-cache python3 -m unittest -v pilot.test_pilot` → 351 OK, 13 skipped; `go build ./...` → OK.
+One next action: повторить Review изменения и влить после CI.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Паузы от `resolve_orchestrator_wait`, loop-stop, diagnosis и work-day guard теперь записываются как durable запись с `work_id`; loop baseline разделён тем же ключом. Добавлена регрессия для двух одноимённых работ через orchestrator wait и loop-stop. Полный `pilot.test_pilot` — 351 OK, 13 skipped; Go build — OK с доступным локальным GOCACHE.
 
 ### 2026-08-11 — Implement
 
