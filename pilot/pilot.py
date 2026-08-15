@@ -1643,6 +1643,20 @@ def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
     return urgent + rest
 
 
+def rotate_terminal_handoffs(tasks, cursor, processed, recovery_ids=()):
+    """Rotate fairly without moving an earlier delivery stage behind a later one."""
+    tasks = list(tasks or [])
+    cursor_index = next((index for index, task in enumerate(tasks)
+                         if task.get("id") == cursor), None)
+    if cursor_index is None:
+        return tasks
+    rotated = tasks[cursor_index + 1:] + tasks[:cursor_index + 1]
+    # Reapply stage priority after rotation. Stable sorting preserves the
+    # round-robin order inside one stage, while Verify/Review stay ahead of
+    # Implement/Specification/Triage.
+    return prioritize_terminal_handoffs(rotated, processed, recovery_ids)
+
+
 def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT,
                                     pinned_ids=()):
     """Keep the live handoff scan bounded to the newest task-list window.
@@ -8230,11 +8244,8 @@ def cycle(conf, state):
     # sort lets a capacity-deferred late stage jump back to the front on every
     # cycle and starve earlier-stage continuations forever.
     terminal_cursor = state.get("terminal_cursor")
-    cursor_index = next((index for index, task in enumerate(terminal_tasks)
-                         if task.get("id") == terminal_cursor), None)
-    if cursor_index is not None:
-        terminal_tasks = (terminal_tasks[cursor_index + 1:]
-                          + terminal_tasks[:cursor_index + 1])
+    terminal_tasks = rotate_terminal_handoffs(
+        terminal_tasks, terminal_cursor, state.get("processed"), recovery_ids)
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):

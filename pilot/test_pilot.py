@@ -5642,6 +5642,25 @@ class TerminalHandoffPriorityTests(unittest.TestCase):
         self.assertEqual([task["id"] for task in recovery],
                          ["processed", "fresh"])
 
+    def test_round_robin_cursor_never_demotes_verify_behind_earlier_stage(self):
+        tasks = [
+            {"id": "verify-new", "title": "[auto] [5/5 Verify] Ready",
+             "state": "succeeded"},
+            {"id": "verify-cursor", "title": "[auto] [5/5 Verify] Previous",
+             "state": "succeeded"},
+            {"id": "implement", "title": "[auto] [3/5 Implement + Test] Old",
+             "state": "succeeded"},
+            {"id": "spec", "title": "[auto] [2/5 Specification] Old",
+             "state": "succeeded"},
+        ]
+        ordered = pilot.prioritize_terminal_handoffs(tasks, [])
+
+        rotated = pilot.rotate_terminal_handoffs(
+            ordered, "verify-cursor", processed=[])
+
+        self.assertEqual([task["id"] for task in rotated],
+                         ["verify-new", "verify-cursor", "implement", "spec"])
+
 
 class AnswerEscalationTests(unittest.TestCase):
     @mock.patch.object(pilot, "load_limits", return_value={})
