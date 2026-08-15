@@ -46,6 +46,56 @@ class TestDataIsolationTests(unittest.TestCase):
         self.assertNotEqual(pilot.STATE_PATH, "/opt/factory-data/pilot/state.json")
 
 
+class GitHubOriginIdentityTests(unittest.TestCase):
+    def origin(self, url):
+        return mock.patch("subprocess.run", return_value=subprocess.CompletedProcess(
+            ["git"], 0, url + "\n", ""))
+
+    def test_origin_normalizes_ssh_and_https_urls(self):
+        for url in ("git@github.com:timafen/factory.git",
+                    "ssh://git@github.com/timafen/factory.git",
+                    "https://github.com/timafen/factory"):
+            with self.subTest(url=url), self.origin(url):
+                self.assertEqual(pilot.github_repository_from_origin("/worktree"),
+                                 "timafen/factory")
+
+    def test_explicit_repo_ignores_a_foreign_gh_default(self):
+        with self.origin("git@github.com:timafen/factory.git"), \
+                mock.patch.object(pilot, "gh_json", return_value={
+                    "nameWithOwner": "timafen/factory"}) as gh:
+            self.assertEqual(pilot.gh_repo_view_from_origin("/worktree"),
+                             "timafen/factory")
+        self.assertEqual(gh.call_args.args[0], [
+            "repo", "view", "--repo", "timafen/factory", "--json", "nameWithOwner"])
+
+    def test_foreign_repo_response_blocks_before_it_can_be_used(self):
+        with self.origin("https://github.com/timafen/factory.git"), \
+                mock.patch.object(pilot, "gh_json", return_value={
+                    "nameWithOwner": "owainlewis/factory"}):
+            with self.assertRaisesRegex(RuntimeError, "GitHub action blocked.*owainlewis"):
+                pilot.gh_repo_view_from_origin("/worktree")
+
+    def test_bare_repo_view_is_rejected_before_gh_can_use_its_default(self):
+        with mock.patch("subprocess.run") as run:
+            with self.assertRaisesRegex(RuntimeError, "bare gh repo view"):
+                pilot.gh_json(["repo", "view", "--json", "nameWithOwner"])
+        run.assert_not_called()
+
+    def test_missing_or_non_github_origin_blocks_action(self):
+        for url in ("", "file:///tmp/factory", "https://gitlab.com/timafen/factory"):
+            with self.subTest(url=url), self.origin(url):
+                with self.assertRaisesRegex(RuntimeError, "GitHub action blocked"):
+                    pilot.github_repository_from_origin("/worktree")
+
+    def test_origin_read_failure_blocks_without_gh_request(self):
+        failed = subprocess.CompletedProcess(["git"], 2, "", "No such remote 'origin'")
+        with mock.patch("subprocess.run", return_value=failed), \
+                mock.patch.object(pilot, "gh_json") as gh:
+            with self.assertRaisesRegex(RuntimeError, "cannot read origin"):
+                pilot.gh_repo_view_from_origin("/worktree")
+        gh.assert_not_called()
+
+
 class AgentRulesScopeTests(unittest.TestCase):
     def test_common_rules_exclude_stage_specific_requirements(self):
         self.assertNotIn("ГОТОВО-КОГДА", pilot.AGENT_RULES)
