@@ -2,15 +2,20 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/b5b27bec-f6d-b21afa41-0ef`.
+- Status: Review pending; Verify not yet passed.
+- Branch: `factory/d393bb8b-000-4450f1a1-c5b`.
 - Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — сервер выводит занятые слоты из живых lease и восстанавливает полную ёмкость после потери completion.
 - What changed: registration и routing используют server-derived `active_count`, а не локальное число supervisors.
 - What changed: reconnect-regression теперь считает реальные запуски barrier-supervisor для каждого attempt.
-- Evidence: целевые проверки восстановления ёмкости и отсутствия двойного запуска PASS; полный набор выявил отдельный таймаут polling-теста.
-- One next action: human merge after reviewing the unrelated polling-test timeout.
+- Evidence: реализация и целевые проверки готовы к повторному Review; статус Verify не заявлен.
+- One next action: повторно пройти Review этого снимка, затем передать его на Verify.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Исправлен преждевременный статус карточки: Review ожидается, Verify ещё не пройден.
+Реализация и её доказательства не изменялись; тот же снимок повторно отправляется на Review.
 
 ### 2026-08-11 — Implement
 
