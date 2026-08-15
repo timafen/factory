@@ -203,10 +203,10 @@ export function App() {
           </div>
           <div>
             <span className="brand-name">Factory</span>
-            <span className="brand-subtitle">control plane</span>
+            <span className="brand-subtitle">панель управления</span>
           </div>
         </div>
-        <nav aria-label="Primary navigation">
+        <nav aria-label="Основная навигация">
           <button
             className={`nav-item ${route.page === "overview" ? "active" : ""}`}
             aria-current={route.page === "overview" ? "page" : undefined}
@@ -273,14 +273,14 @@ export function App() {
             aria-current={route.page === "work" ? "page" : undefined}
             onClick={() => navigate({ page: "work" })}
           >
-            <ListChecks size={17} /> Работа
+            <ListChecks size={17} /> Работы
           </button>
           <button
             className={`nav-item ${route.page === "workflows" || route.page === "workflow" ? "active" : ""}`}
             aria-current={route.page === "workflows" ? "page" : undefined}
             onClick={() => navigate({ page: "workflows" })}
           >
-            <BookOpenText size={17} /> Workflows
+            <BookOpenText size={17} /> Сценарии
           </button>
           <button
             className={`nav-item ${route.page === "pipeline" ? "active" : ""}`}
@@ -294,14 +294,14 @@ export function App() {
             aria-current={route.page === "cards" ? "page" : undefined}
             onClick={() => navigate({ page: "cards" })}
           >
-            <FileText size={17} /> Cards
+            <FileText size={17} /> Карточки
           </button>
           <button
             className={`nav-item ${route.page === "automations" || route.page === "automation" ? "active" : ""}`}
             aria-current={route.page === "automations" ? "page" : undefined}
             onClick={() => navigate({ page: "automations" })}
           >
-            <AutomationIcon size={17} /> Automations
+            <AutomationIcon size={17} /> Автоматизации
           </button>
           <button
             className={`nav-item ${route.page === "workers" || route.page === "worker" ? "active" : ""}`}
@@ -315,7 +315,7 @@ export function App() {
             aria-current={route.page === "repositories" ? "page" : undefined}
             onClick={() => navigate({ page: "repositories" })}
           >
-            <GitBranch size={17} /> Repositories
+            <GitBranch size={17} /> Репозитории
           </button>
           <button
             className={`nav-item ${route.page === "projects" ? "active" : ""}`}
@@ -336,12 +336,12 @@ export function App() {
             aria-current={route.page === "settings" ? "page" : undefined}
             onClick={() => navigate({ page: "settings" })}
           >
-            <SettingsIcon size={17} /> Settings
+            <SettingsIcon size={17} /> Настройки
           </button>
         </nav>
         <div className="sidebar-foot">
           <span className="local-dot" aria-hidden="true" />
-          Local control plane
+          Локальная панель управления
         </div>
       </aside>
 
@@ -349,7 +349,7 @@ export function App() {
         <header className="topbar">
           <button
             className="icon-button mobile-menu"
-            aria-label="Toggle navigation"
+            aria-label="Открыть навигацию"
             aria-expanded={mobileNavOpen}
             onClick={() => setMobileNavOpen((open) => !open)}
           >
@@ -360,25 +360,25 @@ export function App() {
             {route.page === "say" && "Say"}
             {route.page === "epics" && "Epics"}
             {route.page === "answer" && "Нужен ответ"}
-            {route.page === "work" && "Работа"}
+            {route.page === "work" && "Работы"}
             {route.page === "workers" && "Исполнители"}
-            {route.page === "task" && "Task detail"}
-            {route.page === "worker" && "Worker detail"}
-            {route.page === "repositories" && "Repositories"}
+            {route.page === "task" && "Задача"}
+            {route.page === "worker" && "Исполнитель"}
+            {route.page === "repositories" && "Репозитории"}
             {route.page === "projects" && "Безопасные проекты"}
-            {route.page === "repository" && "Repository detail"}
-            {route.page === "workflows" && "Workflows"}
-            {route.page === "workflow" && "Workflow detail"}
+            {route.page === "repository" && "Репозиторий"}
+            {route.page === "workflows" && "Сценарии"}
+            {route.page === "workflow" && "Сценарий"}
             {route.page === "pipeline" && "Pipeline"}
-            {route.page === "cards" && "Cards"}
-            {route.page === "automations" && "Automations"}
-            {route.page === "automation" && "Automation detail"}
-            {route.page === "settings" && "Settings"}
+            {route.page === "cards" && "Карточки"}
+            {route.page === "automations" && "Автоматизации"}
+            {route.page === "automation" && "Автоматизация"}
+            {route.page === "settings" && "Настройки"}
             {route.page === "dialog" && "Диалог"}
             {route.page === "sandboxKeys" && "Ключи песочницы"}
           </div>
           <button className="button button-primary" onClick={() => openDelegate()}>
-            <Plus size={16} /> Delegate task
+            <Plus size={16} /> Поставить задачу
           </button>
         </header>
 
@@ -488,7 +488,7 @@ export function App() {
       {mobileNavOpen && (
         <button
           className="nav-scrim"
-          aria-label="Close navigation"
+          aria-label="Закрыть навигацию"
           onClick={() => setMobileNavOpen(false)}
         />
       )}
