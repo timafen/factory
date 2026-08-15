@@ -3036,6 +3036,39 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
         self.assertEqual(artifact["head"], refreshed_head)
         self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
 
+    def test_completed_review_restores_missing_delivery_pin(self):
+        reviewed_head = "b" * 40
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/real", "head": "a" * 40,
+                "task_id": "implement-task",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head=reviewed_head)):
+            artifact, reason = pilot.pin_reviewed_delivery(
+                "Настоящая работа", "github.com/timafen/factory",
+                "factory/real", f"APPROVE\nHEAD: {reviewed_head}")
+
+        self.assertEqual(reason, "")
+        self.assertEqual(artifact["head"], reviewed_head)
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), artifact)
+
+    def test_changed_branch_cannot_be_pinned_by_old_review(self):
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head="c" * 40)):
+            artifact, reason = pilot.pin_reviewed_delivery(
+                "Настоящая работа", "github.com/timafen/factory",
+                "factory/real", "HEAD: " + "b" * 40)
+
+        self.assertEqual(artifact, {})
+        self.assertIn("изменилась после Review", reason)
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), {})
+
     def test_new_implementation_invalidates_delivery_branch(self):
         pilot.save(self.works_path, {"Настоящая работа": {
             "run_generation": "generation-1",
@@ -3237,7 +3270,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertEqual(pilot.delivery_artifact(base)["branch"], rebuilt)
 
             tasks[-1]["state"] = "succeeded"
-            details["review"]["attempts"] = [{"result": "PASS"}]
+            details["review"]["attempts"] = [{
+                "result": f"PASS\nHEAD: {delivery_head}",
+            }]
             pilot.cycle(conf, state)
             self.assertIn(f"Branch: {rebuilt}", created[1]["context"])
 
