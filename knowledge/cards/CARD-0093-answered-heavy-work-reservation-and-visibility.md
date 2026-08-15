@@ -4,13 +4,13 @@ Implementation commit: ab728815799fae74056647c6fb58e309ee2784f4 — production-�
 
 ## HEAD
 
-Status: BLOCKED — production-сборка синхронизирована, но среда не вернула итог полного Playwright-набора.
-Branch: `factory/83735399-1bf-cd7ae267-3a8`.
+Status: PASS — полный HTTPS-набор завершён с реальным service worker.
+Branch: `factory/0f7281c4-7b4-33a9182d-427`.
 Implementation commit: ab728815799fae74056647c6fb58e309ee2784f4 — production-сборка синхронизирована с текущим Vite, чтобы browser-набор не останавливался до Playwright.
 What changed: `web/dist` теперь соответствует текущему `npm run build`; барьер `git diff --exit-code -- dist` пройден.
 What changed: сценарий после возобновления показывает владельцу «Ожидает слияния и выпуска», а не ложное финальное завершение.
-Evidence: `npm run build` — PASS; `just test-browser` дошёл до Playwright, но среда завершила процесс без кода и итоговой сводки; в логе есть внешний `daily_report_failed` из-за отсутствующего `FACTORY_BROWSER_LAUNCHER`.
-One next action: запустить `just test-browser` в среде с заданным абсолютным `FACTORY_BROWSER_LAUNCHER` и дождаться итогового PASS.
+Evidence: `FACTORY_BROWSER_LAUNCHER=/usr/local/libexec/factory/factory-browser-sandbox just test-browser` — PASS, 23/23 за 5,7 мин; HTTPS resume/Origin-сценарий пройден.
+One next action: проверить и влить ветку.
 
 ## LOG
 
@@ -59,3 +59,8 @@ Answer, Work и Overview.
 
 - После явного требования владельца повторён полный `just test-browser`. Первый запуск выявил и подтвердил рассинхронизацию committed `web/dist` с текущим Vite; production-артефакты синхронизированы в `ab728815799fae74056647c6fb58e309ee2784f4`.
 - Повторный запуск прошёл build и проверку чистоты `dist`, затем запустил Playwright. Среда оборвала процесс без финальной сводки; журнал `/tmp/card-0093-test-browser-final.log` содержит независимый `daily_report_failed`: отсутствует абсолютный `FACTORY_BROWSER_LAUNCHER`.
+
+### 2026-08-15 — Implement
+
+- Диагностика подтвердила рабочий изолированный Chromium launcher `/usr/local/libexec/factory/factory-browser-sandbox` для пользователя `factory`; Playwright Chromium установлен в кэше.
+- Полный `FACTORY_BROWSER_LAUNCHER=/usr/local/libexec/factory/factory-browser-sandbox just test-browser` завершился: 23/23 PASS за 5,7 мин. Включая реальный HTTPS resume/Origin-сценарий, который использует service worker.
