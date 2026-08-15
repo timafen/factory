@@ -5,7 +5,7 @@ Implementation commit: отсутствует — этап Specification зап�
 ## HEAD
 
 - Статус: specification готова к реализации.
-- Ветка: `factory/2c42ca50-b44-e8c39729-eb7`.
+- Ветка: `factory/91d6c8ed-24a-54d37d65-54e`.
 - Спецификация: `knowledge/specs/gh-default-repository.md`.
 - Область реализации: `internal/worker/repository_cache.go` и
   `internal/worker/repository_coordination_test.go`.
