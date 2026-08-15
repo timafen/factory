@@ -4,16 +4,17 @@
 
 Implementation commit: 35cb54daeecf082cfd4ced4ecae36a17d987891d — после `gh repo clone` зарегистрированный GitHub URL закрепляется за `origin` до проверки и публикации кэша.
 
-Status: Implemented
-Branch: `factory/baeb072c-39a-9dbd1243-563`.
+Status: Verified
+Branch: `factory/e5b0d18f-eae-811e86c6-04a`.
 
 Factory добавляет отсутствующий либо заменяет неверный `origin`, не удаляя
 оставленный `gh` remote `upstream`. Ошибка настройки не публикует cache entry.
 
 Evidence: целевой managed-task test → PASS; ошибки `remote add`/`set-url` → PASS;
-`go test -timeout 5m ./...` → PASS; `go build ./...` → PASS.
+`go test -timeout 5m ./...` → PASS; `go build ./...` → PASS;
+`just test-browser-critical` через server sandbox → PASS.
 
-Next action: проверить ветку и слить реализацию в `main`.
+Next action: просмотреть и слить реализацию в `main`.
 
 ## LOG
 
@@ -46,3 +47,9 @@ commit и отсутствие опубликованного кэша при о
 Повторная проверка подтвердила реализацию и исправила стабильную строку статуса
 в HEAD карточки, из-за отсутствия которой машинная проверка возвращала работу.
 Целевые сценарии выбора `origin` и отказа публикации кэша снова прошли.
+
+### 2026-08-15 — Implement
+
+В проверочной среде восстановлен изолированный browser launcher и повторена
+обязательная проверка кандидата. `just test-browser-critical` завершилась с
+PASS через server sandbox; тем самым снят прежний инфраструктурный блокер.
