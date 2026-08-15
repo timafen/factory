@@ -85,23 +85,32 @@ func TestRuntimeEnvironmentGitHubRepositoryPolicy(t *testing.T) {
 
 func TestRuntimeCommandUsesGitHubRepositoryPolicyForEveryRuntime(t *testing.T) {
 	t.Setenv("GH_REPO", "owainlewis/factory")
-	for _, runtime := range []string{protocol.RuntimeCodex, protocol.RuntimeClaudeCode} {
-		t.Run(runtime, func(t *testing.T) {
-			command := runtimeCommand(supervisorInit{
-				Runtime:           runtime,
-				RuntimeExecutable: "agent",
-				RemoteIdentity:    "github.com/Example/Cattle",
-				Worktree:          t.TempDir(),
-			}, nil)
-			var repositories []string
-			for _, entry := range command.Env {
-				if strings.HasPrefix(entry, "GH_REPO=") {
-					repositories = append(repositories, strings.TrimPrefix(entry, "GH_REPO="))
+	for _, test := range []struct {
+		name     string
+		identity string
+		want     string
+	}{
+		{name: "assigned factory repository", identity: "github.com/timafen/factory", want: "timafen/factory"},
+		{name: "another github repository", identity: "github.com/Example/Cattle", want: "example/cattle"},
+	} {
+		for _, runtime := range []string{protocol.RuntimeCodex, protocol.RuntimeClaudeCode} {
+			t.Run(test.name+"/"+runtime, func(t *testing.T) {
+				command := runtimeCommand(supervisorInit{
+					Runtime:           runtime,
+					RuntimeExecutable: "agent",
+					RemoteIdentity:    test.identity,
+					Worktree:          t.TempDir(),
+				}, nil)
+				var repositories []string
+				for _, entry := range command.Env {
+					if strings.HasPrefix(entry, "GH_REPO=") {
+						repositories = append(repositories, strings.TrimPrefix(entry, "GH_REPO="))
+					}
 				}
-			}
-			if len(repositories) != 1 || repositories[0] != "example/cattle" {
-				t.Fatalf("GH_REPO values = %q; want [example/cattle]", repositories)
-			}
-		})
+				if len(repositories) != 1 || repositories[0] != test.want {
+					t.Fatalf("GH_REPO values = %q; want [%s]", repositories, test.want)
+				}
+			})
+		}
 	}
 }
