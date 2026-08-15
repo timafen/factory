@@ -3575,7 +3575,7 @@ func TestClaimOrderingRepositoryFilteringAndReplay(t *testing.T) {
 	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return fixed }
 	worker := registerTestWorker(t, store, workerA, 2,
-		protocol.RepositoryRegistration{Key: "full", RemoteIdentity: "github.com/example/full", RetainedCount: 10},
+		protocol.RepositoryRegistration{Key: "full", RemoteIdentity: "github.com/example/full", RetainedCount: protocol.MaxRetainedPerRepo},
 		protocol.RepositoryRegistration{Key: "open", RemoteIdentity: "github.com/example/open"},
 	)
 	repositories := map[string]string{}
@@ -3593,9 +3593,22 @@ func TestClaimOrderingRepositoryFilteringAndReplay(t *testing.T) {
 	if claim.Task.State != "running" || claim.Execution.State != "preparing" {
 		t.Fatalf("task-level preparing mapping is wrong: task=%s execution=%s", claim.Task.State, claim.Execution.State)
 	}
+	originalExpiry := claim.Attempt.LeaseExpiresAt
+	fixed = fixed.Add(20 * time.Second)
 	replay := claimTestTask(t, store, workerA, "claim-replay", tokenA)
 	if replay.Attempt.ID != claim.Attempt.ID {
 		t.Fatalf("claim replay created a different attempt: %s != %s", replay.Attempt.ID, claim.Attempt.ID)
+	}
+	if !replay.Attempt.LeaseExpiresAt.After(originalExpiry) {
+		t.Fatalf("claim replay lease = %s, want later than %s",
+			replay.Attempt.LeaseExpiresAt, originalExpiry)
+	}
+	// The original lease has now expired, but the idempotent replay kept the
+	// same handoff alive long enough for the worker to receive and start it.
+	fixed = originalExpiry.Add(time.Millisecond)
+	if _, err := store.StartAttempt(context.Background(), claim.Attempt.ID,
+		protocol.StartAttemptRequest{LeaseToken: tokenA}); err != nil {
+		t.Fatalf("start after original claim expiry: %v", err)
 	}
 	if _, err := store.Claim(context.Background(), workerA, protocol.ClaimRequest{
 		RequestID: "claim-replay", LeaseToken: tokenB,
@@ -3998,6 +4011,48 @@ func TestVersionedRegistrationDoesNotBulkAcknowledgeUnlistedAttempt(t *testing.T
 	}
 	if blocked != nil {
 		t.Fatalf("versioned snapshot bulk-acknowledged an unlisted attempt: %#v", blocked)
+	}
+}
+
+func TestVersionedRegistrationAcknowledgesExpiredClaimWorkerNeverStarted(t *testing.T) {
+	store := newTestStore(t)
+	fixed := time.Date(2026, 8, 15, 16, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return fixed }
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/unseen-expired-claim",
+	})
+	createTestTask(t, store, "unseen-expired-first", workerA, worker.Repositories[0].ID)
+	claim := claimTestTask(t, store, workerA, "unseen-expired-first", tokenA)
+	if claim.Attempt.StartedAt != nil {
+		t.Fatalf("unstarted claim started_at = %s; want nil", claim.Attempt.StartedAt)
+	}
+
+	fixed = fixed.Add(protocol.LeaseDuration + time.Millisecond)
+	if _, err := store.SweepExpired(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := createTestTask(t, store, "unseen-expired-second", workerA, worker.Repositories[0].ID)
+	if _, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: "modern-worker", WorkerVersion: "test", RuntimeVersion: "test",
+		Capacity: 2, ActiveCount: 0, Health: "healthy", CapacityHandoffVersion: 1,
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "factory", RemoteIdentity: "github.com/example/unseen-expired-claim",
+			RetainedCount: protocol.MaxRetainedPerRepo - 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	next := claimTestTask(t, store, workerA, "unseen-expired-second", tokenB)
+	if next.Task.ID != second.Task.ID {
+		t.Fatalf("claim after unseen lease expired = %s; want %s", next.Task.ID, second.Task.ID)
+	}
+	var acknowledged int
+	if err := store.db.QueryRow(`SELECT capacity_acknowledged FROM attempts WHERE id = ?`, claim.Attempt.ID).Scan(&acknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged != 1 {
+		t.Fatalf("expired unseen claim capacity_acknowledged = %d; want 1", acknowledged)
 	}
 }
 

@@ -1769,6 +1769,27 @@ func (s *Store) RegisterWorker(ctx context.Context, workerID string, input proto
 			return protocol.Worker{}, unavailable(err)
 		}
 	}
+	// A claim response can be lost while the control plane is restarting. In
+	// that case the worker never sees the attempt, so it cannot publish the
+	// attempt ID as disposed on its next registration. Once the untouched lease
+	// has expired, the attempt has no worker-side capacity to hand off. Keeping
+	// it unacknowledged would permanently consume retained-worktree headroom and
+	// can stop that worker from claiming any more tasks.
+	if input.CapacityHandoffVersion == 1 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE attempts
+			SET capacity_acknowledged = 1
+			WHERE worker_id = ?
+			  AND capacity_acknowledged = 0
+			  AND started_at IS NULL
+			  AND (
+			      state = 'lost'
+			      OR (state IN ('preparing', 'running') AND lease_expires_at <= ?)
+			  )
+		`, workerID, now); err != nil {
+			return protocol.Worker{}, unavailable(err)
+		}
+	}
 	for repositoryID := range advertisedRepositoryIDs {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE attempts
