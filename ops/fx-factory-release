@@ -186,21 +186,21 @@ if [ -n "$DELIVERY_ID" ]; then
   fi
   DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
 
-  # Arm the handler before any durable transition.  A signal or an early
-  # failure after `launching` must not leave the operation in that state.
-  trap on_delivery_exit EXIT
-
   if [ -f "$DELIVERY_FILE" ]; then
     case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
       succeeded) exit 0 ;;
       # rc=8 is a retryable contention result.  Keep the immutable delivery id,
       # but retry the lock acquisition instead of making `locked` terminal.
-      locked) delivery_status launching || { echo "!! cannot restart locked delivery" >&2; exit 4; } ;;
+      locked) ;;
       failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
       running) echo "!! delivery outcome is uncertain; refusing to repeat physical release" >&2; exit 4 ;;
       *) echo "!! delivery status is corrupt or unknown; refusing to repeat physical release" >&2; exit 4 ;;
     esac
   fi
+
+  # Arm the handler before the first transition owned by this process.  It
+  # must not rewrite an authoritative pre-existing status that was refused.
+  trap on_delivery_exit EXIT
   delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
 fi
 

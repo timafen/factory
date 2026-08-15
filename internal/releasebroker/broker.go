@@ -363,14 +363,7 @@ func newBroker(stateDir string, executor Executor) *Broker {
 		rename:     os.Rename,
 		closeFile:  (*os.File).Close,
 		renameFile: os.Rename,
-		syncDir: func(path string) error {
-			directory, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer directory.Close()
-			return directory.Sync()
-		},
+		syncDir:    syncDirectory,
 	}
 }
 

@@ -754,7 +754,9 @@ fi
 EOF
   cat >"$case_dir/bin/chmod" <<'EOF'
 #!/bin/bash
-if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]]; then
+if [ "$TEST_MODE" = worker-install-fail ] && [[ "${*: -1}" = *factory-worker.new ]] \
+  && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
+  : >"$TEST_INTERRUPT_MARK"
   exit 1
 fi
 exec /bin/chmod "$@"
@@ -1234,7 +1236,7 @@ set -e
 final_status_value=$(tr -d '\r\n' <"$final_status_failed/delivery-state/$final_status_id.status")
 [ "$final_status_value" = running ] \
   || fail "failed final delivery status write published: $final_status_value"
-[ "$(grep -Fxc 'restart factory-server.service' "$final_status_failed/events")" -eq 1 ] \
+[ "$(grep -Fxc 'start factory-server.service' "$final_status_failed/events")" -eq 1 ] \
   || fail "final status fixture did not perform exactly one physical release"
 grep -F 'не смог надёжно подтвердить успешный выпуск' "$final_status_failed/output" >/dev/null \
   || fail "final status write failure was not reported"
@@ -1277,7 +1279,7 @@ FACTORY_DELIVERY_ID=running-preflight-retry run_release "$running_preflight_fail
   || { cat "$running_preflight_failed/output" >&2; fail "release after preflight refusal did not run"; }
 [ "$(tr -d '\r\n' <"$running_preflight_failed/delivery-state/running-preflight-retry.status")" = succeeded ] \
   || fail "release after preflight refusal did not finish successfully"
-[ "$(grep -Fxc 'restart factory-server.service' "$running_preflight_failed/events")" -eq 1 ] \
+[ "$(grep -Fxc 'start factory-server.service' "$running_preflight_failed/events")" -eq 1 ] \
   || fail "release after preflight refusal did not perform exactly one release"
 
 metadata_mode="$temporary/metadata-mode-0644"
@@ -1365,11 +1367,7 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   assert_file "$failed/install/factory-worker" old-worker
   assert_file "$failed/install/fx" 'exit 0'
   assert_file "$failed/live/pilot/pilot.py" 'old pilot'
-  if [ "$mode" = worker-install-fail ]; then
-    assert_file "$failed/releases/transaction" 'phase=old-stopped'
-  else
-    [ ! -e "$failed/releases/transaction" ] || fail "$mode left a false successful journal"
-  fi
+  [ ! -e "$failed/releases/transaction" ] || fail "$mode left a false successful journal"
   assert_no_fixture_processes "$failed"
 done
 
@@ -1725,7 +1723,7 @@ FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked \
   || { cat "$locked/output" >&2; fail "release after lock failure did not run"; }
 [ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = succeeded ] \
   || fail "release after lock failure did not finish successfully"
-[ "$(grep -Fxc 'restart factory-server.service' "$locked/events")" -eq 1 ] \
+[ "$(grep -Fxc 'start factory-server.service' "$locked/events")" -eq 1 ] \
   || fail "release after lock failure did not perform exactly one release"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
