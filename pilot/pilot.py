@@ -637,6 +637,9 @@ def _note_admitted_task(conf, response, body):
 
 def gh_merge(repo_identity, branch, title, expected_head=""):
     """Open (best-effort) and squash-merge the branch into the default branch."""
+    title, title_error = validate_delivery_title(title)
+    if title_error:
+        return False, "invalid delivery title: " + title_error
     repo = repo_identity.split("github.com/")[-1]
     if expected_head:
         current = gh_json(["api", f"repos/{repo}/branches/{branch}"])
@@ -646,7 +649,7 @@ def gh_merge(repo_identity, branch, title, expected_head=""):
     env = dict(os.environ, HOME=HOME)
     subprocess.run(
         ["gh", "pr", "create", "--repo", repo, "--head", branch,
-         "--title", title or branch,
+         "--title", title,
          "--body", "Automated by the Factory pipeline after Verify PASS."],
         capture_output=True, text=True, env=env, timeout=120)
     if expected_head:
@@ -3298,7 +3301,7 @@ def specification_head_gate(result):
             "Повтори Specification и укажи точный полный SHA опубликованного коммита.")
 
 
-def implementation_commit_gate(repo_identity, branch, files):
+def implementation_commit_gate(repo_identity, branch, files, base=""):
     """Validate the stable code-commit evidence in every delivered card.
 
     A card is itself committed after the implementation.  Comparing its field
@@ -3317,6 +3320,7 @@ def implementation_commit_gate(repo_identity, branch, files):
     repo = repo_identity.split("github.com/")[-1]
     if not repo:
         return None
+    approved_commits = []
     for path in cards:
         encoded_branch = urllib.parse.quote(branch, safe="")
         data = gh_json(["api", f"repos/{repo}/contents/{path}?ref={encoded_branch}"])
@@ -3361,6 +3365,16 @@ def implementation_commit_gate(repo_identity, branch, files):
             return {"back": True, "note": (
                 f"Машинная проверка: Implementation commit {commit} меняет только карточки. "
                 "Укажи существующий коммит с реализацией кода до карточки.")}
+        approved_commits.append(commit)
+    if base and approved_commits:
+        works = load(WORKS_PATH, {}) or {}
+        meta = works.get(base) or {}
+        artifact = meta.get("implementation_artifact") or {}
+        if artifact:
+            artifact["approved_commit"] = approved_commits[0]
+            meta["implementation_artifact"] = artifact
+            works[base] = meta
+            save(WORKS_PATH, works)
     return None
 
 
@@ -3592,7 +3606,7 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                 f"knowledge/cards/{expected_card}-<slug>.md. "
                 "Не выбирай другой номер: создай карточку с выданным префиксом.")}
 
-        implementation_gate = implementation_commit_gate(repo_identity, branch, files)
+        implementation_gate = implementation_commit_gate(repo_identity, branch, files, base)
         if implementation_gate:
             implementation_gate.setdefault("alert", "Вернул сам: карточка не подтверждает реализацию")
             implementation_gate.setdefault("alert_msg", "Карточка должна ссылаться на настоящий коммит кода до своей финальной записи.")
@@ -5345,6 +5359,50 @@ def pushed_branch(candidates, repo_identity):
 
 
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+DELIVERY_TITLE_LINE = re.compile(r"^DELIVERY_TITLE:[ \t]*(.*)$", re.M)
+DELIVERY_TITLE_FORBIDDEN = re.compile(
+    r"(?:\b(?:PASS|BLOCKED|READY\s+TO\s+SPECIFY|REQUEST\s+CHANGES|"
+    r"stopped_owner|succeeded|failed|queued|running)\b|"
+    r"\b(?:TASK|CARD)-[0-9A-Za-z-]+\b|"
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|"
+    r"\b[0-9a-f]{7,64}\b|"
+    r"\[[^\]\n]*auto[^\]\n]*\]\s*\[[^\]\n]*\d+/\d+[^\]\n]*\]|"
+    r"Merge\s+pull\s+request|(?<!\w)#\d+\b)", re.I)
+
+
+def validate_delivery_title(value):
+    """Return a normalized owner-facing result title or a precise reason."""
+    raw = str(value or "")
+    if "\n" in raw or "\r" in raw:
+        return "", "название должно занимать ровно одну строку"
+    title = re.sub(r"[ \t]+", " ", raw).strip()
+    if not title:
+        return "", "название результата пустое"
+    if len(title) > 72:
+        return "", "название результата длиннее 72 символов"
+    if DELIVERY_TITLE_FORBIDDEN.search(title):
+        return "", "название содержит служебный статус, идентификатор или номер PR"
+    return title, ""
+
+
+def choose_delivery_title(result, repo_identity, implementation_commit,
+                          inherited_title=""):
+    """Choose an explicit Verify override or the approved commit subject."""
+    overrides = DELIVERY_TITLE_LINE.findall(result or "")
+    if len(overrides) > 1:
+        return "", "в отчёте Verify должно быть не больше одной строки DELIVERY_TITLE"
+    if overrides:
+        return validate_delivery_title(overrides[0])
+    if inherited_title:
+        return validate_delivery_title(inherited_title)
+    repo = (repo_identity or "").split("github.com/")[-1]
+    if not repo or not FULL_GIT_SHA.fullmatch(implementation_commit or ""):
+        return "", "не сохранён подтверждённый Implementation commit"
+    commit = gh_json(["api", f"repos/{repo}/commits/{implementation_commit}"], strict=True)
+    message = (((commit or {}).get("commit") or {}).get("message") or "")
+    if not message:
+        return "", "GitHub не вернул subject подтверждённого Implementation commit"
+    return validate_delivery_title(message.splitlines()[0])
 
 
 def implementation_artifact(base):
@@ -5392,6 +5450,10 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
             "generation": meta.get("run_generation") or "",
         }
         previous = meta.get("implementation_artifact") or {}
+        if (previous.get("approved_commit")
+                and all(previous.get(key) == artifact[key]
+                        for key in ("branch", "task_id", "generation"))):
+            artifact["approved_commit"] = previous["approved_commit"]
         meta["implementation_artifact"] = artifact
         # Re-reading the same completed Implement task happens after
         # review_gate has refreshed its branch onto a newer main.  The remote
@@ -7634,7 +7696,7 @@ def _fail_generation(state, target, generation, category, now):
     generation["failure_category"] = category
     generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     event_id = generation["id"] + ":failed"
-    titles = [no_bare_hashes(str(wait.get("base") or "Работа из выпуска"))
+    titles = [no_bare_hashes(str(wait.get("delivery_title") or "Название результата недоступно"))
               for wait in generation.get("waits", {}).values() if isinstance(wait, dict)]
     _delivery_state(state)["outbox"].setdefault(event_id, {
         "id": event_id, "kind": "failed", "status": "pending",
@@ -7662,7 +7724,7 @@ def dispatch_delivery_outbox(conf, state):
                    tags="warning", click=f"{UI_BASE}/", journal_id=item["id"])
         else:
             wait = item["waits"][0] if item["waits"] else {}
-            notify(conf, "Задача выполнена", wait.get("base", "Выпуск принят"), tags="white_check_mark",
+            notify(conf, "Задача выполнена", wait.get("delivery_title", "Выпуск принят"), tags="white_check_mark",
                    click=wait.get("link") or f"{UI_BASE}/work", journal_id=item["id"])
         item["status"] = "sent"
         save(STATE_PATH, state)
@@ -7838,8 +7900,11 @@ def recover_merge_intents(conf, state):
         if intent.get("phase") in ("conflict", "repairing", "superseded", "stale"):
             continue
         repo, branch = intent.get("repository", ""), intent.get("branch", "")
-        if not repo or not branch:
+        delivery_title, title_error = validate_delivery_title(intent.get("delivery_title", ""))
+        if not repo or not branch or title_error:
             intent["phase"] = "failed"
+            if title_error:
+                intent["merge_error"] = "invalid delivery title: " + title_error
             continue
         merged = intent.get("phase") in ("merged", "journaled", "waiting")
         if not merged:
@@ -7862,7 +7927,7 @@ def recover_merge_intents(conf, state):
                 intent["actor"] = "automatic"
                 intent["phase"] = "merging"
                 save(STATE_PATH, state)
-                ok, output = gh_merge(repo, branch, intent.get("base", branch),
+                ok, output = gh_merge(repo, branch, delivery_title,
                                       expected_head)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
@@ -7880,6 +7945,7 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "delivery_title": delivery_title,
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "actor": intent.get("actor", "automatic"),
                        "actor_id": intent.get("actor_id"),
@@ -7892,6 +7958,7 @@ def recover_merge_intents(conf, state):
             intent["phase"] = "journaled"
             save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
+                    "delivery_title": delivery_title,
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             # Поезду — коммит, который реально лёг в main после squash,
             # а не head ветки до вливания (его после merge уже не существует).
@@ -7967,6 +8034,7 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         context = (
             f"Pipeline: {base}\n"
             f"Branch: {branch}\n"
+            f"Delivery title: {intent.get('delivery_title', '')}\n"
             f"Previous verified head: {intent.get('commit_sha', '')}\n\n"
             "GitHub found a content conflict with current main. Continue the SAME branch. "
             "Fetch origin/main, rebase or merge it into this branch, resolve only the "
@@ -8426,9 +8494,29 @@ def cycle(conf, state):
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
                             attempts_so_far=0, branch=branch)
                         continue
+                    implementation = implementation_artifact(base_title(title))
+                    work_id = task_work_id(t)
+                    inherited_title = next((old.get("delivery_title", "")
+                        for old in state.get("merge_intents", {}).values()
+                        if old.get("delivery_title")
+                        and ((work_id and old.get("work_id") == work_id)
+                             or old.get("base") == base_title(title))), "")
+                    delivery_title, title_error = choose_delivery_title(
+                        result, repo_identity, implementation.get("approved_commit", ""),
+                        inherited_title)
+                    if title_error:
+                        route_question(
+                            conf, tid, "Verify", "Verify", base_title(title), rid,
+                            "Поставка не получила понятное человеку название результата.",
+                            "Повторить Verify и дать одну строку DELIVERY_TITLE с результатом?",
+                            ["Повтори Verify", "Покажи причину", "Останови работу"],
+                            title_error + ". Нужна одна строка до 72 символов без статуса, ID, SHA или номера PR.",
+                            attempts_so_far=0, branch=branch)
+                        continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
                         "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
+                        "delivery_title": delivery_title, "work_id": work_id,
                         "actor_id": None,
                         "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
