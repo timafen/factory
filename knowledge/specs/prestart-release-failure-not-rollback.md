@@ -12,9 +12,11 @@
 ## Технический подход и реальные файлы
 
 - В `internal/controlplane/project_adapters.go` обработать definitive 4xx/POST
-  отказ broker как durable `failed` с сообщением о том, что broker отклонил
-  операцию до старта; неизвестный результат POST по-прежнему оставить running
-  для последующего poll.
+  отказ broker в `RunProjectOperation` как durable `failed` с сообщением о том,
+  что broker отклонил операцию до старта; неизвестный результат POST по-прежнему
+  оставить `running` для последующего poll. В `parseProjectReleaseBrokerStatus`
+  принять terminal-значение `failed`, а в `ProjectOperation` завершать его без
+  health-check и без запуска rollback.
 - В `internal/releasebroker/broker.go` вернуть `failed`, если executable не
   удалось запустить. Ошибка после фактического старта должна сохранить текущую
   семантику: успешный выпуск, `release_failed_rolled_back`, либо
@@ -22,9 +24,11 @@
 - В `internal/controlplane/project_adapters.go` расширить разбор durable-статуса
   broker значением `failed`; не менять смысл `release_failed_rolled_back`,
   `health_failed_rolled_back` и `rollback_failed`.
-- В `migrations/021_projects.sql` добавить `failed` в CHECK для новых баз и
-  подготовить совместимое обновление существующей схемы, если миграционный
-  механизм проекта этого требует.
+- В `migrations/031_project_operation_failed_status.sql` пересоздать SQLite
+  таблицу `project_operations` с расширенным CHECK, скопировать данные и
+  восстановить частичный уникальный индекс. `021_projects.sql` уже применена
+  существующими базами, поэтому её изменение не обновит их схему; новая миграция
+  одновременно будет применена и к чистой базе после `021`.
 - В `web/src/types.ts` добавить `failed` в `ProjectOperation.status` и проверить
   `web/src/Projects.tsx`/форматирование сообщения: UI не должен превращать его
   в rollback failure.
@@ -34,7 +38,8 @@
 
 ## Последовательный план
 
-1. Добавить durable-статус `failed` в схему, серверный разбор и TypeScript-контракт.
+1. Добавить новую миграцию для durable-статуса `failed`, серверный разбор и
+   TypeScript-контракт.
 2. Разделить pre-start ошибки broker и executor от ошибок, возникших после
    старта процесса или во время требуемого rollback.
 3. Закрепить сообщения: отказ broker явно говорит «до старта», а невозможность
@@ -57,21 +62,29 @@
   остаётся наблюдаемой до poll, согласно текущему safety-контракту.
 - API, durable store и TypeScript принимают `failed`; Projects показывает
   владельцу честное сообщение без слова/смысла «неудачный откат».
+- Когда broker уже вернул terminal `failed`, повторный poll сохраняет этот
+  статус и не выполняет health-check либо rollback как побочный эффект.
 
 ## Тест-план
 
-- `go test ./internal/controlplane -run 'TestBrokerDefinitiveRejectionDoesNotLeaveOperationRunning|TestTarserNeverClaimsAnUnverifiedRollback|TestFactoryAutomaticRollbackRequiresRestoredHealth' -count=1`;
-  первый тест должен быть изменён на ожидание `failed` и сообщение pre-start.
-- Добавить тест executor для ошибки `Start()` и запустить
-  `go test ./internal/releasebroker -count=1`.
+- Изменить `TestBrokerDefinitiveRejectionDoesNotLeaveOperationRunning`: 409 на
+  POST должен дать `failed`, а сообщение должно содержать «до старта»; добавить
+  в `TestFactoryBrokerReportsExactAutomaticRollbackOutcomes` terminal `failed`
+  и проверку отсутствия health/rollback.
+- Добавить `TestFXExecutorStartFailureIsFailed`: несуществующий executable
+  возвращает `failed`, а не `rollback_failed`.
+- Запустить обязательную команду из блока «ГОТОВО-КОГДА»; она одновременно
+  проверяет pre-start 4xx, ошибку `Start()` и сохранение настоящих rollback
+  исходов.
 - Запустить целевые Projects-тесты в `web` (включая новый сценарий `failed`) и
   TypeScript-проверку проекта.
 - Проверить миграцию на чистой БД и чтение всех старых rollback-статусов.
 
 ## Риски и решения
 
-- Риск: `failed` отвергнет старый CHECK или потребитель контракта. Решение:
-  обновить миграцию, Go-разбор и TypeScript одновременно, затем пройти API/UI.
+- Риск: `failed` отвергнет старый CHECK существующей SQLite-базы или потребитель
+  контракта. Решение: добавить новую миграцию (не переписывать применённую 021),
+  затем обновить Go-разбор и TypeScript одновременно и пройти API/UI.
 - Риск: ошибка POST может быть неопределённой. Решение: менять только
   `projectBrokerDefinitelyRejected`; unknown оставлять running.
 - Риск: слишком широкая замена `rollback_failed` скроет реальный rollback.
@@ -89,10 +102,10 @@
 
 ГОТОВО-КОГДА: файл internal/controlplane/project_adapters.go
 ГОТОВО-КОГДА: файл internal/releasebroker/broker.go
-ГОТОВО-КОГДА: файл migrations/021_projects.sql
+ГОТОВО-КОГДА: файл migrations/031_project_operation_failed_status.sql
 ГОТОВО-КОГДА: файл web/src/types.ts
 ГОТОВО-КОГДА: файл web/src/Projects.tsx
 ГОТОВО-КОГДА: файл internal/controlplane/project_adapters_test.go
 ГОТОВО-КОГДА: файл internal/releasebroker/broker_test.go
 ГОТОВО-КОГДА: файл web/src/Projects.test.tsx
-ГОТОВО-КОГДА: команда go test ./internal/controlplane -run 'TestBrokerDefinitiveRejectionDoesNotLeaveOperationRunning|TestTarserNeverClaimsAnUnverifiedRollback|TestFactoryAutomaticRollbackRequiresRestoredHealth' -count=1
+ГОТОВО-КОГДА: команда go test ./internal/controlplane ./internal/releasebroker -run 'TestBrokerDefinitiveRejectionDoesNotLeaveOperationRunning|TestFXExecutorStartFailureIsFailed|TestFactoryBrokerReportsExactAutomaticRollbackOutcomes' -count=1
