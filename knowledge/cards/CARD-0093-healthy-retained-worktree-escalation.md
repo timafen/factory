@@ -1,18 +1,17 @@
-Implementation commit: c850eebe5528a7c33c34b661c00df47cf567ed0c — healthy retained эскалируется идемпотентно, а unhealthy retained очищается через карантин.
+Implementation commit: c454b985e60446f07c66b15318432193e3c1e38a — healthy retained эскалируется без остановки, а тест очистки unhealthy retained использует точный путь worktree.
 
 # CARD-0093 — Эскалация retained worktree здорового исполнителя
 
 ## HEAD
 
-- Status: Implemented — targeted checks pass
-- Branch: `factory/113d4a38-8aa-4624be9d-a9f`
-- Implementation commit: `c850eebe5528a7c33c34b661c00df47cf567ed0c`
+- Status: Implemented — checks and build pass
+- Branch: `factory/4ba42919-8a6-eea8bfd8-3d7`
+- Implementation commit: `c454b985e60446f07c66b15318432193e3c1e38a`
 - Specification: `knowledge/specs/healthy-retained-worktree-escalation.md`
 - What changed: healthy online retained получает одну durable-эскалацию на
   точный снимок; online unhealthy retained теперь переносится в карантин и
   подтверждается существующим API очистки, как и offline retained.
-- Evidence: `bash ops/test-factory-janitor.sh` — 8 сценариев PASS, включая
-  очистку retained worktree у online unhealthy исполнителя.
+- Evidence: целевой shell-тест — 8 PASS; `just test` и `just build` — PASS.
 - Next action: проверить этапом Verify и влить ветку в `main`.
 
 ## LOG
@@ -43,6 +42,13 @@ Online unhealthy исполнитель с retained worktree включён в �
 карантина и API-подтверждения очистки. Целевой тест сохранил прежний сценарий
 unhealthy без retained и добавил восьмой сценарий очистки unhealthy retained:
 `bash ops/test-factory-janitor.sh` — 8 PASS.
+
+### 2026-08-15 — Implement
+
+Фикстура online unhealthy retained привязана к реально перемещаемому
+worktree, а для healthy retained добавлен прямой запрет `stop/start`.
+`bash ops/test-factory-janitor.sh` подтвердил 8 сценариев PASS.
+Полный `just test` и сборка `just build` также завершились PASS.
 
 ## Проверка готовности
 
