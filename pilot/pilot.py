@@ -5299,8 +5299,40 @@ def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
     return answered
 
 
+def certain_positive_decision(stage, result):
+    """Route only an exact positive workflow verdict without a second model."""
+    first = next((line.strip() for line in (result or "").splitlines()
+                  if line.strip()), "")
+    first = re.sub(r"^[#>*-]+\s*", "", first).rstrip(" .:").upper()
+    messages = {
+        ("Triage", "READY TO SPECIFY"): (
+            "advance",
+            "Разбор подтвердил, что работа актуальна и готова к спецификации."),
+        ("Review", "APPROVE"): (
+            "advance",
+            "Проверка изменений одобрила работу без замечаний."),
+        ("Verify", "PASS"): (
+            "stop",
+            "Финальная проверка пройдена; слияние и выпуск продолжатся автоматически."),
+    }
+    selected = messages.get((stage, first))
+    if not selected:
+        return None
+    action, summary = selected
+    return {
+        "action": action,
+        "reason": summary,
+        "handoff": "",
+        "next_complexity": "medium",
+        "verdict_ru": summary,
+    }
+
+
 def decide(conf, stage, next_stage, title, result, repo_id=""):
     """Ask the decision model what to do. Returns dict(action, reason, handoff)."""
+    certain = certain_positive_decision(stage, result)
+    if certain:
+        return certain
     guide = {
         "Triage": "Advance ONLY if the triage verdict is READY (ready to specify/implement). "
                   "If NEEDS INFORMATION, WAIT, or CLOSE/DUPLICATE - stop.",

@@ -5730,6 +5730,39 @@ class TriageCloseTests(unittest.TestCase):
         close.assert_not_called()
 
 
+class CertainDecisionTests(unittest.TestCase):
+    def test_exact_positive_verdicts_do_not_call_the_model_again(self):
+        cases = (
+            ("Triage", "READY TO SPECIFY\nProblem: reproduced", "advance"),
+            ("Review", "# APPROVE\nNo blocking findings.", "advance"),
+            ("Verify", "PASS.\nAll release checks are green.", "stop"),
+        )
+        for stage, result, action in cases:
+            with self.subTest(stage=stage), \
+                    mock.patch.object(
+                        pilot, "brain",
+                        side_effect=AssertionError("model must not be called")):
+                decision = pilot.decide(
+                    {}, stage, "next", "Work", result, "repo")
+            self.assertEqual(decision["action"], action)
+            self.assertEqual(decision["next_complexity"], "medium")
+            self.assertTrue(decision["verdict_ru"])
+
+    def test_ambiguous_or_negative_verdict_still_uses_the_model(self):
+        answer = json.dumps({
+            "action": "stop", "reason": "needs context", "handoff": "",
+            "next_complexity": "medium", "verdict_ru": "Нужны подробности.",
+        })
+        for result in ("Result: APPROVE", "BLOCKED\nDNS is unavailable"):
+            with self.subTest(result=result), \
+                    mock.patch.object(
+                        pilot, "brain", return_value=(answer, "test")) as brain:
+                decision = pilot.decide(
+                    {}, "Review", "Verify", "Work", result, "repo")
+            self.assertEqual(decision["action"], "stop")
+            brain.assert_called_once()
+
+
 class TerminalHandoffPriorityTests(unittest.TestCase):
     def test_late_existing_work_precedes_new_triage_backlog(self):
         tasks = [
