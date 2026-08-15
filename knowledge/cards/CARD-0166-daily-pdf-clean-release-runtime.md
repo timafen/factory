@@ -1,19 +1,18 @@
-Implementation commit: 031e6c9d63d3c174cce7067cd758979b664285bb — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
+Implementation commit: 90272561dcd7c8bcb4b3ef5694428e7ff983c461 — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
-Status: Implemented — awaiting Review
-Branch: `factory/77de079d-588-9c3552f3-2ed`
-Implementation commit: `031e6c9d63d3c174cce7067cd758979b664285bb`
+Status: Blocked by release-fixture regression after rebase
+Branch: `factory/8ebc0078-797-76204680-988`
+Implementation commit: `90272561dcd7c8bcb4b3ef5694428e7ff983c461`
 What changed: generation parents и Chromium payload доступны группе служебного
 пользователя без права записи; installer проверен отдельной service identity.
 Cleanup возвращает browser live-state после любого сбоя между installer и prepared journal.
-Evidence: `bash ops/test-install-server-browser.sh` → PASS; отдельная service identity
-загружает Playwright из постоянного payload. `bash ops/test-fx-factory-release.sh` → PASS;
-сбой после browser smoke восстанавливает live-state, не создаёт journal и не трогает службы.
-One next action: провести Review доступа service user и раннего rollback-контракта.
+Evidence: installer → PASS; `npx tsc -p tsconfig.app.json --noEmit` → PASS;
+`node --test report/report.test.mjs` → 5/5 PASS. Release fixture fails: `ui-test-fail returned 0 instead of build error 5`.
+One next action: restore the expected UI gate rejection and rerun the full release fixture.
 
 ## LOG
 
@@ -50,3 +49,10 @@ web — 180/180 и production build PASS.
 installer и возвращает browser live-state при сбое до `prepared` journal.
 Проверки: `bash ops/test-install-server-browser.sh` — PASS;
 `bash ops/test-fx-factory-release.sh` — PASS, включая сбой после browser smoke.
+
+### 2026-08-14 — Implement (rebase verification)
+
+Реализация перенесена на свежий `origin/main`; SHA реализации обновлён после
+перебазирования. Installer — PASS, TypeScript — PASS, report tests — 5/5 PASS.
+Полный release fixture остановился на `ui-test-fail returned 0 instead of build error 5`;
+живой выпуск не выполнялся.
