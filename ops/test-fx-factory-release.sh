@@ -702,8 +702,14 @@ exit 0
 EOF
   cat >"$case_dir/bin/mv" <<'EOF'
 #!/bin/bash
-/bin/mv "$@" || exit
 target=${@: -1}
+if [ "$TEST_MODE" = final-release-record-write-fail ] \
+  && [ "$target" = "$TEST_RELEASE_DIR/current" ] \
+  && [ ! -e "$TEST_RELEASE_DIR/final-write-failed" ]; then
+  : >"$TEST_RELEASE_DIR/final-write-failed"
+  exit 1
+fi
+/bin/mv "$@" || exit
 if [ "$TEST_MODE" = interrupt-between-install ] \
   && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
   : >"$TEST_INTERRUPT_MARK"
@@ -1232,6 +1238,23 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   fi
   assert_no_fixture_processes "$failed"
 done
+
+final_write_failed="$temporary/final-release-record-write-fail"
+make_fixture "$final_write_failed" final-release-record-write-fail
+set +e
+run_release "$final_write_failed" final-release-record-write-fail
+status=$?
+set -e
+[ "$status" -eq 7 ] \
+  || fail "final release record write failure returned $status instead of 7"
+[ -e "$final_write_failed/releases/final-write-failed" ] \
+  || fail "final release record failure fixture did not reach the final write"
+assert_file "$final_write_failed/output" 'финальная запись выпуска не сохранена'
+assert_file "$final_write_failed/install/factory-server" old-server
+assert_file "$final_write_failed/install/factory-worker" old-worker
+! grep -F '== выкачено:' "$final_write_failed/output" >/dev/null \
+  || fail "final release record write failure was reported as success"
+assert_no_fixture_processes "$final_write_failed"
 
 run_crash_cleanup
 

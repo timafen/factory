@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -329,13 +330,25 @@ func TestFXExecutorMapsEveryAdapterToFixedArgv(t *testing.T) {
 	}
 }
 
-func TestFXExecutorRecognizesFactoryAutomaticRollback(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "fx")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 6\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if status := (FXExecutor{FactoryReleaseExecutable: executable}).Execute(context.Background(), "fx-factory-release", testSHA); status != "release_failed_rolled_back" {
-		t.Fatalf("status=%q, want release_failed_rolled_back", status)
+func TestFXExecutorRecognizesFactoryTerminalOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		exit   int
+		status string
+	}{
+		{name: "automatic rollback", exit: 6, status: "release_failed_rolled_back"},
+		{name: "final record failure", exit: 7, status: "rollback_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executable := filepath.Join(t.TempDir(), "fx")
+			script := fmt.Sprintf("#!/bin/sh\nexit %d\n", test.exit)
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if status := (FXExecutor{FactoryReleaseExecutable: executable}).Execute(context.Background(), "fx-factory-release", testSHA); status != test.status {
+				t.Fatalf("status=%q, want %s", status, test.status)
+			}
+		})
 	}
 }
 

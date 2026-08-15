@@ -1304,9 +1304,10 @@ write_journal services-started "$generation_path" "$old_generation" || rollback 
 cp -f "$generation_path/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
   && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" \
   || rollback "правдивые metadata не опубликованы" 7
-ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"
-ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
-write_journal committed "$generation_path" "$old_generation" || rollback "commit journal не записан" 7
+ln -sfn "$old_generation" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" \
+  && ln -sfn "$generation_path" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT" \
+  && write_journal committed "$generation_path" "$old_generation" \
+  || rollback "финальная запись выпуска не сохранена" 7
 rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
 cleanup
