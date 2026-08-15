@@ -5687,7 +5687,10 @@ class StageWorkerCapacityTests(unittest.TestCase):
             "preferred": {
                 "online": True, "health": "healthy", "capacity": 2,
                 "active_count": 0,
-                "repositories": [{"id": "factory", "retained_count": 10}],
+                "repositories": [{
+                    "id": "factory",
+                    "retained_count": pilot.MAX_RETAINED_PER_REPOSITORY,
+                }],
             },
             "spare": {
                 "online": True, "health": "healthy", "capacity": 2,
@@ -7897,7 +7900,10 @@ class HostLoadAdmissionTests(unittest.TestCase):
             "full-worker": {
                 "id": "full-id", "name": "full-worker", "online": True,
                 "health": "healthy", "capacity": 2, "active_count": 0,
-                "repositories": [{"id": "repo-id", "retained_count": 10}],
+                "repositories": [{
+                    "id": "repo-id",
+                    "retained_count": pilot.MAX_RETAINED_PER_REPOSITORY,
+                }],
             },
             "spare-worker": {
                 "id": "spare-id", "name": "spare-worker", "online": True,

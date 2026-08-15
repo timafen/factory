@@ -7375,9 +7375,9 @@ def rescue_queued(conf, tasks, workflows, workers):
 def worker_retention_full(worker, repository_id=None):
     """Whether retained worktrees make a worker unable to claim more work.
 
-    The Go control plane deliberately stops claims at ten retained worktrees
-    per repository. Heartbeats remain healthy in that state, so the pilot must
-    include repository headroom in its own routing health check.
+    The Go control plane deliberately stops claims at the shared retained
+    worktree ceiling per repository. Heartbeats remain healthy in that state,
+    so the pilot must include repository headroom in its routing health check.
     """
     if not isinstance(worker, dict):
         return False
