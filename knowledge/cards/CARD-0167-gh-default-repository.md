@@ -1,4 +1,4 @@
-Implementation commit: 48ae3f9f5d4010e2577932a1f390d54e52f70ece — кэш назначает upstream GitHub CLI default, сохраняя origin.
+Implementation commit: 74eac0559890da5b8b52707061e5b9017789c79f — кэш назначает upstream GitHub CLI default, сохраняя origin.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
@@ -6,7 +6,7 @@ Implementation commit: 48ae3f9f5d4010e2577932a1f390d54e52f70ece — кэш на�
 
 - Status: Implemented
 - Branch: `factory/8c401f07-2c6-808aca56-426`.
-- Implementation commit: `48ae3f9f5d4010e2577932a1f390d54e52f70ece`.
+- Implementation commit: `74eac0559890da5b8b52707061e5b9017789c79f`.
 - What changed: новые и существующие кэши снимают `gh-resolved` с `origin` и
   назначают `remote.upstream.gh-resolved=base`, не меняя URL и tracking.
 - Evidence: `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS; bare `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
