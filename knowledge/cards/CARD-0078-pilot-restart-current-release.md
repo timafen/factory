@@ -1,21 +1,30 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: 679736aa7be56c37873cf83de6f4771b35ad229a — generation-выпуск ставит restart Пилота после metadata под общим lock.
+Implementation commit: aed58a5970a744f4e6c938f2db80b5b6d3cdeb3a — rollback отменяет отложенный restart Пилота после сбоя финализации.
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/a3f73517-faf-01a878ca-879`.
+- Status: Implemented — ready for review.
+- Branch: `factory/10d44ecc-3cd-9a57f061-633`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: 679736aa7be56c37873cf83de6f4771b35ad229a — restart
-  Пилота в generation-модели защищён общим lock.
-- What changed: обновлённый brain планирует restart после публикации
-  `release-info`; неизменённый brain его не ставит.
-- Evidence: `bash ops/test-fx-factory-release.sh`, `go test ./... -count=1` и
-  `go build ./...` — PASS.
-- Next action: человек проверяет и вливает изменения.
+- Implementation commit: aed58a5970a744f4e6c938f2db80b5b6d3cdeb3a — rollback
+  отменяет transient timer и service до восстановления прежнего поколения.
+- What changed: сбой после успешного `systemd-run` останавливает отложенный
+  restart; обычный restart по-прежнему защищён общим release-lock.
+- Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
+  `bash ops/test-fx-factory-release.sh` — PASS.
+- Next action: провести review и влить изменение.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Исправлен риск после успешного `systemd-run`: rollback теперь останавливает
+созданные transient timer и service перед возвратом к прежнему поколению.
+Новая shell-регрессия принудительно ломает публикацию `current` после постановки
+timer и подтверждает, что marker ожидания удалён, а Пилот не перезапускается.
+`bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
+`bash ops/test-fx-factory-release.sh` — PASS.
 
 ### 2026-08-14 — Implement
 
