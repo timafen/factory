@@ -2,14 +2,13 @@
 
 ## HEAD
 
-Implementation commit: cc1529ee976ab0cafe4720f1e04455966ee37b32 — durable merge-intent принимает только сериализуемый ID поколения, а receipts разделяются по work_id.
-- Status: PASS — перенесено поверх свежего main.
-- Branch: `factory/3917a24c-b6d-31bdcadc-621`.
-- What changed: повторные корректировки с совпадающим заголовком остаются в одном
-  устойчивом конвейере; migration 027 не применяется без схемы 026.
-- Evidence: `go test ./...`, `go build ./...`, полный Pilot и 7 restart-storm
-  проверок — PASS.
-- Next action: повторно выполнить Verify для запушенного candidate.
+Implementation commit: 0c3eb07c0366ed11a8d61bdb31cd84b4fd38c094 — Pilot сохраняет границы поколений и delivery artifact по durable work_id.
+- Status: PASS — перенесено поверх свежего `origin/main`.
+- Branch: `factory/41c411be-17e-a852630a-f7e`.
+- What changed: Review/Verify corrections и одноимённые работы остаются в одном
+  устойчивом конвейере; lifecycle и выбранная поставка не теряют work_id после рестарта.
+- Evidence: target Go 5 tests, `CorrectionProvenanceStormTests` 11, полный Pilot 306 (13 skipped), `go test ./...` и `go build ./...` — PASS.
+- Next action: выполнить Verify для запушенной ветки.
 
 ## LOG
 
@@ -100,3 +99,12 @@ outbox и их целевые тесты. Первый subprocess создаёт
 final verdict и merge, читая только JSON state/API-фикстуры. `python3 -m unittest
 pilot.test_pilot.CorrectionProvenanceStormTests` дал 7 OK; `go test ./internal/controlplane`
 и `python3 -m py_compile pilot/test_pilot.py` прошли.
+
+### 2026-08-14 — Implement
+
+Предыдущая реализация забрана через `FETCH_HEAD` и перебазирована на свежий
+`origin/main`; после перебазирования исправлены потерянный `work_id` в terminal
+handoff, переоткрытие поколения, delivery artifact и граница активной карточки
+Плана для старого одноимённого root. Целевые Go-проверки (5), `CorrectionProvenanceStormTests`
+(11), полный `pilot.test_pilot` (306, 13 skipped), `go test ./...`, `go build ./...`,
+`py_compile` и `git diff --check` прошли.
