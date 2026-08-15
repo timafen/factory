@@ -1,13 +1,13 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: 4466b40d9e19b3aceb6077f994add145641dab88 — rollback отменяет отложенный restart Пилота после сбоя финализации.
+Implementation commit: 2543db91194a5a459a43ceea687c93684df52e8c — rollback отменяет отложенный restart Пилота после сбоя финализации.
 
 ## HEAD
 
 - Status: Implemented — ready for review.
 - Branch: `factory/8e1c3a13-abf-0dfe5ba5-2b6`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: 4466b40d9e19b3aceb6077f994add145641dab88 — rollback
+- Implementation commit: 2543db91194a5a459a43ceea687c93684df52e8c — rollback
   отменяет transient timer и service до восстановления прежнего поколения.
 - What changed: сбой после успешного `systemd-run` останавливает отложенный
   restart; обычный restart по-прежнему защищён общим release-lock.
