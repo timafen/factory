@@ -2857,6 +2857,7 @@ def pipeline_watch(conf, tasks, workflows, workers):
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     gave_up = []
+    capacity_deferred = 0
     for work_key, group in groups.items():
         base, lst = group["base"], group["tasks"]
         allowed = []
@@ -2903,6 +2904,17 @@ def pipeline_watch(conf, tasks, workflows, workers):
             if rec.get("why") != "give_up":
                 rec["why"] = "give_up"
                 gave_up.append((base, stages[far]))
+            continue
+        active_tasks = conf.get("_active_work_tasks")
+        if (isinstance(active_tasks, list)
+                and len(active_auto_works(active_tasks)) >= int(
+                    conf.get("max_parallel_works", MAX_PARALLEL_WORKS))):
+            # Capacity is already known from the shared cycle snapshot.  Do
+            # not ask the control plane the same doomed question once per
+            # stale work: after a release restart that can be hundreds of
+            # sequential HTTP 400s before Pilot records the release result.
+            rec["since"] = now
+            capacity_deferred += 1
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
@@ -2962,6 +2974,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
             # задач этой работы больше нет в панели — запись выдохлась,
             # держать её значит толкать призраков вместо живых работ
             mem.pop(key, None)
+    if capacity_deferred:
+        log(f"watch_capacity_deferred count={capacity_deferred}")
     if gave_up:
         if len(gave_up) == 1:
             base, stage = gave_up[0]
