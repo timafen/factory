@@ -130,7 +130,7 @@ func run() (returnErr error) {
 		return err
 	}
 
-	store, err := controlplane.Open(rootContext, *database)
+	store, err := controlplane.OpenWithOptions(rootContext, *database, controlplane.OpenOptions{HostMaxConcurrent: *bootstrap.HostMaxConcurrent})
 	if err != nil {
 		return err
 	}
@@ -247,6 +247,7 @@ func run() (returnErr error) {
 			"address", listener.Addr().String(),
 			"database", *database,
 			"ui_url", "http://"+listener.Addr().String()+"/",
+			"host_max_concurrent", *bootstrap.HostMaxConcurrent,
 		)
 		serverErrors <- server.Serve(listener)
 	}()

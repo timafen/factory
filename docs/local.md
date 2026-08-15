@@ -31,12 +31,19 @@ needed before SQLite opens:
 ```toml
 listen = "127.0.0.1:7337"
 database = "server/factory.sqlite3"
+# Optional. Defaults to the number of logical CPUs visible to factory-server.
+host_max_concurrent = 8
 ```
 
 Relative database paths resolve from the config file directory. Unknown fields,
 symlinks, and files larger than 1 MiB are rejected. Command-line flags override
 the file. Copy [the example](../examples/config.toml) only when changing these
 defaults.
+
+`host_max_concurrent` is the shared host budget across every local worker
+service. It does not replace each worker's own `max_concurrent` setting: both
+limits apply, so use this value to keep all workers on one machine within its
+available CPU capacity.
 
 The control-plane database contains prompts, results, and repository metadata.
 Factory creates the database, its marker, and SQLite WAL and shared-memory files

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -102,20 +103,34 @@ func TestServerBootstrapConfigIsOptionalAndResolvesRelativeDatabase(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Listen != "" || config.Database != "" || config.path != filepath.Join(dataRoot, "config.toml") {
+	if config.Listen != "" || config.Database != "" || config.HostMaxConcurrent == nil || *config.HostMaxConcurrent != runtime.NumCPU() || config.path != filepath.Join(dataRoot, "config.toml") {
 		t.Fatalf("missing optional config = %#v", config)
 	}
 
 	path := filepath.Join(dataRoot, "config.toml")
-	if err := os.WriteFile(path, []byte("listen = \"127.0.0.1:7447\"\ndatabase = \"state/factory.sqlite3\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("listen = \"127.0.0.1:7447\"\ndatabase = \"state/factory.sqlite3\"\nhost_max_concurrent = 8\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config, err = loadServerBootstrapConfig(dataRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Listen != "127.0.0.1:7447" || config.Database != filepath.Join(dataRoot, "state", "factory.sqlite3") {
+	if config.Listen != "127.0.0.1:7447" || config.Database != filepath.Join(dataRoot, "state", "factory.sqlite3") || config.HostMaxConcurrent == nil || *config.HostMaxConcurrent != 8 {
 		t.Fatalf("loaded config = %#v", config)
+	}
+}
+
+func TestServerBootstrapConfigRejectsNonPositiveHostCapacity(t *testing.T) {
+	dataRoot := t.TempDir()
+	path := filepath.Join(dataRoot, "config.toml")
+	t.Setenv("FACTORY_SERVER_CONFIG", path)
+	for _, value := range []string{"0", "-1"} {
+		if err := os.WriteFile(path, []byte("host_max_concurrent = "+value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadServerBootstrapConfig(dataRoot); err == nil || !strings.Contains(err.Error(), "host_max_concurrent must be a positive integer") {
+			t.Fatalf("host_max_concurrent %s error = %v", value, err)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -12,9 +13,10 @@ import (
 )
 
 type serverBootstrapConfig struct {
-	Listen   string `toml:"listen"`
-	Database string `toml:"database"`
-	path     string
+	Listen            string `toml:"listen"`
+	Database          string `toml:"database"`
+	HostMaxConcurrent *int   `toml:"host_max_concurrent"`
+	path              string
 }
 
 func loadServerBootstrapConfig(dataRoot string) (serverBootstrapConfig, error) {
@@ -29,7 +31,7 @@ func loadServerBootstrapConfig(dataRoot string) (serverBootstrapConfig, error) {
 	}
 	info, err := os.Lstat(absolute)
 	if errors.Is(err, os.ErrNotExist) && !explicit {
-		return serverBootstrapConfig{path: absolute}, nil
+		return serverBootstrapConfig{HostMaxConcurrent: intPointer(runtime.NumCPU()), path: absolute}, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return serverBootstrapConfig{}, fmt.Errorf("Factory server configuration does not exist: %s", absolute)
@@ -59,8 +61,15 @@ func loadServerBootstrapConfig(dataRoot string) (serverBootstrapConfig, error) {
 	config.path = absolute
 	config.Listen = strings.TrimSpace(config.Listen)
 	config.Database = strings.TrimSpace(config.Database)
+	if config.HostMaxConcurrent == nil {
+		config.HostMaxConcurrent = intPointer(runtime.NumCPU())
+	} else if *config.HostMaxConcurrent <= 0 {
+		return serverBootstrapConfig{}, errors.New("host_max_concurrent must be a positive integer")
+	}
 	if config.Database != "" && !filepath.IsAbs(config.Database) {
 		config.Database = filepath.Join(filepath.Dir(absolute), config.Database)
 	}
 	return config, nil
 }
+
+func intPointer(value int) *int { return &value }

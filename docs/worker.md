@@ -26,6 +26,10 @@ Across all workers connected to one control plane, active preparing and running
 attempts are also capped at the host's logical CPU count. This host-wide limit
 is fixed by the control plane and has no worker configuration override.
 
+The server also applies one shared `host_max_concurrent` budget across all local
+worker services. It defaults to the logical CPU count visible to the server;
+the worker value above remains this service's independent local limit.
+
 Factory migrates existing SQLite databases to the expanded worker capacity
 range when the control plane starts.
 

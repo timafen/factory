@@ -2,3 +2,5 @@
 # Automations are created in the Factory UI and stored in SQLite.
 listen = "127.0.0.1:7337"
 database = "server/factory.sqlite3"
+# Optional. Defaults to the logical CPU count visible to factory-server.
+host_max_concurrent = 8

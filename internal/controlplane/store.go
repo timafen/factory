@@ -74,6 +74,11 @@ type Store struct {
 	beginLegacyResumeLink func(context.Context) (*sql.Tx, error)
 }
 
+// OpenOptions configures limits that apply to every worker served by this Store.
+type OpenOptions struct {
+	HostMaxConcurrent int
+}
+
 // hostSlotLimit keeps direct Store construction safe for migration and focused
 // tests, while Open records the same limit explicitly for production stores.
 func (s *Store) hostSlotLimit() int {
@@ -85,6 +90,14 @@ func (s *Store) hostSlotLimit() int {
 
 func Open(ctx context.Context, path string) (*Store, error) {
 	return openStore(ctx, path, false, runtime.NumCPU())
+}
+
+// OpenWithOptions opens a production Store with an explicit host-wide limit.
+func OpenWithOptions(ctx context.Context, path string, options OpenOptions) (*Store, error) {
+	if options.HostMaxConcurrent <= 0 {
+		return nil, errors.New("host max concurrent must be positive")
+	}
+	return openStore(ctx, path, false, options.HostMaxConcurrent)
 }
 
 // OpenForTest opens a Store with an explicit host slot limit for tests whose
