@@ -834,8 +834,8 @@ func TestDirectoryFsyncFailureAfterRenameFailsClosedOnRestart(t *testing.T) {
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, "rename-sync-restart.json")); err != nil {
 		t.Fatal(err)
-	} else if !strings.Contains(string(data), `"status":"succeeded"`) {
-		t.Fatalf("test did not leave renamed terminal record: %s", data)
+	} else if !strings.Contains(string(data), `"status":"running"`) {
+		t.Fatalf("test did not restore the last durable non-terminal record: %s", data)
 	}
 
 	restarted, err := NewAt(dir, &recordingExecutor{})
