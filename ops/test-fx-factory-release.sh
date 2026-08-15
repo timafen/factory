@@ -953,6 +953,41 @@ run_fast_release() {
     || fail "fast release did not explain why duplicate tests were skipped"
 }
 
+run_build_cleanup() {
+  local cleanup="$temporary/cleanup"
+  make_fixture "$cleanup" parallel-success
+  mkdir -p "$cleanup/releases/build-old" "$cleanup/releases/build-fresh" \
+    "$cleanup/releases/generations" \
+    "$cleanup/releases/.generation-protected" \
+    "$cleanup/releases/other-prefix"
+  mkdir -p "$cleanup/external-build"
+  ln -s "$cleanup/external-build" "$cleanup/releases/build-link"
+  touch -d '2 days ago' "$cleanup/releases/build-old"
+  touch -d '1 hour ago' "$cleanup/releases/build-fresh"
+  run_release "$cleanup" parallel-success 1 --cleanup-dry-run \
+    || { cat "$cleanup/output" >&2; fail "cleanup dry-run failed"; }
+  [ -d "$cleanup/releases/build-old" ] || fail "dry-run removed old build"
+  [ -d "$cleanup/releases/build-fresh" ] || fail "dry-run removed fresh build"
+  [ -L "$cleanup/releases/build-link" ] || fail "dry-run removed build symlink"
+  [ -d "$cleanup/releases/generations" ] || fail "dry-run touched generations"
+  [ -d "$cleanup/releases/.generation-protected" ] || fail "dry-run touched generation prefix"
+  [ -d "$cleanup/releases/other-prefix" ] || fail "dry-run touched other prefix"
+  assert_file "$cleanup/output" 'cleanup build=build-old decision=would-delete'
+  assert_file "$cleanup/output" 'cleanup build=build-fresh decision=skip reason=fresh'
+  assert_file "$cleanup/output" 'cleanup build=build-link decision=skip reason=symlink'
+  [ ! -s "$cleanup/gates" ] || fail "dry-run started release gates"
+  [ ! -s "$cleanup/events" ] || fail "dry-run touched services"
+  run_release "$cleanup" parallel-success \
+    || { cat "$cleanup/output" >&2; fail "cleanup release failed"; }
+  [ ! -e "$cleanup/releases/build-old" ] || fail "release retained old build"
+  [ -d "$cleanup/releases/build-fresh" ] || fail "release removed fresh build"
+  [ -L "$cleanup/releases/build-link" ] || fail "release removed build symlink"
+  [ -d "$cleanup/releases/generations" ] || fail "release touched generations"
+  [ -d "$cleanup/releases/.generation-protected" ] || fail "release touched generation prefix"
+  [ -d "$cleanup/releases/other-prefix" ] || fail "release touched other prefix"
+  assert_file "$cleanup/output" 'cleanup build=build-old decision=deleted'
+}
+
 if [ "${FACTORY_TEST_ONLY:-}" = fast-release ]; then
   run_fast_release
   echo "PASS: fast release builds, installs and verifies without duplicate test suites"
@@ -962,6 +997,12 @@ fi
 if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
   run_crash_cleanup
   echo "PASS: crash-cleanup scenarios recovered every journal phase"
+  exit 0
+fi
+
+if [ "${FACTORY_TEST_ONLY:-}" = build-cleanup ]; then
+  run_build_cleanup
+  echo "PASS: build cleanup preserves protected release objects"
   exit 0
 fi
 
@@ -1543,36 +1584,6 @@ flock -u 8
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
 
-cleanup="$temporary/cleanup"
-make_fixture "$cleanup" parallel-success
-mkdir -p "$cleanup/releases/build-old" "$cleanup/releases/build-fresh" \
-  "$cleanup/releases/generations/build-protected" "$cleanup/releases/.generation-protected" \
-  "$cleanup/releases/other-prefix"
-mkdir -p "$cleanup/external-build"
-ln -s "$cleanup/external-build" "$cleanup/releases/build-link"
-touch -d '2 days ago' "$cleanup/releases/build-old"
-touch -d '1 hour ago' "$cleanup/releases/build-fresh"
-run_release "$cleanup" parallel-success 1 --cleanup-dry-run \
-  || { cat "$cleanup/output" >&2; fail "cleanup dry-run failed"; }
-[ -d "$cleanup/releases/build-old" ] || fail "dry-run removed old build"
-[ -d "$cleanup/releases/build-fresh" ] || fail "dry-run removed fresh build"
-[ -L "$cleanup/releases/build-link" ] || fail "dry-run removed build symlink"
-[ -d "$cleanup/releases/generations/build-protected" ] || fail "dry-run touched generations"
-[ -d "$cleanup/releases/.generation-protected" ] || fail "dry-run touched generation prefix"
-[ -d "$cleanup/releases/other-prefix" ] || fail "dry-run touched other prefix"
-assert_file "$cleanup/output" 'cleanup build=build-old decision=would-delete'
-assert_file "$cleanup/output" 'cleanup build=build-fresh decision=skip reason=fresh'
-assert_file "$cleanup/output" 'cleanup build=build-link decision=skip reason=symlink'
-[ ! -s "$cleanup/gates" ] || fail "dry-run started release gates"
-[ ! -s "$cleanup/events" ] || fail "dry-run touched services"
-run_release "$cleanup" parallel-success \
-  || { cat "$cleanup/output" >&2; fail "cleanup release failed"; }
-[ ! -e "$cleanup/releases/build-old" ] || fail "release retained old build"
-[ -d "$cleanup/releases/build-fresh" ] || fail "release removed fresh build"
-[ -L "$cleanup/releases/build-link" ] || fail "release removed build symlink"
-[ -d "$cleanup/releases/generations/build-protected" ] || fail "release touched generations"
-[ -d "$cleanup/releases/.generation-protected" ] || fail "release touched generation prefix"
-[ -d "$cleanup/releases/other-prefix" ] || fail "release touched other prefix"
-assert_file "$cleanup/output" 'cleanup build=build-old decision=deleted'
+run_build_cleanup
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
