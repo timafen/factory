@@ -1,12 +1,12 @@
 # CARD-0129 — Патрули показывают находки в «Автоматизациях»
 
-Implementation commit: 2f5f75a8caade2f2173358bb52fcec3f0481f616 — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
+Implementation commit: bccaaa13ed859bffd0453002c8a393f87d881890 — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
 
 ## HEAD
 
 - Статус: Implemented — целевые проверки повторно пройдены.
 - Ветка: `factory/5d2c3ee1-280-555865f1-50f`.
-- Implementation commit: `2f5f75a8caade2f2173358bb52fcec3f0481f616` —
+- Implementation commit: `bccaaa13ed859bffd0453002c8a393f87d881890` —
   патрули скрыты в обоих режимах «Работы», а находки и итог последней попытки
   доступны в истории Automation.
 - Спецификация: `knowledge/specs/patrol-findings-on-automations.md`.
