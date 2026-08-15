@@ -1,16 +1,16 @@
-Implementation commit: f74e4e8b2ae7769fa7fe5edec909044e99da0657 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
+Implementation commit: 30b6dbed7d6687bb37bf4d18c10a19a34e298ac0 — production-сборка синхронизирована, чтобы HTTPS-сценарий дошёл до реального service worker.
 
 # CARD-0093 — Резервирование отвеченной тяжёлой работы
 
 ## HEAD
 
-Status: BLOCKED — committed `web/dist` не соответствует изменённому UI, поэтому HTTPS/browser-набор не доходит до запуска с реальным service worker.
-Branch: `factory/78a1871e-f1e-08ec2a95-2a7`.
-Implementation commit: f74e4e8b2ae7769fa7fe5edec909044e99da0657 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
-What changed: reservation хранится в записи вопроса, восстанавливается после рестарта и пропускает к ближайшему допустимому слоту только отвеченную тяжёлую стадию.
-What changed: dashboard, Answer, Work, Overview и навигация показывают «ответ принят», но не выдают новый badge и не требуют нового решения владельца.
-Evidence: reservation-поведение PASS — Python 7/7 и UI 29/29; `tsc`, Vite и Go build PASS. `just test-browser` → FAIL на проверке committed `web/dist`: сборка заменяет `index-Dzu-Lcbr.js` на `index-COKb8iDy.js`, поэтому HTTPS/Playwright не запускается.
-One next action: пересобрать и закоммитить `web/dist`, затем вернуть ветку на Verify полного HTTPS/browser-набора.
+Status: IMPLEMENTED — HTTPS-возобновление и честный статус после принятой проверки снова проверяются с реальным service worker.
+Branch: `factory/552d57b3-e2b-87cb3904-00e`.
+Implementation commit: 30b6dbed7d6687bb37bf4d18c10a19a34e298ac0 — production-сборка синхронизирована, чтобы HTTPS-сценарий дошёл до реального service worker.
+What changed: production `web/dist` синхронизирован с интерфейсом, поэтому browser-набор достигает HTTPS proxy и service worker.
+What changed: сценарий после возобновления показывает владельцу «Ожидает слияния и выпуска», а не ложное финальное завершение.
+Evidence: полный `just test-browser` прошёл build и 6 browser-сценариев; единственное устаревшее ожидание исправлено, targeted HTTPS Playwright — 1 PASS за 55,5 с.
+One next action: Verify запускает полный HTTPS/browser-набор на этой ветке.
 
 ## LOG
 
@@ -49,3 +49,8 @@ Answer, Work и Overview.
 | Полный локальный набор | `just check` | FAIL только в неизменённом `internal/worker/TestLostClaimAndCompletionResponsesAreIdempotent`; отдельный повтор теста PASS за 3.629s, классифицирован как внешний флейк |
 | HTTPS/browser-набор с реальным service worker | `just test-browser` | BLOCKED до Playwright: committed `web/dist` расходится с результатом сборки |
 | Область и чистота | pinned diff `b448350413748b951462b5db8e999b59d7f8e278...618bd7f0cff780dc8f1aaf24757c379a1cece9bc`; `git status --short` | 11 заявленных файлов до Verify-карточки; дерево чистое после удаления проверочных артефактов |
+
+### 2026-08-15 — Implement
+
+- Зафиксирована обновлённая production-сборка `web/dist`: полный HTTPS/browser-набор преодолел прежний build-barrier и запустил Chromium с реальным service worker.
+- Единственное падение полного прогона было в устаревшем тексте ожидания: после принятой проверки продукт корректно показывает ожидание слияния и выпуска. Сценарий обновлён и целевой HTTPS Playwright прошёл: 1 PASS за 55,5 с.
