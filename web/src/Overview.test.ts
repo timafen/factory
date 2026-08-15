@@ -373,6 +373,38 @@ describe("Overview Codex spend", () => {
     expect(screen.getByText("Нет точного API-тарифа: gpt-future-exact")).toBeVisible();
     expect(screen.getByText(/базовая оценка по API-тарифу/)).toBeVisible();
   });
+
+  it("shows an honest waste breakdown, window and incomplete coverage", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/v1/dashboard" ? {spend: {
+        wasted_usd: 6, waste: {duplicate_usd: 1, cancelled_usd: 2,
+          unfinished_usd: 3, total_usd: 6, priced_attempts: 2,
+          unpriced_attempts: 1, window_started_at: "2026-08-14T12:00:00Z",
+          generated_at: "2026-08-15T12:00:00Z"}}}
+        : path.startsWith("/api/v1/tasks") ? {tasks: [], next_cursor: null}
+        : path.endsWith("/works") ? {} : {};
+      return {ok: true, json: async () => body} as Response;
+    }));
+    render(createElement(Overview, {}));
+    expect(await screen.findByText("известно не меньше, впустую за 24 часа")).toBeVisible();
+    expect(screen.getByText("Отменённые задачи: $2.00")).toBeVisible();
+    expect(screen.getByText("Повторные стадии: $1.00")).toBeVisible();
+    expect(screen.getByText("Остановились до слияния: $3.00")).toBeVisible();
+    expect(screen.getByText(/покрытие: 2 \/ 3 попыток/)).toBeVisible();
+  });
+
+  it("keeps the legacy waste total with an explicit fallback label", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const body = String(input) === "/api/v1/dashboard"
+        ? {spend: {wasted_usd: 4.25}}
+        : String(input).startsWith("/api/v1/tasks") ? {tasks: [], next_cursor: null} : {};
+      return {ok: true, json: async () => body} as Response;
+    }));
+    render(createElement(Overview, {}));
+    expect(await screen.findByText("$4.25")).toBeVisible();
+    expect(screen.getByText("без разбивки")).toBeVisible();
+  });
 });
 
 describe("fetchAllTasks", () => {

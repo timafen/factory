@@ -1,5 +1,6 @@
 import contextlib
 import base64
+import calendar
 import datetime
 import importlib
 import io
@@ -7784,6 +7785,95 @@ class HostLoadAdmissionTests(unittest.TestCase):
         self.assertEqual(routed_workers["full-worker"]["health"], "retention_full")
         self.assertEqual(routed_workers["spare-worker"]["health"], "healthy")
         self.assertEqual(create.call_args.args[0]["worker_id"], "spare-id")
+
+
+class DashboardWasteMetricsTests(unittest.TestCase):
+    now = calendar.timegm(time.strptime("2026-08-15T12:00:00", "%Y-%m-%dT%H:%M:%S"))
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.sessions = os.path.join(self.tmp.name, "sessions")
+        os.makedirs(self.sessions)
+        self.merges = os.path.join(self.tmp.name, "merges.jsonl")
+        self.patches = [mock.patch.object(pilot, "SESSION_ROOT", self.sessions),
+                        mock.patch.object(pilot, "MERGES_PATH", self.merges)]
+        for patch in self.patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def usage(self, attempt, at, model="claude-sonnet", malformed=False):
+        directory = os.path.join(self.sessions, "task-" + attempt)
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "session.jsonl")
+        with open(path, "a", encoding="utf-8") as stream:
+            if malformed:
+                stream.write('{"usage": broken\n')
+            else:
+                event = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
+                         "message": {"model": model, "usage": {
+                             "input_tokens": 1000000, "output_tokens": 0}}}
+                stream.write(json.dumps(event) + "\n")
+
+    def task(self, task_id, stage="Implement + Test", state="failed", age=3600,
+             base="Цена потерь", repo="repo"):
+        at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.now - age))
+        return {"id": task_id, "title": f"[auto] [3/5 {stage}] {base}",
+                "state": state, "created_at": at, "updated_at": at,
+                "repository_id": repo}
+
+    @staticmethod
+    def details(*attempts):
+        return lambda _task_id: {"attempts": [{"id": item} for item in attempts]}
+
+    def test_usage_window_uses_event_time_and_marks_unknown_price(self):
+        task = self.task("dead", age=900)
+        for attempt, at in (("before", self.now - 86400 - 1),
+                            ("left", self.now - 86400),
+                            ("right", self.now)):
+            self.usage(attempt, at)
+        self.usage("unknown", self.now - 10, model="claude-future")
+        result = pilot.dashboard_waste_metrics(
+            [task], self.now, self.details("before", "left", "right", "unknown"))
+        self.assertEqual(result["unfinished_usd"], 3.0)
+        self.assertEqual(result["priced_attempts"], 1)
+        self.assertEqual(result["unpriced_attempts"], 1)
+
+    def test_categories_are_exclusive_and_receipts_are_deduplicated(self):
+        cancelled = self.task("cancelled", state="cancelled", age=7200)
+        retry = self.task("retry", state="succeeded", age=3600)
+        dead = self.task("dead", stage="Verify", age=1200, base="Другой хвост")
+        merged = self.task("merged", stage="Verify", age=1200, base="Влито")
+        for task_id in ("cancelled", "retry", "dead", "merged"):
+            self.usage("a-" + task_id, self.now - 60)
+        with open(self.merges, "w", encoding="utf-8") as stream:
+            receipt = json.dumps({"task_id": "merged", "base": "Влито", "at": "2026-08-15T11:59:00Z"})
+            stream.write(receipt + "\n" + receipt + "\n")
+        attempts = {task_id: {"attempts": [{"id": "a-" + task_id}]}
+                    for task_id in ("cancelled", "retry", "dead", "merged")}
+        result = pilot.dashboard_waste_metrics(
+            [cancelled, retry, dead, merged], self.now, attempts.get)
+        self.assertEqual(result["cancelled_usd"], 3.0)
+        self.assertEqual(result["duplicate_usd"], 0.0)
+        self.assertEqual(result["unfinished_usd"], 6.0)
+        self.assertEqual(result["total_usd"], 9.0)
+        self.assertEqual(result["priced_attempts"], 3)
+
+    def test_duplicate_live_and_grace_rules_and_all_rows(self):
+        rows = [self.task(f"service-{i}", base="Factory patrol") for i in range(65)]
+        old = self.task("old", state="succeeded", age=7200, base="Повтор")
+        latest = self.task("latest", state="running", age=3600, base="Повтор")
+        fresh = self.task("fresh", stage="Verify", age=300, base="Свежий хвост")
+        single = self.task("single", stage="Verify", age=1200, base="Один хвост")
+        for task_id in ("old", "latest", "fresh", "single"):
+            self.usage("a-" + task_id, self.now - 60)
+        details = {task_id: {"attempts": [{"id": "a-" + task_id}]}
+                   for task_id in ("old", "latest", "fresh", "single")}
+        result = pilot.dashboard_waste_metrics(
+            rows + [old, latest, fresh, single], self.now, details.get)
+        self.assertEqual(result["duplicate_usd"], 3.0)
+        self.assertEqual(result["unfinished_usd"], 3.0)
+        self.assertEqual(result["total_usd"], 6.0)
 
 
 class DashboardSnapshotTest(unittest.TestCase):

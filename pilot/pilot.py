@@ -5937,6 +5937,158 @@ def task_cost_usd(attempt_ids):
     return total
 
 
+def _attempt_usage_in_window(attempt_id, started_at, ended_at):
+    """Return the known Claude cost in a time window and whether it is complete."""
+    cost = 0.0
+    activity = False
+    unpriced = False
+    try:
+        dirs = [name for name in os.listdir(SESSION_ROOT) if name.endswith(attempt_id)]
+    except OSError:
+        dirs = []
+    for directory in dirs:
+        path = os.path.join(SESSION_ROOT, directory)
+        try:
+            files = [os.path.join(path, name) for name in os.listdir(path)
+                     if name.endswith(".jsonl")]
+        except OSError:
+            files = []
+        for filename in files:
+            try:
+                stream = open(filename, encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            with stream:
+                for line in stream:
+                    if '"usage"' not in line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        message = event.get("message") or {}
+                        usage = message.get("usage") or {}
+                        at = _event_epoch(event.get("timestamp"))
+                        if not isinstance(usage, dict) or not at:
+                            raise ValueError("usage event has no timestamp")
+                    except Exception:
+                        unpriced = True
+                        continue
+                    if not (started_at <= at < ended_at):
+                        continue
+                    activity = True
+                    model = str(message.get("model") or "").lower()
+                    price_key = next((key for key in PRICE if key in model), None)
+                    values = [usage.get(key, 0) for key in (
+                        "input_tokens", "cache_creation_input_tokens",
+                        "cache_read_input_tokens", "output_tokens")]
+                    if price_key is None or any(isinstance(value, bool) or
+                                                not isinstance(value, (int, float)) or value < 0
+                                                for value in values):
+                        unpriced = True
+                        continue
+                    pin, pout = PRICE[price_key]
+                    incoming, cache_write, cache_read, outgoing = values
+                    cost += ((incoming + cache_write * 1.25 + cache_read * 0.1)
+                             * pin + outgoing * pout) / 1e6
+    return cost, activity, unpriced
+
+
+def dashboard_waste_metrics(tasks, generated_at=None, detail_loader=None):
+    """Price mutually exclusive product-pipeline losses over the last 24 hours."""
+    generated_at = time.time() if generated_at is None else generated_at
+    window_started_at = generated_at - 24 * 3600
+    detail_loader = detail_loader or (lambda task_id: api(f"/tasks/{task_id}"))
+    product = []
+    for task in tasks:
+        match = STAGE_TITLE_RE.match(str(task.get("title") or ""))
+        if not match or not match.group(2).strip() or is_service_work(match.group(2).strip()):
+            continue
+        product.append({"task": task, "stage": match.group(1).strip(),
+                        "base": match.group(2).strip(),
+                        "repo": task.get("repository_id") or ""})
+
+    task_by_id = {item["task"].get("id"): item for item in product}
+    merged = set()
+    try:
+        with open(MERGES_PATH, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    receipt = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                item = task_by_id.get(receipt.get("task_id"))
+                if item:
+                    merged.add((item["repo"], item["base"]))
+    except OSError:
+        pass
+
+    by_stage = {}
+    by_pipeline = {}
+    for item in product:
+        by_stage.setdefault((item["repo"], item["base"], item["stage"]), []).append(item)
+        by_pipeline.setdefault((item["repo"], item["base"]), []).append(item)
+    duplicates = set()
+    for rows in by_stage.values():
+        ordered = sorted(rows, key=lambda row: (row["task"].get("created_at") or "",
+                                                row["task"].get("id") or ""))
+        duplicates.update(row["task"].get("id") for row in ordered[:-1])
+
+    unfinished = set()
+    live_states = {"queued", "preparing", "running"}
+    for key, rows in by_pipeline.items():
+        if key in merged or any(row["task"].get("state") in live_states for row in rows):
+            continue
+        latest = max(rows, key=lambda row: (row["task"].get("created_at") or "",
+                                            row["task"].get("id") or ""))["task"]
+        changed = receipt_epoch(latest.get("finished_at") or latest.get("updated_at")
+                                or latest.get("created_at"))
+        if changed is None or generated_at - changed < 600:
+            continue
+        unfinished.update(row["task"].get("id") for row in rows)
+
+    result = {"duplicate_usd": 0.0, "cancelled_usd": 0.0,
+              "unfinished_usd": 0.0, "total_usd": 0.0,
+              "priced_attempts": 0, "unpriced_attempts": 0,
+              "window_started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                  time.gmtime(window_started_at)),
+              "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                             time.gmtime(generated_at))}
+    counted = set()
+    for item in product:
+        task = item["task"]
+        task_id = task.get("id")
+        if task.get("state") == "cancelled":
+            category = "cancelled_usd"
+        elif task_id in duplicates:
+            category = "duplicate_usd"
+        elif task_id in unfinished:
+            category = "unfinished_usd"
+        else:
+            continue
+        try:
+            detail = detail_loader(task_id) or {}
+        except Exception:
+            detail = {}
+        for attempt in detail.get("attempts") or []:
+            attempt_id = attempt.get("id") if isinstance(attempt, dict) else None
+            if not attempt_id or attempt_id in counted:
+                continue
+            cost, activity, unpriced = _attempt_usage_in_window(
+                attempt_id, window_started_at, generated_at)
+            if not activity and not unpriced:
+                continue
+            counted.add(attempt_id)
+            result[category] += cost
+            if unpriced:
+                result["unpriced_attempts"] += 1
+            else:
+                result["priced_attempts"] += 1
+    for key in ("duplicate_usd", "cancelled_usd", "unfinished_usd"):
+        result[key] = round(result[key], 2)
+    result["total_usd"] = round(sum(result[key] for key in (
+        "duplicate_usd", "cancelled_usd", "unfinished_usd")), 2)
+    return result
+
+
 BUDGET_STOPS = f"{HOME}/pilot/budget_stops.json"
 
 
@@ -7046,6 +7198,8 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
              "week_cost_defined": True, "day_base_estimate": False,
              "week_base_estimate": False, "day_unknown_models": [],
              "week_unknown_models": []}
+    spend["waste"] = dashboard_waste_metrics(tasks, now)
+    spend["wasted_usd"] = spend["waste"]["total_usd"]
     for t in tasks[:60]:
         h = age_h(t)
         if h > 24 * 7:
@@ -7063,8 +7217,6 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         spend["week_usd"] += usd
         if h <= 24:
             spend["day_usd"] += usd
-            if t.get("state") in ("failed", "cancelled"):
-                spend["wasted_usd"] += usd
             if not spend["worst"] or usd > spend["worst"]["usd"]:
                 spend["worst"] = {"usd": round(usd, 2), "title": (t.get("title") or "")[:70],
                                   "id": t["id"]}
