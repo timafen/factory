@@ -352,6 +352,40 @@ mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 
+# The root-owned broker gives a delivery one private status path.  It is the
+# driver's durable proof: a restarted broker can read it without guessing from
+# a PID or starting a second physical release.
+DELIVERY_STATUS_FILE="${FACTORY_DELIVERY_STATUS_FILE:-}"
+delivery_status_write() { # delivery_status_write <driver exit code>
+  [ -n "$DELIVERY_STATUS_FILE" ] || return 0
+  case "$1" in
+    0) delivery_status=succeeded ;;
+    8) delivery_status=locked ;;
+    6) delivery_status=release_failed_rolled_back ;;
+    *) delivery_status=rollback_failed ;;
+  esac
+  temporary_status="$DELIVERY_STATUS_FILE.new.$$"
+  umask 077
+  printf '%s\n' "$delivery_status" >"$temporary_status" \
+    && sync_path "$temporary_status" && mv -f "$temporary_status" "$DELIVERY_STATUS_FILE" \
+    && sync_path "$(dirname "$DELIVERY_STATUS_FILE")" || rm -f -- "$temporary_status"
+}
+delivery_status_exit_code() {
+  [ -n "$DELIVERY_STATUS_FILE" ] && [ -r "$DELIVERY_STATUS_FILE" ] || return 1
+  IFS= read -r delivery_status <"$DELIVERY_STATUS_FILE" || return 1
+  case "$delivery_status" in
+    succeeded) return 0 ;;
+    locked) return 8 ;;
+    release_failed_rolled_back) return 6 ;;
+    rollback_failed) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+if [ -n "$DELIVERY_STATUS_FILE" ] && [ -e "$DELIVERY_STATUS_FILE" ]; then
+  delivery_status_exit_code
+  exit $?
+fi
+
 umask 077
 mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
   || { fail "не смог подготовить папку релизов"; exit 4; }
@@ -451,7 +485,7 @@ cleanup() {
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   rm -rf "$work"
 }
-on_release_exit() { cleanup; }
+on_release_exit() { status=$?; cleanup; delivery_status_write "$status"; }
 trap on_release_exit EXIT
 
 # UI-проверки и Go-ворота независимы, но установка может начаться только после
@@ -1111,8 +1145,8 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
-on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
+rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; delivery_status_write "$status"; exit "$status"; }
+on_exit() { status=$?; trap - EXIT HUP INT TERM; if [ "$rollback_armed" = 1 ]; then [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; fi; delivery_status_write "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
 step "останавливаю прежний комплект и атомарно ставлю согласованную пару"
