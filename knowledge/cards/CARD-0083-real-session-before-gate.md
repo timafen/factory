@@ -2,17 +2,23 @@
 
 ## HEAD
 
-Status: BLOCKED — cleanup Gate не выдержал проверку ограниченного времени.
-Branch: factory/5d250fde-09f-9cbb7136-05f.
-Implementation commit: 741c717ecbf8fc96bb0b3de079c8bbde1a250820 — вся release-цепочка закреплена абсолютными tools, каждый gate изолирован cgroup v2.
-What changed: безопасный root PATH устанавливается до первого external command; checkout, lock, ownership, gates, installation и cleanup используют проверенные абсолютные executables.
-What changed: gate останавливается до attach в отдельную cgroup; успех требует пустой cgroup, остатки получают bounded TERM→KILL и приводят к отказу без install.
-Preserved: root-owned immutable checkout, абсолютный Node, SID/PGID/supervisor/nonce, signal cleanup, kernel wait status и запрет install до двух gates; Pilot выключен.
-Evidence: `bash ops/test-fx-factory-release.sh` воспроизвёл отказ `orphan-after-success`: потомок Gate не был очищен за bounded time.
-Evidence: `bash -n` для release/cgroup/install-скриптов и `git diff --check` → PASS; полный `just test` также упал на внешнем `internal/worker` timeout после 300 секунд.
-One next action: исправить bounded cleanup orphan-потомка и повторить полный Verify.
+Status: IMPLEMENTED.
+Branch: factory/ea5fa84f-fa8-17dfd9ea-064.
+Implementation commit: ab62450f9d291f8aa7ad3af74f0202d57e9e6bd7 — release-цепочка использует безопасный PATH, абсолютные tools и отдельную cgroup v2 для каждого Gate.
+What changed: cleanup теперь ограниченно останавливает и очищает потомков Gate; остаток превращает успешный gate в отказ без установки.
+What changed: тестовая фикстура broker использует актуальные переменные Pilot/legacy drop-in после перебазирования на main.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS, включая PATH-shadow, orphan-after-success и escaped-setsid.
+Evidence: `(cd web && npx tsc -p tsconfig.app.json --noEmit)` и `git diff --check` → PASS.
+One next action: провести независимый review перед слиянием.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Ветка перебазирована на свежий `main`; cgroup/PATH-защита и её adversarial shell-набор
+повторно прошли. Фикстура release broker приведена к новому контракту Pilot drop-in,
+поэтому проверка больше не обращается к системному `/etc`. TypeScript `tsconfig.app`
+проверен без генерации файлов; `git diff --check` чист.
 
 ### 2026-08-12 — Verify
 
