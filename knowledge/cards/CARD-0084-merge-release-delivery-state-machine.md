@@ -5,7 +5,7 @@
 - Status: Implemented + tested — ready for Review.
 - Branch: `factory/2a183592-0f3-6d0b097e-59f`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: cf7c0eaa3e7103d3e7050fee5bcfe68010493070 — broker восстанавливает terminal status из durable marker реального release driver после restart.
+Implementation commit: ad3121653ddaa1024b419796ced64750fe355359 — broker восстанавливает terminal status из durable marker реального release driver после restart.
 - What changed: FX driver атомарно сохраняет terminal marker; broker читает его при старте и публикует terminal receipt без повторного executor.
 - What changed: добавлен процессный Unix broker→FX→Pilot тест: restart во время FX, затем receipt и Verify completion.
 - Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; shell fixtures — PASS.
