@@ -6204,6 +6204,73 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(retry["repository_id"], "repo-id")
         self.assertIn("TimeoutError", retry["reason"])
 
+    def test_invalid_classifier_decision_is_a_technical_retry(self):
+        reply = json.dumps({"decision": "answer", "answer": ""})
+
+        with mock.patch.object(pilot, "brain", return_value=(reply, "test")):
+            verdict = pilot.orchestrator_answer(
+                {"auto_answer": True}, "Triage", "Работа", "сбой",
+                "Как исправить среду?", "")
+
+        self.assertEqual(verdict["decision"], "technical_retry")
+        self.assertIn("ValueError", verdict["reason"])
+
+    def test_classifier_failure_at_retry_cap_still_never_asks_owner(self):
+        verdict = {
+            "decision": "technical_retry",
+            "reason": "авторазбор временно недоступен: TimeoutError",
+        }
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "write_question") as write_question, \
+                mock.patch.object(pilot, "notify") as notify, \
+                mock.patch.object(pilot, "budget_stopped", return_value=False), \
+                mock.patch.object(pilot, "cap_rescues", return_value=0):
+            self.assertFalse(pilot.route_question(
+                self.conf, "failed-at-cap", "Triage", "Specification",
+                "Работа", "repo-id", "таймаут", "Как исправить среду?", [],
+                "отчёт", attempts_so_far=3))
+
+        write_question.assert_not_called()
+        notify.assert_not_called()
+        retry = pilot.load(self.retry_path, {})["failed-at-cap"]
+        self.assertEqual(retry["attempts_so_far"], 3)
+        self.assertEqual(retry["resume_stage"], "Specification")
+
+    def test_due_technical_retry_is_reclassified_and_removed_from_queue(self):
+        technical = {
+            "decision": "technical_retry",
+            "reason": "авторазбор временно недоступен: TimeoutError",
+        }
+        self.assertFalse(self.route(technical, task_id="due-retry"))
+        pending = pilot.load(self.retry_path, {})
+        pending["due-retry"]["retry_not_before"] = "2000-01-01T00:00:00Z"
+        pilot.save(self.retry_path, pending)
+
+        answer = {"decision": "answer", "answer": "Исправь среду и продолжай"}
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=answer), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "load_limits", return_value={}):
+            self.assertEqual(pilot.retry_technical_questions(self.conf), 1)
+
+        self.assertEqual(pilot.load(self.retry_path, {}), {})
+        question = pilot.load(
+            os.path.join(self.question_dir, "due-retry.json"), {})
+        self.assertEqual(question["status"], "answered")
+        self.assertEqual(question["answered_by"], "orchestrator")
+
+    def test_product_priority_escalation_keeps_human_readable_reason(self):
+        escalated = {
+            "decision": "escalate",
+            "reason": "владельцу нужно выбрать приоритет двух функций",
+        }
+
+        self.assertTrue(self.route(escalated, task_id="owner-choice"))
+
+        question = pilot.load(
+            os.path.join(self.question_dir, "owner-choice.json"), {})
+        self.assertEqual(question["status"], "open")
+        self.assertEqual(question["escalation_reason"], escalated["reason"])
+
     def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
         self.conf["stages"] = [
             {"workflow": "Triage", "worker": "worker"},

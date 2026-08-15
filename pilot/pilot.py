@@ -1583,8 +1583,10 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
             return v
         if v.get("decision") == "wait" and (v.get("reason") or "").strip():
             return v
-        return {"decision": "escalate", "answer": "",
-                "reason": v.get("reason", "оркестратор передал решение владельцу")}
+        if v.get("decision") == "escalate" and (v.get("reason") or "").strip():
+            return {"decision": "escalate", "answer": "",
+                    "reason": str(v["reason"])[:500]}
+        raise ValueError("invalid orchestrator decision")
     except Exception as e:
         log("orchestrator_answer_error", repr(e))
         # A broken classifier is an operational problem, not an owner choice.
@@ -4497,6 +4499,31 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
     """Try to resolve the question with the orchestrator; escalate if it's the
     owner's call OR if this stage has already been retried too many times."""
     cap = conf.get("max_stage_attempts", 3)
+
+    def defer_technical_retry(verdict):
+        if verdict.get("decision") != "technical_retry":
+            return False
+        pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
+        previous = pending.get(task_id) or {}
+        retry_count = int(previous.get("retry_count") or 0) + 1
+        delay = min(3600, 60 * (2 ** min(retry_count - 1, 6)))
+        pending[task_id] = {
+            "task_id": task_id, "stage": stage, "resume_stage": resume_stage,
+            "base": base, "repository_id": repo_id, "situation": situation,
+            "question": question, "options": options or [],
+            "prior_result": squeeze(prior_result, 12000), "branch": branch,
+            "attempts_so_far": attempts_so_far,
+            "reason": str(verdict.get("reason") or "сбой авторазбора")[:200],
+            "retry_count": retry_count,
+            "retry_not_before": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + delay)),
+            "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        save(TECHNICAL_RETRIES_PATH, pending)
+        log(f"TECHNICAL QUESTION RETRY task={task_id} stage={stage} "
+            f"attempt={retry_count}: {pending[task_id]['reason']}")
+        return True
+
     # Порог разбора: столько кругов подряд — и зовём сильную модель разобраться,
     # а владельцу уходит одно человеческое сообщение вместо десяти пушей.
     diag_at = int(conf.get("deep_diag_rounds", 5))
@@ -4531,6 +4558,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+        if defer_technical_retry(v):
+            return False
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch, attempts_so_far):
@@ -4596,6 +4625,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if defer_technical_retry(v):
+                return False
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch,
@@ -4628,6 +4659,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if defer_technical_retry(v):
+                return False
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch,
@@ -4665,17 +4698,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         return True
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
-    if verdict.get("decision") == "technical_retry":
-        pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
-        pending[task_id] = {
-            "task_id": task_id, "stage": stage, "base": base,
-            "repository_id": repo_id,
-            "reason": str(verdict.get("reason") or "сбой авторазбора")[:200],
-            "updated": time.strftime("%Y-%m-%d %H:%M"),
-        }
-        save(TECHNICAL_RETRIES_PATH, pending)
-        log(f"TECHNICAL QUESTION RETRY task={task_id} stage={stage}: "
-            f"{pending[task_id]['reason']}")
+    if defer_technical_retry(verdict):
         return False
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
@@ -4703,6 +4726,37 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
            f"(сам решить не могу: {verdict.get('reason','')})",
            priority="high", tags="raising_hand", click=f"{UI_BASE}/answer")
     return True
+
+
+def retry_technical_questions(conf):
+    """Re-run due classifier failures without exposing them to the owner."""
+    pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
+    retried = 0
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for task_id, item in list(pending.items()):
+        retry_at = _work_time(item.get("retry_not_before"))
+        if retry_at is not None and retry_at > now:
+            continue
+        retry_count = int(item.get("retry_count") or 0)
+        try:
+            route_question(
+                conf, task_id, item.get("stage") or "",
+                item.get("resume_stage") or item.get("stage") or "",
+                item.get("base") or "", item.get("repository_id") or "",
+                item.get("situation") or "", item.get("question") or "",
+                item.get("options") or [], item.get("prior_result") or "",
+                attempts_so_far=int(item.get("attempts_so_far") or 0),
+                branch=item.get("branch") or "")
+        except Exception as e:
+            log(f"technical_question_retry_error task={task_id}: {e!r}")
+            continue
+        latest = load(TECHNICAL_RETRIES_PATH, {}) or {}
+        if int((latest.get(task_id) or {}).get("retry_count") or 0) <= retry_count:
+            latest.pop(task_id, None)
+            save(TECHNICAL_RETRIES_PATH, latest)
+        pending = latest
+        retried += 1
+    return retried
 
 
 def write_question(task_id, stage, resume_stage, base, repo_id, situation, question,
@@ -8485,6 +8539,10 @@ def cycle(conf, state):
         log("paused_pipeline_cleanup_outer_error", repr(e))
 
     # Owner answers resume stopped pipelines.
+    try:
+        retry_technical_questions(conf)
+    except Exception as e:
+        log("technical_question_retries_error", repr(e))
     try:
         answered = handle_answers(conf, workflows, workers, tasks)
         activity["answer_applied"] = (
