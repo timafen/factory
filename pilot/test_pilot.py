@@ -4326,6 +4326,109 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
         self.assertEqual(self.disk_config()["stopped_pipelines"], [])
 
 
+class ProviderLimitDetectionTest(unittest.TestCase):
+    def setUp(self):
+        self.conf = {"name": "test"}
+        self.workers = {"worker-claude": {"name": "claude-1"}}
+        self.details = {}
+        self.note_limit_calls = []
+
+        def fake_api(path):
+            task_id = path.removeprefix("/tasks/")
+            return self.details[task_id]
+
+        self.api_patch = mock.patch.object(pilot, "api", side_effect=fake_api)
+        self.note_patch = mock.patch.object(
+            pilot, "note_limit",
+            side_effect=lambda *args: self.note_limit_calls.append(args),
+        )
+        self.provider_limits_patch = mock.patch.object(pilot, "load")
+        self.api_mock = self.api_patch.start()
+        self.note_patch.start()
+        self.provider_limits_mock = self.provider_limits_patch.start()
+        self.addCleanup(self.api_patch.stop)
+        self.addCleanup(self.note_patch.stop)
+        self.addCleanup(self.provider_limits_patch.stop)
+
+    @staticmethod
+    def task(task_id, state):
+        return {"id": task_id, "state": state, "worker_id": "worker-claude"}
+
+    def test_succeeded_report_never_blocks_regardless_of_limit_snapshot(self):
+        markers = "rate limit; quota exceeded; usage limit reached"
+        self.details["patrol"] = {"attempts": [{"error": "", "result": markers}]}
+
+        for snapshot in ({}, {"claude": {"used_percent": 99, "at": time.time()}}):
+            with self.subTest(snapshot=snapshot):
+                self.provider_limits_mock.return_value = snapshot
+                pilot.detect_limits(
+                    self.conf, [self.task("patrol", "succeeded")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_not_called()
+        self.provider_limits_mock.assert_not_called()
+
+    def test_result_only_markers_do_not_block_failed_or_cancelled_task(self):
+        report = "Проверены rate limit и quota exceeded; это только отчёт."
+        self.details["failed"] = {"attempts": [{"error": "", "result": report}]}
+        self.details["cancelled"] = {"attempts": [{"error": "", "result": report}]}
+
+        pilot.detect_limits(
+            self.conf,
+            [self.task("failed", "failed"), self.task("cancelled", "cancelled")],
+            self.workers,
+        )
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_called_once_with("/tasks/failed")
+
+    def test_successful_retry_does_not_reuse_previous_limit_error(self):
+        self.details["retried"] = {"attempts": [
+            {"state": "failed", "error": "rate limit reached"},
+            {"state": "succeeded", "error": "", "result": "Готово"},
+        ]}
+
+        pilot.detect_limits(
+            self.conf, [self.task("retried", "succeeded")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_not_called()
+
+    def test_only_latest_attempt_error_is_considered(self):
+        self.details["failed"] = {"attempts": [
+            {"state": "failed", "error": "rate limit reached"},
+            {"state": "failed", "error": "обычная ошибка"},
+        ]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+
+    def test_latest_failed_error_blocks_provider_with_reset_time(self):
+        error = "usage limit reached; resets at 2026-08-16T07:30:00Z"
+        self.details["failed"] = {"attempts": [
+            {"state": "failed", "error": "обычная ошибка"},
+            {"state": "failed", "error": error, "result": "rate limit в отчёте"},
+        ]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(
+            self.note_limit_calls,
+            [(self.conf, "claude", error, "2026-08-16T07:30:00Z")],
+        )
+
+    def test_infrastructure_error_is_not_a_subscription_limit(self):
+        self.details["failed"] = {"attempts": [{
+            "state": "failed",
+            "error": "rate limit reached after 401 Unauthorized",
+        }]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+
+
 class BrainFallbackTest(unittest.TestCase):
     """После лимита один провайдер должен оставаться заблокирован до
     следующего вызова brain(), а не тратить попытку снова."""

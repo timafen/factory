@@ -6049,7 +6049,7 @@ def detect_limits(conf, tasks, workers_by_id):
     """Разбор свежих неудач: если этап упал из-за лимита подписки, это не повод
     перезапускать его три раза — это повод подождать."""
     for t in tasks[:15]:                       # только свежие, вглубь не лезем
-        if t.get("state") not in ("failed", "succeeded", "cancelled"):
+        if t.get("state") != "failed":
             continue
         wname = (workers_by_id.get(t.get("worker_id")) or {}).get("name", "")
         prov = provider_of(wname)
@@ -6060,26 +6060,13 @@ def detect_limits(conf, tasks, workers_by_id):
         except Exception:
             continue
         atts = detail.get("attempts") or []
-        # и ошибка, и отчёт: Codex про исчерпанный лимит часто пишет прямо в вывод
-        text = " ".join(str(a.get("error") or "") + " " + str(a.get("result") or "")[-4000:]
-                        for a in atts[-2:])
+        # Только ошибка последней неудачной попытки является сигналом провайдера.
+        # Result — свободный отчёт агента: в нём могут законно обсуждаться лимиты.
+        text = str((atts[-1] if atts else {}).get("error") or "").strip()
         if not text or not LIMIT_SIGNS.search(text):
             continue
         # Сбой входа/сети — не лимит подписки, а поломка окружения.
         if INFRA_SIGNS.search(text):
-            continue
-        # Слова «rate limit» в чужом отчёте или в диффе — не лимит подписки.
-        # Если настоящий счётчик говорит, что запас есть, а слова нашлись
-        # только в тексте отчёта (не в ошибке запуска), — не верим словам.
-        err_only = " ".join(str(a.get("error") or "") for a in atts[-2:])
-        real = (load(PROVIDER_LIMITS_PATH, {}) or {}).get(prov) or {}
-        up = real.get("used_percent")
-        if not isinstance(up, (int, float)):
-            up = (real.get("percents") or {}).get("seven_day.utilization")
-        fresh = time.time() - (real.get("at") or real.get("asked_at") or 0) < 10800
-        # Живой счётчик провайдера главнее слов в чужом выводе: если подписка
-        # израсходована меньше чем на 80%, никакие фразы её не блокируют.
-        if isinstance(up, (int, float)) and up < 80 and fresh:
             continue
         m = RESET_AT.search(text)
         note_limit(conf, prov, text, m.group(1) if m else "")
