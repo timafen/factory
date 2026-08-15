@@ -1,17 +1,23 @@
 # CARD-0137 — Патрули и находки на экране «Автоматизации»
 
-Implementation commit: 328fc9f55c134918826341bcf03412550483996b — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
+Implementation commit: cd781011f4db035a982ad288f3356a123d31ae35 — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
 
 ## HEAD
 
 Status: IMPLEMENTED — препятствия прошлого Verify устранены
-Branch: factory/7c9e1a81-ce2-85f0d92d-f73
-Implementation commit: 328fc9f55c134918826341bcf03412550483996b — патрули скрыты в обоих режимах «Работы», а результаты последней попытки доступны в Automation
+Branch: factory/5d2c3ee1-280-555865f1-50f
+Implementation commit: cd781011f4db035a982ad288f3356a123d31ae35 — патрули скрыты в обоих режимах «Работы», а результаты последней попытки доступны в Automation
 What changed: Tasks получают устойчивый `work_class`; UI исключает patrol из списка и доски этапов. Находки и итог проецируются из последней попытки; helpers вынесены из React-компонента, `web/dist` пересобран.
-Evidence: 2 целевых Go-теста и 25 UI-тестов — PASS; lint без предупреждений, typecheck и production build — PASS.
+Evidence: 2 целевых Go-теста и 26 UI-тестов — PASS; lint без предупреждений, typecheck и production build — PASS.
 Next action: повторить Verify на чистой доставленной ветке.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлена ссылка на реальный коммит реализации, предшествующий обновлению
+карточки после ребейза: он содержит встроенную production-сборку переноса патрульных находок.
+Ветка сдачи указана как `factory/5d2c3ee1-280-555865f1-50f`.
 
 ### 2026-08-14 — Implement
 
