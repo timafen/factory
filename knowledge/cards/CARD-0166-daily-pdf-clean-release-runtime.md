@@ -1,17 +1,19 @@
-Implementation commit: ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5 — ранее реализованы ежедневный PDF, capture/renderer и browser installer; это фундамент, а не реализация данной спецификации.
+Implementation commit: 455578a90a4762848c8929f79488babd55af8684 — штатный релиз публикует постоянное browser-поколение и сохраняет ежедневный PDF после удаления checkout.
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
-Status: Specified — awaiting Implement
-Branch: `factory/f21366b6-de0-98254ee2-e4d`
-What changed: определён воспроизводимый release-контракт постоянного browser runtime,
-который не зависит от ручных Node-модулей в `/opt/factory`.
-Evidence: текущие renderer/capture используют fallback через `process.cwd()/web`,
-а `ops/fx-factory-release` удаляет временный checkout и не публикует browser payload.
-One next action: реализовать постоянное поколение browser runtime и clean-host
-регрессию из `knowledge/specs/daily-pdf-clean-release-runtime.md`.
+Status: Implemented — awaiting Review
+Branch: `factory/4b9a661a-bef-7825bbe2-aec`
+Implementation commit: `455578a90a4762848c8929f79488babd55af8684`
+What changed: релиз готовит Playwright/Chromium и PDF smoke до остановки служб,
+хранит runtime в поколении и атомарно выбирает его через `browser-current`.
+Renderer/capture больше не читают checkout; поздний rollback возвращает browser state.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS; clean fixture после удаления
+checkout получила `%PDF-`, а installer failure не публиковала runtime и не трогала службы.
+Evidence: installer → PASS; Node 5/5; Go target → PASS; web tests 180/180; build → PASS.
+One next action: провести Review коммита реализации и release/rollback-контракта.
 
 ## LOG
 
@@ -30,3 +32,12 @@ One next action: реализовать постоянное поколение 
 воспроизвести чистый релиз, удалить build checkout и получить `%PDF-`, не
 публикуя browser runtime при ошибке подготовки. В конце спецификации отдельно
 зафиксированы все файлы реализации и обязательная команда с нулевым кодом выхода.
+
+### 2026-08-14 — Implement
+
+Штатный релиз получил постоянное browser-поколение с pinned Playwright/Chromium,
+readiness и PDF smoke до остановки служб. `browser-current` переключается вместе с
+release generation, а сохранённый live-state возвращает launcher/profile при позднем
+откате. Production renderer/capture используют только `FACTORY_BROWSER_PAYLOAD`.
+Проверки: release fixture — PASS; installer — PASS; Node — 5/5; Go target — PASS;
+web — 180/180 и production build PASS.
