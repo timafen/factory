@@ -988,7 +988,10 @@ run_parallel_test_gates() {
   if [ "$status" -ne 0 ]; then
     stop_test_gates
     wait_for_test_gates
+    trap - HUP INT TERM
+    print_test_gate_logs
     fail "${gate_names[$other_index]} завершилась с кодом $status"
+    return 1
   fi
   trap - HUP INT TERM
   print_test_gate_logs
