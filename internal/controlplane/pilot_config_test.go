@@ -22,7 +22,7 @@ func validPilotSettings() protocol.PilotSettings {
 		costs[stage] = 1
 	}
 	return protocol.PilotSettings{
-		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true,
+		Note: "keep this", Enabled: true, PollSeconds: 10, TimeoutSeconds: 60, AutoMerge: true, AutoAnswer: true, CollectReportIdeas: true,
 		MaxStageAttempts: 2, AllowAnyWorker: false, AllowedWorkers: []string{"worker-1"}, MaxParallelSubtasks: 2, MaxParallelWorks: 4, MaxTerminalTasksPerCycle: 8,
 		DayCapUSD: 20, DeployStagingCmd: "deploy staging", DeployFactoryCmd: "deploy factory", OwnerChatURL: "https://example.test/chat", OwnerUIURL: "https://example.test/ui",
 		Stages: stages, SkipStagesForLow: []string{}, StoppedPipelines: []string{}, StageBaseUSD: costs,
@@ -310,6 +310,9 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	if !current.Settings.RespectHostLoad {
 		t.Fatal("example respect_host_load was not decoded as true")
 	}
+	if !current.Settings.CollectReportIdeas {
+		t.Fatal("example collect_report_ideas was not decoded as true")
+	}
 	if current.Settings.MaxParallelWorks != 4 {
 		t.Fatalf("example max_parallel_works = %d, want 4", current.Settings.MaxParallelWorks)
 	}
@@ -337,6 +340,7 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 
 	delete(fields, "respect_host_load")
+	delete(fields, "collect_report_ideas")
 	delete(fields, "max_parallel_works")
 	delete(fields, "max_terminal_tasks_per_cycle")
 	legacy, err := json.Marshal(fields)
@@ -352,6 +356,9 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 	if !legacySettings.Settings.RespectHostLoad {
 		t.Fatal("legacy config did not receive respect_host_load=true")
+	}
+	if !legacySettings.Settings.CollectReportIdeas {
+		t.Fatal("legacy config did not receive collect_report_ideas=true")
 	}
 	if legacySettings.Settings.MaxParallelWorks != 4 {
 		t.Fatalf("legacy max_parallel_works = %d, want 4", legacySettings.Settings.MaxParallelWorks)

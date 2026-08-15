@@ -996,6 +996,7 @@ type PilotSettings struct {
 	TimeoutSeconds           float64      `json:"timeout_seconds"`
 	AutoMerge                bool         `json:"auto_merge"`
 	AutoAnswer               bool         `json:"auto_answer"`
+	CollectReportIdeas       bool         `json:"collect_report_ideas"`
 	MaxStageAttempts         int          `json:"max_stage_attempts"`
 	AllowAnyWorker           bool         `json:"allow_any_worker"`
 	RespectHostLoad          bool         `json:"respect_host_load"`

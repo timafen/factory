@@ -5109,6 +5109,60 @@ class PlanAutostartTest(unittest.TestCase):
             ["automation-ok", "automation-failed"],
         )
 
+    def test_pipeline_report_ideas_can_be_paused(self):
+        with mock.patch.object(pilot, "collect_ideas", return_value=1) as collect:
+            self.assertEqual(
+                pilot.collect_report_ideas(
+                    {"collect_report_ideas": False},
+                    "НАХОДКА: новая карточка из отчёта",
+                    "repo-1",
+                    "Pipeline work",
+                ),
+                0,
+            )
+            collect.assert_not_called()
+
+            self.assertEqual(
+                pilot.collect_report_ideas(
+                    {"collect_report_ideas": True},
+                    "НАХОДКА: новая карточка из отчёта",
+                    "repo-1",
+                    "Pipeline work",
+                ),
+                1,
+            )
+            collect.assert_called_once()
+
+    def test_automation_report_ideas_are_suppressed_once_when_paused(self):
+        tasks = [{
+            "id": "automation-ok",
+            "title": "Patrol: run now",
+            "request_key": "automation:patrol:schedule:run:one",
+            "state": "succeeded",
+        }]
+        detail = {
+            "task": {"repository_id": "repo-1"},
+            "workflow": {"title": "Factory Patrol"},
+            "attempts": [{"result": "НАХОДКА: новая карточка из Automation"}],
+        }
+        state = {}
+
+        with mock.patch.object(pilot, "api", return_value=detail), \
+                mock.patch.object(pilot, "collect_ideas") as collect:
+            self.assertEqual(
+                pilot.collect_automation_findings(
+                    state, tasks, {"collect_report_ideas": False}),
+                0,
+            )
+            self.assertEqual(
+                pilot.collect_automation_findings(
+                    state, tasks, {"collect_report_ideas": False}),
+                0,
+            )
+
+        collect.assert_not_called()
+        self.assertEqual(state["automation_results_processed"], ["automation-ok"])
+
     @mock.patch.object(pilot.uuid, "uuid4", side_effect=["generation-1", "generation-2"])
     @mock.patch.object(pilot, "set_idea")
     def test_each_explicit_planning_gets_a_new_generation(self, set_idea, _uuid):

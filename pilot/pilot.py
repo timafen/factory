@@ -2597,7 +2597,21 @@ def collect_ideas(result, repo_id="", source=""):
     return n
 
 
-def collect_automation_findings(state, tasks):
+def collect_report_ideas(conf, result, repo_id="", source=""):
+    """Collect worker-authored Plan cards unless report intake is paused.
+
+    Owner-created Intake does not pass through this helper, so the switch only
+    pauses automatic cards parsed from task and Automation reports.
+    """
+    if (conf or {}).get("collect_report_ideas", True):
+        return collect_ideas(result, repo_id, source)
+    suppressed = len(IDEA_LINE.findall(result or ""))
+    if suppressed:
+        log(f"report ideas suppressed count={suppressed} source={source!r}")
+    return 0
+
+
+def collect_automation_findings(state, tasks, conf=None):
     """Persist findings emitted by completed Automation workflow runs.
 
     Automation tasks do not use the ``[auto] [n/m Stage]`` title contract, so
@@ -2630,7 +2644,7 @@ def collect_automation_findings(state, tasks):
         repository_id = detail.get("task", {}).get("repository_id") or ""
         workflow_title = (detail.get("workflow") or {}).get("title")
         source = f"Automation: {workflow_title or task.get('title') or task_id}"
-        found = collect_ideas(result, repository_id, source)
+        found = collect_report_ideas(conf, result, repository_id, source)
         processed.append(task_id)
         collected += found
         log(f"automation findings task={task_id} collected={found}")
@@ -8462,7 +8476,7 @@ def cycle(conf, state):
     recovery_details = load_restart_recovery_tasks(conf, tasks)
     new_terminal = remember_new_terminal_tasks(conf, state, tasks)
     try:
-        collect_automation_findings(state, tasks)
+        collect_automation_findings(state, tasks, conf)
     except Exception as e:
         # A transient read or Plan write failure must not mark the run as
         # processed. The next cycle retries it through the durable cursor.
@@ -8741,8 +8755,9 @@ def cycle(conf, state):
         except Exception as e:
             log("area_extend_error", repr(e))
         try:
-            collect_ideas(result, detail["task"].get("repository_id") or "",
-                          base_title(title))
+            collect_report_ideas(
+                conf, result, detail["task"].get("repository_id") or "",
+                base_title(title))
         except Exception as e:
             log("ideas_error", repr(e))
         if wf == "Specification":
