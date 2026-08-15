@@ -1,13 +1,13 @@
-Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран исполнителей показывает живой парк и архив старых регистраций
+Implementation commit: 189cba3dd6309115f71dc7739d2b245b7a08a5c5 — экран исполнителей показывает живой парк и архив старых регистраций
 
 # CARD-0174: Живой парк исполнителей и архив регистраций
 
 ## HEAD
 
 Status: Implemented — ready for Review and Verify
-Branch: factory/47fbf262-f67-afb6c67a-20a
+Branch: factory/589204d9-c3e-cc171337-a96
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: f3646fb72679a05a7a144c006f88fdd41118f87f — экран
+Implementation commit: 189cba3dd6309115f71dc7739d2b245b7a08a5c5 — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: lint проходит без исключений; встроенный `web/dist` собран из
 исходников; браузерный путь открывает карточку архивного исполнителя.
@@ -17,6 +17,12 @@ pilot.test_pilot` — успешно.
 One next action: Review и Verify повторно принимают поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлена верхняя обязательная ссылка на кодовый коммит этой ветки: она
+указывает на `189cba3dd6309115f71dc7739d2b245b7a08a5c5`, где изменены экран,
+браузерная проверка и production-ассеты, а не на SHA из другой ветки.
 
 ### 2026-08-15 — Implement
 
