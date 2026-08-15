@@ -1122,7 +1122,7 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(workersNavigation).not.toHaveAttribute("aria-current");
   const profileTabs = page.getByRole("tablist", { name: "Профиль исполнителя" });
   await expect(profileTabs.getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("region", { name: "Worker summary" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Сводка исполнителя" })).toBeVisible();
 
   await profileTabs.getByRole("tab", { name: "Работа" }).click();
   await expect(page.getByText("factory-worker cleanup attempt-retained-001 --confirm")).toBeVisible();
