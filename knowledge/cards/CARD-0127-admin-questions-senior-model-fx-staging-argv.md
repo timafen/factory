@@ -2,12 +2,12 @@
 
 ## HEAD
 
-Status: Implemented; rebased on fresh origin/main
-Branch: factory/e5e89597-f7d-fb81014d-09b
-Implementation commit: 4640f3cc6c634459c6e959e1c67cafce23a32fda — каждый admin-вопрос сначала проходит senior bridge с фиксированными argv и stdin, обычная модель получает его только после fallback
+Status: Implemented
+Branch: factory/6f48ccb6-130-9874a9bc-f77
+Implementation commit: 7a25548063b6149f5ebe9235355509ec0360dc9b — каждый admin-вопрос сначала проходит senior bridge с фиксированными argv и stdin, обычная модель получает его только после fallback
 What changed: senior-маршрут перенесён в начало `route_question`; тест закрепляет порядок `senior → ordinary`, точный argv и полный stdin payload.
-Evidence: `SeniorAdminQuestionTests` — 4/4 PASS; `bash -n ops/fx`, `py_compile`, `go test` и `go build ./internal/protocol` — PASS.
-One next action: провести повторный Review закреплённого снимка на свежем origin/main.
+Evidence: целевые тесты — 4/4 PASS; Python — 350 PASS, 13 skipped; Go test/build — PASS; web lint/typecheck/181 tests/build — PASS.
+One next action: провести Review опубликованной ветки относительно свежего origin/main.
 
 ## LOG
 
@@ -28,3 +28,9 @@ One next action: провести повторный Review закреплённ
 Реализация перенесена на свежий `origin/main` без изменения области: senior-маршрут остаётся первым, использует фиксированный `fx staging brain admin-question --model=…` argv и передаёт JSON только через stdin. Карточка привязана к фактическому кодовому коммиту до её обновления.
 
 Доказательство: `python3 -m unittest pilot.test_pilot.SeniorAdminQuestionTests` — 4/4 PASS; `bash -n ops/fx`; `python3 -m py_compile pilot/pilot.py`; `go test -timeout 5m ./internal/protocol`; `go build ./internal/protocol` — PASS. Закреплённый diff от `origin/main` чист по whitespace и содержит только шесть файлов задачи.
+
+### 2026-08-15 — Implement
+
+Ветка повторно перенесена на свежий `origin/main`; HEAD карточки теперь явно фиксирует `Status: Implemented` и ссылается на фактический кодовый коммит-предок текущей ветки.
+
+Доказательство: точный argv/stdin/fallback и порядок `senior → ordinary` — 4/4 PASS; `python3 -m unittest pilot.test_pilot` — 350 PASS, 13 skipped; `go test -timeout 5m ./...`, `go build ./...`; web lint/typecheck/181 tests/build; `bash -n ops/fx`, `py_compile`, `git diff --check` — PASS.
