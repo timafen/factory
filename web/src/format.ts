@@ -9,7 +9,15 @@ export const taskStates: TaskState[] = [
 ];
 
 export function stateLabel(state: string): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+  const labels: Record<string, string> = {
+    queued: "В очереди",
+    running: "Выполняется",
+    succeeded: "Завершено",
+    failed: "Ошибка",
+    cancelled: "Отменено",
+    preparing: "Подготовка",
+  };
+  return labels[state.toLowerCase()] ?? "Неизвестно";
 }
 
 export function runtimeLabel(runtime: string): string {
@@ -18,23 +26,23 @@ export function runtimeLabel(runtime: string): string {
 
 export function timeAgo(value: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 10) return "только что";
+  if (seconds < 60) return `${seconds} с назад`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes} мин назад`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return `${hours} ч назад`;
+  return `${Math.floor(hours / 24)} дн назад`;
 }
 
 export function duration(start: string, end?: string, now = Date.now()): string {
   const elapsed = Math.max(0, (end ? new Date(end).getTime() : now) - new Date(start).getTime());
   const seconds = Math.floor(elapsed / 1000);
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return `${seconds} с`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  if (minutes < 60) return `${minutes} мин ${seconds % 60} с`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  return `${hours} ч ${minutes % 60} мин`;
 }
 
 export interface EventSummary {
@@ -52,7 +60,7 @@ const hiddenEventTypes = new Set([
 
 export function eventSummary(event: AttemptEvent): EventSummary | null {
   if (typeof event.payload === "string") {
-    return { label: stateLabel(event.kind), text: event.payload };
+    return { label: eventLabel(event.kind), text: event.payload };
   }
   const payload = record(event.payload);
   if (!payload) return fallbackSummary(event);
@@ -164,12 +172,13 @@ function toolAction(value: Record<string, unknown>, completed: boolean, failed =
 }
 
 function fallbackSummary(event: AttemptEvent): EventSummary {
-  return { label: eventLabel(event.kind), text: "Runtime update" };
+  return { label: eventLabel(event.kind), text: "Обновление среды выполнения" };
 }
 
 function eventLabel(kind: string): string {
-  if (kind === "claude-code" || kind === "codex") return "Runtime";
-  return stateLabel(kind);
+  if (kind === "claude-code" || kind === "codex") return "Среда выполнения";
+  if (taskStates.includes(kind as TaskState)) return stateLabel(kind);
+  return "Событие";
 }
 
 function errorText(payload: Record<string, unknown>): string | null {
