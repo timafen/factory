@@ -1,16 +1,17 @@
-Implementation commit: ea7ae6497ed6ee8907c2d3e254a90c3e87da22a7 — Pilot получает GitHub-репозиторий из origin и блокирует чужой контекст gh.
+Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — Pilot вызывает `gh repo view` с позиционным репозиторием из origin.
 
 # CARD-0175: GitHub-репозиторий Pilot только из origin
 
 ## HEAD
 
 Status: Implemented.
-Branch: `factory/9feaa5f8-af6-4c723584-32a`.
-Implementation commit: a57b7041c48423d741ab4a8676a7c60b4afa0855 — Pilot адресует GitHub API, PR и merge только репозиторием из origin.
-What changed: resolver SSH/HTTPS `origin` теперь подключён к карте целей главного
-цикла; `remote_identity` control plane не может направить API или merge в чужой repo.
-Evidence: `python3 -m unittest pilot.test_pilot` → OK (348 tests, 13 skipped).
-Next action: Review проверяет сквозной путь API/merge с чужим default-repo `gh`.
+Branch: `factory/1c5c6741-43a-0ebf7035-d70`.
+Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — `gh repo view` использует поддерживаемый позиционный repository из origin.
+What changed: resolver SSH/HTTPS `origin` по-прежнему задаёт цель всех действий;
+диагностический CLI-путь теперь реально исполним и не обращается к default-repo.
+Evidence: 9 целевых и 350 полных Pilot-тестов → OK; живой bare-вызов вернул
+`owainlewis/factory`, позиционный вызов — `timafen/factory`; browser-critical → 5 passed.
+Next action: Review подтверждает итоговый diff перед слиянием.
 
 ## LOG
 
@@ -26,3 +27,9 @@ Next action: Review проверяет сквозной путь API/merge с ч
 Подключение завершено: все GitHub-действия, запускаемые главным циклом, получают
 цель из managed `origin`; сторонний `remote_identity` остаётся только описанием.
 Регрессии для чужого `owainlewis/factory` и весь `pilot.test_pilot` проходят.
+
+### 2026-08-15 — Implement
+
+Устранён невалидный синтаксис диагностического `gh repo view`: репозиторий из
+`origin` передаётся позиционно. Тест проверяет полный массив аргументов процесса;
+повторный Verify на свежем `origin/main` и живое сравнение bare/explicit прошли.

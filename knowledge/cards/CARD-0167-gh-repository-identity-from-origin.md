@@ -3,13 +3,13 @@
 ## HEAD
 
 Status: Implemented.
-Branch: `factory/9feaa5f8-af6-4c723584-32a`.
-Implementation commit: a57b7041c48423d741ab4a8676a7c60b4afa0855 — GitHub-действия Pilot получают цель только из origin управляемой копии.
-What changed: цикл больше не передаёт `remote_identity` control plane в GitHub API,
-PR или merge; адрес выводится из `origin` и отсутствие либо неоднозначность копии
-безопасно исключает действие.
-Evidence: `python3 -m unittest pilot.test_pilot` → OK (348 tests, 13 skipped).
-Next action: Review проверяет сквозной сценарий с чужим default-repo `gh`.
+Branch: `factory/1c5c6741-43a-0ebf7035-d70`.
+Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — `gh repo view` получает репозиторий из origin поддерживаемым позиционным аргументом.
+What changed: диагностический GitHub-вызов больше не использует несуществующий
+`--repo`; bare-контекст остаётся заблокирован, а фактические аргументы CLI покрыты тестом.
+Evidence: `python3 -m unittest pilot.test_pilot` → OK (350 tests, 13 skipped);
+живой `gh repo view timafen/factory` → `timafen/factory`; browser-critical → 5 passed.
+Next action: Review подтверждает итоговый diff перед слиянием.
 
 ## LOG
 
@@ -29,3 +29,9 @@ GitHub-действия. Несовпадение должно блокиров�
 Pilot строит карту GitHub-целей только по `origin` точных managed worktree и
 не использует `remote_identity` как адрес действия. Регрессии подтверждают,
 что чужое `owainlewis/factory` не заменяет `timafen/factory`; целевой набор — OK.
+
+### 2026-08-15 — Implement
+
+Диагностический `gh repo view` переведён с неподдерживаемого `--repo` на
+позиционный репозиторий из `origin`. Новый subprocess-тест фиксирует фактический
+CLI-контракт; полный Verify на свежем `origin/main`, включая живой вызов, прошёл.
