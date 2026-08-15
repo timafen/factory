@@ -1004,12 +1004,21 @@ def work_lifecycle_block(base, task=None, tasks=None, work_id=""):
     key = work_storage_key(base, stable_work_id, task, tasks)
     if not key:
         return "задача с неполным происхождением не может продолжать конвейер"
+    ideas = ideas_all()
     matching = [
-        idea for idea in ideas_all()
+        idea for idea in ideas
         if (str(idea.get("task_id") or "").strip() == stable_work_id
             if stable_work_id else _same_work(idea.get("title"), base))
     ]
     active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
+    if not active and stable_work_id:
+        # A current Plan card is also the boundary that retires an older
+        # same-titled work whose root is no longer in the task page.  Keep the
+        # exact work-ID match above for normal descendants, then use the title
+        # only to find that missing generation boundary.
+        active = [idea for idea in ideas
+                  if idea.get("state") in ("planned", "in_work")
+                  and _same_work(idea.get("title"), base)]
     if active:
         current = active[-1]
         linked_id = current.get("task_id") or ""
@@ -5218,7 +5227,7 @@ def delivery_artifact(base, work_id=""):
     return artifact
 
 
-def record_delivery_artifact(base, branch, head):
+def record_delivery_artifact(base, branch, head, work_id=""):
     """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
     head = (head or "").lower()
     if not branch or not FULL_GIT_SHA.fullmatch(head):
@@ -8485,7 +8494,8 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch, g.get("head", ""))
+                    record_delivery_artifact(
+                        base, branch, g.get("head", ""), work_id=work_id)
                     branch_line = f"Branch: {branch}\n"
                     head_line = (f"Implementation head: {g['head']}\n"
                                  if g.get("head") else "")
