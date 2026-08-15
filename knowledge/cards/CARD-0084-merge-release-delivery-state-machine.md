@@ -1,18 +1,25 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: ef1f4268f48ae236f124868c399c5b5c3dc6ebae — release-driver повторяет locked delivery, записывает terminal status после running и сохраняет точный итог отката.
+Implementation commit: 10e442726f3348d0b3470f59a3ba59ca835909d4 — release-driver fail-closed отклоняет повреждённый status и сохраняет failed при ранней ошибке после running.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
-- Branch: `factory/a85069b2-7bc-2d06ff8e-a9c`.
+- Branch: `factory/0e061e2b-457-c027e11e-b09`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `ef1f4268f48ae236f124868c399c5b5c3dc6ebae` — release-driver повторяет locked delivery, записывает terminal status после running и сохраняет точный итог отката.
-- What changed: сохранённый `locked` возвращает операцию к захвату lock; общий terminal trap покрывает preflight и служебные режимы; автоматический откат сохраняет `release_failed_rolled_back` либо `rollback_failed`.
+- Implementation commit: `10e442726f3348d0b3470f59a3ba59ca835909d4` — release-driver fail-closed отклоняет повреждённый status и сохраняет failed при ранней ошибке после running.
+- What changed: неизвестный или повреждённый status останавливает delivery без повторного запуска; cleanup-trap надёжно пишет `failed` при preflight-ошибке после durable `running`.
 - Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
 - Next action: Повторить Review на свежем `main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По утверждённому ответу владельца исправлены оба блокера Review: повреждённый
+authoritative status теперь fail-closed запрещает повторный выпуск, а ранняя
+ошибка после durable `running` сохраняет terminal `failed`. Добавлены отдельные
+fixture-сценарии, подтверждающие отсутствие физического выпуска и terminal status.
 
 ### 2026-08-15 — Implement
 
