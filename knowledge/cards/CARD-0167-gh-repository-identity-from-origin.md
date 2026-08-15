@@ -7,9 +7,9 @@ Branch: `factory/3c382039-7ed-5f27e697-a7d`.
 Implementation commit: 9f414dd1298e61641633cae05c9dadac564d3379 — `gh repo view` получает репозиторий из origin поддерживаемым позиционным аргументом.
 What changed: диагностический GitHub-вызов больше не использует несуществующий
 `--repo`; bare-контекст остаётся заблокирован, а фактические аргументы CLI покрыты тестом.
-Evidence: `python3 -m unittest pilot.test_pilot` → OK (350 tests, 13 skipped);
+Evidence: `python3 -m unittest pilot.test_pilot` → OK (353 tests, 13 skipped);
 живой bare-вызов → `owainlewis/factory`, позиционный → `timafen/factory`;
-`FACTORY_BUILD_DIR=/tmp/card0167-build just build` → OK.
+`FACTORY_BUILD_DIR=/tmp/card0167-build-rebased just build` → OK.
 Next action: Review подтверждает итоговый diff перед слиянием.
 
 ## LOG
@@ -40,5 +40,5 @@ CLI-контракт; полный Verify на свежем `origin/main`, вк�
 ### 2026-08-15 — Implement
 
 HEAD приведён к машиночитаемой строке `Status: Implemented` после
-повторной проверки целевых 350 тестов, сборки бинарников и живого
+повторной проверки целевых 353 тестов, сборки бинарников и живого
 сравнения bare/explicit `gh repo view`.
