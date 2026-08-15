@@ -868,6 +868,7 @@ run_driver() {
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
+    FACTORY_DELIVERY_ID="${FACTORY_DELIVERY_ID:-}" FACTORY_DELIVERY_STATE_DIR="$case_dir/delivery-state" \
     FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER="${fixture_release_owner:-}" FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
@@ -1248,10 +1249,12 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   set +e
-  run_release "$failed" "$mode"
+  FACTORY_DELIVERY_ID="$mode-delivery" run_release "$failed" "$mode"
   status=$?
   set -e
   [ "$status" -ne 0 ] || fail "$mode unexpectedly succeeded"
+  [ "$(tr -d '\r\n' <"$failed/delivery-state/$mode-delivery.status")" = release_failed_rolled_back ] \
+    || fail "$mode did not preserve the successful automatic rollback result"
   assert_file "$failed/install/factory-server" old-server
   assert_file "$failed/install/factory-worker" old-worker
   assert_file "$failed/install/fx" 'exit 0'
@@ -1495,10 +1498,12 @@ missing="$temporary/missing-artifact"
 make_fixture "$missing" missing-artifact
 rm "$missing/install/factory-release-broker"
 set +e
-run_release "$missing" missing-artifact
+FACTORY_DELIVERY_ID=missing-artifact-delivery run_release "$missing" missing-artifact
 status=$?
 set -e
 [ "$status" -eq 4 ] || fail "missing rollback artifact was not rejected"
+[ "$(tr -d '\r\n' <"$missing/delivery-state/missing-artifact-delivery.status")" = failed ] \
+  || fail "post-running preflight refusal did not record failed status"
 [ ! -s "$missing/events" ] || fail "missing artifact caused a service mutation"
 grep -F 'нет полного rollback artifact' "$missing/output" >/dev/null \
   || fail "missing artifact refusal was not human-readable"
@@ -1597,12 +1602,20 @@ make_fixture "$locked" locked
 exec 8>"$locked/release.lock"
 flock -n 8 || fail "could not acquire fixture release lock"
 set +e
-run_release "$locked" locked
+FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked
 status=$?
 set -e
-flock -u 8
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = locked ] \
+  || fail "concurrent release did not durably record locked status"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
+flock -u 8
+FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked \
+  || { cat "$locked/output" >&2; fail "locked delivery retry did not run"; }
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = succeeded ] \
+  || fail "locked delivery retry did not finish successfully"
+[ "$(grep -Fxc 'restart factory-server.service' "$locked/events")" -eq 1 ] \
+  || fail "locked delivery retry did not perform exactly one release"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
