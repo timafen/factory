@@ -1,24 +1,20 @@
-Implementation commit: 899120cfcbb94156b6002146df40bd56f75ffeb4 — безопасные admin-вопросы решает старшая модель, а необратимые действия заранее эскалируются владельцу.
-
 # CARD-0116 — Административный вопрос сначала решает старшая модель
 
 ## HEAD
 
-- Статус: Verified PASS — awaiting human merge.
-- Ветка: `factory/2a75e05c-932-084e26a0-22a`.
-- Implementation commit: `899120cfcbb94156b6002146df40bd56f75ffeb4` — безопасные admin-вопросы маршрутизируются через фиксированный `fx` argv; необратимые действия блокируются до запуска.
-- Спецификация: `knowledge/specs/admin-questions-first-to-senior-model.md`.
-- Что изменено: старшая модель сама выполняет разрешённые staging-проверки;
-  API скрывает завершённый admin-аудит от владельца.
-- Что изменено: `manage migrate`, sandbox без `--dry-run` и любой `--force`
-  эскалируются владельцу до исполнения; `collectstatic` остаётся разрешённым.
-- Evidence: pinned base `d98c9b10c72add76401f216a770da0994f73fe5f` → candidate
-  `563efd8cb6ccb8178164904cecc7e4056f828e59`; `go test -timeout 5m ./...` → PASS;
-  `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 tests OK.
-  Владелец принял отсутствие UI-зависимостей и незавершённый Pilot-прогон как долг
-  окружения вне изменённой области; повторный круг не требуется. Tree clean and
-  `git diff --check` → PASS.
-- Следующее действие: человек проверяет поставку и вливает её в `main`.
+Status: Implemented
+
+Branch: `factory/8ae0163b-2bd-6f054ba5-0e9`
+
+Implementation commit: 129a13347531528d677b14773fb7755c11b849b0 — безопасные admin-вопросы решает старшая модель, а необратимые действия заранее эскалируются владельцу.
+
+What changed: разрешённые staging-проверки идут через фиксированный `fx` argv,
+а завершённый admin-аудит не попадает в список вопросов владельца.
+
+Evidence: `python3 -m unittest pilot.test_pilot.AdminQuestionRoutingTests` → 8 OK;
+`go test ./internal/controlplane` → PASS.
+
+Next action: влить поставку в `main`.
 
 ## LOG
 
@@ -124,3 +120,10 @@ restart/provenance общего набора остались нестабиль
 удалены из автоматического allowlist: они создают owner-вопрос до исполнения;
 `collectstatic` и sandbox `--dry-run` остаются разрешёнными. Маршрутизационные
 Python-тесты (8) и `go test ./internal/controlplane` прошли.
+
+### 2026-08-15 — Implement
+
+Готовая поставка перенесена на ветку реализации от свежего `origin/main`.
+Безопасные staging-вопросы решаются старшей моделью через ограниченный `fx` argv;
+необратимые действия эскалируются владельцу, а admin-аудит скрыт из его очереди.
+Целевые проверки: `AdminQuestionRoutingTests` — 8 OK, `go test ./internal/controlplane` — PASS.
