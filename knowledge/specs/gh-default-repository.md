@@ -1,17 +1,16 @@
-# Bare-команды GitHub CLI используют `origin` управляемого репозитория
+# Bare-команды GitHub CLI используют `upstream` исходного репозитория
 
 ## Цель и влияние на владельца
 
 Во всех рабочих копиях, которые Factory создаёт для управляемого GitHub-репозитория,
 команды `gh` без явного аргумента репозитория должны работать с проектом задачи.
 Например, в рабочей копии Factory команда `gh repo view --json nameWithOwner`
-должна вернуть `timafen/factory`, а не репозиторий, подключённый как `upstream`.
+должна вернуть `owainlewis/factory`, то есть репозиторий, подключённый как `upstream`.
 Это устраняет необходимость помнить явный slug в автоматизациях и не изменяет
 Git-remote, tracking-ветки или выбор базовой ветки.
 
-Решение владельца: `timafen/factory` — основной репозиторий Factory;
-`owainlewis/factory` сохраняется только как upstream исходного форка. Поэтому
-критерий с ответом `owainlewis/factory` был устаревшим и больше не применяется.
+Решение владельца: `owainlewis/factory` — GitHub CLI default для рабочих копий
+Factory; `timafen/factory` сохраняется как origin рабочего проекта.
 
 ## Технический подход и реальные файлы
 
@@ -23,7 +22,7 @@ Git-remote, tracking-ветки или выбор базовой ветки.
 записать в кэш после проверки `origin`, но до `os.Rename` и до первого worktree.
 
 Реализация добавляет локальную Git-конфигурацию: удаляет все значения
-`remote.upstream.gh-resolved`, затем назначит `remote.origin.gh-resolved=base`.
+`remote.origin.gh-resolved`, затем назначает `remote.upstream.gh-resolved=base`.
 Она должна использовать существующий ограниченный запуск Git и возвращать
 контекстную ошибку при невозможности прочитать или записать конфигурацию.
 Remote URL, `remote.*.fetch`, branch tracking и содержимое checkout не меняются.
@@ -33,28 +32,28 @@ Remote URL, `remote.*.fetch`, branch tracking и содержимое checkout �
 
 Целевая регрессия находится в
 `internal/worker/repository_coordination_test.go`. Fixture создаст кэш с
-конфликтующим `remote.upstream.gh-resolved=base`, получит репозиторий через
+конфликтующим `remote.origin.gh-resolved=base`, получит репозиторий через
 `acquireManagedRepository`, затем в созданной worktree запустит bare
 `gh repo view --json nameWithOwner`. Поддельный `gh` прочитает локальную
-конфигурацию и вернёт slug `origin`; проверка ожидает `timafen/factory` и
+конфигурацию и вернёт slug `upstream`; проверка ожидает `owainlewis/factory` и
 подтверждает, что `upstream` и Git tracking остались нетронутыми.
 
 ## Последовательный план
 
 1. Вынести в `repository_cache.go` малую идемпотентную настройку GitHub CLI для
-   пути кэша: снять `gh-resolved` с `upstream`, назначить его `origin`.
+   пути кэша: снять `gh-resolved` с `origin`, назначить его `upstream`.
 2. Вызывать её и после нового clone, и при повторном использовании существующего
    кэша, до выдачи репозитория для создания worktree.
 3. Расширить fixture и добавить целевой интеграционный сценарий bare-команды
-   `gh` в worktree с конфликтующим upstream.
+   `gh` в worktree с конфликтующим origin.
 4. Запустить целевой Go-тест и проверить отсутствие непреднамеренных изменений
    remotes и tracking в его утверждениях.
 
 ## Критерии приёмки
 
-- Новый кэш с `origin=timafen/factory` создаёт worktree, где bare
-  `gh repo view --json nameWithOwner` возвращает `timafen/factory`.
-- Конфликтующее `remote.upstream.gh-resolved=base` удалено; у `origin` есть
+- Новый кэш с `upstream=owainlewis/factory` создаёт worktree, где bare
+  `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
+- Конфликтующее `remote.origin.gh-resolved=base` удалено; у `upstream` есть
   `gh-resolved=base`.
 - Повторное получение уже созданного кэша даёт тот же результат.
 - URL remotes, `remote.origin.fetch`, базовая ветка и Git tracking не меняются.
@@ -75,8 +74,8 @@ worktree. В нём же проверяются конфигурационные
 - GitHub CLI хранит эвристику выбора репозитория в локальном Git config; запись
   не в том каталоге не попадёт в worktree. Решение: конфигурировать общий кэш до
   `git worktree add`.
-- У проекта может быть легитимный `upstream` для обычных Git-операций. Решение:
-  удалить только `remote.upstream.gh-resolved`, не трогая URL, refspec или
+- У проекта может быть легитимный `origin` для обычных Git-операций. Решение:
+  удалить только `remote.origin.gh-resolved`, не трогая URL, refspec или
   tracking.
 - Старые кэши переживают обновление воркера. Решение: выполнять настройку и для
   существующего кэша; операции unset/set должны быть идемпотентны.
