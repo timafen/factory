@@ -1,20 +1,20 @@
 # CARD-0129 — Патрули показывают находки в «Автоматизациях»
 
-Implementation commit: bccaaa13ed859bffd0453002c8a393f87d881890 — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
+Implementation commit: 2e52cdf51be58046e6e8be02daa1af3568b4cf30 — патрули скрыты на экране «Работа», а их находки и итоги перенесены в историю Automation.
 
 ## HEAD
 
-- Статус: Implemented — целевые проверки повторно пройдены.
-- Ветка: `factory/5d2c3ee1-280-555865f1-50f`.
-- Implementation commit: `bccaaa13ed859bffd0453002c8a393f87d881890` —
+- Статус: Implemented — обязательные ворота пройдены на свежем `origin/main`.
+- Ветка: `factory/3fe0c1c6-0f9-77830e71-827`.
+- Implementation commit: `2e52cdf51be58046e6e8be02daa1af3568b4cf30` —
   патрули скрыты в обоих режимах «Работы», а находки и итог последней попытки
   доступны в истории Automation.
 - Спецификация: `knowledge/specs/patrol-findings-on-automations.md`.
 - Область: скрыть только встроенные патрули с экрана «Работа» и перенести
   наблюдение их запусков, находок и итогов на detail-экран Automation.
-- Evidence: целевые Go-проверки — PASS; 25 целевых UI-тестов — PASS; lint без
-  предупреждений, typecheck и production build — PASS.
-- Следующее действие: открыть detail-экран Automation патруля на стенде.
+- Evidence: `just check`, `just ui-check`, `just ui-build 0` и
+  `python3 -m unittest pilot.test_pilot` — PASS; целевые UI-тесты — 29/29 PASS.
+- Следующее действие: запустить Verify заново; выпуск пока не выполнять.
 
 ## LOG
 
@@ -73,3 +73,9 @@ Automation показывает состояние, явные строки `Н�
 показ их итогов и находок в Automation. `go test ./internal/controlplane -run
 'TestTasks.*WorkClass|TestAutomationOccurrence.*AttemptResult'` прошёл; 25
 целевых UI-тестов, typecheck, lint и production build также прошли.
+
+### 2026-08-15 — Implement
+
+После переноса на свежий `origin/main` исправлено устаревшее ожидание истории
+работы. `just check`, `just ui-check`, `just ui-build 0` и pilot прошли; целевые
+UI-тесты — 29/29 PASS. Реальный коммит реализации указан в HEAD.
