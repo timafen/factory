@@ -47,9 +47,10 @@ EPIC_START_PREFIX = "[epic-start]"   # human approval to fan out
 HOST_LOAD_ACTIVE_STATES = {"running", "queued", "pending", "created", "starting"}
 HOST_LOAD_LIGHT_STAGES = {"Triage", "Specification", "Review"}
 HOST_LOAD_MINIMUM_ACTIVE = 1
-MAX_RETAINED_PER_REPOSITORY = 10
+MAX_RETAINED_PER_REPOSITORY = 16
 PROCESSED_RETENTION = 10000
 RESTART_RECOVERY_RETENTION = 500
+FULL_HISTORY_MAINTENANCE_SECONDS = 30 * 60
 FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
@@ -7374,9 +7375,9 @@ def rescue_queued(conf, tasks, workflows, workers):
 def worker_retention_full(worker, repository_id=None):
     """Whether retained worktrees make a worker unable to claim more work.
 
-    The Go control plane deliberately stops claims at ten retained worktrees
-    per repository. Heartbeats remain healthy in that state, so the pilot must
-    include repository headroom in its own routing health check.
+    The Go control plane deliberately stops claims at the shared retained
+    worktree ceiling per repository. Heartbeats remain healthy in that state,
+    so the pilot must include repository headroom in its routing health check.
     """
     if not isinstance(worker, dict):
         return False
@@ -8383,7 +8384,8 @@ def cycle(conf, state):
     # walk the historical backlog.  Answered continuations still get first
     # claim inside refill_open_work_slots(); Plan receives only capacity that
     # remains.  Ordinary cycles keep the normal terminal-first ordering below.
-    if conf.pop("_startup_refill", False):
+    startup_refill = bool(conf.pop("_startup_refill", False))
+    if startup_refill:
         try:
             answered = refill_open_work_slots(conf, workflows, workers)
             activity["answer_applied"] = (
@@ -8394,30 +8396,46 @@ def cycle(conf, state):
         except Exception as e:
             log("startup_work_slot_refill_error", repr(e))
 
-    # The full task history, dashboard, and diagnostics are maintenance work.
-    # On startup they must not delay restoring useful capacity: admission,
-    # budgets, host load, and the one-shot refill above have already run.
-    complete_tasks = None
+    # Four thousand historical tasks take well over a minute to page through.
+    # Fresh work and handoffs use the current page every cycle; archive cleanup
+    # and the full dashboard need the complete history only periodically.
+    # A restart deliberately postpones that maintenance so the first useful
+    # slots do not empty again while Pilot walks the archive.
+    maintenance_now = time.time()
+    if startup_refill:
+        state["full_history_maintenance_at"] = maintenance_now
+    last_maintenance = state.get("full_history_maintenance_at") or 0
     try:
-        complete_tasks = all_tasks()
-    except Exception as e:
-        log("task_history_error", repr(e))
+        full_history_due = (
+            maintenance_now - float(last_maintenance)
+            >= FULL_HISTORY_MAINTENANCE_SECONDS
+        )
+    except (TypeError, ValueError):
+        full_history_due = True
+    complete_tasks = None
+    if full_history_due:
+        try:
+            complete_tasks = all_tasks()
+            state["full_history_maintenance_at"] = time.time()
+        except Exception as e:
+            log("task_history_error", repr(e))
     lifecycle_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
 
-    try:
-        cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
-    except Exception as e:
-        log("plan_cleanup_error", repr(e))
-    try:
-        reconcile_stale_plan_cards(lifecycle_tasks)
-    except Exception as e:
-        log("plan_reconcile_error", repr(e))
-
-    try:
-        write_dashboard(conf, lifecycle_tasks, {w["id"]: w for w in api("/workers")["workers"]},
-                        codex_snapshot, (day_start, week_start))
-    except Exception as e:
-        log("dashboard_error", repr(e))
+    if isinstance(complete_tasks, list):
+        try:
+            cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
+        except Exception as e:
+            log("plan_cleanup_error", repr(e))
+        try:
+            reconcile_stale_plan_cards(lifecycle_tasks)
+        except Exception as e:
+            log("plan_reconcile_error", repr(e))
+        try:
+            write_dashboard(conf, lifecycle_tasks,
+                            {w["id"]: w for w in api("/workers")["workers"]},
+                            codex_snapshot, (day_start, week_start))
+        except Exception as e:
+            log("dashboard_error", repr(e))
     try:
         provider_limits_tick(conf)
     except Exception as e:
@@ -8511,6 +8529,11 @@ def cycle(conf, state):
                      MAX_TERMINAL_TASKS_PER_CYCLE)),
         1,
     )
+    # Capacity/area deferrals do not count as completed decisions below, but
+    # they must still have a hard per-cycle ceiling. Without this second bound
+    # one pass can revisit dozens of historical waits while live slots empty.
+    terminal_scanned = 0
+    terminal_scan_limit = terminal_limit * 2
     handoff_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
     terminal_tasks = recent_terminal_handoff_history(
         handoff_tasks,
@@ -8533,6 +8556,10 @@ def cycle(conf, state):
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
             continue
+        if terminal_scanned >= terminal_scan_limit:
+            activity["terminal_backlog"] = True
+            break
+        terminal_scanned += 1
         recovery_detail = None
         if tid in state["processed"]:
             recovery_detail = restart_recovery_detail(
