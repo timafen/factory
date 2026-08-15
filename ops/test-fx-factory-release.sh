@@ -1074,6 +1074,37 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
 
+# Historical generations are not rollback targets. A fresh, even corrupted,
+# unreferenced copy must neither block the next release nor survive it. The
+# bootstrap snapshot (ledger <= 27), current and previous remain protected.
+stale_generation="$success/releases/generations/stale-unreferenced"
+cp -a "$previous_generation" "$stale_generation"
+python3 - "$stale_generation/manifest.json" <<'PY'
+import json, sys
+path=sys.argv[1]
+body=json.load(open(path))
+body.setdefault("database", {})["ledger"]=30
+with open(path, "w") as out: json.dump(body, out)
+PY
+printf 'tampered stale payload\n' >>"$stale_generation/payload/factory-worker"
+# The second release is a new boot cycle. Drop the first cycle's synthetic
+# service events so the worker-health fixture can emit a genuinely newer
+# heartbeat after restart, just as production does.
+: >"$success/events"
+run_release "$success" parallel-success 0 \
+  || { cat "$success/output" >&2; fail "release was blocked by unreferenced history"; }
+[ ! -e "$stale_generation" ] || fail "unreferenced generation survived retention"
+current_generation=$(readlink -f "$success/releases/current")
+previous_generation=$(readlink -f "$success/releases/previous")
+verify_immutable_generation "$current_generation" \
+  || fail "retention damaged current generation"
+verify_immutable_generation "$previous_generation" \
+  || fail "retention damaged previous generation"
+find "$success/releases/generations" -mindepth 1 -maxdepth 1 -type d -name 'bootstrap-*' -print -quit \
+  | grep -q . || fail "retention removed the bootstrap generation"
+grep -F 'retention: удалено старое поколение вне current/previous: stale-unreferenced' "$success/output" >/dev/null \
+  || fail "retention did not explain removal of unreferenced history"
+
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup
 run_release "$fresh_snapshot" installed-server-no-backup \
