@@ -4001,6 +4001,48 @@ func TestVersionedRegistrationDoesNotBulkAcknowledgeUnlistedAttempt(t *testing.T
 	}
 }
 
+func TestVersionedRegistrationAcknowledgesExpiredClaimWorkerNeverStarted(t *testing.T) {
+	store := newTestStore(t)
+	fixed := time.Date(2026, 8, 15, 16, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return fixed }
+	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{
+		Key: "factory", RemoteIdentity: "github.com/example/unseen-expired-claim",
+	})
+	createTestTask(t, store, "unseen-expired-first", workerA, worker.Repositories[0].ID)
+	claim := claimTestTask(t, store, workerA, "unseen-expired-first", tokenA)
+	if claim.Attempt.StartedAt != nil {
+		t.Fatalf("unstarted claim started_at = %s; want nil", claim.Attempt.StartedAt)
+	}
+
+	fixed = fixed.Add(protocol.LeaseDuration + time.Millisecond)
+	if _, err := store.SweepExpired(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := createTestTask(t, store, "unseen-expired-second", workerA, worker.Repositories[0].ID)
+	if _, err := store.RegisterWorker(context.Background(), workerA, protocol.WorkerRegistration{
+		Name: "modern-worker", WorkerVersion: "test", RuntimeVersion: "test",
+		Capacity: 2, ActiveCount: 0, Health: "healthy", CapacityHandoffVersion: 1,
+		Repositories: []protocol.RepositoryRegistration{{
+			Key: "factory", RemoteIdentity: "github.com/example/unseen-expired-claim",
+			RetainedCount: protocol.MaxRetainedPerRepo - 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	next := claimTestTask(t, store, workerA, "unseen-expired-second", tokenB)
+	if next.Task.ID != second.Task.ID {
+		t.Fatalf("claim after unseen lease expired = %s; want %s", next.Task.ID, second.Task.ID)
+	}
+	var acknowledged int
+	if err := store.db.QueryRow(`SELECT capacity_acknowledged FROM attempts WHERE id = ?`, claim.Attempt.ID).Scan(&acknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged != 1 {
+		t.Fatalf("expired unseen claim capacity_acknowledged = %d; want 1", acknowledged)
+	}
+}
+
 func TestRegistrationCanPreAcknowledgeDisposedAttemptBeforeLeaseSweep(t *testing.T) {
 	store := newTestStore(t)
 	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
