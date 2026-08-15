@@ -1,12 +1,12 @@
 # CARD-0099 — Журнал вливания хранит круги и участие владельца
 
-Implementation commit: 70d07db9901fec4bdcf63851bfc30d1e181ec9ae — журнал считает заменённые попытки текущего поколения и исключает завершённые поколения.
+Implementation commit: bd4ea46a89cf8895f3dea168083a5122c0573ddd — журнал считает заменённые попытки текущего поколения и исключает завершённые поколения.
 
 ## HEAD
 
 - Status: Implement + Test complete after Review correction — ready for Review.
 - Branch: `factory/24b53552-ddd-674ca24f-de5`.
-- Implementation commit: `70d07db9901fec4bdcf63851bfc30d1e181ec9ae`.
+- Implementation commit: `bd4ea46a89cf8895f3dea168083a5122c0573ddd`.
 - What changed: новые merge receipts сохраняют `rounds`, `actor` и nullable
   `actor_id`; crash-recovery не меняет заранее зафиксированные значения.
 - What changed: `rounds` включает заменённые попытки текущего `work_id`, но не
@@ -42,7 +42,7 @@ head. Выбран контракт, утверждённый владельце
 
 ### 2026-08-15 — Implement
 
-Коммит `70d07db9901fec4bdcf63851bfc30d1e181ec9ae` отделяет фактические круги
+Коммит `bd4ea46a89cf8895f3dea168083a5122c0573ddd` отделяет фактические круги
 вливания от лимита повторов: заменённые попытки текущего `work_id` учитываются,
 а одноимённые задачи предыдущего поколения не учитываются. Регрессионный тест
 с заполненным `archived_attempts` и три смежных целевых теста прошли.
