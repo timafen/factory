@@ -2660,9 +2660,10 @@ class PipelineWatchTests(unittest.TestCase):
             "repository_id": repository_id,
         }
 
-    def watch(self, tasks=None):
+    def watch(self, tasks=None, processed=None):
         pilot.pipeline_watch(
-            self.conf, tasks or [self.task()], self.workflows, self.workers
+            self.conf, tasks or [self.task()], self.workflows, self.workers,
+            processed,
         )
 
     def test_waits_before_resuming_lost_transition(self):
@@ -2674,6 +2675,50 @@ class PipelineWatchTests(unittest.TestCase):
         self.now += pilot.STALL_WAIT - 1
         self.watch()
         self.assertEqual(self.created, [])
+
+    def test_fresh_terminal_handoff_waits_for_normal_processor(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch(processed=[])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
+        self.assertEqual(
+            self.work_status["Встроенный патруль"]["state"], "queued")
+
+        self.now += pilot.STALL_WAIT
+        self.watch(processed=["source-task"])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+
+    def test_new_unprocessed_attempt_prevents_watchdog_duplicate(self):
+        old = self.task()
+        old.update({"id": "old-attempt", "created_at": "2026-08-15T10:00:00Z"})
+        new = self.task()
+        new.update({"id": "new-attempt", "created_at": "2026-08-15T10:05:00Z"})
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch([old, new], processed=["old-attempt"])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
 
     def test_resumes_once_after_wait_with_same_repository_and_revision(self):
         self.memory = {
@@ -5484,6 +5529,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(watch.call_args.args[1], tasks)
         self.assertEqual(watch.call_args.args[2]["Triage"]["revision_id"], "wf-triage")
         self.assertIs(watch.call_args.args[3], self.workers)
+        self.assertIs(watch.call_args.args[4], state["processed"])
         self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
@@ -7703,7 +7749,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_called_once_with(conf, [], {}, {})
+        watch.assert_called_once_with(conf, [], {}, {}, state["processed"])
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)
