@@ -13,7 +13,7 @@ What changed:
 - Общие подписи статусов безопасны к неизвестным backend-значениям.
 - Время, длительности и state loading/error русские; API error не раскрывает сырой текст.
 
-Evidence: `format.test.ts` 13/13, `App.test.tsx` 69/69; TypeScript, lint, web build и `go build ./...` → успешно.
+Evidence: web tests 183/183; TypeScript, lint, web build и `go build ./...` → успешно.
 
 Next action: подключить единый итог и действие владельца к списку и detail работы.
 
@@ -63,3 +63,5 @@ lint, production web build и Go build завершились успешно.
 Сохранённая реализация перенесена на текущую ветку и перебазирована на свежий
 `origin/main`. Повторно пройдены `format.test.ts` (13/13), `App.test.tsx` (69/69),
 TypeScript, lint, production web build и `go build ./...` — все проверки успешны.
+
+Полный web-набор завершён: 16 файлов и 183 теста прошли успешно.
