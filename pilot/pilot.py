@@ -1554,13 +1554,47 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
 
 
+def archived_attempt_ids(reference):
+    """Task IDs archived for this exact work generation."""
+    works = load(WORKS_PATH, {}) or {}
+    if not isinstance(works, dict):
+        return set()
+
+    metas = []
+    if isinstance(reference, dict) and reference.get("work_id"):
+        meta = works.get(reference["work_id"])
+        if isinstance(meta, dict):
+            metas.append(meta)
+    else:
+        title = (base_title(reference.get("title") or "")
+                 if isinstance(reference, dict) else str(reference or ""))
+        metas.extend(
+            meta for name, meta in works.items()
+            if isinstance(meta, dict)
+            and _same_work(meta.get("base_title") or name, title)
+        )
+
+    archived_ids = set()
+    for meta in metas:
+        attempts = meta.get("archived_attempts") or []
+        if not isinstance(attempts, list):
+            continue
+        archived_ids.update(
+            item.get("task_id") for item in attempts
+            if isinstance(item, dict) and item.get("task_id")
+        )
+    return archived_ids
+
+
 def stage_attempts(tasks, stage, base):
     """How many times this exact work already went through this exact stage."""
+    archived_ids = archived_attempt_ids(base)
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
         if (m and m.group(1).strip() == stage
-                and same_task_work(t, base)):
+                and same_task_work(t, base)
+                and t.get("id") not in archived_ids):
             n += 1
     return n
 
