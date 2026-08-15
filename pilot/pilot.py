@@ -4531,6 +4531,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
+        if v.get("decision") == "technical_retry":
+            enqueue_technical_retry(task_id, stage, resume_stage, base, repo_id,
+                                    situation, question, options, prior_result, branch,
+                                    v.get("reason"))
+            return False
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch, attempts_so_far):
@@ -4596,6 +4601,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + CAP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if v.get("decision") == "technical_retry":
+                enqueue_technical_retry(task_id, stage, resume_stage, base, repo_id,
+                                        situation, question, options, prior_result, branch,
+                                        v.get("reason"))
+                return False
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch,
@@ -4628,6 +4638,11 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
             v = orchestrator_answer(conf, stage, base,
                                     situation + LOOP_NOTE.format(n=attempts_so_far),
                                     question, prior_result, repo_id)
+            if v.get("decision") == "technical_retry":
+                enqueue_technical_retry(task_id, stage, resume_stage, base, repo_id,
+                                        situation, question, options, prior_result, branch,
+                                        v.get("reason"))
+                return False
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
                     situation, question, options, prior_result, branch,
@@ -4666,16 +4681,9 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
     verdict = orchestrator_answer(conf, stage, base, situation, question,
                                   prior_result, repo_id)
     if verdict.get("decision") == "technical_retry":
-        pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
-        pending[task_id] = {
-            "task_id": task_id, "stage": stage, "base": base,
-            "repository_id": repo_id,
-            "reason": str(verdict.get("reason") or "сбой авторазбора")[:200],
-            "updated": time.strftime("%Y-%m-%d %H:%M"),
-        }
-        save(TECHNICAL_RETRIES_PATH, pending)
-        log(f"TECHNICAL QUESTION RETRY task={task_id} stage={stage}: "
-            f"{pending[task_id]['reason']}")
+        enqueue_technical_retry(task_id, stage, resume_stage, base, repo_id,
+                                situation, question, options, prior_result, branch,
+                                verdict.get("reason"))
         return False
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
@@ -4732,6 +4740,53 @@ def write_question(task_id, stage, resume_stage, base, repo_id, situation, quest
     }
     save(f"{QUESTION_DIR}/{task_id}.json", rec)
     return rec
+
+
+def enqueue_technical_retry(task_id, stage, resume_stage, base, repo_id, situation,
+                            question, options, prior_result, branch, reason=""):
+    """Durably queue one machine-only retry without exposing it to the owner."""
+    pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
+    old = pending.get(task_id, {})
+    pending[task_id] = {
+        "task_id": task_id, "stage": stage, "resume_stage": resume_stage,
+        "base": base, "repository_id": repo_id, "situation": situation,
+        "question": question, "options": options, "prior_result": prior_result,
+        "branch": branch, "reason": str(reason or "сбой авторазбора")[:200],
+        "updated": time.strftime("%Y-%m-%d %H:%M"),
+        # A repeated terminal delivery must update the same queue item, not
+        # create another continuation.  The question below is the durable
+        # handoff to handle_answers(), which already bounds launch retries.
+        "queue_attempts": int(old.get("queue_attempts", 0)) + 1,
+    }
+    save(TECHNICAL_RETRIES_PATH, pending)
+    log(f"TECHNICAL QUESTION RETRY task={task_id} stage={stage}: "
+        f"{pending[task_id]['reason']}")
+
+
+def activate_technical_retries():
+    """Turn queued classifier outages into idempotent machine continuations."""
+    pending = load(TECHNICAL_RETRIES_PATH, {}) or {}
+    for task_id, item in pending.items():
+        if not isinstance(item, dict):
+            continue
+        path = f"{QUESTION_DIR}/{task_id}.json"
+        current = load(path, None)
+        # Do not overwrite an owner question, and never relaunch a retry that
+        # handle_answers() has already accepted.
+        if current or not item.get("resume_stage"):
+            continue
+        rec = write_question(
+            task_id, item.get("stage", ""), item["resume_stage"],
+            item.get("base", ""), item.get("repository_id", ""),
+            item.get("situation", ""), item.get("question", ""),
+            item.get("options", []), item.get("prior_result", ""),
+            item.get("branch", ""), status="answered")
+        rec["answer"] = "Повтори этап после восстановления авторазбора."
+        rec["answered_by"] = "technical_retry"
+        rec["machine_action"] = "retry_infrastructure"
+        rec["technical_retry_reason"] = item.get("reason", "")
+        save(path, rec)
+        log(f"TECHNICAL RETRY ACTIVATED task={task_id} stage={item.get('stage', '')}")
 
 
 def load_questions():
@@ -5110,6 +5165,7 @@ def record_new_works(conf, tasks, max_age_min=180):
 
 def handle_answers(conf, workflows, workers, tasks):
     """An answered question resumes its pipeline from resume_stage."""
+    activate_technical_retries()
     stages = [s["workflow"] for s in conf["stages"]]
     applied = 0
     for q in load_questions():

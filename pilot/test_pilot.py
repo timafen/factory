@@ -6171,6 +6171,44 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(retry["repository_id"], "repo-id")
         self.assertIn("TimeoutError", retry["reason"])
 
+        # The durable record is an executable queue, not an audit file: the
+        # next scheduler pass creates exactly one continuation even if called
+        # repeatedly.
+        created = self.apply_answers_twice()
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["title"], "[auto] [1/1 Specification] Работа")
+        queued = pilot.load(os.path.join(self.question_dir, "failed-classifier.json"), {})
+        self.assertEqual(queued["status"], "resolved")
+        self.assertEqual(queued["answered_by"], "technical_retry")
+
+    def test_retry_cap_classifier_failure_is_queued_not_sent_to_owner(self):
+        self.conf["max_cap_rescues"] = 0
+        with mock.patch.object(pilot, "orchestrator_answer", return_value={
+                "decision": "technical_retry", "reason": "классификатор недоступен"}), \
+                mock.patch.object(pilot, "write_question") as write_question, \
+                mock.patch.object(pilot, "notify") as notify:
+            self.assertFalse(pilot.route_question(
+                self.conf, "cap-classifier", "Triage", "Specification", "Работа",
+                "repo-id", "лимит повторов", "Что делать дальше?", [], "вывод",
+                attempts_so_far=3))
+
+        write_question.assert_not_called()
+        notify.assert_not_called()
+        self.assertEqual(
+            pilot.load(self.retry_path, {})["cap-classifier"]["reason"],
+            "классификатор недоступен")
+
+    def test_technical_retry_queue_keeps_one_continuation_after_repeated_delivery(self):
+        verdict = {"decision": "technical_retry", "reason": "временный сбой"}
+        self.assertFalse(self.route(verdict, task_id="duplicate-classifier"))
+        self.assertFalse(self.route(verdict, task_id="duplicate-classifier"))
+
+        created = self.apply_answers_twice()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(
+            pilot.load(self.retry_path, {})["duplicate-classifier"]["queue_attempts"], 2)
+
     def test_wait_survives_repeated_cleanup_and_pipeline_watch_cycles(self):
         self.conf["stages"] = [
             {"workflow": "Triage", "worker": "worker"},
