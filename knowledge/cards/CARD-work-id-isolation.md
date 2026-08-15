@@ -1,14 +1,14 @@
-Implementation commit: e291e6b2876937c3d21fb1a88f5dfb0efbdaddad — архив, lifecycle, budget-stop и handoff изолированы по work_id
+Implementation commit: 1692747ff71a369e4ff1c2463d08f577ac9d19a5 — вопросы и возобновления сохраняют work_id
 
 ## HEAD
 
-Status: Implemented — awaiting Review
-Branch: factory/2745c8b1-72f-c9ec8e64-11a
-Implementation commit: e291e6b2876937c3d21fb1a88f5dfb0efbdaddad
-What changed: merge/archive, lifecycle и паузы budget-stop сопоставляют provenance `work_id`; title остаётся только для legacy-записей без provenance.
-What changed: handoff, Review и Verify передают ID при выборе baseline и delivery artifact; остановка хранит также понятный владельцу заголовок.
-Evidence: `python3 -m unittest -v pilot.test_pilot` → 348 OK, 13 skipped; `go build ./...` → OK.
-One next action: провести Review изоляции одноимённых работ по `work_id`.
+Status: Implemented — Review повторён
+Branch: factory/2bf978ed-b20-44c65b97-386
+Implementation commit: 1692747ff71a369e4ff1c2463d08f577ac9d19a5
+What changed: все ветки `route_question`, включая budget-stop, retry и orchestrator wait, сохраняют durable `work_id`.
+What changed: ответ при исчезнувшем source task не подхватывает одноимённую работу; созданное продолжение получает сохранённый ID.
+Evidence: `python3 -m unittest -v pilot.test_pilot` → 349 OK, 13 skipped; `go build ./...` → OK.
+One next action: влить поставку после финальной проверки CI.
 
 ## LOG
 
@@ -40,3 +40,7 @@ One next action: провести Review изоляции одноимённых
 ### 2026-08-15 — Implement
 
 Закрыты четыре замечания Review: архив merge receipt, lifecycle и budget hard-stop больше не пересекают одноимённые работы; handoff/Review/Verify выбирают baseline и artifact по `work_id`. `stopped_pipelines` хранит durable ID вместе с человеческим заголовком, а cleanup сохраняет такую паузу. Добавлены проверки полного archive/cleanup и раздельной передачи delivery artifact. `python3 -m unittest -v pilot.test_pilot` — 348 OK, 13 skipped; `go build ./...` — OK.
+
+### 2026-08-15 — Implement
+
+По замечанию повторного Review все пути записи вопросов теперь передают `work_id`, включая budget-stop, предел повторов и машинное ожидание. Возобновление вопроса с удалённой исходной задачей сопоставляет только сохранённый ID и передаёт его в новое продолжение; одноимённая чужая работа не становится дублем. `python3 -m unittest -v pilot.test_pilot` — 349 OK, 13 skipped; `go build ./...` — OK.
