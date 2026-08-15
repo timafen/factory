@@ -6,6 +6,7 @@
 и помощник вручную заводят только предложения и видят тот же общий список.
 """
 import html
+import os
 import sys
 import uuid
 
@@ -184,6 +185,9 @@ h2{font-size:15px;margin:22px 0 8px;color:#9fb4d8;
 .card.done,.card.rejected{opacity:.55}
 .t{font-weight:600;margin:0 0 4px}
 .why{color:#a8b3c7;font-size:13.5px;margin:0 0 8px;white-space:pre-wrap}
+.why-disclosure{background:transparent;border:0;border-radius:0;padding:0;margin:7px 0 9px}
+.why-disclosure summary{min-height:36px;display:flex;align-items:center;font-size:13px}
+.why-disclosure .why{margin:5px 0 0;overflow-wrap:anywhere}
 .meta{color:#7b8699;font-size:12px;margin:0 0 9px}
 .badge{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11.5px;
  margin-right:6px;border:1px solid #2a3346;background:#182031;color:#9fb4d8}
@@ -207,8 +211,19 @@ textarea{min-height:64px}
 details{background:#121722;border:1px solid #1e2532;border-radius:12px;
  padding:10px 12px;margin:18px 0 0}
 summary{cursor:pointer;color:#9fb4d8;font-size:14px}
+.alert-group{margin:10px 0;padding:0;overflow:hidden}
+.alert-group>summary{display:flex;align-items:center;gap:8px;min-height:44px;padding:10px 12px}
+.alert-group>summary .freshness{margin-left:auto;color:#7b8699;font-size:12px;text-align:right}
+.alert-group .card{margin:0;border-width:1px 0 0;border-radius:0}
+.card,.meta,.t,.sub,summary{overflow-wrap:anywhere}
 .empty{color:#7b8699;font-size:13.5px;padding:10px 2px}
 a.back{color:#8fabe6;text-decoration:none;font-size:13px}
+@media(max-width:480px){
+ body{padding-left:10px;padding-right:10px}
+ .tabs{gap:5px}.tabs a{padding:8px 10px}
+ button{min-height:40px}.alert-group>summary{align-items:flex-start;flex-wrap:wrap}
+ .alert-group>summary .freshness{width:100%;margin-left:0;text-align:left}
+}
 """
 
 HELP = ("Здесь ничего не теряется: предложения добавляешь ты или помощник, "
@@ -240,7 +255,8 @@ def card_html(it, back):
                 f'<span class="badge b-{st}">{STATE_RU.get(st, st)}</span>')
     bits.append(f'<div class="t">{esc(it.get("title"))}</div>')
     if it.get("why"):
-        bits.append(f'<div class="why">{esc(it["why"])}</div>')
+        bits.append('<details class="why-disclosure"><summary>Показать обоснование</summary>'
+                    f'<div class="why">{esc(it["why"])}</div></details>')
     meta = f'завёл: {ORIGIN_RU.get(it.get("origin"), it.get("origin"))} · {esc(it.get("created"))}'
     if it.get("source"):
         meta += f' · из работы «{esc(it["source"])}»'
@@ -353,12 +369,17 @@ GROUP_RU = {"questions": "вопрос ко мне", "stuck": "работа вс
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_page(group: str = "", n: int = 100):
+def alerts_page(group: str = "", n: int = 30):
     import json as _json
-    path = "/opt/factory-data/pilot/notifications.jsonl"
+    path = os.environ.get(
+        "FACTORY_INTAKE_NOTIFICATIONS_PATH",
+        "/opt/factory-data/pilot/notifications.jsonl",
+    )
     items = []
     try:
-        for line in open(path, encoding="utf-8").readlines()[-800:]:
+        with open(path, encoding="utf-8") as stream:
+            lines = stream.readlines()[-800:]
+        for line in lines:
             try:
                 items.append(_json.loads(line))
             except Exception:
@@ -368,7 +389,7 @@ def alerts_page(group: str = "", n: int = 100):
     items.reverse()
     if group:
         items = [i for i in items if i.get("group") == group]
-    items = items[:max(10, min(n, 300))]
+    items = items[:max(1, min(n, 30))]
 
     tabs = ['<div class="tabs">',
             f'<a class="{"on" if not group else ""}" href="alerts">Все</a>']
@@ -376,17 +397,29 @@ def alerts_page(group: str = "", n: int = 100):
         tabs.append(f'<a class="{"on" if group == k else ""}" href="alerts?group={k}">{v}</a>')
     tabs.append("</div>")
 
-    body = []
+    grouped = {}
     for i in items:
-        quiet = "" if i.get("delivered") else " (тихое: группа выключена)"
-        click = i.get("click") or ""
-        link = (f'<a class="back" href="{esc(click)}">открыть</a>' if click else "")
+        grouped.setdefault(i.get("group") or "routine", []).append(i)
+
+    body = []
+    for group_key, group_items in grouped.items():
+        group_name = GROUP_RU.get(group_key, group_key)
+        latest = group_items[0].get("at") or "время не указано"
         body.append(
-            f'<div class="card{"" if i.get("delivered") else " done"}">'
-            f'<div class="t">{esc(i.get("title"))}</div>'
-            f'<div class="why">{esc(i.get("message"))}</div>'
-            f'<div class="meta">{esc(i.get("at"))} · {GROUP_RU.get(i.get("group"), i.get("group"))}'
-            f'{quiet} {link}</div></div>')
+            f'<details class="alert-group"{" open" if group else ""}>'
+            f'<summary><span>{esc(group_name)} · {len(group_items)}</span>'
+            f'<span class="freshness">последнее: {esc(latest)}</span></summary>')
+        for i in group_items:
+            quiet = "" if i.get("delivered") else " (тихое: группа выключена)"
+            click = i.get("click") or ""
+            link = (f'<a class="back" href="{esc(click)}">открыть</a>' if click else "")
+            body.append(
+                f'<div class="card{"" if i.get("delivered") else " done"}">'
+                f'<div class="t">{esc(i.get("title"))}</div>'
+                f'<div class="why">{esc(i.get("message"))}</div>'
+                f'<div class="meta">{esc(i.get("at"))} · {esc(group_name)}'
+                f'{quiet} {link}</div></div>')
+        body.append('</details>')
     if not body:
         body.append('<div class="empty">Уведомлений пока нет.</div>')
 

@@ -161,7 +161,7 @@ export function EpicsView({ onTask, onAnswer }: { onTask?: (id: string) => void;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="epics-toolbar">
         <p style={{ color: "var(--text-muted, #8a94a6)", margin: 0, flex: 1 }}>
           Эпики — большие цели, разложенные планировщиком на подзадачи. «Старт» отправляет все
           подзадачи в конвейер; дальше прогресс обновляется сам.

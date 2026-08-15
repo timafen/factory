@@ -87,13 +87,13 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
     return true;
   });
 
-  if (query.isPending) return <LoadingState label="Loading Automations" />;
+  if (query.isPending) return <LoadingState label="Загружаем автоматизации" />;
   if (!query.data) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
 
   return (
     <div className="page">
       <ViewHeader
-        title="Automations"
+        title="Автоматизации"
         fetching={query.isFetching}
         updatedAt={query.dataUpdatedAt}
         onRefresh={() => void query.refetch()}
@@ -101,13 +101,13 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
       {query.error && <StaleBanner error={query.error} />}
 	  {statuses.error && <StaleBanner error={statuses.error} />}
       <div className="view-toolbar">
-        <p>Run coding agents from a saved Markdown runbook, GitHub state, or a schedule.</p>
+        <p>Запускайте агентов по сохранённому Markdown-сценарию, состоянию GitHub или расписанию.</p>
         <div className="detail-actions">
           <button className="button button-secondary" onClick={() => setMigrationOpen(true)}>
-            <DatabaseBackup size={15} /> Migrate legacy poller
+            <DatabaseBackup size={15} /> Перенести старый опросчик
           </button>
           <button className="button button-primary" onClick={() => setCreateOpen(true)}>
-            <Plus size={15} /> Create Automation
+            <Plus size={15} /> Создать автоматизацию
           </button>
         </div>
       </div>
@@ -118,7 +118,7 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
 		  </div>
 		  {statuses.data.map((status: AutomationStatus) => {
 			const content = <>
-			  <span className="workflow-identity"><strong>{status.title}</strong><small>{status.source === "host" ? "Служба хоста" : "Control plane"}</small></span>
+			  <span className="workflow-identity"><strong>{status.title}</strong><small>{status.source === "host" ? "Служба хоста" : "Панель управления"}</small></span>
 			  <span>{status.category}</span>
 			  <span className="automation-list-copy"><strong>{status.data_status === "no_data" ? "Нет данных" : status.status}</strong><small>{status.diagnostic ?? "Живой статус"}</small></span>
 			  <span>{status.purpose}</span>
@@ -132,44 +132,44 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
 		</div>
 	  )}
       {items.length > 0 && (
-        <div className="automation-filterbar" aria-label="Filter Automations">
+        <div className="automation-filterbar" aria-label="Фильтры автоматизаций">
           <SlidersHorizontal size={14} aria-hidden="true" />
           <label>
-            <span>Repository</span>
+            <span>Репозиторий</span>
             <select value={repositoryFilter} onChange={(event) => setRepositoryFilter(event.target.value)}>
-              <option value="all">All repositories</option>
+              <option value="all">Все репозитории</option>
               {repositoryOptions.map((identity) => <option key={identity} value={identity}>{identity}</option>)}
             </select>
           </label>
           <label>
-            <span>Status</span>
+            <span>Статус</span>
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
-              <option value="all">Any status</option>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
+              <option value="all">Любой статус</option>
+              <option value="enabled">Включена</option>
+              <option value="disabled">Выключена</option>
             </select>
           </label>
-          <span className="automation-filter-count">{visibleItems.length} of {items.length}</span>
+          <span className="automation-filter-count">{visibleItems.length} из {items.length}</span>
         </div>
       )}
       {items.length === 0 ? (
         <EmptyState
           icon={<Bot size={22} />}
-          title="No Automations yet"
-          description="Create a disabled typed trigger, preview it, then enable it."
-          action={<button className="button button-primary" onClick={() => setCreateOpen(true)}>Create Automation</button>}
+          title="Автоматизаций пока нет"
+          description="Создайте выключенный типизированный триггер, проверьте его и затем включите."
+          action={<button className="button button-primary" onClick={() => setCreateOpen(true)}>Создать автоматизацию</button>}
         />
       ) : visibleItems.length === 0 ? (
         <EmptyState
           icon={<SlidersHorizontal size={22} />}
-          title="No Automations match"
-          description="Change the repository or status filter to see more Automations."
-          action={<button className="button button-secondary" onClick={() => { setRepositoryFilter("all"); setStatusFilter("all"); }}>Clear filters</button>}
+          title="Подходящих автоматизаций нет"
+          description="Измените фильтр репозитория или статуса, чтобы увидеть больше автоматизаций."
+          action={<button className="button button-secondary" onClick={() => { setRepositoryFilter("all"); setStatusFilter("all"); }}>Сбросить фильтры</button>}
         />
       ) : (
         <div className="workflow-list automation-list">
           <div className="automation-table-head">
-            <span>Automation</span><span>Status</span><span>Last run</span><span>Activity</span><span>Next action</span><span />
+            <span>Автоматизация</span><span>Статус</span><span>Последний запуск</span><span>Активность</span><span>Следующее действие</span><span />
           </div>
           {visibleItems.map((automation) => {
             const latestRun = automation.latest_run;
@@ -180,15 +180,15 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
                   <strong>{automation.title}</strong>
                   <small>{automation.repository_identity} · {triggerSummary(automation)}</small>
                 </span>
-                <span className="automation-list-health"><HealthBadge automation={automation} /><small>{automation.health.message || "No health detail."}</small></span>
+                <span className="automation-list-health"><HealthBadge automation={automation} /><small>{automationHealthMessage(automation.health.message)}</small></span>
                 <span className="automation-list-copy">
-                  <strong>{latestRun ? occurrenceIdentity(latestRun) : automation.latest_task?.title || "No run yet"}</strong>
+                  <strong>{latestRun ? occurrenceIdentity(latestRun) : automation.latest_task?.title || "Запусков ещё нет"}</strong>
                   <small>{latestRun && latestRunState
                     ? `${latestRunState.label} · ${formatTimestamp(latestRun.created_at)}`
-                    : automation.latest_task ? formatRunState(automation.latest_task.state) : "Waiting for the first run"}</small>
+                    : automation.latest_task ? formatRunState(automation.latest_task.state) : "Ожидается первый запуск"}</small>
                 </span>
-                <span className="automation-list-copy"><strong>{automation.dispatched_count} dispatched</strong><small>{automation.matched_count} matched · {automation.skipped_count} reused</small></span>
-                <span className="automation-list-copy"><strong>{formatTimestamp(automation.next_due_at ?? automation.next_check_at)}</strong><small>{automation.trigger.type === "schedule" ? "Next run" : "Next check"} · last checked {formatTimestamp(automation.last_checked_at)}</small></span>
+                <span className="automation-list-copy"><strong>{automation.dispatched_count} запущено</strong><small>{automation.matched_count} найдено · {automation.skipped_count} повторно использовано</small></span>
+                <span className="automation-list-copy"><strong>{formatTimestamp(automation.next_due_at ?? automation.next_check_at)}</strong><small>{automation.trigger.type === "schedule" ? "Следующий запуск" : "Следующая проверка"} · проверено {formatTimestamp(automation.last_checked_at)}</small></span>
                 <ChevronRight size={15} className="row-chevron" />
               </button>
             );
@@ -202,7 +202,7 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
             disabled={loadMore.isPending}
             onClick={() => loadMore.mutate({ cursor: activeCursor, headCursor: previousHeadCursor.current ?? null })}
           >
-            {loadMore.isPending ? "Loading…" : "Load more Automations"}
+            {loadMore.isPending ? "Загружаем…" : "Показать ещё автоматизации"}
           </button>
         </div>
       )}
@@ -316,7 +316,7 @@ export function AutomationDetail({
     },
   });
 
-  if (detail.isPending) return <LoadingState label="Loading Automation" />;
+  if (detail.isPending) return <LoadingState label="Загружаем автоматизацию" />;
   if (!detail.data) return <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />;
   const data = detail.data;
   const automation = data.automation;
@@ -329,7 +329,7 @@ export function AutomationDetail({
 
   return (
     <div className="page detail-page">
-      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> All Automations</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> Все автоматизации</button>
       <div className="detail-heading">
         <div>
           <HealthBadge automation={automation} />
@@ -338,31 +338,31 @@ export function AutomationDetail({
         </div>
         <div className="detail-actions">
           <button className="button button-secondary" onClick={() => test.mutate()} disabled={test.isPending}>
-            {test.isPending ? <LoaderCircle size={14} className="spin" /> : <FlaskConical size={14} />} Test trigger
+            {test.isPending ? <LoaderCircle size={14} className="spin" /> : <FlaskConical size={14} />} Проверить триггер
           </button>
           {automation.trigger.type === "schedule" ? (
             <>
               <button className="button button-secondary" onClick={() => setConfirmPatrol(true)} disabled={provisionPatrol.isPending}>
-                <Bot size={14} /> Enable pipeline patrol
+                <Bot size={14} /> Включить патруль конвейера
               </button>
               <button className="button button-secondary" onClick={() => run.mutate()} disabled={!automation.enabled || run.isPending}>
-                <CirclePlay size={14} /> Run now
+                <CirclePlay size={14} /> Запустить сейчас
               </button>
             </>
           ) : (
             <button className="button button-secondary" onClick={() => check.mutate()} disabled={!automation.enabled || check.isPending}>
-              <CirclePlay size={14} /> Check now
+              <CirclePlay size={14} /> Проверить сейчас
             </button>
           )}
           <button className="button button-secondary" onClick={() => setEditing(true)} disabled={automation.enabled}>
-            <Pencil size={14} /> Edit
+            <Pencil size={14} /> Изменить
           </button>
           <button
             className={automation.enabled ? "button button-danger-secondary" : "button button-primary"}
             onClick={() => setConfirmEnabled(!automation.enabled)}
           >
             {automation.enabled ? <PowerOff size={14} /> : <Power size={14} />}
-            {automation.enabled ? "Disable" : "Enable"}
+            {automation.enabled ? "Выключить" : "Включить"}
           </button>
         </div>
       </div>
@@ -375,68 +375,68 @@ export function AutomationDetail({
       {confirmEnabled !== undefined && (
         <div className="confirm-action automation-confirm" role="alert">
           <div>
-            <strong>{confirmEnabled ? "Enable this Automation?" : "Disable this Automation?"}</strong>
+            <strong>{confirmEnabled ? "Включить эту автоматизацию?" : "Выключить эту автоматизацию?"}</strong>
             <p>{confirmEnabled
               ? `${automation.workflow_title} · ${automation.repository_identity} · ${triggerSummary(automation)}`
-              : "Future checks and pending dispatches stop. Existing tasks continue."}</p>
+              : "Будущие проверки и ожидающие запуски остановятся. Существующие задачи продолжатся."}</p>
           </div>
           <button
             className={confirmEnabled ? "button button-primary" : "button button-danger"}
             disabled={setEnabled.isPending}
             onClick={() => setEnabled.mutate(confirmEnabled)}
           >
-            {setEnabled.isPending ? "Saving…" : `Confirm ${confirmEnabled ? "enable" : "disable"}`}
+            {setEnabled.isPending ? "Сохраняем…" : `Подтвердить ${confirmEnabled ? "включение" : "выключение"}`}
           </button>
-          <button className="button button-secondary" onClick={() => setConfirmEnabled(undefined)}>Cancel</button>
+          <button className="button button-secondary" onClick={() => setConfirmEnabled(undefined)}>Отмена</button>
         </div>
       )}
       {confirmPatrol && (
         <div className="confirm-action automation-confirm" role="alert">
           <div>
-            <strong>Enable pipeline patrol on this schedule?</strong>
-            <p>The patrol instructions will be saved in {automation.title}. Its existing cron and timezone stay unchanged.</p>
+            <strong>Включить патруль конвейера по этому расписанию?</strong>
+            <p>Инструкции патруля сохранятся в «{automation.title}». Текущие Cron и часовой пояс не изменятся.</p>
           </div>
           <button
             className="button button-primary"
             disabled={provisionPatrol.isPending}
             onClick={() => provisionPatrol.mutate()}
           >
-            {provisionPatrol.isPending ? "Enabling…" : "Confirm pipeline patrol"}
+            {provisionPatrol.isPending ? "Включаем…" : "Подтвердить патруль"}
           </button>
-          <button className="button button-secondary" onClick={() => setConfirmPatrol(false)}>Cancel</button>
+          <button className="button button-secondary" onClick={() => setConfirmPatrol(false)}>Отмена</button>
         </div>
       )}
 
       <div className="automation-health-card panel">
-        <PanelHeading title="Automation health" aside={automation.health.status} />
+        <PanelHeading title="Состояние автоматизации" aside={automation.health.status} />
         <p className={automation.health.status === "error" || automation.health.status === "blocked" ? "health-error" : ""}>
-          {automation.health.message || "No health detail yet."}
+          {automationHealthMessage(automation.health.message)}
           {automation.health.code && <span className="mono"> · {automation.health.code}</span>}
         </p>
         <div className="automation-metrics">
-          <Metric label="Matched" value={automation.matched_count} />
-          <Metric label="Reused" value={automation.skipped_count} />
-          <Metric label="Dispatched" value={automation.dispatched_count} />
-          <Metric label={automation.trigger.type === "schedule" ? "Last occurrence" : "Last checked"} value={formatTimestamp(automation.last_checked_at)} />
-          <Metric label={automation.trigger.type === "schedule" ? "Next due" : "Next check"} value={formatTimestamp(automation.next_due_at ?? automation.next_check_at)} />
+          <Metric label="Найдено" value={automation.matched_count} />
+          <Metric label="Повторно использовано" value={automation.skipped_count} />
+          <Metric label="Запущено" value={automation.dispatched_count} />
+          <Metric label={automation.trigger.type === "schedule" ? "Последнее событие" : "Последняя проверка"} value={formatTimestamp(automation.last_checked_at)} />
+          <Metric label={automation.trigger.type === "schedule" ? "Следующий запуск" : "Следующая проверка"} value={formatTimestamp(automation.next_due_at ?? automation.next_check_at)} />
         </div>
         <div className="automation-latest-task">
-          <span><strong>Latest run</strong><small>{latestRun ? occurrenceIdentity(latestRun) : "No durable run yet."}</small></span>
+          <span><strong>Последний запуск</strong><small>{latestRun ? occurrenceIdentity(latestRun) : "Зафиксированных запусков пока нет."}</small></span>
           {latestRun && latestRunState && <>
             <span className={`status-badge status-${latestRunState.style}`}><span className="status-dot" />{latestRunState.label}</span>
-            {latestRun.task && <button className="button button-secondary" onClick={() => onTask(latestRun.task!.id)}>Open latest task</button>}
+            {latestRun.task && <button className="button button-secondary" onClick={() => onTask(latestRun.task!.id)}>Открыть последнюю задачу</button>}
           </>}
         </div>
       </div>
 
       {preview && (
         <section className="panel preview-panel" aria-live="polite">
-          <PanelHeading title="Test results" aside={preview.next_due_at ? `Next due ${formatTimestamp(preview.next_due_at)}` : `${preview.matches.length} bounded match${preview.matches.length === 1 ? "" : "es"}`} />
-          <p className="muted">Testing creates no task or durable run.</p>
-          {preview.next_due_at ? <p>The next matching UTC instant is <strong>{new Date(preview.next_due_at).toISOString()}</strong>.</p> : preview.matches.length === 0 ? <p>No GitHub items matched.</p> : preview.matches.map((match) => (
+          <PanelHeading title="Результаты проверки" aside={preview.next_due_at ? `Следующий запуск ${formatTimestamp(preview.next_due_at)}` : `${preview.matches.length} совпадений`} />
+          <p className="muted">Проверка не создаёт задачу или постоянную запись запуска.</p>
+          {preview.next_due_at ? <p>Следующий подходящий момент UTC: <strong>{new Date(preview.next_due_at).toISOString()}</strong>.</p> : preview.matches.length === 0 ? <p>Подходящие элементы GitHub не найдены.</p> : preview.matches.map((match) => (
             <a key={match.number} href={match.url} target="_blank" rel="noreferrer" className="preview-match">
               <strong>#{match.number} {match.title}</strong>
-              <span>{match.state}{match.base_branch ? ` · base ${match.base_branch}` : ""}{match.is_draft ? " · draft" : ""} · {match.labels.join(", ") || "no labels"}</span>
+              <span>{match.state}{match.base_branch ? ` · база ${match.base_branch}` : ""}{match.is_draft ? " · черновик" : ""} · {match.labels.join(", ") || "без меток"}</span>
             </a>
           ))}
         </section>
@@ -444,30 +444,30 @@ export function AutomationDetail({
 
       <div className="detail-grid">
         <section className="panel detail-main">
-          <PanelHeading title="Configuration" aside={`Version ${automation.version}`} />
+          <PanelHeading title="Конфигурация" aside={`Версия ${automation.version}`} />
           <dl className="metadata">
-            <div><dt>Runbook</dt><dd>{automation.workflow_title} · revision {automation.workflow_revision}</dd></div>
-            <div><dt>Repository</dt><dd className="mono">{automation.repository_identity}</dd></div>
+            <div><dt>Сценарий</dt><dd>{automation.workflow_title} · версия {automation.workflow_revision}</dd></div>
+            <div><dt>Репозиторий</dt><dd className="mono">{automation.repository_identity}</dd></div>
             {automation.trigger.type === "schedule" ? <>
               <div><dt>Cron</dt><dd className="mono">{automation.trigger.cron}</dd></div>
-              <div><dt>Timezone</dt><dd>{automation.trigger.timezone}</dd></div>
-              <div><dt>Next due UTC</dt><dd>{automation.next_due_at ? new Date(automation.next_due_at).toISOString() : "Disabled"}</dd></div>
+              <div><dt>Часовой пояс</dt><dd>{automation.trigger.timezone}</dd></div>
+              <div><dt>Следующий запуск UTC</dt><dd>{automation.next_due_at ? new Date(automation.next_due_at).toISOString() : "Выключена"}</dd></div>
             </> : <>
-              <div><dt>{automation.trigger.type === "github_pull_request" ? "Pull request state" : "Issue state"}</dt><dd>{automation.trigger.state}</dd></div>
+              <div><dt>{automation.trigger.type === "github_pull_request" ? "Состояние pull request" : "Состояние issue"}</dt><dd>{automation.trigger.state}</dd></div>
             {automation.trigger.type === "github_pull_request" && <>
-              <div><dt>Drafts</dt><dd>{automation.trigger.include_drafts ? "Included" : "Excluded"}</dd></div>
-              <div><dt>Base branches</dt><dd>{automation.trigger.base_branches.join(", ") || "Any"}</dd></div>
+              <div><dt>Черновики</dt><dd>{automation.trigger.include_drafts ? "Включены" : "Исключены"}</dd></div>
+              <div><dt>Базовые ветки</dt><dd>{automation.trigger.base_branches.join(", ") || "Любые"}</dd></div>
             </>}
-            <div><dt>Required labels</dt><dd>{automation.trigger.required_labels.join(", ") || "None"}</dd></div>
-            <div><dt>Polling</dt><dd>Every {automation.trigger.poll_interval_seconds} seconds</dd></div>
+            <div><dt>Обязательные метки</dt><dd>{automation.trigger.required_labels.join(", ") || "Нет"}</dd></div>
+            <div><dt>Опрос</dt><dd>Каждые {automation.trigger.poll_interval_seconds} секунд</dd></div>
             </>}
-            <div><dt>Timeout</dt><dd>{automation.timeout_seconds} seconds</dd></div>
+            <div><dt>Тайм-аут</dt><dd>{automation.timeout_seconds} секунд</dd></div>
           </dl>
         </section>
         <section className="panel">
-          <PanelHeading title="Runbook" aside={runbook.data ? `Revision ${runbook.data.workflow.current_revision.revision_number}` : undefined} />
+          <PanelHeading title="Сценарий" aside={runbook.data ? `Версия ${runbook.data.workflow.current_revision.revision_number}` : undefined} />
           {runbook.isPending ? (
-            <p className="muted">Loading Markdown instructions…</p>
+            <p className="muted">Загружаем инструкции Markdown…</p>
           ) : runbook.data ? (
             <pre className="runbook-copy">{runbook.data.workflow.current_revision.instructions}</pre>
           ) : (
@@ -477,14 +477,14 @@ export function AutomationDetail({
       </div>
 
       <section className="panel automation-context-panel">
-        <PanelHeading title="Context for this Automation" />
-        <div className="long-copy">{automation.context || "No additional context."}</div>
+        <PanelHeading title="Контекст автоматизации" />
+        <div className="long-copy">{automation.context || "Дополнительного контекста нет."}</div>
       </section>
 
       <section className="panel">
-        <PanelHeading title="Runs" aside={`${occurrenceItems.length} loaded`} />
+        <PanelHeading title="Запуски" aside={`${occurrenceItems.length} загружено`} />
         {occurrenceItems.length === 0 ? (
-          <p className="muted">No runs yet.</p>
+          <p className="muted">Запусков пока нет.</p>
         ) : (
           <div className="occurrence-list">
             {occurrenceItems.map((occurrence) => {
@@ -500,15 +500,15 @@ export function AutomationDetail({
                   <span className="occurrence-actions">
                     {sourceURL && (
                       <a className="button button-secondary" href={sourceURL} target="_blank" rel="noreferrer">
-                        <ExternalLink size={13} /> GitHub source
+                        <ExternalLink size={13} /> Источник GitHub
                       </a>
                     )}
                     {occurrence.task ? (
                       <button className="button button-secondary" onClick={() => onTask(occurrence.task!.id)}>
-                        Open task
+                        Открыть задачу
                       </button>
                     ) : occurrence.state === "task_deleted" ? (
-                      <span className="muted">Task deleted</span>
+                      <span className="muted">Задача удалена</span>
                     ) : null}
                   </span>
                 </div>
@@ -526,7 +526,7 @@ export function AutomationDetail({
                 headCursor: previousOccurrenceHeadCursor.current ?? null,
               })}
             >
-              {loadMoreOccurrences.isPending ? "Loading…" : "Load more runs"}
+              {loadMoreOccurrences.isPending ? "Загружаем…" : "Показать ещё запуски"}
             </button>
           </div>
         )}
@@ -619,26 +619,26 @@ function LegacyPollerMigrationDialog({
 
   return (
     <div className="modal-layer">
-      <button className="modal-scrim" aria-label="Close legacy poller migration" onClick={onClose} />
+      <button className="modal-scrim" aria-label="Закрыть перенос старого опросчика" onClick={onClose} />
       <div className="modal migration-modal" role="dialog" aria-modal="true" aria-labelledby="legacy-migration-heading">
         <div className="modal-header">
           <div>
-            <h2 id="legacy-migration-heading">Migrate legacy poller</h2>
-            <p className="muted">Stop poller → Preview → Import disabled → Resume or Skip pending → Finalize → Enable</p>
+            <h2 id="legacy-migration-heading">Перенос старого опросчика</h2>
+            <p className="muted">Остановить → Предпросмотр → Импортировать выключенными → Решить ожидающие → Завершить → Включить</p>
           </div>
-          <button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button>
+          <button className="icon-button" aria-label="Закрыть" onClick={onClose}><X size={19} /></button>
         </div>
         <div className="modal-body migration-body">
-          {!migration && activeMigration.isPending && <LoadingState label="Checking for an active migration" />}
+          {!migration && activeMigration.isPending && <LoadingState label="Проверяем активный перенос" />}
           {!migration && !activeMigration.isPending && (
             <div className="migration-grid">
-              <Field label="Legacy poller.toml" htmlFor="migration-config" hint="Optional absolute override. Default: ~/.factory/poller.toml">
+              <Field label="Старый poller.toml" htmlFor="migration-config" hint="Необязательный абсолютный путь. По умолчанию: ~/.factory/poller.toml">
                 <input id="migration-config" value={selection.config_path ?? ""} onChange={(event) => setPath("config_path", event.target.value)} placeholder="/absolute/path/poller.toml" />
               </Field>
-              <Field label="Legacy data home" htmlFor="migration-home" hint="Optional absolute override. Default: FACTORY_DATA_HOME or ~/.factory">
+              <Field label="Старый каталог данных" htmlFor="migration-home" hint="Необязательный абсолютный путь. По умолчанию: FACTORY_DATA_HOME или ~/.factory">
                 <input id="migration-home" value={selection.data_home ?? ""} onChange={(event) => setPath("data_home", event.target.value)} placeholder="/absolute/path/.factory" />
               </Field>
-              <Field label="Original working directory" htmlFor="migration-cwd" hint="Needed only when the old environment selected a relative path.">
+              <Field label="Исходный рабочий каталог" htmlFor="migration-cwd" hint="Нужен, только если старое окружение использовало относительный путь.">
                 <input id="migration-cwd" value={selection.working_directory ?? ""} onChange={(event) => setPath("working_directory", event.target.value)} placeholder="/absolute/path" />
               </Field>
               <label className="confirmation-check migration-confirm">
@@ -647,10 +647,10 @@ function LegacyPollerMigrationDialog({
                   checked={selection.confirm_stopped}
                   onChange={(event) => setSelection((current) => ({ ...current, confirm_stopped: event.target.checked }))}
                 />
-                I stopped every factory-poller process. Factory may hold an exclusive lock during each migration action.
+                Все процессы factory-poller остановлены. Factory может брать исключительную блокировку на время переноса.
               </label>
               <button className="button button-primary" disabled={!selection.confirm_stopped || preview.isPending} onClick={() => preview.mutate()}>
-                {preview.isPending ? <LoaderCircle size={15} className="spin" /> : <DatabaseBackup size={15} />} Preview locked snapshot
+                {preview.isPending ? <LoaderCircle size={15} className="spin" /> : <DatabaseBackup size={15} />} Проверить заблокированный снимок
               </button>
             </div>
           )}
@@ -658,18 +658,18 @@ function LegacyPollerMigrationDialog({
           {migration && (
             <>
               <section className="migration-summary">
-                <div><span>Status</span><strong>{migration.status}</strong></div>
-                <div><span>Queues</span><strong>{migration.counts.supported_queues} supported · {migration.counts.unsupported_queues} unsupported</strong></div>
-                <div><span>Observations</span><strong>{migration.counts.submitted_observations} submitted · {migration.counts.pending_observations} pending</strong></div>
-                <div><span>Snapshot</span><strong className="mono">{migration.snapshot_digest.slice(0, 16)}…</strong></div>
+                <div><span>Статус</span><strong>{migration.status}</strong></div>
+                <div><span>Очереди</span><strong>{migration.counts.supported_queues} поддерживается · {migration.counts.unsupported_queues} не поддерживается</strong></div>
+                <div><span>Наблюдения</span><strong>{migration.counts.submitted_observations} отправлено · {migration.counts.pending_observations} ожидает</strong></div>
+                <div><span>Снимок</span><strong className="mono">SHA {migration.snapshot_digest.slice(0, 16)}…</strong></div>
               </section>
               <dl className="migration-paths">
-                <div><dt>Config</dt><dd className="mono">{migration.config_path}</dd></div>
-                <div><dt>Data home</dt><dd className="mono">{migration.data_home}</dd></div>
-                <div><dt>Original working directory</dt><dd className="mono">{migration.working_directory}</dd></div>
-                <div><dt>Legacy data directory</dt><dd className="mono">{migration.data_directory}</dd></div>
-                <div><dt>Ledger</dt><dd className="mono">{migration.ledger_path}</dd></div>
-                <div><dt>Archive root</dt><dd className="mono">{migration.archive_root}</dd></div>
+                <div><dt>Конфигурация</dt><dd className="mono">{migration.config_path}</dd></div>
+                <div><dt>Каталог данных</dt><dd className="mono">{migration.data_home}</dd></div>
+                <div><dt>Исходный рабочий каталог</dt><dd className="mono">{migration.working_directory}</dd></div>
+                <div><dt>Старый каталог данных</dt><dd className="mono">{migration.data_directory}</dd></div>
+                <div><dt>Журнал</dt><dd className="mono">{migration.ledger_path}</dd></div>
+                <div><dt>Корень архива</dt><dd className="mono">{migration.archive_root}</dd></div>
               </dl>
             </>
           )}
@@ -679,17 +679,17 @@ function LegacyPollerMigrationDialog({
               <div className="migration-queue-list">
                 {reviewQueues.map((queue) => (
                   <section className="panel migration-queue" key={queue.queue_id}>
-                    <PanelHeading title={queue.name} aside={queue.supported ? "GitHub issue" : "Not imported"} />
-                    <p>{queue.project} · {queue.state} · labels {queue.required_labels.join(", ") || "none"}</p>
-                    {queue.supported && <p className="muted">Repository mapping: <span className="mono">{queue.repository_identity}</span> · <span className="mono">{queue.repository_id}</span></p>}
-                    <p className="muted">{queue.submitted_observations} submitted · {queue.pending_observations} pending · every {queue.poll_interval_seconds}s</p>
+                    <PanelHeading title={queue.name} aside={queue.supported ? "issue GitHub" : "Не импортируется"} />
+                    <p>{queue.project} · {queue.state} · метки {queue.required_labels.join(", ") || "нет"}</p>
+                    {queue.supported && <p className="muted">Репозиторий: <span className="mono">{queue.repository_identity}</span> · ID <span className="mono">{queue.repository_id}</span></p>}
+                    <p className="muted">{queue.submitted_observations} отправлено · {queue.pending_observations} ожидает · каждые {queue.poll_interval_seconds} с</p>
                     {queue.errors.map((message) => <p className="field-error" key={message}>{message}</p>)}
                     {queue.supported && (
                       <div className="migration-title-grid">
-                        <Field label="Runbook title" htmlFor={`workflow-${queue.queue_id}`}>
+                        <Field label="Название сценария" htmlFor={`workflow-${queue.queue_id}`}>
                           <input id={`workflow-${queue.queue_id}`} name={`workflow-${queue.queue_id}`} autoComplete="off" defaultValue={queue.workflow_title} required />
                         </Field>
-                        <Field label="Automation title" htmlFor={`automation-${queue.queue_id}`}>
+                        <Field label="Название автоматизации" htmlFor={`automation-${queue.queue_id}`}>
                           <input id={`automation-${queue.queue_id}`} name={`automation-${queue.queue_id}`} autoComplete="off" defaultValue={queue.automation_title} required />
                         </Field>
                       </div>
@@ -698,9 +698,9 @@ function LegacyPollerMigrationDialog({
                 ))}
               </div>
               <div className="migration-actions">
-                <button type="button" className="button button-secondary" onClick={() => { setMigration(undefined); setReviewQueues([]); }}>Run a new Preview</button>
+                <button type="button" className="button button-secondary" onClick={() => { setMigration(undefined); setReviewQueues([]); }}>Новый предпросмотр</button>
                 <button type="submit" className="button button-primary" disabled={hasMissingLedgerQueue || importMigration.isPending}>
-                  {importMigration.isPending ? "Importing…" : hasMissingLedgerQueue ? "Restore missing queue before Import" : migration.counts.supported_queues === 0 ? "Continue to archive" : "Import disabled Automations"}
+                  {importMigration.isPending ? "Импортируем…" : hasMissingLedgerQueue ? "Восстановите отсутствующую очередь" : migration.counts.supported_queues === 0 ? "Перейти к архиву" : "Импортировать выключенными"}
                 </button>
               </div>
             </form>
@@ -715,12 +715,12 @@ function LegacyPollerMigrationDialog({
                     checked={selection.confirm_stopped}
                     onChange={(event) => setSelection((current) => ({ ...current, confirm_stopped: event.target.checked }))}
                   />
-                  I reconfirmed every factory-poller process is stopped before continuing.
+                  Все процессы factory-poller по-прежнему остановлены.
                 </label>
               )}
               {migration.occurrences.length > 0 && (
                 <section className="panel">
-                  <PanelHeading title="Imported observations" aside={`${unresolved.length} unresolved`} />
+                  <PanelHeading title="Импортированные наблюдения" aside={`${unresolved.length} не решено`} />
                   <div className="occurrence-list">
                     {migration.occurrences.map((occurrence) => (
                       <div className="occurrence-row" key={occurrence.id}>
@@ -731,8 +731,8 @@ function LegacyPollerMigrationDialog({
                         </span>
                         {(occurrence.state === "pending" || occurrence.state === "failed") && (
                           <div className="detail-actions">
-                            {occurrence.state === "pending" && <button className="button button-secondary" disabled={!selection.confirm_stopped || resolveOccurrence.isPending} onClick={() => resolveOccurrence.mutate({ id: occurrence.id, action: "resume" })}>Resume</button>}
-                            <button className="button button-danger-secondary" disabled={!selection.confirm_stopped || resolveOccurrence.isPending} onClick={() => resolveOccurrence.mutate({ id: occurrence.id, action: "skip" })}>Skip</button>
+                            {occurrence.state === "pending" && <button className="button button-secondary" disabled={!selection.confirm_stopped || resolveOccurrence.isPending} onClick={() => resolveOccurrence.mutate({ id: occurrence.id, action: "resume" })}>Продолжить</button>}
+                            <button className="button button-danger-secondary" disabled={!selection.confirm_stopped || resolveOccurrence.isPending} onClick={() => resolveOccurrence.mutate({ id: occurrence.id, action: "skip" })}>Пропустить</button>
                           </div>
                         )}
                       </div>
@@ -742,21 +742,21 @@ function LegacyPollerMigrationDialog({
               )}
               {migration.status === "imported" && (
                 <div className="migration-actions">
-                  <p className="muted">Finalize verifies the same locked snapshot and archives copies. It never deletes the source files.</p>
+                  <p className="muted">Завершение проверяет тот же снимок и архивирует копии, не удаляя исходные файлы.</p>
                   <button className="button button-primary" disabled={!selection.confirm_stopped || unresolved.length > 0 || finalize.isPending} onClick={() => finalize.mutate()}>
-                    {finalize.isPending ? "Finalizing…" : "Finalize and archive"}
+                    {finalize.isPending ? "Завершаем…" : "Завершить и архивировать"}
                   </button>
                 </div>
               )}
               {migration.status === "finalized" && (
                 <section className="panel migration-complete">
-                  <PanelHeading title="Migration finalized" aside="Ready for review" />
-                  <p>Archive: <span className="mono">{migration.archive_path}</span></p>
-                  <p className="muted">Review each imported Automation, test its trigger, then enable it. The retired poller must remain stopped.</p>
+                  <PanelHeading title="Перенос завершён" aside="Готово к проверке" />
+                  <p>Архив: <span className="mono">{migration.archive_path}</span></p>
+                  <p className="muted">Проверьте каждую автоматизацию и её триггер, затем включите. Старый опросчик должен оставаться остановленным.</p>
                   <div className="detail-actions">
                     {migration.automations.map((automation) => (
                       <button className="button button-secondary" key={automation.id} onClick={() => onAutomation(automation.id)}>
-                        Review {automation.title}
+                        Проверить {automation.title}
                       </button>
                     ))}
                   </div>
@@ -767,8 +767,8 @@ function LegacyPollerMigrationDialog({
           {operationError && <InlineError error={operationError as Error} />}
         </div>
         <div className="modal-footer">
-          <span className="disabled-first-note"><Activity size={14} /> Imported Automations stay disabled until Finalize.</span>
-          <button className="button button-secondary" onClick={onClose}>Close</button>
+          <span className="disabled-first-note"><Activity size={14} /> Импортированные автоматизации выключены до завершения.</span>
+          <button className="button button-secondary" onClick={onClose}>Закрыть</button>
         </div>
       </div>
     </div>
@@ -866,18 +866,18 @@ function AutomationForm({
     const labels = String(form.get("required_labels") ?? "").split(",").map((label) => label.trim()).filter(Boolean);
     const baseBranches = String(form.get("base_branches") ?? "").split(",").map((branch) => branch.trim()).filter(Boolean);
     const nextErrors: Record<string, string> = {};
-    if (!title) nextErrors.title = "Enter an Automation title.";
-    else if (Array.from(title).length > 100) nextErrors.title = "Keep the title to 100 characters.";
-    if (!workflow) nextErrors.workflow = "Choose a runbook.";
-    if (!repository) nextErrors.repository = "Choose a repository.";
-    if (!isSchedule && (labels.length > 20 || labels.some((label) => new TextEncoder().encode(label).length > 200))) nextErrors.labels = "Use at most 20 labels of 200 bytes each.";
-    if (isPullRequest && (baseBranches.length > 20 || baseBranches.some((branch) => new TextEncoder().encode(branch).length > 255))) nextErrors.branches = "Use at most 20 base branches of 255 bytes each.";
-    if (!isSchedule && (!Number.isInteger(pollInterval) || pollInterval < 10 || pollInterval > 86_400)) nextErrors.interval = "Use 10 to 86,400 seconds.";
-    if (isSchedule && schedulePreset !== "custom" && !/^\d{2}:\d{2}$/.test(scheduleTime)) nextErrors.schedule = "Choose a schedule time.";
-    if (isSchedule && cron.split(" ").length !== 5) nextErrors.cron = "Enter exactly five cron fields, with no seconds field.";
-    if (isSchedule && !timezone) nextErrors.timezone = "Enter an IANA timezone, such as Europe/London.";
-    if (!Number.isInteger(timeout) || timeout < 1 || timeout > 28_800) nextErrors.timeout = "Use 1 to 28,800 seconds.";
-    if (new TextEncoder().encode(context).length > 8 * 1024) nextErrors.context = "Keep context to 8 KiB.";
+    if (!title) nextErrors.title = "Введите название автоматизации.";
+    else if (Array.from(title).length > 100) nextErrors.title = "Название должно быть не длиннее 100 символов.";
+    if (!workflow) nextErrors.workflow = "Выберите сценарий.";
+    if (!repository) nextErrors.repository = "Выберите репозиторий.";
+    if (!isSchedule && (labels.length > 20 || labels.some((label) => new TextEncoder().encode(label).length > 200))) nextErrors.labels = "Укажите не больше 20 меток по 200 байт.";
+    if (isPullRequest && (baseBranches.length > 20 || baseBranches.some((branch) => new TextEncoder().encode(branch).length > 255))) nextErrors.branches = "Укажите не больше 20 базовых веток по 255 байт.";
+    if (!isSchedule && (!Number.isInteger(pollInterval) || pollInterval < 10 || pollInterval > 86_400)) nextErrors.interval = "Укажите от 10 до 86 400 секунд.";
+    if (isSchedule && schedulePreset !== "custom" && !/^\d{2}:\d{2}$/.test(scheduleTime)) nextErrors.schedule = "Выберите время запуска.";
+    if (isSchedule && cron.split(" ").length !== 5) nextErrors.cron = "Введите ровно пять полей Cron без поля секунд.";
+    if (isSchedule && !timezone) nextErrors.timezone = "Введите часовой пояс IANA, например Europe/London.";
+    if (!Number.isInteger(timeout) || timeout < 1 || timeout > 28_800) nextErrors.timeout = "Укажите от 1 до 28 800 секунд.";
+    if (new TextEncoder().encode(context).length > 8 * 1024) nextErrors.context = "Контекст должен занимать не больше 8 KiB.";
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
       if (nextErrors.interval || nextErrors.cron || nextErrors.timeout) advancedRef.current?.setAttribute("open", "");
@@ -922,24 +922,24 @@ function AutomationForm({
     : undefined;
   return (
     <div className="modal-layer">
-      <button className="modal-scrim" aria-label="Close Automation form" onClick={onClose} />
+      <button className="modal-scrim" aria-label="Закрыть форму автоматизации" onClick={onClose} />
       <div className="modal automation-modal" role="dialog" aria-modal="true" aria-labelledby="automation-form-heading">
         <div className="modal-header">
-          <h2 id="automation-form-heading">{mode === "create" ? "Create Automation" : "Edit Automation"}</h2>
-          <button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button>
+          <h2 id="automation-form-heading">{mode === "create" ? "Создать автоматизацию" : "Изменить автоматизацию"}</h2>
+          <button className="icon-button" aria-label="Закрыть" onClick={onClose}><X size={19} /></button>
         </div>
         <form onSubmit={submit} noValidate>
           <div className="modal-body automation-composer">
             <section className="automation-form-section">
               <div className="automation-section-heading">
                 <span>1</span>
-                <div><strong>What should run?</strong><small>Choose the versioned Markdown instructions the agent will follow.</small></div>
+                <div><strong>Что запускать?</strong><small>Выберите версию Markdown-инструкций для агента.</small></div>
               </div>
               <div className="automation-form-grid">
-                <Field label="Title" htmlFor={titleID} error={errors.title}>
+                <Field label="Название" htmlFor={titleID} error={errors.title}>
                   <input ref={titleRef} id={titleID} name="title" autoComplete="off" defaultValue={current?.title ?? ""} aria-invalid={Boolean(errors.title)} />
                 </Field>
-                <Field label="Runbook" htmlFor={workflowID} error={errors.workflow} hint="Saved Markdown with immutable revisions.">
+                <Field label="Сценарий" htmlFor={workflowID} error={errors.workflow} hint="Сохранённый Markdown с неизменяемыми версиями.">
                   <select
                     id={workflowID}
                     name="workflow_id"
@@ -947,17 +947,17 @@ function AutomationForm({
                     onChange={(event) => setWorkflowSelection(event.target.value)}
                     aria-invalid={Boolean(errors.workflow)}
                   >
-                    <option value="">Choose a runbook</option>
+                    <option value="">Выберите сценарий</option>
                     {current && !workflowItems.some((workflow) => workflow.id === current.workflow_id) && (
                       <option value={current.workflow_id}>{current.workflow_title}</option>
                     )}
-                    {workflowItems.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.current_revision.title}{workflow.enabled ? "" : " (disabled)"}</option>)}
+                    {workflowItems.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.current_revision.title}{workflow.enabled ? "" : " (выключен)"}</option>)}
                   </select>
                 </Field>
               </div>
               {workflowSelection && (
                 <div className="runbook-preview" aria-live="polite">
-                  <div><BookOpenText size={14} /><strong>{selectedRunbook.data?.workflow.current_revision.title ?? selectedWorkflow?.current_revision.title ?? current?.workflow_title ?? "Runbook"}</strong><span>{selectedRunbook.data ? `Revision ${selectedRunbook.data.workflow.current_revision.revision_number}` : "Loading…"}</span></div>
+                  <div><BookOpenText size={14} /><strong>{selectedRunbook.data?.workflow.current_revision.title ?? selectedWorkflow?.current_revision.title ?? current?.workflow_title ?? "Сценарий"}</strong><span>{selectedRunbook.data ? `Версия ${selectedRunbook.data.workflow.current_revision.revision_number}` : "Загружаем…"}</span></div>
                   {selectedRunbook.data ? <pre>{selectedRunbook.data.workflow.current_revision.instructions}</pre> : selectedRunbook.error ? <InlineError error={selectedRunbook.error as Error} /> : null}
                 </div>
               )}
@@ -966,18 +966,18 @@ function AutomationForm({
             <section className="automation-form-section">
               <div className="automation-section-heading">
                 <span>2</span>
-                <div><strong>Where should it run?</strong><small>Each run is isolated in one managed Git repository.</small></div>
+                <div><strong>Где запускать?</strong><small>Каждый запуск изолирован в одном управляемом Git-репозитории.</small></div>
               </div>
-              <Field label="Repository" htmlFor={repositoryID} error={errors.repository} hint={mode === "edit" ? "Repository identity is immutable." : "Choose one target now. Workspace filters make many repositories easy to manage."}>
+              <Field label="Репозиторий" htmlFor={repositoryID} error={errors.repository} hint={mode === "edit" ? "Адрес репозитория неизменяем." : "Выберите один целевой репозиторий."}>
                 <select id={repositoryID} name="repository_id" defaultValue={current?.repository_id ?? ""} disabled={mode === "edit"} aria-invalid={Boolean(errors.repository)}>
-                  <option value="">Choose a repository</option>
+                  <option value="">Выберите репозиторий</option>
                   {current && <option key={current.repository_id} value={current.repository_id}>
-                    {selectedRepository?.remote_identity ?? current.repository_identity}{selectedRepository?.enabled === false ? " (disabled)" : ""}
+                    {selectedRepository?.remote_identity ?? current.repository_identity}{selectedRepository?.enabled === false ? " (выключен)" : ""}
                   </option>}
-                  {repositoryItems.filter((repository) => repository.id !== current?.repository_id).map((repository) => <option key={repository.id} value={repository.id}>{repository.remote_identity}{repository.enabled ? "" : " (disabled)"}</option>)}
+                  {repositoryItems.filter((repository) => repository.id !== current?.repository_id).map((repository) => <option key={repository.id} value={repository.id}>{repository.remote_identity}{repository.enabled ? "" : " (выключен)"}</option>)}
                 </select>
               </Field>
-              <Field label="Context for this Automation" htmlFor={contextID} error={errors.context} hint="Optional repository-specific context · 8 KiB">
+              <Field label="Контекст автоматизации" htmlFor={contextID} error={errors.context} hint="Необязательный контекст репозитория · 8 KiB">
                 <textarea id={contextID} name="context" rows={4} defaultValue={current?.context ?? ""} aria-invalid={Boolean(errors.context)} />
               </Field>
             </section>
@@ -985,10 +985,10 @@ function AutomationForm({
             <section className="automation-form-section">
               <div className="automation-section-heading">
                 <span>3</span>
-                <div><strong>When should it run?</strong><small>React to GitHub state or run on a local control-plane schedule.</small></div>
+                <div><strong>Когда запускать?</strong><small>Реагировать на состояние GitHub или локальное расписание панели управления.</small></div>
               </div>
               <div className="automation-form-grid">
-                <Field label="Trigger" htmlFor={triggerTypeID} hint={mode === "edit" ? "Trigger type is immutable." : undefined}>
+                <Field label="Триггер" htmlFor={triggerTypeID} hint={mode === "edit" ? "Тип триггера неизменяем." : undefined}>
                   <select
                     id={triggerTypeID}
                     name="trigger_type"
@@ -998,51 +998,51 @@ function AutomationForm({
                   >
                     <option value="github_issue">GitHub issue</option>
                     <option value="github_pull_request">GitHub pull request</option>
-                    <option value="schedule">Schedule</option>
+                    <option value="schedule">Расписание</option>
                   </select>
                 </Field>
-                {!isSchedule && <Field key="provider-state" label={isPullRequest ? "Pull request state" : "Issue state"} htmlFor={stateID}>
+                {!isSchedule && <Field key="provider-state" label={isPullRequest ? "Состояние pull request" : "Состояние issue"} htmlFor={stateID}>
                   <select id={stateID} name="state" defaultValue={current?.trigger.type === "github_issue" || current?.trigger.type === "github_pull_request" ? current.trigger.state : "open"}>
-                    <option value="open">Open</option><option value="closed">Closed</option>
-                    {isPullRequest && <option value="merged">Merged</option>}
+                    <option value="open">Открыт</option><option value="closed">Закрыт</option>
+                    {isPullRequest && <option value="merged">Слит</option>}
                   </select>
                 </Field>}
                 {isPullRequest && <>
-                  <Field label="Draft pull requests" htmlFor={draftsID} hint="Include drafts that match every other condition.">
+                  <Field label="Черновики pull request" htmlFor={draftsID} hint="Включать черновики, подходящие под остальные условия.">
                     <label className="confirmation-check" htmlFor={draftsID}>
                       <input id={draftsID} name="include_drafts" type="checkbox" defaultChecked={current?.trigger.type === "github_pull_request" && current.trigger.include_drafts} />
-                      Include drafts
+                      Включать черновики
                     </label>
                   </Field>
-                  <Field label="Base branches" htmlFor={branchesID} error={errors.branches} hint="Comma separated · optional · up to 20">
+                  <Field label="Базовые ветки" htmlFor={branchesID} error={errors.branches} hint="Через запятую · необязательно · до 20">
                     <input id={branchesID} name="base_branches" defaultValue={current?.trigger.type === "github_pull_request" ? current.trigger.base_branches.join(", ") : ""} aria-invalid={Boolean(errors.branches)} />
                   </Field>
                 </>}
                 {isSchedule ? <>
-                  <Field key="schedule-frequency" label="Frequency" htmlFor={schedulePresetID}>
+                  <Field key="schedule-frequency" label="Частота" htmlFor={schedulePresetID}>
                     <select id={schedulePresetID} value={schedulePreset} onChange={(event) => setSchedulePreset(event.target.value as SchedulePreset)}>
-                      <option value="weekdays">Every weekday</option>
-                      <option value="daily">Every day</option>
-                      <option value="weekly">Every Monday</option>
-                      <option value="custom">Custom cron</option>
+                      <option value="weekdays">По будням</option>
+                      <option value="daily">Каждый день</option>
+                      <option value="weekly">Каждый понедельник</option>
+                      <option value="custom">Свой Cron</option>
                     </select>
                   </Field>
-                  {schedulePreset !== "custom" && <Field key="schedule-time" label="Time" htmlFor={scheduleTimeID} error={errors.schedule}>
+                  {schedulePreset !== "custom" && <Field key="schedule-time" label="Время" htmlFor={scheduleTimeID} error={errors.schedule}>
                     <input id={scheduleTimeID} type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} aria-invalid={Boolean(errors.schedule)} />
                   </Field>}
-                  <Field key="schedule-timezone" label="Timezone" htmlFor={timezoneID} error={errors.timezone} hint="IANA name, such as Europe/London">
+                  <Field key="schedule-timezone" label="Часовой пояс" htmlFor={timezoneID} error={errors.timezone} hint="Имя IANA, например Europe/London">
                     <input id={timezoneID} name="timezone" defaultValue={current?.trigger.type === "schedule" ? current.trigger.timezone : Intl.DateTimeFormat().resolvedOptions().timeZone} aria-invalid={Boolean(errors.timezone)} />
                   </Field>
-                </> : <Field key="provider-labels" label="Required labels" htmlFor={labelsID} error={errors.labels} hint="Comma separated · up to 20">
+                </> : <Field key="provider-labels" label="Обязательные метки" htmlFor={labelsID} error={errors.labels} hint="Через запятую · до 20">
                   <input id={labelsID} name="required_labels" defaultValue={current?.trigger.type === "github_issue" || current?.trigger.type === "github_pull_request" ? current.trigger.required_labels.join(", ") : "factory:ready"} aria-invalid={Boolean(errors.labels)} />
                 </Field>}
               </div>
             </section>
 
             <details ref={advancedRef} className="automation-advanced">
-              <summary><span><SlidersHorizontal size={14} /> Expert settings</span><small>{isSchedule ? `Cron ${schedulePreset === "custom" ? customCron : cronForSchedule(schedulePreset, scheduleTime)}` : `Poll every ${current?.trigger.type === "github_issue" || current?.trigger.type === "github_pull_request" ? current.trigger.poll_interval_seconds : 30}s`} · timeout {current?.timeout_seconds ?? 7200}s</small></summary>
+              <summary><span><SlidersHorizontal size={14} /> Расширенные настройки</span><small>{isSchedule ? `Cron ${schedulePreset === "custom" ? customCron : cronForSchedule(schedulePreset, scheduleTime)}` : `Опрос каждые ${current?.trigger.type === "github_issue" || current?.trigger.type === "github_pull_request" ? current.trigger.poll_interval_seconds : 30} с`} · тайм-аут {current?.timeout_seconds ?? 7200} с</small></summary>
               <div className="automation-form-grid">
-                {isSchedule ? <Field key="schedule-cron" label="Cron (five fields)" htmlFor={cronID} error={errors.cron} hint="Choose Custom cron above to edit the raw expression.">
+                {isSchedule ? <Field key="schedule-cron" label="Cron (пять полей)" htmlFor={cronID} error={errors.cron} hint="Чтобы изменить выражение, выберите выше «Свой Cron».">
                   <input
                     id={cronID}
                     name="cron"
@@ -1052,10 +1052,10 @@ function AutomationForm({
                     onChange={(event) => setCustomCron(event.target.value)}
                     aria-invalid={Boolean(errors.cron)}
                   />
-                </Field> : <Field key="provider-poll" label="Poll interval (seconds)" htmlFor={intervalID} error={errors.interval}>
+                </Field> : <Field key="provider-poll" label="Интервал опроса, секунд" htmlFor={intervalID} error={errors.interval}>
                   <input id={intervalID} name="poll_interval_seconds" type="number" min={10} max={86_400} defaultValue={current?.trigger.type === "github_issue" || current?.trigger.type === "github_pull_request" ? current.trigger.poll_interval_seconds : 30} aria-invalid={Boolean(errors.interval)} />
                 </Field>}
-                <Field label="Task timeout (seconds)" htmlFor={timeoutID} error={errors.timeout}>
+                <Field label="Тайм-аут задачи, секунд" htmlFor={timeoutID} error={errors.timeout}>
                   <input id={timeoutID} name="timeout_seconds" type="number" min={1} max={28_800} defaultValue={current?.timeout_seconds ?? 7200} aria-invalid={Boolean(errors.timeout)} />
                 </Field>
               </div>
@@ -1063,10 +1063,10 @@ function AutomationForm({
             {(workflows.error || repositories.error || save.error) && <InlineError error={(workflows.error || repositories.error || save.error) as Error} />}
           </div>
           <div className="modal-footer">
-            <span className="disabled-first-note"><Activity size={14} /> New Automations are disabled.</span>
-            <button type="button" className="button button-secondary" onClick={onClose}>Cancel</button>
+            <span className="disabled-first-note"><Activity size={14} /> Новые автоматизации создаются выключенными.</span>
+            <button type="button" className="button button-secondary" onClick={onClose}>Отмена</button>
             <button type="submit" className="button button-primary" disabled={save.isPending || workflows.isPending || repositories.isPending}>
-              {save.isPending ? <><LoaderCircle size={16} className="spin" /> Saving…</> : <><Plus size={16} /> {mode === "create" ? "Create Automation" : "Save changes"}</>}
+              {save.isPending ? <><LoaderCircle size={16} className="spin" /> Сохраняем…</> : <><Plus size={16} /> {mode === "create" ? "Создать автоматизацию" : "Сохранить изменения"}</>}
             </button>
           </div>
         </form>
@@ -1083,11 +1083,22 @@ function Field({ label, htmlFor, error, hint, children }: { label: string; htmlF
 
 function HealthBadge({ automation }: { automation: Automation }) {
   const status = automation.enabled ? automation.health.status : "disabled";
-  return <span className={`status-badge automation-health status-${status}`}><span className="status-dot" />{status}</span>;
+  const labels: Record<string, string> = { disabled: "выключена", healthy: "работает", checking: "проверяется", idle: "ожидает", warning: "предупреждение", error: "ошибка", blocked: "заблокирована", unknown: "неизвестно" };
+  return <span className={`status-badge automation-health status-${status}`}><span className="status-dot" />{labels[status] ?? status}</span>;
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function automationHealthMessage(message?: string): string {
+  const translated: Record<string, string> = {
+    "Automation is disabled.": "Автоматизация выключена.",
+    "Waiting for the next GitHub check.": "Ожидается следующая проверка GitHub.",
+    "Pipeline patrol provisioned from the existing schedule.": "Патруль конвейера настроен по существующему расписанию.",
+    "Checking GitHub now.": "GitHub проверяется сейчас.",
+  };
+  return message ? translated[message] ?? message : "Сведений о состоянии пока нет.";
 }
 
 type SchedulePreset = "weekdays" | "daily" | "weekly" | "custom";
@@ -1109,20 +1120,20 @@ function cronForSchedule(preset: SchedulePreset, time: string): string {
 
 function formatRunState(state: string): string {
   const labels: Record<string, string> = {
-    task_deleted: "Task deleted",
-    dispatching: "Preparing",
-    dispatched: "Dispatched",
-    preparing: "Preparing",
-    queued: "Queued",
-    running: "Running",
-    succeeded: "Succeeded",
-    failed: "Failed",
-    cancelled: "Cancelled",
-    lost: "Lost",
-    pending: "Pending",
-    skipped: "Skipped",
+    task_deleted: "Задача удалена",
+    dispatching: "Подготовка",
+    dispatched: "Запущено",
+    preparing: "Подготовка",
+    queued: "В очереди",
+    running: "Выполняется",
+    succeeded: "Выполнено",
+    failed: "Ошибка",
+    cancelled: "Отменено",
+    lost: "Потеряно",
+    pending: "Ожидает",
+    skipped: "Пропущено",
   };
-  return labels[state] ?? state.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+  return labels[state] ?? state;
 }
 
 function automationRunState(occurrence: AutomationOccurrence): { style: string; label: string } {
@@ -1134,10 +1145,10 @@ function automationRunState(occurrence: AutomationOccurrence): { style: string; 
     return { style: known.has(state) ? state : "cancelled", label: formatRunState(state) };
   }
   if (occurrence.state === "pending" || occurrence.state === "dispatching") {
-    return { style: "preparing", label: "Preparing" };
+    return { style: "preparing", label: "Подготовка" };
   }
-  if (occurrence.state === "task_deleted") return { style: "cancelled", label: "Task deleted" };
-  if (occurrence.state === "skipped") return { style: "skipped", label: "Skipped" };
+  if (occurrence.state === "task_deleted") return { style: "cancelled", label: "Задача удалена" };
+  if (occurrence.state === "skipped") return { style: "skipped", label: "Пропущено" };
   return { style: occurrence.state, label: formatRunState(occurrence.state) };
 }
 
@@ -1147,39 +1158,39 @@ function retryRunState(status: NonNullable<AutomationTaskSummary["retry_status"]
 		running: { style: "running", label: "Повтор выполняется" },
 		succeeded: { style: "succeeded", label: "Повтор выполнен" },
 		final_failed: { style: "failed", label: "Сбой после повтора" },
-		skipped_disabled: { style: "failed", label: "Сбой — Automation отключена" },
-		skipped_worker_unavailable: { style: "failed", label: "Сбой — worker недоступен" },
+		skipped_disabled: { style: "failed", label: "Сбой — автоматизация отключена" },
+		skipped_worker_unavailable: { style: "failed", label: "Сбой — исполнитель недоступен" },
 	};
 	return labels[status];
 }
 
 function triggerSummary(automation: Automation): string {
   if (automation.trigger.type === "schedule") {
-    return `Schedule · ${automation.trigger.cron} · ${automation.trigger.timezone}`;
+    return `Расписание · ${automation.trigger.cron} · ${automation.trigger.timezone}`;
   }
   const labels = automation.trigger.required_labels.length
-    ? ` · labels ${automation.trigger.required_labels.join(", ")}`
+    ? ` · метки ${automation.trigger.required_labels.join(", ")}`
     : "";
   if (automation.trigger.type === "github_pull_request") {
-    const drafts = automation.trigger.include_drafts ? " · including drafts" : " · excluding drafts";
+    const drafts = automation.trigger.include_drafts ? " · с черновиками" : " · без черновиков";
     const bases = automation.trigger.base_branches.length
-      ? ` · bases ${automation.trigger.base_branches.join(", ")}`
+      ? ` · базовые ветки ${automation.trigger.base_branches.join(", ")}`
       : "";
-    return `GitHub pull requests · ${automation.trigger.state}${drafts}${labels}${bases}`;
+    return `pull request GitHub · ${automation.trigger.state}${drafts}${labels}${bases}`;
   }
-  return `GitHub issues · ${automation.trigger.state}${labels}`;
+  return `issue GitHub · ${automation.trigger.state}${labels}`;
 }
 
 function occurrenceIdentity(occurrence: AutomationOccurrence): string {
-  if (occurrence.kind === "scheduled") return `Scheduled ${occurrence.scheduled_at ? new Date(occurrence.scheduled_at).toISOString() : "instant"}`;
-  if (occurrence.kind === "run_now") return "Run now";
+  if (occurrence.kind === "scheduled") return `По расписанию: ${occurrence.scheduled_at ? new Date(occurrence.scheduled_at).toISOString() : "сейчас"}`;
+  if (occurrence.kind === "run_now") return "Ручной запуск";
   const number = occurrence.pull_request_number ?? occurrence.issue_number ?? 0;
-  const title = occurrence.pull_request_title ?? occurrence.issue_title ?? "Unknown GitHub item";
+  const title = occurrence.pull_request_title ?? occurrence.issue_title ?? "Неизвестный элемент GitHub";
   return `#${number} ${title}`;
 }
 
 function formatTimestamp(value?: string): string {
-  return value ? new Date(value).toLocaleString() : "Never";
+  return value ? new Date(value).toLocaleString() : "Никогда";
 }
 
 function mergeAutomations(...groups: Automation[][]): Automation[] {

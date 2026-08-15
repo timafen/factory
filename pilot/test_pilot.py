@@ -5544,6 +5544,32 @@ class PlanAutostartTest(unittest.TestCase):
 
 
 class PlanManualTaskTest(unittest.TestCase):
+    @staticmethod
+    def load_plan_module():
+        fastapi = types.ModuleType("fastapi")
+        responses = types.ModuleType("fastapi.responses")
+
+        class Router:
+            def get(self, *_args, **_kwargs):
+                return lambda func: func
+
+            post = get
+
+        class Response:
+            def __init__(self, content, **_kwargs):
+                self.body = content.encode()
+
+        fastapi.APIRouter = Router
+        fastapi.Form = lambda default, **_kwargs: default
+        fastapi.HTTPException = RuntimeError
+        responses.HTMLResponse = Response
+        responses.RedirectResponse = Response
+        with mock.patch.dict(sys.modules, {
+                "pilot": pilot, "fastapi": fastapi,
+                "fastapi.responses": responses}):
+            sys.modules.pop("intake.plan", None)
+            return importlib.import_module("intake.plan")
+
     def test_task_action_promotes_card_and_creates_task(self):
         fastapi = types.ModuleType("fastapi")
         responses = types.ModuleType("fastapi.responses")
@@ -5602,6 +5628,75 @@ class PlanManualTaskTest(unittest.TestCase):
         set_idea.assert_called_with(
             "manual-card", state="in_work", task_id="manual-task",
             run_generation=generation)
+
+    def test_plan_hides_escaped_reason_in_disclosure_without_hiding_actions(self):
+        plan = self.load_plan_module()
+        card = {
+            "id": "compact-card", "title": "Проверить карточку",
+            "why": "Причина <важная> & полная", "kind": "idea",
+            "repo": "repo-1", "state": "new", "created": "2026-08-15",
+        }
+
+        rendered = plan.card_html(card, "/intake/plan")
+
+        self.assertIn('<details class="why-disclosure">', rendered)
+        self.assertIn("<summary>Показать обоснование</summary>", rendered)
+        self.assertIn("Причина &lt;важная&gt; &amp; полная", rendered)
+        self.assertIn("Завести задачу", rendered)
+        self.assertNotIn("Причина <важная>", rendered)
+
+    def test_alerts_default_to_latest_thirty_and_group_events_in_order(self):
+        plan = self.load_plan_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "notifications.jsonl")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write("malformed\n")
+                for index in range(35):
+                    stream.write(json.dumps({
+                        "at": f"2026-08-15T10:{index:02d}:00Z",
+                        "group": "questions" if index % 2 else "done",
+                        "title": f"Событие {index}",
+                        "message": f"Сообщение {index}",
+                        "delivered": index % 3 != 0,
+                        "click": f"/tasks/{index}",
+                    }, ensure_ascii=False) + "\n")
+            with mock.patch.dict(os.environ, {
+                    "FACTORY_INTAKE_NOTIFICATIONS_PATH": path}):
+                html_body = plan.alerts_page().body.decode()
+
+        self.assertEqual(html_body.count('<div class="card'), 30)
+        self.assertIn("вопрос ко мне · 15", html_body)
+        self.assertIn("завершения и запуски · 15", html_body)
+        self.assertNotIn('<details class="alert-group" open>', html_body)
+        self.assertLess(html_body.index("Событие 34"), html_body.index("Событие 32"))
+        self.assertNotIn("Событие 4<", html_body)
+
+    def test_alerts_filter_opens_only_selected_group_and_keeps_event_data(self):
+        plan = self.load_plan_module()
+        records = [
+            {"at": "2026-08-15T12:00:00Z", "group": "stuck",
+             "title": "Нужна помощь", "message": "Работа остановилась",
+             "delivered": False, "click": "/tasks/stuck"},
+            {"at": "2026-08-15T12:01:00Z", "group": "done",
+             "title": "Готово", "message": "Работа завершена",
+             "delivered": True, "click": "/tasks/done"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = os.path.join(temporary, "notifications.jsonl")
+            with open(path, "w", encoding="utf-8") as stream:
+                for record in records:
+                    stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with mock.patch.dict(os.environ, {
+                    "FACTORY_INTAKE_NOTIFICATIONS_PATH": path}):
+                html_body = plan.alerts_page(group="stuck", n=300).body.decode()
+
+        self.assertIn('<details class="alert-group" open>', html_body)
+        self.assertIn("работа встала · 1", html_body)
+        self.assertIn("последнее: 2026-08-15T12:00:00Z", html_body)
+        self.assertIn("Работа остановилась", html_body)
+        self.assertIn("тихое: группа выключена", html_body)
+        self.assertIn('href="/tasks/stuck"', html_body)
+        self.assertNotIn("Работа завершена", html_body)
 
 
 class StageWorkerCapacityTests(unittest.TestCase):
