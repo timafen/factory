@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const interruptedTestHelperEnv = "FACTORY_WORKER_INTERRUPTION_HELPER"
+const interruptedTestControlledEnv = "FACTORY_WORKER_INTERRUPTION_CONTROLLED"
 
 var interruptedTestLifecycle = struct {
 	sync.Mutex
@@ -22,16 +22,24 @@ var interruptedTestLifecycle = struct {
 	signal   chan os.Signal
 }{signal: make(chan os.Signal, 1)}
 
-// runInterruptedTestHelper wraps the real test lifecycle. Signal notification is
+// runInterruptedTestLifecycle wraps every worker-test run. Signal notification is
 // installed before main.Run can publish a readiness marker from a blocking fake gh.
-func runInterruptedTestHelper(main *testing.M) int {
+func runInterruptedTestLifecycle(main *testing.M) int {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(signals)
 	go func() {
 		sig := <-signals
 		cleanupInterruptedTestGroups()
-		interruptedTestLifecycle.signal <- sig
+		root := os.Getenv("FACTORY_WORKER_INTERRUPTION_ROOT")
+		if root != "" {
+			_ = os.RemoveAll(root)
+		}
+		if os.Getenv(interruptedTestControlledEnv) == "1" {
+			interruptedTestLifecycle.signal <- sig
+			return
+		}
+		os.Exit(128 + int(sig.(syscall.Signal)))
 	}()
 	code := main.Run()
 	_ = os.RemoveAll(os.Getenv("FACTORY_WORKER_INTERRUPTION_ROOT"))

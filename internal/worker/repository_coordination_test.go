@@ -19,7 +19,7 @@ import (
 )
 
 func TestWorkerTestInterruptionCleanup(t *testing.T) {
-	if os.Getenv(interruptedTestHelperEnv) == "1" {
+	if os.Getenv(interruptedTestControlledEnv) == "1" {
 		fixture := newManagedAcquisitionFixture(t, "block-all")
 		firstDone := acquireManagedAsync(fixture.manager, fixture.first)
 		waitFor(t, 5*time.Second, func() bool {
@@ -49,8 +49,13 @@ func TestWorkerTestInterruptionCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(os.Args[0], "-test.run=^TestWorkerTestInterruptionCleanup$")
-			cmd.Env = append(os.Environ(), interruptedTestHelperEnv+"=1", "FACTORY_WORKER_INTERRUPTION_ROOT="+root)
+			workingDirectory, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("go", "test", "./internal/worker", "-run", "^TestWorkerTestInterruptionCleanup$", "-count=1")
+			cmd.Dir = filepath.Clean(filepath.Join(workingDirectory, "../.."))
+			cmd.Env = append(os.Environ(), interruptedTestControlledEnv+"=1", "FACTORY_WORKER_INTERRUPTION_ROOT="+root)
 			configureNewProcessGroup(cmd)
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -73,13 +78,13 @@ func TestWorkerTestInterruptionCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := cmd.Process.Signal(signal); err != nil {
+			if err := signalProcessGroup(cmd.Process.Pid, signal.(syscall.Signal)); err != nil {
 				t.Fatal(err)
 			}
 			err = cmd.Wait()
 			waited = true
-			if err != nil {
-				t.Fatalf("helper exited after %s: %v", signal, err)
+			if err == nil {
+				t.Fatalf("go test unexpectedly succeeded after %s", signal)
 			}
 			if processGroupAlive(pgid) {
 				t.Fatalf("process group %d survived %s", pgid, signal)
@@ -111,9 +116,7 @@ func newManagedAcquisitionFixture(t *testing.T, mode string) managedAcquisitionF
 	if err := os.Mkdir(syncDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv(interruptedTestHelperEnv) == "1" {
-		registerInterruptibleSyncDir(syncDirectory)
-	}
+	registerInterruptibleSyncDir(syncDirectory)
 	t.Setenv("FACTORY_TEST_REAL_GIT", realGit)
 	t.Setenv("FACTORY_TEST_FIRST_ORIGIN", firstOrigin.origin)
 	t.Setenv("FACTORY_TEST_SECOND_ORIGIN", secondOrigin.origin)
