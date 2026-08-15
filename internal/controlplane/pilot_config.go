@@ -101,6 +101,10 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["respect_host_load"] {
 		settings.RespectHostLoad = true
 	}
+	// Compatibility default: automatic report intake existed before the switch.
+	if !present["collect_report_ideas"] {
+		settings.CollectReportIdeas = true
+	}
 	// Compatibility default: Pilot historically kept this limit only in Python.
 	if !present["max_parallel_works"] {
 		settings.MaxParallelWorks = 4

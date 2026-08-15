@@ -40,6 +40,7 @@
   "fd08e9ef-0b65-40d4-95a9-c4e50c9ba061"
  ],
  "auto_answer": true,
+ "collect_report_ideas": true,
  "auto_merge": true,
  "project_providers": [
   {
