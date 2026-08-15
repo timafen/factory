@@ -8385,6 +8385,18 @@ def record_poll_hint(state, hint, now=None):
         log(f"next_poll seconds={chosen['seconds']:g} reason={chosen['reason']}")
 
 
+def normalize_pilot_state(state):
+    """Restore required cursors without discarding surviving durable state."""
+    if not isinstance(state, dict):
+        state = {}
+    for key in (
+            "processed", "automation_results_processed", "epics_processed",
+            "epic_starts_processed", "poll_terminal_seen"):
+        if not isinstance(state.get(key), list):
+            state[key] = []
+    return state
+
+
 def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     sleep_fn = sleep_fn or time.sleep
     clock_fn = clock_fn or time.time
@@ -8394,7 +8406,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     recovery_watermark = None
     while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
-        state = load(STATE_PATH, {"processed": []})
+        state = normalize_pilot_state(load(STATE_PATH, {"processed": []}))
         hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
             if recovery_ids is None:
