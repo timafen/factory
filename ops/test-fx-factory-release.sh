@@ -1017,8 +1017,30 @@ fi
 success="$temporary/success"
 make_fixture "$success" parallel-success
 cp "$success/current.json" "$success/source-current.json"
+mkdir -p "$success/releases/build-orphaned" "$success/releases/.generation-interrupted" \
+  "$success/releases/temporary-other-prefix" "$success/outside-build-target"
+printf 'remove build directory\n' >"$success/releases/build-orphaned/marker"
+printf 'remove hidden directory\n' >"$success/releases/.generation-interrupted/marker"
+printf 'remove alternate directory\n' >"$success/releases/temporary-other-prefix/marker"
+printf 'outside stays\n' >"$success/outside-build-target/marker"
+ln -s "$success/outside-build-target" "$success/releases/external-link"
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
+[ ! -e "$success/releases/build-orphaned" ] \
+  || fail "successful release retained an orphaned build directory"
+[ ! -e "$success/releases/.generation-interrupted" ] \
+  || fail "successful release retained a hidden interrupted generation"
+[ ! -e "$success/releases/temporary-other-prefix" ] \
+  || fail "successful release retained an alternate temporary directory"
+[ -L "$success/releases/external-link" ] \
+  || fail "successful release removed an external symlink"
+assert_file "$success/releases/external-link/marker" 'outside stays'
+grep -F 'удаляю остаток прерванного выпуска: build-orphaned' "$success/output" >/dev/null \
+  || fail "successful release did not report build cleanup"
+grep -F 'удаляю остаток прерванного выпуска: temporary-other-prefix' "$success/output" >/dev/null \
+  || fail "successful release did not clean an alternate temporary directory"
+grep -F 'пропускаю небезопасный остаток выпуска:' "$success/output" >/dev/null \
+  || fail "successful release did not report skipped symlink"
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
