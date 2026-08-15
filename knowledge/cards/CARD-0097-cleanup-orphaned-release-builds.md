@@ -1,23 +1,30 @@
 # CARD-0097 — Осиротевшие папки release-сборок освобождают место безопасно
 
-Implementation commit: 9d17d66744d025af6afa993dafbb1995b2b53e7a — выпуск безопасно удаляет осиротевшие каталоги build-* до новой сборки.
+Implementation commit: 747815f7a5969233791b8134e5adad6954f8f782 — выпуск безопасно удаляет осиротевшие каталоги build-* до новой сборки.
 
 ## HEAD
 
-- Status: PASS: целевой release-fixture подтвердил безопасную очистку.
-- Branch: `factory/f6ed9c59-55e-85f4cb35-7dc`.
+- Status: PASS: изменения перенесены на свежий `main`; целевой release-fixture подтвердил безопасную очистку.
+- Branch: `factory/838067ab-2c4-2eaf967d-ece`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` — PASS;
-  `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` — PASS.
+  `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh` — PASS.
   Fixture удалил реальный `build-orphaned`, сохранил обычную папку, symlink и
   его внешний target, а также подтвердил публикацию, rollback и signal-cleanup.
-- Known baseline: общий `just check` дошёл до `staticcheck` и завершился
-  на прежнем SA4000 в `internal/worker/attempt_lifecycle_test.go`, вне diff задачи.
 - One next action: влить ветку после обычного review.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Реализация перенесена на свежий `main`; конфликт в release-скриптах разрешён
+с сохранением актуальной подготовки release-каталогов до безопасной очистки.
+`bash -n` и полный `FACTORY_RELEASE_TEST_TIMEOUT=120 bash
+ops/test-fx-factory-release.sh` прошли: fixture удалил только реальный
+`build-orphaned`, сохранил обычную папку, symlink и внешний target, а также
+подтвердил publish, rollback и signal-cleanup.
 
 ### 2026-08-14 — Implement
 
