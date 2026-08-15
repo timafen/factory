@@ -5186,6 +5186,23 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertEqual(order, ["answer", "plan"])
         self.assertIs(conf["_active_work_tasks"], fresh_tasks)
 
+    def test_terminal_backlog_reserves_open_slot_before_new_plan_work(self):
+        conf = {"max_parallel_works": 4}
+        fresh_tasks = [{
+            "id": "running", "title": "[auto] [1/5 Triage] Existing",
+            "state": "running",
+        }]
+
+        with mock.patch.object(
+                pilot, "api", return_value={"tasks": fresh_tasks}), \
+                mock.patch.object(pilot, "handle_answers", return_value=0), \
+                mock.patch.object(pilot, "replenish_plan") as replenish:
+            pilot.refill_open_work_slots(
+                conf, {}, {}, admit_new_plan=False)
+
+        replenish.assert_not_called()
+        self.assertIs(conf["_active_work_tasks"], fresh_tasks)
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
@@ -6481,6 +6498,8 @@ class AdaptivePollingTests(unittest.TestCase):
             decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
                 "action": "advance", "next_complexity": "medium", "handoff": "",
             }))
+            refill = stack.enter_context(mock.patch.object(
+                pilot, "refill_open_work_slots", return_value=0))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
@@ -6490,6 +6509,8 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(decide.call_count, 1)
         self.assertEqual(len(created), 1)
         self.assertEqual(len(state["processed"]), 1)
+        refill.assert_called_once()
+        self.assertFalse(refill.call_args.kwargs["admit_new_plan"])
 
     def test_deferred_terminal_handoff_does_not_starve_next_terminal(self):
         conf = {
