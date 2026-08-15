@@ -1,4 +1,4 @@
-Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — Pilot вызывает `gh repo view` с позиционным репозиторием из origin.
+Implementation commit: 9f414dd1298e61641633cae05c9dadac564d3379 — Pilot вызывает `gh repo view` с позиционным репозиторием из origin.
 
 # CARD-0175: GitHub-репозиторий Pilot только из origin
 
@@ -6,7 +6,7 @@ Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — Pilot выз
 
 Status: Implemented.
 Branch: `factory/1c5c6741-43a-0ebf7035-d70`.
-Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — `gh repo view` использует поддерживаемый позиционный repository из origin.
+Implementation commit: 9f414dd1298e61641633cae05c9dadac564d3379 — `gh repo view` использует поддерживаемый позиционный repository из origin.
 What changed: resolver SSH/HTTPS `origin` по-прежнему задаёт цель всех действий;
 диагностический CLI-путь теперь реально исполним и не обращается к default-repo.
 Evidence: 9 целевых и 350 полных Pilot-тестов → OK; живой bare-вызов вернул

@@ -4,7 +4,7 @@
 
 Status: Implemented
 Branch: `factory/3c382039-7ed-5f27e697-a7d`.
-Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — `gh repo view` получает репозиторий из origin поддерживаемым позиционным аргументом.
+Implementation commit: 9f414dd1298e61641633cae05c9dadac564d3379 — `gh repo view` получает репозиторий из origin поддерживаемым позиционным аргументом.
 What changed: диагностический GitHub-вызов больше не использует несуществующий
 `--repo`; bare-контекст остаётся заблокирован, а фактические аргументы CLI покрыты тестом.
 Evidence: `python3 -m unittest pilot.test_pilot` → OK (350 tests, 13 skipped);
