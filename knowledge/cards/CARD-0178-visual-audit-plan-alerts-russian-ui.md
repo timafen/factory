@@ -1,4 +1,4 @@
-Implementation commit: c03f83be0578c46391785ce575076d4120622a91 — единое русское название «Работа» и точные браузерные проверки
+Implementation commit: 9d247784e44234535b8c824616c0c44abf15b4c5 — единое русское название «Работа» и точные браузерные проверки
 
 # CARD-0178 — Довести визуальный аудит до Плана, Уведомлений и единого языка
 
@@ -6,7 +6,7 @@ Implementation commit: c03f83be0578c46391785ce575076d4120622a91 — единое
 
 - Status: Implemented
 - Branch: `factory/0734ceb7-d09-2d4ef532-4ba`
-- Implementation commit: `c03f83be0578c46391785ce575076d4120622a91`
+- Implementation commit: `9d247784e44234535b8c824616c0c44abf15b4c5`
 - What changed: раздел работ в заголовке, навигации и верхней строке называется «Работа».
 - What changed: критические браузерные проверки используют русские подписи исполнителя.
 - Evidence: `npm --prefix web test -- --run src/App.test.tsx src/WorkView.test.tsx` → 76 tests passed.
