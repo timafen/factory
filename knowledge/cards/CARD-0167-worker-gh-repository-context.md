@@ -4,17 +4,24 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker за�
 
 ## HEAD
 
-Status: Implemented and retested
-Branch: factory/ecca0a56-b55-ccda0cc6-2a5
+Status: Implemented and verified
+Branch: factory/f183fb93-223-0ec14629-eda
 Specification: `knowledge/specs/worker-gh-repository-context.md`
 What changed: identity из claim передаётся supervisor; runtime получает
 единственный `GH_REPO` только для валидного GitHub.com. Унаследованное
 или недостоверное значение всегда удаляется.
-Evidence: целевой integration test PASS (1.900s); весь `internal/worker`
-PASS (133.798s); `go build ./...` PASS.
+Evidence: `just build format-check vet boundary test` PASS; `just ui-check`
+и `just ui-build 0` PASS; 5 critical browser scenarios PASS.
 One next action: Review доставленной ветки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Полная повторная проверка выполнена с безопасным `TMPDIR`, принадлежащим UID
+процесса и закрытым правами 0700. Сквозной worker-сценарий подтвердил
+контекст `GH_REPO`; Go-набор, UI-набор и пять критических браузерных
+сценариев прошли без изменений кода реализации.
 
 ### 2026-08-15 — Implement
 
