@@ -4,15 +4,15 @@ Implementation commit: 5bde9d8d300d40fc89179283ac80a3619c28cfe5 — отвече
 
 ## HEAD
 
-Status: IMPLEMENTED — готово к проверке выпуска.
-Branch: `factory/29cb07e5-6c1-de1548c8-bc2`.
-Implementation commit: 5bde9d8d300d40fc89179283ac80a3619c28cfe5 — отвеченная тяжёлая работа получает durable reservation, ближайший допустимый слот и видимое объяснение ожидания.
-What changed: ответ на тяжёлый этап сохраняет резерв в вопросе, переживает
+Status: IMPLEMENTED — выпускные проверки пройдены.
+Branch: `factory/d3df81f7-891-a667f566-513`.
+Implementation commit: 108f65581cfced81ce241813ffbf9e10b5e33ef2 — резервированная отвеченная работа отображается в общей очереди, а очистка старых вопросов сохраняет совместимый вызов.
+What changed: отвеченная тяжёлая работа сохраняет durable reservation, переживает
 рестарт и получает первый безопасный слот; новые тяжёлые старты ждут.
-What changed: Answer, Work и Overview показывают принятое решение и честную
-причину ожидания без нового badge открытых вопросов.
-Evidence: `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` → OK (3 tests).
-Next action: Verify должен установить web-зависимости, прогнать три UI-теста и browser-проверку.
+What changed: Work показывает такой резерв в разделе «В очереди», без ложного
+ожидания решения владельца; циклический вызов очистки остался однопараметрическим.
+Evidence: `GOCACHE=/tmp/card0116-go-cache python3 -m unittest pilot.test_pilot` → OK (357 tests, 13 skipped); UI lint/typecheck/test/build → OK (184 tests).
+Next action: влить поставку в `main`.
 
 ## LOG
 
@@ -28,3 +28,12 @@ Next action: Verify должен установить web-зависимости
 - `python3 -m unittest pilot.test_pilot.AnswerEscalationTests` завершился OK
   (3 tests). UI-команда не стартовала: в worktree отсутствуют пакеты `vitest`
   и `@vitejs/plugin-react`.
+
+### 2026-08-15 — Implement
+
+- Резервированная отвеченная работа возвращена в раздел «В очереди»; её причина
+  ожидания остаётся видимой, но Factory больше не просит у владельца решение.
+- Вызов `supersede_stale_questions` снова совместим с существующими однопараметрическими
+  обработчиками; очистка снятой паузы подтверждена целевым тестом.
+- Полный `pilot.test_pilot` завершился OK (357 tests, 13 skipped); UI lint,
+  typecheck, 184 component tests и production build завершились успешно.
