@@ -169,7 +169,9 @@ if [ -n "$DELIVERY_ID" ]; then
   if [ -f "$DELIVERY_FILE" ]; then
     case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
       succeeded) exit 0 ;;
-      locked) delivery_status locked || { echo "!! cannot confirm locked delivery status" >&2; exit 4; }; exit 8 ;;
+      # rc=8 is a retryable contention result.  Keep the immutable delivery id,
+      # but retry the lock acquisition instead of making `locked` terminal.
+      locked) delivery_status launching || { echo "!! cannot restart locked delivery" >&2; exit 4; } ;;
       failed|release_failed_rolled_back|rollback_failed) exit 6 ;;
       running) echo "!! delivery outcome is uncertain; refusing to repeat physical release" >&2; exit 4 ;;
     esac
@@ -666,6 +668,20 @@ flock -n 9 || {
 }
 delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
 
+# From this point the broker has proof that the physical delivery may have
+# started.  Every ordinary exit therefore needs a durable terminal outcome;
+# rollback() below replaces this trap when it can report a more precise result.
+delivery_terminal_status=failed
+on_delivery_exit() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
+  delivery_status "$delivery_terminal_status" \
+    || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
+  exit "$status"
+}
+trap on_delivery_exit EXIT
+
 umask 077
 
 case "$ref" in
@@ -686,7 +702,13 @@ case "$ref" in
     [ -n "$target" ] && verify_generation "$target" || { fail "нет проверенного предыдущего поколения"; exit 4; }
     previous=$current_path
     write_journal prepared "$target" "$current_path" || exit 4
-    rollback_to_generation "$target" "откат Factory" || exit $?
+    if rollback_to_generation "$target" "откат Factory"; then
+      :
+    else
+      rollback_result=$?
+      delivery_terminal_status=rollback_failed
+      exit "$rollback_result"
+    fi
     [ -z "$current_path" ] || { ln -sfn "$current_path" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
     echo "== полный откат к $(basename "$target") завершён; база не изменялась"
     exit 0
@@ -1428,7 +1450,21 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; delivery_status failed || fail "не смог надёжно записать неуспешный выпуск"; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+rollback() {
+  local why=$1 status=$2 result terminal
+  trap - EXIT HUP INT TERM
+  rollback_armed=0
+  rollback_to_generation "$old_generation" "$why"
+  result=$?
+  terminal=release_failed_rolled_back
+  if [ "$result" -ne 0 ]; then
+    terminal=rollback_failed
+    status=$result
+  fi
+  delivery_status "$terminal" || { fail "не смог надёжно записать итог отката"; status=4; }
+  cleanup
+  exit "$status"
+}
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
