@@ -1,16 +1,16 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: e8da3c7abf4da5d67fc15980cf0e6aabadfad8ad — authoritative-статусы выпуска защищены root-owned каталогом 0700 и fail-closed проверками.
+Implementation commit: 1449b7f344161590eb436ccae60bdc60c8b7ff74 — release-driver сохраняет отказанный authoritative-статус неизменным и надёжно пишет собственные переходы.
 
 ## HEAD
 
-- Status: Implemented — ready for повторного Review.
-- Branch: `factory/6f0e04be-c10-83d60fdc-a06`.
+- Status: Implemented — ready for Review.
+- Branch: `factory/ac06d0d4-35f-9eec718c-8c1`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `e8da3c7abf4da5d67fc15980cf0e6aabadfad8ad` — authoritative-статусы выпуска защищены root-owned каталогом 0700 и fail-closed проверками.
-- What changed: systemd создаёт каталог статусов root-owned с mode 0700; driver не создаёт его сам и отвергает symlink, неверного владельца или права.
-- Evidence: `bash ops/test-fx-factory-release.sh`, `bash ops/test-install-project-release-broker.sh`, `go test -count=1 ./internal/releasebroker` — PASS.
-- Next action: Провести повторный Review поставки.
+- Implementation commit: `1449b7f344161590eb436ccae60bdc60c8b7ff74` — release-driver сохраняет отказанный authoritative-статус неизменным и надёжно пишет собственные переходы.
+- What changed: root-owned каталог 0700 и fail-closed проверки защищают статусы; EXIT-trap включается только перед собственным durable-переходом и не перезаписывает неизвестное состояние.
+- Evidence: release-driver/installer fixtures, releasebroker Go-тесты, `just staticcheck`, `just build` — PASS; свежий `origin/main` также прошёл `staticcheck` без U1000.
+- Next action: Провести Review поставки.
 
 ## LOG
 
@@ -205,3 +205,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 поэтому ошибки подготовки и захвата release lock не оставляют delivery в
 неопределённом состоянии. Shell-fixture подтверждает terminal `failed` для
 lock/preflight и успешный повторный выпуск с новым delivery ID; Go-пакет и сборка прошли.
+
+### 2026-08-15 — Implement
+
+Кандидат перебазирован на свежий `origin/main`; неизвестный authoritative-статус
+теперь остаётся неизменным, а собственные переходы драйвера сохраняются fail-closed.
+Полный release-driver fixture, installer fixture, releasebroker Go-тесты,
+`staticcheck` и сборка прошли; U1000 отсутствует и на main, и в кандидате.
