@@ -3894,10 +3894,10 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
         self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
 
-    def test_second_conflict_closes_current_pr_when_same_work_was_merged(self):
-        """A second conflict must not leave a duplicate PR after equivalent delivery."""
+    def test_first_conflict_closes_current_pr_when_same_work_was_merged(self):
+        """The first conflict must not leave a duplicate PR after equivalent delivery."""
         state = {"merge_intents": {"verify-1": dict(
-            self.intent, work_id="work-1", base_branch="main", conflict_count=1)}}
+            self.intent, work_id="work-1", base_branch="main", conflict_count=0)}}
         current = {"number": 11, "state": "open", "body": "<!-- factory-work-id:work-1 -->",
                    "head": {"ref": "factory/topic"}, "base": {"ref": "main"}}
         merged = {"number": 12, "merged_at": "2026-08-15T12:00:00Z",

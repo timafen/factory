@@ -8038,7 +8038,7 @@ def recover_merge_intents(conf, state):
                             "conflict_at": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         })
-                        if conflicts >= 2 and _supersede_conflicted_pr(intent):
+                        if _supersede_conflicted_pr(intent):
                             log(f"AUTO-MERGE stale PR superseded task={task_id}")
                         save(STATE_PATH, state)
                     continue
