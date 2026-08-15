@@ -108,7 +108,10 @@
 - `web/src/Overview.test.ts`: snapshot с failed и cancelled одновременно
   рисует «Провалы» и «Отменены», человеческую причину и не показывает
   внутренние enum/API ID.
-- Обязательная целевая команда: `python3 -m unittest pilot.test_pilot.RecentDoneTest`.
+- Обязательная целевая команда: `python3 -m unittest
+  pilot.test_pilot.RecentDoneAndSpendTest`. Новый test case объединяет только
+  матрицу recent-результатов и расхода этой работы; до реализации он ожидаемо
+  отсутствует, а после неё команда обязана завершаться с кодом 0.
 
 ## Риски и решения
 
@@ -143,4 +146,4 @@
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл web/src/Overview.tsx
 ГОТОВО-КОГДА: файл web/src/Overview.test.ts
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.RecentDoneTest
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.RecentDoneAndSpendTest
