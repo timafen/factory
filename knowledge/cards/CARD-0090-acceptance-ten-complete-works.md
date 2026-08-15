@@ -4,16 +4,16 @@
 
 Status: In progress — реализован общий русский слой статусов, времени и ошибок.
 
-Branch: `factory/487b9529-eb7-49361f09-b58`
+Branch: `factory/94e03ee1-79f-9e8fe697-202`
 
-Implementation commit: 5f2ed57c36b916bf81e1115684091f4c31a98ff6 — статусы, длительности и ошибки Factory переведены на русский.
+Implementation commit: 512bb01a03c6087b210eed377993da806f632cbb — статусы, длительности и ошибки Factory переведены на русский.
 
 What changed:
 
 - Общие подписи статусов безопасны к неизвестным backend-значениям.
 - Время, длительности и state loading/error русские; API error не раскрывает сырой текст.
 
-Evidence: `npm --prefix web test`, `npx tsc -p tsconfig.app.json --noEmit`, lint и build → успешно.
+Evidence: web tests 183/183; TypeScript, lint, web build и `go build ./...` → успешно.
 
 Next action: подключить единый итог и действие владельца к списку и detail работы.
 
@@ -51,3 +51,9 @@ copied from it.
 для новых значений backend. Экранные загрузка и ошибки переведены на русский,
 а текст ошибки API не выводится пользователю. Полный `web` test suite, TypeScript,
 lint и production build завершились успешно.
+
+### 2026-08-15 — Implement
+
+Работа перенесена на свежий `origin/main`, а полный UI-набор приведён к безопасным
+русским ошибкам без сырого текста API. Проверено: 183/183 web-теста, TypeScript,
+lint, production web build и Go build завершились успешно.
