@@ -762,6 +762,38 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["state"], "blocked")
         self.assertIn("default branch", snapshot["reason"])
 
+    def test_origin_mismatch_blocks_before_default_branch_or_network(self):
+        """All isolated Git flows check their configured remote before lookup."""
+        expected_url = "https://github.com/acme/repo.git"
+
+        for name, invoke in (
+                ("snapshot", lambda: pilot.fresh_branch_snapshot(expected_url, "factory/candidate")),
+                ("refresh", lambda: pilot.refresh_stale_branch(expected_url, "factory/candidate")),
+                ("rebuild", lambda: pilot.rebuild_clean_branch(
+                    expected_url, "factory/candidate", ["pilot/pilot.py"], "Работа"))):
+            calls = []
+
+            def fake_git(cwd, *args, **_kwargs):
+                calls.append(args)
+                if args == ("remote", "get-url", "origin"):
+                    return 0, "https://github.com/attacker/repo.git\n"
+                return 0, ""
+
+            with self.subTest(flow=name), tempfile.TemporaryDirectory() as rebuild_dir, \
+                    mock.patch.object(pilot, "REBUILD_DIR", rebuild_dir), \
+                    mock.patch.object(pilot, "_git", side_effect=fake_git), \
+                    mock.patch.object(pilot, "_default_branch") as default_branch:
+                result = invoke()
+
+            if isinstance(result, dict):
+                self.assertEqual(result["state"], "blocked")
+                self.assertIn("registered origin", result["reason"])
+            else:
+                self.assertEqual(result, "")
+            default_branch.assert_not_called()
+            self.assertFalse(any(args and args[0] in {"fetch", "ls-remote", "push"}
+                                 for args in calls), calls)
+
     def test_review_gate_keeps_infrastructure_failure_out_of_request_changes(self):
         with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
                 "state": "blocked", "reason": "cannot fetch authoritative refs"}):
