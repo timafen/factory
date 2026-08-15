@@ -1,17 +1,17 @@
-Implementation commit: 57520292e77bb48ea9c6e2de40ada9eb38773eb7 — выпуск возвращает ошибку UI gate, а fixture запускает глубокие ворота
+Implementation commit: 4d01a575218e3666ffdff41d9245ad9fc55a1bef — повторный откат транзакционно восстанавливает browser-среду
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
 Status: Implemented and verified
-Branch: `factory/ad425558-8b0-e78a0fdd-36d`
-Implementation commit: 57520292e77bb48ea9c6e2de40ada9eb38773eb7 — выпуск возвращает ошибку UI gate, а fixture запускает глубокие ворота
-What changed: ошибка второй параллельной группы немедленно прерывает выпуск;
-асинхронные signal-сценарии явно включают полный UI/Go gate.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS;
-`npx tsc -p tsconfig.app.json --noEmit` → PASS;
-`node --test report/report.test.mjs` → 5/5 PASS.
+Branch: `factory/db641bfe-a22-70413f54-5a3`
+Implementation commit: 4d01a575218e3666ffdff41d9245ad9fc55a1bef — повторный откат транзакционно восстанавливает browser-среду
+What changed: поставка перенесена на свежий `main`; повторное применение browser-поколения
+получает rollback backup, а fixture проверяет идемпотентный installer и новый heartbeat.
+Evidence: `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS;
+`go test ./...` → PASS; `npm test` → 181/181 PASS;
+`npm run lint` и `npm run build` → PASS; report tests → 5/5 PASS.
 One next action: merge the verified branch; do not run a production release in this stage.
 
 ## LOG
@@ -64,3 +64,11 @@ UI gate исправлен после возврата владельцем: п�
 глубокие проверки после перехода штатного выпуска в быстрый режим.
 Проверки: release fixture — PASS; TypeScript — PASS; PDF report tests — 5/5 PASS.
 Боевой выпуск не запускался.
+
+### 2026-08-15 — Implement
+
+Поставка перебазирована на свежий `origin/main`. Конфликты объединены с новыми
+гарантиями полного поколения; повторный rollback теперь резервирует browser live-state,
+а fixture поддерживает повторное применение installer и монотонный heartbeat.
+Проверки: release fixture — PASS; Go suite — PASS; web — 181/181, lint и build PASS;
+installer — PASS; PDF report tests — 5/5 PASS. Боевой выпуск не запускался.
