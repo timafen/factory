@@ -95,6 +95,23 @@ class GitHubOriginIdentityTests(unittest.TestCase):
                 pilot.gh_repo_view_from_origin("/worktree")
         gh.assert_not_called()
 
+    def test_cycle_targets_are_taken_from_managed_origin_not_control_plane(self):
+        repositories = [{"id": "factory-id", "remote_identity": "owainlewis/factory"}]
+        with mock.patch.object(pilot, "_project_repo_dirs", return_value=["/worktree"]), \
+                mock.patch.object(pilot, "github_repository_from_origin",
+                                  return_value="timafen/factory") as resolve:
+            targets = pilot.github_repositories_from_managed_origins(repositories)
+
+        self.assertEqual(targets, {"factory-id": "timafen/factory"})
+        resolve.assert_called_once_with("/worktree")
+
+    def test_cycle_refuses_github_actions_without_a_managed_origin(self):
+        repositories = [{"id": "factory-id", "remote_identity": "owainlewis/factory"}]
+        with mock.patch.object(pilot, "_project_repo_dirs", return_value=[]):
+            targets = pilot.github_repositories_from_managed_origins(repositories)
+
+        self.assertEqual(targets, {})
+
 
 class AgentRulesScopeTests(unittest.TestCase):
     def test_common_rules_exclude_stage_specific_requirements(self):
@@ -1096,6 +1113,9 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
         )
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "github_repositories_from_managed_origins",
+                return_value={"repo-id": "acme/repo"}))
             stack.enter_context(mock.patch.object(pilot, "create_task", side_effect=create))
             stack.enter_context(mock.patch.object(pilot, "gh_json", side_effect=github_branch))
             if branch_error:
@@ -1151,7 +1171,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
             "PUSHED: yes\n"
             "ГОТОВО-КОГДА: файл pilot/pilot.py")
 
-        report.assert_called_once_with("github.com/acme/repo", "factory/published")
+        report.assert_called_once_with("acme/repo", "factory/published")
         self.assertEqual(len(self.created), 1)
         self.assertIn("Implement + Test", self.created[0]["title"])
         self.assertEqual(self.created[0]["workflow_revision_id"], "rev-implementation")
@@ -1209,7 +1229,7 @@ class SpecificationBranchHandoffTests(unittest.TestCase):
             published_branches={"factory/published"},
         )
 
-        report.assert_called_once_with("github.com/acme/repo", "factory/published")
+        report.assert_called_once_with("acme/repo", "factory/published")
         self.assertEqual(len(self.created), 1)
         self.assertIn("Branch: factory/published", self.created[0]["context"])
 
@@ -2198,6 +2218,9 @@ def run_full_cycle(fixture):
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
         stack.enter_context(mock.patch.object(
+            pilot, "github_repositories_from_managed_origins",
+            return_value={"repo-id": "acme/repo"}))
+        stack.enter_context(mock.patch.object(
             pilot, "all_tasks", side_effect=lambda: list(fixture["tasks"])))
         stack.enter_context(mock.patch.object(
             pilot, "codex_usage_snapshot", return_value={day_start: {}}))
@@ -2460,7 +2483,7 @@ else:
             merged = [json.loads(line)["task_id"] for line in stream if line.strip()]
         self.assertEqual(merged, [verify["id"]])
         state = pilot.load(self.state_path, {})
-        target_key, adapter = pilot._delivery_target("github.com/acme/repo")
+        target_key, adapter = pilot._delivery_target("acme/repo")
         self.assertEqual(adapter, "external-merge")
         delivery = state[pilot.DELIVERY_STATE_KEY]["targets"][target_key]
         generation = delivery["generations"][delivery["current_generation"]]
@@ -3220,6 +3243,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(pilot, "MERGES_PATH", merges_path))
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(
+                pilot, "github_repositories_from_managed_origins",
+                return_value={"repo-id": "acme/repo"}))
+            stack.enter_context(mock.patch.object(
                 pilot, "codex_usage_snapshot",
                 side_effect=lambda day_start, _week_start: {day_start: {}}))
             stack.enter_context(mock.patch.object(
@@ -3301,12 +3327,12 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertEqual(state["merge_intents"]["verify"]["branch"], rebuilt)
             self.assertEqual(state["merge_intents"]["verify"]["commit_sha"], delivery_head)
             self.assertEqual(state["merge_intents"]["verify"]["phase"], "conflict")
-            fresh.assert_called_once_with("github.com/acme/repo", rebuilt)
+            fresh.assert_called_once_with("acme/repo", rebuilt)
 
         gate.assert_called_once_with(
-            conf, base, original, "github.com/acme/repo", mock.ANY,
+            conf, base, original, "acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
+        merge.assert_called_once_with("acme/repo", rebuilt, base, delivery_head)
 
 
 class ImmutableMergeTests(unittest.TestCase):

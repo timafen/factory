@@ -3098,6 +3098,35 @@ def gh_repo_view_from_origin(worktree):
     return repo
 
 
+def github_repositories_from_managed_origins(repositories):
+    """Return action targets derived only from managed worktrees' ``origin``.
+
+    The control-plane ``remote_identity`` is descriptive data, not authority
+    to operate GitHub.  Every caller in the cycle receives this map instead
+    of that field, so API reads, PR creation and merge recovery cannot follow
+    a stale or foreign identity supplied by another system.
+    """
+    targets = {}
+    for item in repositories or []:
+        repository_id = str((item or {}).get("id") or "")
+        if not repository_id:
+            continue
+        worktrees = _project_repo_dirs(repository_id)
+        if not worktrees:
+            log("github_origin_unavailable repository=" + repository_id)
+            continue
+        try:
+            resolved = {github_repository_from_origin(path) for path in worktrees}
+        except RuntimeError as error:
+            log("github_origin_invalid repository=" + repository_id + " error=" + str(error))
+            continue
+        if len(resolved) != 1:
+            log("github_origin_ambiguous repository=" + repository_id)
+            continue
+        targets[repository_id] = resolved.pop()
+    return targets
+
+
 # --------------------------------------------------- обещания «готово, когда»
 # Спецификация записывает проверяемые машиной факты. Дальше их сверяет код,
 # а не мнение модели: список файлов приходит из GitHub, сравнение — точное.
@@ -8078,8 +8107,12 @@ def cycle(conf, state):
     except Exception as e:
         log("plan_reconcile_error", repr(e))
     workers = best_workers(api("/workers")["workers"])
-    repo_identity_by_id = {r["id"]: r["remote_identity"]
-                           for r in (api("/repositories").get("repositories") or [])}
+    # GitHub actions must use the remote actually configured in the managed
+    # checkout.  In particular, never promote the control-plane's descriptive
+    # ``remote_identity`` into an API or CLI target: it can disagree with the
+    # repository selected by the worker's origin.
+    repo_identity_by_id = github_repositories_from_managed_origins(
+        api("/repositories").get("repositories") or [])
     workflows = {}
     for w in api("/workflows").get("workflows") or []:
         rev = w.get("current_revision") or {}
