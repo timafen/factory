@@ -1,24 +1,42 @@
 # CARD-0164 — `gh` не подменяет зарегистрированный origin
 
-Implementation commit: a56891e6d05910a0e5e9863552d0771b369c0c0a — исходная реализация managed worktrees, в которой следующий этап закрепит зарегистрированный `origin` после clone.
+## HEAD
 
-Status: Specified.
-Branch: `factory/b55ab6fb-0ce-553b9a66-c79`.
+Implementation commit: ce21de10f4e3c82d5a065d2fcafd865e7840ea49 — после `gh repo clone` зарегистрированный GitHub URL закрепляется за `origin` до проверки и публикации кэша.
 
-## Контекст
+Status: Implemented.
+Branch: `factory/634aaf52-312-066d8e25-1b2`.
+
+Factory добавляет отсутствующий либо заменяет неверный `origin`, не удаляя
+оставленный `gh` remote `upstream`. Ошибка настройки не публикует cache entry.
+
+Evidence: целевой managed-task test → PASS; ошибки `remote add`/`set-url` → PASS;
+`go test -timeout 5m ./...` → PASS; `go build ./...` → PASS.
+
+Next action: проверить ветку и слить реализацию в `main`.
+
+## LOG
+
+### 2026-08-15 — Specification
 
 `gh repo clone` в centrally managed repository может оставить `upstream` более
 подходящим remote, чем зарегистрированный `origin`. Для Factory это нарушает
 контракт: base branch и код задачи должны быть получены только из identity,
 назначенной control plane.
 
-## Решение
-
 Implement нормализует `origin` из валидированного managed GitHub slug до
 первой проверки repository identity. Регрессионный integration test воспроизведёт
 клон с `upstream` и докажет, что task использует зарегистрированный origin.
 
-## Передача
-
 Полная спецификация, файлы реализации и обязательная команда находятся в
 `knowledge/specs/managed-worktree-gh-origin-precedence.md`.
+
+### 2026-08-15 — Implement
+
+После клонирования Factory перечисляет remotes и безопасно выполняет `remote add`
+либо `remote set-url` для канонического URL зарегистрированного slug. Регрессия
+использует разные репозитории для `origin` и `upstream`, проверяет выбранный base
+commit и отсутствие опубликованного кэша при обеих ошибках нормализации.
+
+Доказательство: обязательный целевой тест и негативные подслучаи прошли;
+полный `go test -timeout 5m ./...` и `go build ./...` завершились успешно.
