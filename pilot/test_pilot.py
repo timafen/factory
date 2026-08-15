@@ -2327,6 +2327,32 @@ else:
             pilot.load(self.works_path, {})[self.root["id"]]["archived_attempts"],
             [receipt])
 
+    def test_merge_rounds_include_archived_attempts_of_current_generation_only(self):
+        archived = dict(
+            self.correction("review_return"), id="archived-implement",
+            state="succeeded")
+        current = dict(
+            self.correction("verify_return"), id="current-implement",
+            state="succeeded")
+        verify = {
+            "id": "current-verify", "work_id": self.root["id"],
+            "title": "[auto] [5/5 Verify] Исправить корзину",
+            "state": "succeeded", "created_at": "2026-08-11T20:03:00Z",
+        }
+        previous_generation = [dict(
+            archived, id=f"previous-{number}", work_id="previous-root")
+            for number in range(3)
+        ]
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину",
+            "archived_attempts": [{"task_id": archived["id"]}],
+        }})
+
+        self.assertEqual(
+            pilot._merge_rounds(
+                previous_generation + [archived, current, verify], verify),
+            2)
+
     def test_unarchived_terminal_attempt_still_spends_retry_limit(self):
         old = dict(
             self.correction("review_return"), id="old-attempt", state="failed")
@@ -3690,6 +3716,57 @@ class PipelineWatchMergeTests(unittest.TestCase):
                        {"workflow": "Review"}],
             "timeout_seconds": 900,
         }
+
+    def _recover_merge(self, intent, already_merged=False, merge_ok=True):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        state = {"merge_intents": {"verify-1": dict(intent)}}
+        with mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "STATE_PATH", os.path.join(temporary.name, "state.json")), \
+                mock.patch.object(pilot, "gh_json", return_value={"commit": {"sha": "a" * 40}}), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=already_merged), \
+                mock.patch.object(pilot, "gh_merge", return_value=(merge_ok, "merged")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge", return_value=None):
+            pilot.recover_merge_intents({}, state)
+        with open(journal, encoding="utf-8") as stream:
+            records = [json.loads(line) for line in stream]
+        return state, records, merge
+
+    def test_merge_journal_records_rounds_and_automatic_actor(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 3, "actor_id": None,
+        })
+
+        merge.assert_called_once()
+        self.assertEqual(records, [{"task_id": "verify-1", "base": "Круги",
+            "at": records[0]["at"], "actor": "automatic", "actor_id": None,
+            "rounds": 3}])
+
+    def test_owner_merge_records_owner_and_preserves_rounds(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 2, "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual((records[0]["actor"], records[0]["actor_id"], records[0]["rounds"]),
+                         ("owner", None, 2))
+
+    def test_merge_recovery_preserves_actor_and_rounds(self):
+        state, records, merge = self._recover_merge({
+            "phase": "merging", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 4, "actor": "automatic", "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["actor"], records[0]["rounds"]), ("automatic", 4))
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "journaled")
 
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
@@ -7823,18 +7900,27 @@ pilot.save(pilot.STATE_PATH, state)
     def test_outbox_and_notification_journals_are_immutable(self):
         state = {}
         notifications = os.path.join(self.temporary.name, "notifications.jsonl")
+        wait = self.wait()
+        wait["merge_receipt"].update({
+            "actor": "owner", "actor_id": None, "rounds": 3,
+        })
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
                 mock.patch.object(pilot, "mark_final"), \
                 mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
-            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, wait)
             pilot.poll_delivery_state({}, state)
             restored = pilot.load(self.state_path, {})
             pilot.poll_delivery_state({}, restored)
         with open(self.receipts, encoding="utf-8") as stream:
-            self.assertEqual(len(stream.readlines()), 1)
+            receipts = [json.loads(line) for line in stream]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(
+            (receipts[0]["actor"], receipts[0]["actor_id"], receipts[0]["rounds"]),
+            ("owner", None, 3),
+        )
         with open(self.outbox, encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
         with open(notifications, encoding="utf-8") as stream:

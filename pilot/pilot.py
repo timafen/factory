@@ -7451,8 +7451,11 @@ def _complete_generation(conf, state, generation):
     for task_id, wait in generation["waits"].items():
         if task_id in completed:
             continue
-        receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
-                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        receipt = dict(wait.get("merge_receipt") or {})
+        receipt.update({"id": generation["id"] + ":" + task_id,
+                        "generation_id": generation["id"], "task_id": task_id,
+                        "base": wait.get("base", ""),
+                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
         completed[task_id] = receipt["id"]
         mark_final(task_id, "Verify", True)
@@ -7635,6 +7638,25 @@ def _merged_commit_sha(repo, branch, expected_head=""):
     return ""
 
 
+def _merge_rounds(tasks, reference):
+    """Return completed rounds for this work generation, including replacements.
+
+    Archived attempts no longer spend the retry limit in ``stage_attempts``,
+    but they remain real rounds for the delivery journal.  Durable ``work_id``
+    provenance keeps completed generations with the same title out.
+    """
+    counts = []
+    for stage in ("Implement + Test", "Review", "Verify"):
+        count = 0
+        for task in tasks:
+            match = STAGE_TITLE_RE.match(task.get("title", ""))
+            if (match and match.group(1).strip() == stage
+                    and same_task_work(task, reference)):
+                count += 1
+        counts.append(count)
+    return max(counts, default=0)
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -7669,8 +7691,12 @@ def recover_merge_intents(conf, state):
                 save(STATE_PATH, state)
                 continue
             if exact_merge:
+                intent.setdefault("actor", "owner")
                 merged = True
             else:
+                intent["actor"] = "automatic"
+                intent["phase"] = "merging"
+                save(STATE_PATH, state)
                 ok, output = gh_merge(repo, branch, intent.get("base", branch),
                                       expected_head)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
@@ -7689,7 +7715,10 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
-                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "actor": intent.get("actor", "automatic"),
+                       "actor_id": intent.get("actor_id"),
+                       "rounds": max(1, int(intent.get("rounds") or 0))}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
             # let an already-processed Verify task suppress its missing wait.
@@ -8237,7 +8266,9 @@ def cycle(conf, state):
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
+                        "actor_id": None,
+                        "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
