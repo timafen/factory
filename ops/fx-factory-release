@@ -53,6 +53,8 @@ INTAKE_SERVICE="${FACTORY_INTAKE_SERVICE:-factory-intake.service}"
 API="${FACTORY_API_URL:-http://127.0.0.1:7337}"
 REGISTER_ATTEMPTS="${FACTORY_REGISTER_ATTEMPTS:-12}"
 REGISTER_DELAY="${FACTORY_REGISTER_DELAY:-5}"
+DRAIN_ATTEMPTS="${FACTORY_RELEASE_DRAIN_ATTEMPTS:-360}"
+DRAIN_DELAY="${FACTORY_RELEASE_DRAIN_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
 FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
@@ -150,6 +152,44 @@ restart_workers() {
   local -a services=()
   while read -r service; do [ -n "$service" ] && services+=("$service"); done < <(worker_service_list)
   [ "${#services[@]}" -eq 0 ] || systemctl restart "${services[@]}"
+}
+
+online_worker_active_count() {
+  local body
+  body=$(curl -fsS --max-time 10 "$API/api/v1/workers") || return
+  printf '%s' "$body" | python3 -c '
+import json,sys
+workers=json.load(sys.stdin)
+if isinstance(workers,dict):
+    workers=workers.get("workers",workers.get("items",[]))
+if not isinstance(workers,list):
+    raise SystemExit(2)
+print(sum(int(worker.get("active_count") or 0)
+          for worker in workers
+          if isinstance(worker,dict) and worker.get("online",True)))
+' || return
+}
+
+wait_for_worker_drain() {
+  local attempt active previous=''
+  for ((attempt=1; attempt<=DRAIN_ATTEMPTS; attempt++)); do
+    active=$(online_worker_active_count) || {
+      fail "не удалось проверить активные этапы перед выпуском"
+      return 1
+    }
+    case "$active" in ''|*[!0-9]*) fail "API вернул некорректное число активных этапов"; return 1 ;; esac
+    if [ "$active" = 0 ]; then
+      step "все уже запущенные этапы закончились; начинаю короткое переключение"
+      return 0
+    fi
+    if [ "$active" != "$previous" ]; then
+      step "жду завершения уже запущенных этапов: осталось $active"
+      previous=$active
+    fi
+    "$TRUSTED_SLEEP" "$DRAIN_DELAY"
+  done
+  fail "активные этапы не закончились за отведённое время; выпуск отложен"
+  return 1
 }
 
 sync_path() {
@@ -260,9 +300,19 @@ PY
 }
 
 stop_factory_units() {
-  stop_workers || return
+  local pilot_was_active=0 intake_was_active=0
+  systemctl -q is-active "$PILOT_SERVICE" 2>/dev/null && pilot_was_active=1 || true
+  systemctl -q is-active "$INTAKE_SERVICE" 2>/dev/null && intake_was_active=1 || true
+  # Freeze orchestration first: already running stages may finish, but no new
+  # stage can be admitted while the worker binary is about to be replaced.
   systemctl stop "$PILOT_SERVICE" 2>/dev/null || true
   systemctl stop "$INTAKE_SERVICE" 2>/dev/null || true
+  if ! wait_for_worker_drain; then
+    [ "$intake_was_active" = 0 ] || systemctl start "$INTAKE_SERVICE" >/dev/null 2>&1 || true
+    [ "$pilot_was_active" = 0 ] || systemctl start "$PILOT_SERVICE" >/dev/null 2>&1 || true
+    return 75
+  fi
+  stop_workers || return
   # The driver is a child of the broker service.  Stopping the broker here
   # would make systemd KillMode=control-group kill this release before it can
   # persist the terminal result.  The broker stays up until its caller exits.
@@ -1296,7 +1346,15 @@ on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] 
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
 step "останавливаю прежний комплект и атомарно ставлю согласованную пару"
-stop_factory_units || rollback "службы не остановились" 6
+stop_factory_units
+stop_result=$?
+if [ "$stop_result" = 75 ]; then
+  fail "выпуск безопасно отложен: работающие этапы не прерывались"
+  rollback_armed=0
+  cleanup
+  exit 8
+fi
+[ "$stop_result" = 0 ] || rollback "службы не остановились" 6
 write_journal old-stopped "$generation_path" "$old_generation" || rollback "journal не записан" 4
 install_generation "$generation_path" || rollback "полный комплект не установлен" 4
 write_journal pair-installed "$generation_path" "$old_generation" || rollback "journal не записан" 4
