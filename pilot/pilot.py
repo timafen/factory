@@ -1782,8 +1782,9 @@ def load_restart_recovery_tasks(conf, tasks):
 
 def retry_terminal_task(conf, state, task_id):
     """Requeue a terminal task without advancing a startup recovery cursor."""
-    if task_id in state["processed"]:
-        state["processed"].remove(task_id)
+    processed = state.setdefault("processed", [])
+    if task_id in processed:
+        processed.remove(task_id)
     retry_ids = state.setdefault("terminal_retry_ids", [])
     if task_id not in retry_ids:
         retry_ids.append(task_id)
@@ -5167,7 +5168,15 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base))
         br, implementation_head = selected_delivery(base, br)
-        branch_line = resume_branch_line(base, br, rounds)
+        if infrastructure_retry and stage in ("Review", "Verify") and br:
+            # Review and Verify inspect an immutable remote candidate in an
+            # isolated repository. Their workflow contract deliberately
+            # accepts only this canonical marker. A prose "previous branch"
+            # hint made the worker select its newly allocated empty task branch
+            # instead of the already reviewed delivery.
+            branch_line = f"Branch: {br}\n"
+        else:
+            branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
         if infrastructure_retry:
@@ -7772,7 +7781,7 @@ def _fail_generation(state, target, generation, category, now):
     })
 
 
-def _live_acceptance_failed(state, target, generation, response, now):
+def _live_acceptance_failed(conf, state, target, generation, response, now):
     """Fail closed and make each Verify wait eligible for an implementation lap."""
     reason = response.get("reason") if isinstance(response, dict) else "acceptance_unknown"
     generation["acceptance"] = {"status": "failed", "reason": reason}
@@ -7782,7 +7791,7 @@ def _live_acceptance_failed(state, target, generation, response, now):
     for task_id in generation.get("waits", {}):
         if task_id not in returned:
             returned[task_id] = reason
-            retry_terminal_task(state, task_id)
+            retry_terminal_task(conf, state, task_id)
 
 
 def dispatch_delivery_outbox(conf, state):
@@ -7866,7 +7875,9 @@ def poll_delivery_state(conf, state, now=None):
                     save(STATE_PATH, state)
                     _complete_generation(conf, state, generation)
                 elif (acceptance_response or {}).get("status") == "failed":
-                    _live_acceptance_failed(state, target, generation, acceptance_response, current_time)
+                    _live_acceptance_failed(
+                        conf, state, target, generation,
+                        acceptance_response, current_time)
                     save(STATE_PATH, state)
             elif generation["phase"] == "released" and status in ("pending", "running"):
                 generation["acceptance"] = {"status": status}
@@ -7878,7 +7889,9 @@ def poll_delivery_state(conf, state, now=None):
                 save(STATE_PATH, state)
                 _complete_generation(conf, state, generation)
             elif generation["phase"] == "released" and status == "failed":
-                _live_acceptance_failed(state, target, generation, response or {}, current_time)
+                _live_acceptance_failed(
+                    conf, state, target, generation,
+                    response or {}, current_time)
                 save(STATE_PATH, state)
             elif status == "locked":
                 generation["phase"] = "reserved"

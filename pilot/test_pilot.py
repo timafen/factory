@@ -6052,6 +6052,11 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertNotIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
 
     def test_russian_dns_wait_is_also_an_infrastructure_retry(self):
+        self.conf["stages"] = [{"workflow": "Review", "worker": "worker"}]
+        self.workflows["Review"] = {
+            "enabled": True, "revision_id": "review-revision",
+        }
+        pilot.save(self.conf_path, dict(self.conf))
         verdict = {
             "decision": "wait",
             "reason": (
@@ -6074,6 +6079,14 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(question["machine_action"], "retry_infrastructure")
         self.assertEqual(question["resume_stage"], "Review")
         self.assertNotIn("Сетевая проверка", self.conf["stopped_pipelines"])
+
+        question["retry_not_before"] = "2000-01-01T00:00:00Z"
+        pilot.save(
+            os.path.join(self.question_dir, "russian-dns-question.json"), question)
+        created = self.apply_answers_twice()
+        self.assertEqual(len(created), 1)
+        self.assertIn("Branch: factory/network-check\n", created[0]["context"])
+        self.assertNotIn("Прошлая работа лежит в ветке", created[0]["context"])
 
     def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
         self.assertFalse(self.route({
@@ -8063,6 +8076,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         pid = fx + ".pid"
         release_gate = fx + ".release"
         lock_once = fx + ".lock-once"
+        acceptance = fx + ".acceptance"
         with open(fx, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\nset -eu\n"
                          "printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + "\"\n"
@@ -8076,18 +8090,22 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "  *) exit 7 ;;\n"
                          "esac\n")
         os.chmod(fx, 0o700)
+        with open(acceptance, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s\\n' '{\"status\":\"passed\"}'\n")
+        os.chmod(acceptance, 0o700)
         if locked:
             with open(lock_once, "w", encoding="utf-8") as stream:
                 stream.write("locked once\n")
         broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
-                                   "-state-dir", state_dir, "-factory-release-executable", fx],
+                                   "-state-dir", state_dir, "-factory-release-executable", fx,
+                                   "-live-acceptance-executable", acceptance],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[socket_path] = broker
         self.addCleanup(self._stop_process, broker)
         for _ in range(100):
             if os.path.exists(socket_path):
                 return {"socket": socket_path, "broker_state": state_dir,
-                        "fx": fx,
+                        "fx": fx, "acceptance": acceptance,
                         "attempts": attempts, "success": success, "fx_started": started,
                         "fx_pid": pid, "release_gate": release_gate}
             if broker.poll() is not None:
@@ -8099,7 +8117,8 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         """Replace a stopped broker while retaining its durable state and FX."""
         process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
                                     "-state-dir", paths["broker_state"],
-                                    "-factory-release-executable", paths["fx"]],
+                                    "-factory-release-executable", paths["fx"],
+                                    "-live-acceptance-executable", paths["acceptance"]],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[paths["socket"]] = process
         self.addCleanup(self._stop_process, process)
@@ -8441,13 +8460,19 @@ pilot.save(pilot.STATE_PATH, state)
         executable = os.path.join(self.temporary.name, "factory-release-broker")
         fx = os.path.join(self.temporary.name, "fx")
         calls = os.path.join(self.temporary.name, "fx-calls")
+        acceptance = os.path.join(self.temporary.name, "acceptance")
         with open(fx, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\n")
         os.chmod(fx, 0o700)
+        with open(acceptance, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s\\n' '{\"status\":\"passed\"}'\n")
+        os.chmod(acceptance, 0o700)
         subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
                        check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
         process = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
-                                    "-factory-release-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    "-factory-release-executable", fx,
+                                    "-live-acceptance-executable", acceptance],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: (process.terminate() if process.poll() is None else None, process.wait(timeout=2) if process.poll() is None else None))
         for _ in range(100):
             if os.path.exists(socket_path):
