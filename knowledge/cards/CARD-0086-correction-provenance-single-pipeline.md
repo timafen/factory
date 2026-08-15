@@ -2,18 +2,23 @@
 
 ## HEAD
 
-Implementation commit: afd3d9b7acce926389aa79f5eed1b85e4e8a39a9 — устойчивое provenance и реальный перезапуск Review/Verify-конвейера Pilot.
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ed7ee7b4-87a-19b13995-d52`.
-- What changed: проверка полного цикла теперь запускает первый и второй Pilot
-  в разных Python-процессах; второй получает только устойчивые JSON-фикстуры и state.
-- What changed: корректировка с изменённым заголовком продолжает тот же work_id
-  через Review и Verify до финального merge/terminal verdict, без нового root.
-- Evidence: `go test ./...` — PASS; `python3 -m unittest -v pilot.test_pilot` —
-  230 OK (13 skipped); реальный subprocess-рестарт Review/Verify — 7 OK.
-- Next action: Человеку проверить evidence и принять решение о merge.
+Implementation commit: a283f40524e997dc06b3d0934d15f3bbdaa8a810 — одноимённые работы изолированы устойчивым work_id.
+- Status: Implemented and tested — awaiting Verify.
+- Branch: `factory/42811bf8-c2d-05c01d4e-afc`.
+- What changed: Pilot хранит lifecycle, delivery artifact и merge receipt по work_id,
+  поэтому одинаковые заголовки не смешивают ветки или архивирование.
+- What changed: тест проводит две работы через restart, Review, Verify, merge и archive.
+- Evidence: `python3 -m unittest -q pilot.test_pilot.CorrectionProvenanceStormTests` — 9 OK.
+- Next action: Повторить Verify на опубликованной ветке с закреплёнными SHA.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Перенесена изоляция одноимённых работ поверх свежего main без отката новых
+возможностей Pilot. Merge receipt теперь сохраняет work_id, а целевой сценарий
+подтверждает отдельные ветки, Verify, merge и архивы для двух одинаковых заголовков.
+`python3 -m unittest -q pilot.test_pilot.CorrectionProvenanceStormTests` — PASS: 9 tests.
 
 ### 2026-08-12 — Verify
 
