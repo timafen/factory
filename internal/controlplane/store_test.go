@@ -2485,7 +2485,7 @@ func TestTaskProvenanceMigration028RequiresPriorSchemasAndReopensSafely(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 30 {
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 31 {
 		t.Fatalf("combined migration version = %d, %v", maxVersion, err)
 	}
 	if err := store.Close(); err != nil {
@@ -2499,6 +2499,73 @@ func TestTaskProvenanceMigration028RequiresPriorSchemasAndReopensSafely(t *testi
 	legacy, err := reopened.Task(context.Background(), "legacy-task")
 	if err != nil || hasTaskProvenance(legacy.Task) {
 		t.Fatalf("migrated legacy task = %#v, %v", legacy.Task, err)
+	}
+}
+
+func TestHourlyTaskRateLimitMigrationUpgradesExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing-030.sqlite3")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() >= "031_" {
+			continue
+		}
+		body, readErr := migrations.Files.ReadFile(entry.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := database.Exec(string(body)); execErr != nil {
+			t.Fatalf("apply %s: %v", entry.Name(), execErr)
+		}
+		prefix, _, _ := strings.Cut(entry.Name(), "_")
+		var version int
+		if _, scanErr := fmt.Sscanf(prefix, "%d", &version); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		if _, execErr := database.Exec(
+			`INSERT INTO schema_migrations(version, applied_at) VALUES (?, 0)`, version,
+		); execErr != nil {
+			t.Fatalf("record %s: %v", entry.Name(), execErr)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createDatabaseMarker(path + ".v2-control-plane"); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var maxVersion, automaticColumn, automaticIndex int
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'automatic'`,
+	).Scan(&automaticColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'tasks_automatic_created_at'`,
+	).Scan(&automaticIndex); err != nil {
+		t.Fatal(err)
+	}
+	if maxVersion != 31 || automaticColumn != 1 || automaticIndex != 1 {
+		t.Fatalf("upgraded schema = version %d, column %d, index %d", maxVersion, automaticColumn, automaticIndex)
 	}
 }
 

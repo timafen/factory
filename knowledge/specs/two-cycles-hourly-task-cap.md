@@ -22,7 +22,7 @@
    Повтор запроса с уже существующим `request_key` должен оставаться
    идемпотентным и не расходовать квоту.
 2. Добавить в хранилище небольшой durable счётчик/окно (новая миграция
-   `migrations/028_hourly_task_rate_limit.sql`, если номер остаётся свободен)
+   `migrations/031_hourly_task_rate_limit.sql` (следующий свободный номер)
    либо эквивалентную атомарную таблицу. Резервирование и вставка задачи
    выполняются одной SQLite-транзакцией; конкурирующий цикл получает
    стабильную ошибку `hourly_task_cap`, а не частично созданную задачу.
@@ -105,7 +105,7 @@
 этой работы; карточки других работ и общие журналы не изменяются.
 
 ГОТОВО-КОГДА: файл internal/controlplane/store.go
-ГОТОВО-КОГДА: файл migrations/028_hourly_task_rate_limit.sql
+ГОТОВО-КОГДА: файл migrations/031_hourly_task_rate_limit.sql
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл internal/controlplane/store_test.go
 ГОТОВО-КОГДА: файл internal/controlplane/http_test.go

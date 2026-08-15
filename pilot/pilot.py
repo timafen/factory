@@ -22,6 +22,7 @@ import argparse
 import base64
 import calendar
 import datetime
+import fcntl
 import io
 import glob
 import hashlib
@@ -64,6 +65,10 @@ MERGE_CONFLICT_RE = re.compile(
 
 class ParallelWorkLimit(RuntimeError):
     """A pipeline handoff must wait until another work slot is free."""
+
+
+class HourlyTaskLimit(ParallelWorkLimit):
+    """Automatic task creation must wait for the shared hourly window."""
 
 
 def api(path, body=None):
@@ -314,11 +319,17 @@ def _http_err(e):
         return str(e)
 
 
+def _task_http_err(e):
+    """Reuse an HTTP response body already consumed by the task wrapper."""
+    return getattr(e, "factory_message", None) or _http_err(e)
+
+
 # ------------------------------------------------- денежный предохранитель ---
 # 8 августа кодекс сжёг НЕДЕЛЬНЫЙ лимит подписки за один день: ~200 задач за
 # сутки, из них 42 на одну работу. Счётчик долларов не видит кодекс, поэтому
 # защита считает то, что видит всегда: сколько задач создано за 24 часа.
 DAYFLAG_PATH = f"{HOME}/pilot/day_cap_flag.json"
+HOURLY_CAP_PATH = f"{HOME}/pilot/hourly_task_cap.json"
 
 
 def _recent_tasks():
@@ -517,9 +528,62 @@ def context_with_agent_rules(context, conf=None, stage=""):
     return ((ctx + "\n\n") if ctx else "") + rules
 
 
+def _hourly_cap_state():
+    state = load(HOURLY_CAP_PATH, {}) or {}
+    try:
+        retry_at = float(state.get("retry_at") or 0)
+    except (TypeError, ValueError):
+        retry_at = 0
+    return state, retry_at
+
+
+def _hourly_cap_guard():
+    _state, retry_at = _hourly_cap_state()
+    if retry_at > time.time():
+        raise HourlyTaskLimit(
+            "hourly_task_cap: stage deferred until "
+            + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(retry_at)))
+
+
+def _defer_hourly_task(conf, title):
+    """Persist one shared cooldown and notify once for its whole window."""
+    now = time.time()
+    should_notify = False
+    with open(HOURLY_CAP_PATH + ".lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _state, retry_at = _hourly_cap_state()
+        if retry_at <= now:
+            retry_at = now + 3600
+            save(HOURLY_CAP_PATH, {"retry_at": retry_at})
+            should_notify = True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    if should_notify:
+        notify(conf, "Почасовой лимит задач исчерпан",
+               base_title(title) + "\nНовые этапы появятся сами, когда "
+               "освободится общее часовое окно.",
+               tags="hourglass", click=UI_BASE + "/work")
+    raise HourlyTaskLimit(
+        "hourly_task_cap: stage deferred until "
+        + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(retry_at)))
+
+
+def _create_task_api(body, conf, automatic):
+    try:
+        return api("/tasks", body)
+    except urllib.error.HTTPError as error:
+        message = _http_err(error)
+        error.factory_message = message
+        if automatic and "hourly_task_cap" in message:
+            _defer_hourly_task(conf, body.get("title", ""))
+        raise
+
+
 def create_task(body, conf=None):
+    automatic = str(body.get("title", "")).startswith(PREFIX)
+    if automatic:
+        _hourly_cap_guard()
     active_tasks = (conf or {}).get("_active_work_tasks")
-    if (str(body.get("title", "")).startswith(PREFIX)
+    if (automatic
             and isinstance(active_tasks, list)
             and len(active_auto_works(active_tasks)) >= int(
                 (conf or {}).get("max_parallel_works", MAX_PARALLEL_WORKS))):
@@ -528,9 +592,9 @@ def create_task(body, conf=None):
             conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
             conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
         raise RuntimeError("host_load_admission: stage deferred")
-    if conf and str(body.get("title", "")).startswith(PREFIX):
+    if conf and automatic:
         money_guard(conf, body["title"])
-    if str(body.get("title", "")).startswith(PREFIX):
+    if automatic:
         body["context"] = context_with_agent_rules(
             body.get("context"), conf, stage_from_title(body.get("title", "")))
     """Create a task robustly. Attempt chain:
@@ -540,11 +604,11 @@ def create_task(body, conf=None):
        different model tier than a dead button).
     Every fallback is logged with the control-plane error that caused it."""
     try:
-        out = api("/tasks", body)
+        out = _create_task_api(body, conf, automatic)
         _note_admitted_task(conf, out, body)
         return out
     except urllib.error.HTTPError as e:
-        msg = _http_err(e)
+        msg = _task_http_err(e)
         if "repository_not_advertised" not in msg:
             raise
         first_err = msg
@@ -563,12 +627,12 @@ def create_task(body, conf=None):
 
     b2 = dict(route_body)
     try:
-        out = api("/tasks", b2)
+        out = _create_task_api(b2, conf, automatic)
         log(f"task create: acquired {identity} dynamically for pinned worker")
         _note_admitted_task(conf, out, body)
         return out
     except urllib.error.HTTPError as e:
-        log(f"task create: route+worker failed ({_http_err(e)}); trying any eligible worker")
+        log(f"task create: route+worker failed ({_task_http_err(e)}); trying any eligible worker")
 
     if not (conf or {}).get("allow_any_worker", False):
         # Routing to "any eligible worker" once sent work to broken Codex
@@ -577,7 +641,7 @@ def create_task(body, conf=None):
             "create_task: chosen worker cannot take the repository and "
             "allow_any_worker is off (protects from routing to broken workers)")
     b3 = {k: v for k, v in route_body.items() if k != "worker_id"}
-    out = api("/tasks", b3)
+    out = _create_task_api(b3, conf, automatic)
     wid = (out.get("task") or {}).get("worker_id", "?")
     log(f"task create: routed to substitute worker {wid} (original tier unavailable)")
     _note_admitted_task(conf, out, body)
@@ -2663,13 +2727,6 @@ def autostart_plan(conf, tasks, workflows, workers):
                 log("PLAN rejected " + repr(rec.get("title", "")[:70])
                     + ": " + closed_reason)
                 continue
-        retry_at = rec.get("hourly_cap_retry_at") or ""
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
-        if retry_at and now < retry_at:
-            # The control plane owns the exact sliding window.  Waiting a full
-            # hour from its rejection is conservative, but avoids hammering it
-            # from every Pilot cycle before that window can possibly reopen.
-            continue
         if not rec.get("repo"):
             reason = "Не запущено автоматически: сначала выберите проект."
             already_explained = rec.get("state") == "new" and rec.get("reason") == reason
@@ -2718,23 +2775,11 @@ def autostart_plan(conf, tasks, workflows, workers):
                 "timeout_seconds": conf.get("timeout_seconds", 7200),
                 "workflow_revision_id": workflow["revision_id"],
             }, conf)
+        except HourlyTaskLimit:
+            set_idea(rec["id"], state="planned",
+                     reason="Жду освобождения почасового лимита автоматических задач.")
+            return None
         except RuntimeError as error:
-            if "hourly_task_cap" in str(error):
-                # Keep the card planned: its stable request key makes the next
-                # attempt a replay-safe handoff after the shared window opens.
-                updates = {
-                    "state": "planned",
-                    "reason": "Жду освобождения почасового лимита автоматических задач.",
-                    "hourly_cap_retry_at": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)),
-                }
-                if not rec.get("hourly_cap_notified"):
-                    updates["hourly_cap_notified"] = True
-                    notify(conf, "Почасовой лимит задач исчерпан", rec["title"],
-                           body="Новый этап появится сам, когда освободится общее часовое окно.",
-                           tags="hourglass", click=UI_BASE + "/work")
-                set_idea(rec["id"], **updates)
-                return None
             if not is_plan_repository_error(error):
                 raise
             explain_bad_plan_repository(conf, rec, str(error))

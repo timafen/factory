@@ -226,6 +226,71 @@ class AgentRulesScopeTests(unittest.TestCase):
         self.assertIn("=== КОНЕЦ ПРАВИЛ ===", body["context"])
 
 
+class HourlyTaskCapTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.cap_path = os.path.join(self.temporary.name, "hourly-cap.json")
+
+    @staticmethod
+    def cap_error():
+        return urllib.error.HTTPError(
+            "/tasks", 409, "Conflict", {},
+            io.BytesIO(b'{"error":{"code":"hourly_task_cap"}}'))
+
+    def test_continuations_and_returns_share_one_cooldown_and_notification(self):
+        continuation = {
+            "title": "[auto] [4/5 Review] Общая пауза",
+            "context": "test",
+        }
+        correction = {
+            "title": "[auto] [3/5 Implement + Test] Возврат",
+            "context": "test",
+        }
+        parent = {"id": "parent"}
+        with mock.patch.object(pilot, "HOURLY_CAP_PATH", self.cap_path), \
+                mock.patch.object(pilot, "money_guard"), \
+                mock.patch.object(pilot, "notify") as notify, \
+                mock.patch.object(
+                    pilot, "api",
+                    side_effect=[self.cap_error(), {"task": {"id": "continued"}}]) as api_call, \
+                mock.patch.object(pilot.time, "time", side_effect=[100, 100, 101, 3701]):
+            with self.assertRaisesRegex(pilot.HourlyTaskLimit, "stage deferred"):
+                pilot.create_child_task(continuation, parent, {})
+            with self.assertRaisesRegex(pilot.HourlyTaskLimit, "stage deferred"):
+                pilot.create_child_task(correction, parent, {}, "review_return")
+            created = pilot.create_child_task(continuation, parent, {})
+
+        self.assertEqual(created["task"]["id"], "continued")
+        self.assertEqual(api_call.call_count, 2)
+        notify.assert_called_once()
+        self.assertEqual(pilot.load(self.cap_path, {})["retry_at"], 3700)
+
+    def test_pipeline_watch_does_not_spend_nudge_during_hourly_cooldown(self):
+        stalled_path = os.path.join(self.temporary.name, "stalled.json")
+        source = {
+            "id": "triage", "work_id": "work", "state": "succeeded",
+            "title": "[auto] [1/2 Triage] Пауза сторожа",
+            "repository_id": "repo", "created_at": "2026-08-15T00:00:00Z",
+        }
+        pilot.save(stalled_path, {"work": {"since": 0, "nudges": 0}})
+        conf = {"stages": [{"workflow": "Triage"}, {"workflow": "Specification"}]}
+        workflows = {"Specification": {"enabled": True, "revision_id": "spec"}}
+        workers = {"spec-worker": {"id": "worker"}}
+        with mock.patch.object(pilot, "STALL_PATH", stalled_path), \
+                mock.patch.object(pilot.time, "time", return_value=1000), \
+                mock.patch.object(pilot, "stage_worker", return_value="spec-worker"), \
+                mock.patch.object(
+                    pilot, "create_task",
+                    side_effect=pilot.HourlyTaskLimit(
+                        "hourly_task_cap: stage deferred until later")):
+            pilot.pipeline_watch(conf, [source], workflows, workers)
+
+        record = pilot.load(stalled_path, {})["work"]
+        self.assertEqual(record["nudges"], 0)
+        self.assertEqual(record["since"], 1000)
+
+
 class OwnerMessageTests(unittest.TestCase):
     def test_internal_identifiers_become_human_words(self):
         text = (
@@ -5017,18 +5082,14 @@ class PlanAutostartTest(unittest.TestCase):
                                                               _questions, ideas,
                                                               set_idea, notify):
         ideas.return_value = self.cards
-        with mock.patch.object(pilot, "create_task", side_effect=RuntimeError("hourly_task_cap")):
+        with mock.patch.object(
+                pilot, "create_task",
+                side_effect=pilot.HourlyTaskLimit("hourly_task_cap: stage deferred")):
             self.assertIsNone(pilot.autostart_plan(self.conf, [], self.workflows, self.workers))
         self.assertIn(mock.call("top", state="planned",
-                                reason="Жду освобождения почасового лимита автоматических задач.",
-                                hourly_cap_retry_at="2025-10-09T09:53:20Z",
-                                hourly_cap_notified=True), set_idea.call_args_list)
-        notify.assert_called_once()
-        self.cards[1]["hourly_cap_retry_at"] = "2025-10-09T09:53:20Z"
-        with mock.patch.object(pilot, "create_task") as create:
-            self.assertIsNone(pilot.autostart_plan(self.conf, [], self.workflows, self.workers))
-        create.assert_not_called()
-        self.cards[1]["hourly_cap_retry_at"] = "2025-10-09T08:53:19Z"
+                                reason="Жду освобождения почасового лимита автоматических задач."),
+                      set_idea.call_args_list)
+        notify.assert_not_called()
         with mock.patch.object(pilot, "create_task", return_value={"task": {"id": "after-window"}}) as create:
             self.assertEqual(pilot.autostart_plan(self.conf, [], self.workflows, self.workers), "after-window")
         create.assert_called_once()
