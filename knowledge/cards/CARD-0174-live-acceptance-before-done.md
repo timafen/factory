@@ -4,17 +4,18 @@ Implementation commit: df6aceb59d0f990e1fd7316bfac99e3047c905f2 — broker пу�
 
 ## HEAD
 
-- Status: Blocked — worker не может штатно вызвать `sudo` для перезапуска broker.
-- Branch: `factory/0f12da99-439-72bd6b1b-800`.
+- Status: Blocked — права privileged worker не применились: выпуск не начат.
+- Branch: `factory/c4faaa5b-e0c-d1a4c7ed-9ee`.
 - Implementation commit: `df6aceb59d0f990e1fd7316bfac99e3047c905f2`.
 - What changed: POST живой приёмки durable сохраняет `running`, запускает
   checker в фоне и сразу открывает single-flight наблюдение; terminal результат
   публикуется только после записи. Успешный тестовый выпуск моделирует PASS
   приёмки и проверяет `finished_at` в dashboard-проекции.
-- Evidence: `GOCACHE=/tmp/... go test ./internal/releasebroker` → PASS;
-  разрешённый `sudo -n systemctl restart factory-release-broker.service` → не
-  запущен из-за `no_new_privileges`.
-- Next action: повторить перезапуск, выпуск и живую приёмку из privileged worker.
+- Evidence: `just build` и Go/UI/launcher gates → PASS; целевые broker и fixture
+  → PASS; `sudo -n /usr/local/bin/fx whoami` остановлен `NoNewPrivs: 1` до
+  перезапуска, выпуска и любых изменений production.
+- Next action: выдать worker фактический root-capable runtime, затем повторить
+  перезапуск broker, `fx factory release` и живую приёмку.
 
 ## LOG
 
@@ -71,6 +72,16 @@ Production fixture выбран read-only: встроенный offline-retained
 живой workers snapshot проходят один parser. Проверка не вызывает janitor,
 mutating API, systemd или worktree cleanup, но сохранённая живая запись
 обязательно приводит к FAIL.
+
+### 2026-08-15 — Implement
+
+Продолжение подтвердило реализацию полным Go/UI/launcher Verify и целевыми
+проверками установки broker и read-only acceptance fixture. Общий tooling gate
+обнаружил несвязанный долг `main`: версия Go 1.25.13 из `.release/go-version`
+ещё отсутствует в `SECURITY.md`. Обещанный privileged runtime не применился:
+процесс `factory` имеет `NoNewPrivs: 1` и нулевой `CapEff`, поэтому обязательный
+`sudo -n /usr/local/bin/fx` остановился до перезапуска и выпуска; production не
+менялся, живая приёмка не запускалась.
 
 ## Связи
 
