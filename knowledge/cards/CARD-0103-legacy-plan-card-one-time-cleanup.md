@@ -1,17 +1,18 @@
 # CARD-0103 — Разово закрыть старые зависшие карточки Плана
 
-Implementation commit: 71dab9fafea4cc65e5b024a5a86a44a3f78a7702 — реализована безопасная разовая уборка старых карточек Плана.
+Implementation commit: efbf0165120191cc523c96b114d170ee020bd599 — уборка закрывает только подтверждённые успешные финальные работы и доказуемо старые потерянные связи.
 
 ## HEAD
 
-- Status: Implemented and verified on current `main`.
-- Branch: `factory/54202a7e-0a2-18a3d8fd-2c6`.
-- Implementation commit: `71dab9fafea4cc65e5b024a5a86a44a3f78a7702`.
-- What changed: операторская команда находит старые завершённые и потерявшие
-  задачу карточки, делает dry-run по умолчанию и атомарно применяет изменения.
-- Evidence: 14 target tests and 316 full Pilot tests passed; `just test`,
-  `just build`, `py_compile` and `git diff --check` exited successfully.
-- One next action: проверить dry-run с фактической датой внедрения перед применением.
+- Status: Implemented — ожидает Review.
+- Branch: `factory/b31ec162-eb4-24f7c2cf-444`.
+- Implementation commit: `efbf0165120191cc523c96b114d170ee020bd599`.
+- What changed: уборка закрывает только успешный последний этап, который
+  подтвердил `final_ok(..., strict=True)`; failed и незавершённые работы открыты.
+- What changed: потерянная задача допускает закрытие только при RFC3339-дате
+  карточки строго до `--before`; иначе её оставляют для ручной сверки.
+- Evidence: 7 `LegacyPlanCardCleanupTest` — PASS; `py_compile` и `git diff --check` — PASS.
+- One next action: выполнить dry-run с фактической датой внедрения перед `--apply`.
 
 ## LOG
 
@@ -29,3 +30,10 @@ Implementation commit: 71dab9fafea4cc65e5b024a5a86a44a3f78a7702 — реализ
 с сохранением новой повторной проверки брошенных запусков. Целевые 14 и полный
 набор из 316 Pilot-тестов прошли; `just test`, `just build`, `py_compile` и
 `git diff --check` завершились с кодом 0.
+
+### 2026-08-15 — Implement
+
+После замечаний проверки ужесточены условия разовой уборки: неуспешный запуск
+не считается доехавшей работой, а потерянная связь без timezone-qualified даты
+не может скрыть карточку. 7 целевых сценариев подтвердили dry-run и `--apply`,
+включая старую доказуемую дату, отсутствие даты, дату на границе и failed этап.
