@@ -1,6 +1,28 @@
 # CARD-0170 — Безопасное удержание каталогов release-сборки
 
-Implementation commit: e2d99ab2fe2bba9230db17620ede204db2bb6e2f — базовая безопасная очистка реальных верхнеуровневых `build-*` до новой сборки.
+Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
+
+## HEAD
+
+Status: IMPLEMENTED
+Branch: factory/a83fc90f-150-892fa826-5a4
+Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
+What changed: release под lock удаляет лишь реальные `build-*` старше 24 часов;
+`--cleanup-dry-run` журналирует решения, не создавая выпуск.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS;
+`bash ops/test-fx-factory-release.sh` → PASS.
+Next action: провести review изменений перед слиянием.
+
+## LOG
+
+### 2026-08-15 — Implement
+
+Реализованы очистка и dry-run по утверждённой границе CARD-0170. Fixture
+подтверждает удаление только старого реального `build-*`, сохранность свежего,
+symlink и защищённых префиксов, а также отсутствие gates и сервисных действий в dry-run.
+Проверки `bash -n` и `bash ops/test-fx-factory-release.sh` завершились успешно.
+
+### 2026-08-15 — Specification
 
 ## Статус
 
