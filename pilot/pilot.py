@@ -7768,17 +7768,20 @@ def cycle(conf, state):
         conf.get("terminal_handoff_history_limit",
                  TERMINAL_HANDOFF_HISTORY_LIMIT),
     )
+    # A full Plan can leave dozens of completed early stages behind. Continue
+    # work nearest to delivery first; otherwise a fresh Implement/Review/Verify
+    # result waits behind old Triage fragments for many expensive cycles.
+    terminal_tasks = prioritize_terminal_handoffs(
+        terminal_tasks, state.get("processed"), recovery_ids)
+    # Apply the durable cursor after stage priority. Applying it before the
+    # sort lets a capacity-deferred late stage jump back to the front on every
+    # cycle and starve earlier-stage continuations forever.
     terminal_cursor = state.get("terminal_cursor")
     cursor_index = next((index for index, task in enumerate(terminal_tasks)
                          if task.get("id") == terminal_cursor), None)
     if cursor_index is not None:
         terminal_tasks = (terminal_tasks[cursor_index + 1:]
                           + terminal_tasks[:cursor_index + 1])
-    # A full Plan can leave dozens of completed early stages behind. Continue
-    # work nearest to delivery first; otherwise a fresh Implement/Review/Verify
-    # result waits behind old Triage fragments for many expensive cycles.
-    terminal_tasks = prioritize_terminal_handoffs(
-        terminal_tasks, state.get("processed"), recovery_ids)
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
