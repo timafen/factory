@@ -7859,6 +7859,22 @@ class DashboardWasteMetricsTests(unittest.TestCase):
         self.assertEqual(result["total_usd"], 9.0)
         self.assertEqual(result["priced_attempts"], 3)
 
+    def test_scheduled_patrol_with_usage_has_zero_cost(self):
+        patrol = self.task(
+            "patrol", age=1200,
+            base="Factory patrol: scheduled 2026-08-15T11:00:00Z")
+        self.usage("a-patrol", self.now - 60)
+
+        result = pilot.dashboard_waste_metrics(
+            [patrol], self.now, self.details("a-patrol"))
+
+        self.assertEqual(result["duplicate_usd"], 0.0)
+        self.assertEqual(result["cancelled_usd"], 0.0)
+        self.assertEqual(result["unfinished_usd"], 0.0)
+        self.assertEqual(result["total_usd"], 0.0)
+        self.assertEqual(result["priced_attempts"], 0)
+        self.assertEqual(result["unpriced_attempts"], 0)
+
     def test_duplicate_live_and_grace_rules_and_all_rows(self):
         rows = [self.task(f"service-{i}", base="Factory patrol") for i in range(65)]
         old = self.task("old", state="succeeded", age=7200, base="Повтор")

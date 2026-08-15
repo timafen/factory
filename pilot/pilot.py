@@ -1011,6 +1011,18 @@ def work_lifecycle_block(base, task=None, tasks=None):
     return ""
 
 
+def _is_patrol_title(title):
+    """Recognise Factory patrol titles without matching product schedules."""
+    # Schedule request keys contain only an opaque Automation id and therefore
+    # cannot distinguish the Factory patrol from a product Automation.  The
+    # schedule runtime does preserve its title before ``: scheduled/run now``.
+    return bool(re.match(
+        r"^(?:патруль(?:\s+factory)?|factory(?:\s+pipeline)?\s+patrol|"
+        r"patrol(?:\s+factory)?)(?=$|\s*:)",
+        str(title or "").strip().casefold(),
+    ))
+
+
 def _technical_cancel(task):
     """Recognise only known cancelled service runs, not every Automation."""
     if task.get("state") != "cancelled":
@@ -1019,14 +1031,7 @@ def _technical_cancel(task):
     marker = " ".join((str(task.get("request_key") or ""), title)).casefold()
     if re.search(r"(^|[^a-z])(helper|debug)([^a-z]|$)", marker):
         return True
-    # Schedule request keys contain only an opaque Automation id and therefore
-    # cannot distinguish the Factory patrol from a product Automation.  The
-    # schedule runtime does preserve its title before ``: scheduled/run now``.
-    return bool(re.match(
-        r"^(?:патруль(?:\s+factory)?|factory(?:\s+pipeline)?\s+patrol|"
-        r"patrol(?:\s+factory)?)(?=$|\s*:)",
-        title,
-    ))
+    return _is_patrol_title(title)
 
 
 def _work_stage(task):
@@ -6000,7 +6005,9 @@ def dashboard_waste_metrics(tasks, generated_at=None, detail_loader=None):
     product = []
     for task in tasks:
         match = STAGE_TITLE_RE.match(str(task.get("title") or ""))
-        if not match or not match.group(2).strip() or is_service_work(match.group(2).strip()):
+        if (not match or not match.group(2).strip()
+                or is_service_work(match.group(2).strip())
+                or _is_patrol_title(match.group(2))):
             continue
         product.append({"task": task, "stage": match.group(1).strip(),
                         "base": match.group(2).strip(),
