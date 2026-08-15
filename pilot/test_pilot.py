@@ -336,6 +336,7 @@ class ReleaseTrainDashboardTests(unittest.TestCase):
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", os.path.join(temporary.name, "receipts")), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", os.path.join(temporary.name, "outbox")), \
                 mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}), \
                 mock.patch.object(pilot, "mark_final"), mock.patch.object(pilot, "notify"):
             generation = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
                 "a" * 40, {"task_id": "work", "merge_receipt": {}}, now=60)

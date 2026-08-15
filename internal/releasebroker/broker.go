@@ -448,6 +448,14 @@ func (b *Broker) acceptance(w http.ResponseWriter, r *http.Request) {
 	executable := b.acceptanceExecutable
 	sha := item.Request.CommitSHA
 	b.mu.Unlock()
+	// A live check may take a while.  Publish its durable boundary and return
+	// immediately so duplicate POSTs can observe running instead of tying up
+	// the only request that could report it.
+	go b.runAcceptance(id, executable, sha)
+	writeJSON(w, http.StatusOK, Response{Status: "running"})
+}
+
+func (b *Broker) runAcceptance(id, executable, sha string) {
 	output, err := exec.Command(executable, "--generation-id", id, "--commit-sha", sha).Output()
 	status, reason := "failed", "acceptance_execution_failed"
 	var result Response
@@ -455,14 +463,18 @@ func (b *Broker) acceptance(w http.ResponseWriter, r *http.Request) {
 		status, reason = result.Status, result.Reason
 	}
 	b.mu.Lock()
-	item.AcceptanceStatus, item.AcceptanceReason = status, reason
-	persistErr := b.persist(item)
-	b.mu.Unlock()
-	if persistErr != nil {
-		http.Error(w, "cannot persist acceptance", http.StatusServiceUnavailable)
+	item := b.items[id]
+	if item == nil || item.AcceptanceStatus != "running" {
+		b.mu.Unlock()
 		return
 	}
-	writeJSON(w, http.StatusOK, Response{Status: status, Reason: reason})
+	updated := *item
+	updated.AcceptanceStatus, updated.AcceptanceReason = status, reason
+	persistErr := b.persist(&updated)
+	if persistErr == nil {
+		*item = updated
+	}
+	b.mu.Unlock()
 }
 
 func (b *Broker) persist(item *operation) error {

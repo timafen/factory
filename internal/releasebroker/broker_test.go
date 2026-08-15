@@ -221,14 +221,42 @@ func TestAcceptanceRunningIsSingleFlightAndRestartFailsClosed(t *testing.T) {
 	if result := acceptancePost(t, server, "acceptance-1", testSHA); result.Status != "running" {
 		t.Fatalf("duplicate=%+v", result)
 	}
-	if body, err := os.ReadFile(filepath.Join(dir, "runs")); err != nil || strings.Count(string(body), "run") != 1 {
-		t.Fatalf("checker runs=%q err=%v", body, err)
+	deadline = time.Now().Add(time.Second)
+	for {
+		body, err := os.ReadFile(filepath.Join(dir, "runs"))
+		if err == nil && strings.Count(string(body), "run") == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checker runs=%q err=%v", body, err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if result := <-first; result.Status != "passed" {
+	if result := <-first; result.Status != "running" {
 		t.Fatalf("first=%+v", result)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		response, err := http.Get(server.URL + "/v1/operations/acceptance-1/acceptance")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result Response
+		err = json.NewDecoder(response.Body).Decode(&result)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status == "passed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checker result=%+v", result)
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	interrupted := releasedAcceptanceBroker(t, filepath.Join(dir, "restart"))
