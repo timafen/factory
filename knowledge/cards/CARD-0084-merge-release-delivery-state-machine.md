@@ -10,8 +10,8 @@ Implementation commit: 06e2f4180ab35d6c94a25eb36cf08d65ed776c08 — broker во�
 - Implementation commit: 06e2f4180ab35d6c94a25eb36cf08d65ed776c08 — broker восстанавливает terminal status из durable marker реального release driver после restart.
 - What changed: FX driver атомарно сохраняет terminal marker; broker читает его при старте и публикует terminal receipt без повторного executor.
 - What changed: добавлен процессный Unix broker→FX→Pilot тест: restart во время FX, затем receipt и Verify completion.
-- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; shell fixtures — PASS.
-- Next action: Review real broker recovery evidence.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; `just test` и `just build` — PASS.
+- Next action: Verify закрепить этот SHA на удалённом кандидате и повторить recovery-проверку.
 
 ## LOG
 
@@ -171,3 +171,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 Процессный Unix fixture останавливает broker во время настоящего FX, ждёт
 driver marker, запускает broker заново и подтверждает один physical launch,
 receipt и завершение Verify; Go, Pilot и shell fixtures прошли.
+
+### 2026-08-14 — Implement
+
+Кандидат пересобран от свежего `origin/main` и повторно проверен: broker
+восстанавливает terminal marker настоящего FX после restart, не запуская
+executor второй раз. `go test -count=1 ./internal/releasebroker`, 11 Pilot
+сценариев, полный `just test` и `just build` завершились успешно.
