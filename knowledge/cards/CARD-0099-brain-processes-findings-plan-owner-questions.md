@@ -1,20 +1,18 @@
 # CARD-0099 — Мозг сам разбирает находки в План
 
-Implementation commit: 6ecf7f81bbf07111a46d244eafb5c97e065fb023 — находки из любого завершённого отчёта сохраняются в Плане, а сбой авторазбора остаётся техническим повтором.
+Implementation commit: 4dd06e580252c629180d217d3b67381c8a4d3b99 — находки из любого завершённого отчёта сохраняются в Плане, а сбой авторазбора остаётся техническим повтором.
 
 ## HEAD
 
 - Status: Implemented and tested.
-- Branch: `factory/0df54577-a89-21260c7c-53c`.
-- Implementation commit: `6ecf7f81bbf07111a46d244eafb5c97e065fb023`.
+- Branch: `factory/ceed1596-26b-b42daa6f-e0b`.
+- Implementation commit: `4dd06e580252c629180d217d3b67381c8a4d3b99`.
 - What changed: успешные и неуспешные terminal-result и Automation сохраняют
   дедуплицированную находку с проектом и конкретной задачей-источником.
 - What changed: сбой или таймаут мозга сохраняется как технический повтор без
   владельческого вопроса и уведомления.
 - Evidence: 26 целевых тестов Pilot — OK; `py_compile` — OK.
-- Evidence: полный Pilot — 242 passed, 13 skipped, 2 известных baseline failure;
-  те же 2 failure воспроизведены на чистом `origin/main`.
-- One next action: слить ветку после проверки свежей базы `main`.
+- One next action: проверить и слить поставку в `main`.
 
 ## LOG
 
@@ -44,3 +42,10 @@ control-plane API и схема данных не требуют изменен�
 свежая база `main` зафиксирована перед сравнением. Целевые тесты Pilot и
 проверка компиляции проходят; риск остаётся только в двух известных baseline
 ошибках полного Pilot, воспроизведённых предыдущей реализацией на `main`.
+
+### 2026-08-15 — Implement
+
+Поставка перенесена на свежий `main`: терминальные отчёты и Automation сохраняют
+находки с проектом и источником, а ошибка классификатора ставит технический повтор
+без вопроса владельцу. `PlanTerminologyTest`, `PlanAutostartTest` и
+`OrchestratorWaitActionTests` прошли (26 сценариев); `py_compile` прошёл.
