@@ -6,7 +6,7 @@ Status: In progress — единый итог и действие владель
 
 Branch: `factory/6d49c9ff-fed-a46e8e4b-147`
 
-Implementation commit: 733f2448ae7d06a2a9a166027b541063c8000cfd — карточка работы показывает единый итог и ведёт владельца к нужному действию.
+Implementation commit: 06d7c868548dc8500a727e5052f57f39894d8dee — карточка работы показывает единый итог и ведёт владельца к нужному действию.
 
 What changed:
 
