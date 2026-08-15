@@ -4,16 +4,15 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 
 ## HEAD
 
-Status: Specification ready
-Branch: `factory/0032df65-c5e-5ab9477e-95c`
+Status: Implemented and tested
+Branch: `factory/f5fc51eb-1e4-bb5b800e-31f`
 Specification: `knowledge/specs/current-checkout-github-origin-context.md`
 What changed: зафиксирован контракт для checkout с `origin=timafen/factory` и
-`upstream=owainlewis/factory`: runtime получает `GH_REPO=timafen/factory` из
-доверенной identity задачи и не позволяет `gh` выбрать upstream.
-Evidence: кодовый коммит существует в свежем `origin/main`; сквозной тест
-claim → supervisor → fake Codex прошёл за 1.964s.
-One next action: на Verify повторить обязательную целевую команду спецификации
-для свежего candidate snapshot.
+`upstream=owainlewis/factory`; существующая реализация передаёт в runtime
+`GH_REPO=timafen/factory` из доверенной identity и отсекает чужое значение.
+Evidence: целевые тесты политики и пути claim → supervisor → fake Codex → PASS
+(2.269s); `git diff --check` → PASS.
+One next action: на Verify выполнить полный пакет `go test -count=1 ./internal/worker`.
 
 ## LOG
 
@@ -32,3 +31,10 @@ GitHub.com-репозиторий задачи добавляется единс
 `CARD-0300` оказался занят опубликованной параллельной работой. Для текущей
 работы выбран отдельный `CARD-0301`, отсутствовавший в свежем `origin/main` и
 опубликованных ветках на момент проверки; чужие карточки не изменялись.
+
+### 2026-08-15 — Implement
+
+Восстановлена и проверена поставка спецификации на назначенной ветке. Реализация
+`fee29b0c65cc12058cc8c08d6ad87855367bdec8` уже является предком свежего
+`origin/main`, поэтому продуктовый код не дублировался. Целевые проверки политики
+окружения и реального пути claim → supervisor → fake Codex прошли успешно.
