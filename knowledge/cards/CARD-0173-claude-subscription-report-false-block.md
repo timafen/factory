@@ -1,18 +1,17 @@
-Implementation commit: 97b0675e66b7986cb9b310548d85ad47e9377795 — существующая частичная защита отличает инфраструктурный сбой от лимита и учитывает живой счётчик; новый фикс ещё не реализован
+Implementation commit: f0d724e600d5c6557237a76348c278b2e44a9b3c — блок Claude теперь опирается только на ошибку последней failed-попытки
 
 # CARD-0173: Отчёт патруля не блокирует подписку Claude
 
 ## HEAD
 
-Status: Specified
-Branch: factory/3acf6cb5-676-2884ac0e-45b
+Status: Implemented
+Branch: factory/3b9658b2-857-3086c298-fec
 Specification: `knowledge/specs/claude-subscription-report-false-block.md`
-What changes: автоматический блок Claude будет опираться только на ошибку
-последней failed-попытки, а не на свободный текст отчёта.
-Evidence: фактический путь ложной блокировки прослежен в `detect_limits()`;
-обязательная регрессия и положительный контроль определены в спецификации.
-One next action: Implement добавляет тесты, исправляет `detect_limits()` и
-заменяет первую строку полным SHA нового implementation commit.
+What changed: `detect_limits()` игнорирует результаты succeeded/cancelled задач
+и свободный `result`; лимит распознаётся по `error` последней failed-попытки.
+Evidence: `python3 -m unittest pilot.test_pilot.ProviderLimitDetectionTest` —
+6 тестов прошли; `python3 -m py_compile pilot/pilot.py` — успешно.
+One next action: Verify выполняет один полный проектный прогон перед слиянием.
 
 ## LOG
 
@@ -32,3 +31,13 @@ Claude сохраняется worker отдельно в `error`, поэтому
 Номер `CARD-0173` выбран после проверки свежего `origin/main` и всех 1257
 опубликованных remote refs: номера до `CARD-0172` заняты, путь этой карточки не
 использовался.
+
+### 2026-08-15 — Implement
+
+Автоматическая классификация лимита сужена до непустого `error` последней
+failed-попытки. Свободные отчёты успешных, failed и cancelled задач больше не
+могут вызвать `note_limit()`, а настоящий limit error сохраняет извлечение
+`resets_at` и инфраструктурное исключение.
+
+Доказательство: обязательный `ProviderLimitDetectionTest` прошёл 6 сценариев;
+`python3 -m py_compile pilot/pilot.py` и `git diff --check` завершились успешно.
