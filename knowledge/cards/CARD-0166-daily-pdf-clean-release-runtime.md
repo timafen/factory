@@ -5,7 +5,7 @@ Implementation commit: ca4f0e35073e1e8a647c2b35ceecd42f8a9f12f5 — ранее �
 ## HEAD
 
 Status: Specified — awaiting Implement
-Branch: `factory/b60e94a6-e1d-61b860d7-0e7`
+Branch: `factory/f21366b6-de0-98254ee2-e4d`
 What changed: определён воспроизводимый release-контракт постоянного browser runtime,
 который не зависит от ручных Node-модулей в `/opt/factory`.
 Evidence: текущие renderer/capture используют fallback через `process.cwd()/web`,
@@ -23,3 +23,10 @@ One next action: реализовать постоянное поколение 
 публиковать его атомарно вместе с выпуском и возвращать при rollback. Отдельный тест
 должен получить `%PDF-` после удаления checkout на fixture без `/opt/factory`.
 Продуктовый код и UI на этапе Specification не изменялись.
+
+### 2026-08-14 — Уточнение критерия готовности
+
+В спецификации явно добавлен проверяемый результат: целевая команда должна
+воспроизвести чистый релиз, удалить build checkout и получить `%PDF-`, не
+публикуя browser runtime при ошибке подготовки. В конце спецификации отдельно
+зафиксированы все файлы реализации и обязательная команда с нулевым кодом выхода.
