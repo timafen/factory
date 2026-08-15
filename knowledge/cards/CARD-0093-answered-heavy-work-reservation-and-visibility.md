@@ -1,16 +1,16 @@
-Implementation commit: 30b6dbed7d6687bb37bf4d18c10a19a34e298ac0 — production-сборка синхронизирована, чтобы HTTPS-сценарий дошёл до реального service worker.
+Implementation commit: ab728815799fae74056647c6fb58e309ee2784f4 — production-сборка синхронизирована с текущим Vite, чтобы browser-набор не останавливался до Playwright.
 
 # CARD-0093 — Резервирование отвеченной тяжёлой работы
 
 ## HEAD
 
-Status: IMPLEMENTED — HTTPS-возобновление и честный статус после принятой проверки снова проверяются с реальным service worker.
-Branch: `factory/552d57b3-e2b-87cb3904-00e`.
-Implementation commit: 30b6dbed7d6687bb37bf4d18c10a19a34e298ac0 — production-сборка синхронизирована, чтобы HTTPS-сценарий дошёл до реального service worker.
-What changed: production `web/dist` синхронизирован с интерфейсом, поэтому browser-набор достигает HTTPS proxy и service worker.
+Status: BLOCKED — production-сборка синхронизирована, но среда не вернула итог полного Playwright-набора.
+Branch: `factory/83735399-1bf-cd7ae267-3a8`.
+Implementation commit: ab728815799fae74056647c6fb58e309ee2784f4 — production-сборка синхронизирована с текущим Vite, чтобы browser-набор не останавливался до Playwright.
+What changed: `web/dist` теперь соответствует текущему `npm run build`; барьер `git diff --exit-code -- dist` пройден.
 What changed: сценарий после возобновления показывает владельцу «Ожидает слияния и выпуска», а не ложное финальное завершение.
-Evidence: полный `just test-browser` прошёл build и 6 browser-сценариев; единственное устаревшее ожидание исправлено, targeted HTTPS Playwright — 1 PASS за 55,5 с.
-One next action: Verify запускает полный HTTPS/browser-набор на этой ветке.
+Evidence: `npm run build` — PASS; `just test-browser` дошёл до Playwright, но среда завершила процесс без кода и итоговой сводки; в логе есть внешний `daily_report_failed` из-за отсутствующего `FACTORY_BROWSER_LAUNCHER`.
+One next action: запустить `just test-browser` в среде с заданным абсолютным `FACTORY_BROWSER_LAUNCHER` и дождаться итогового PASS.
 
 ## LOG
 
@@ -54,3 +54,8 @@ Answer, Work и Overview.
 
 - Зафиксирована обновлённая production-сборка `web/dist`: полный HTTPS/browser-набор преодолел прежний build-barrier и запустил Chromium с реальным service worker.
 - Единственное падение полного прогона было в устаревшем тексте ожидания: после принятой проверки продукт корректно показывает ожидание слияния и выпуска. Сценарий обновлён и целевой HTTPS Playwright прошёл: 1 PASS за 55,5 с.
+
+### 2026-08-15 — Implement
+
+- После явного требования владельца повторён полный `just test-browser`. Первый запуск выявил и подтвердил рассинхронизацию committed `web/dist` с текущим Vite; production-артефакты синхронизированы в `ab728815799fae74056647c6fb58e309ee2784f4`.
+- Повторный запуск прошёл build и проверку чистоты `dist`, затем запустил Playwright. Среда оборвала процесс без финальной сводки; журнал `/tmp/card-0093-test-browser-final.log` содержит независимый `daily_report_failed`: отсутствует абсолютный `FACTORY_BROWSER_LAUNCHER`.
