@@ -4388,13 +4388,56 @@ def diag_sweep(conf, tasks):
             log("diag_sweep_error", repr(e))
 
 
+TRANSIENT_INFRASTRUCTURE_MARKERS = (
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "connection timed out",
+    "connection reset by peer",
+    "tls handshake timeout",
+    "http 502",
+    "http 503",
+    "http 504",
+)
+
+
+def transient_infrastructure_wait(verdict, situation, prior_result):
+    """True only for failures that can recover without changing the delivery."""
+    text = "\n".join((
+        str(verdict.get("reason") or ""),
+        str(situation or ""),
+        str(prior_result or ""),
+    )).casefold()
+    return any(marker in text for marker in TRANSIENT_INFRASTRUCTURE_MARKERS)
+
+
 def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
                               repo_id, situation, question, options,
-                              prior_result, branch):
-    """Persist an explicit Pilot pause without turning it into a resume answer."""
+                              prior_result, branch, attempts_so_far=0):
+    """Persist a real pause, or schedule a transient infrastructure retry."""
     if verdict.get("decision") != "wait":
         return False
     reason = str(verdict.get("reason") or "").strip()
+    if transient_infrastructure_wait(verdict, situation, prior_result):
+        # A short DNS/GitHub outage must not become an owner pause or send a
+        # read-only Verify back through Implement.  Re-run the unchanged stage
+        # after an increasing delay; a persistent outage therefore stays cheap.
+        delay = min(3600, 60 * (2 ** min(max(int(attempts_so_far), 1), 6)))
+        rec = write_question(
+            task_id, stage, stage, base, repo_id, situation, question, options,
+            prior_result, branch, status="answered")
+        rec["answer"] = (
+            "Временный сбой инфраструктуры устранения кода не требует. "
+            "Повтори тот же этап на неизменённой ветке.")
+        rec["answered_by"] = "orchestrator"
+        rec["machine_action"] = "retry_infrastructure"
+        rec["retry_not_before"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + delay))
+        rec["escalation_reason"] = reason
+        save(f"{QUESTION_DIR}/{task_id}.json", rec)
+        log(f"AUTO-RETRY WAIT task={task_id} stage={stage} delay={delay}s: "
+            f"{reason[:100]}")
+        return True
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch,
                          status="resolved")
@@ -4453,7 +4496,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                 question, prior_result, repo_id)
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
-                question, options, prior_result, branch):
+                question, options, prior_result, branch, attempts_so_far):
             return False
         if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
             note_cap_rescue(base, "LOOP")
@@ -4518,7 +4561,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
-                    situation, question, options, prior_result, branch):
+                    situation, question, options, prior_result, branch,
+                    attempts_so_far):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 note_cap_rescue(base, stage)
@@ -4549,7 +4593,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                     question, prior_result, repo_id)
             if resolve_orchestrator_wait(
                     conf, v, task_id, stage, resume_stage, base, repo_id,
-                    situation, question, options, prior_result, branch):
+                    situation, question, options, prior_result, branch,
+                    attempts_so_far):
                 return False
             if v["decision"] == "answer" and not looks_like_retry(v.get("answer", "")):
                 rec = write_question(task_id, stage,
@@ -4585,7 +4630,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                                   prior_result, repo_id)
     if resolve_orchestrator_wait(
             conf, verdict, task_id, stage, resume_stage, base, repo_id,
-            situation, question, options, prior_result, branch):
+            situation, question, options, prior_result, branch,
+            attempts_so_far):
         return False
     rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                          question, options, prior_result, branch)
@@ -5027,6 +5073,10 @@ def handle_answers(conf, workflows, workers, tasks):
                 or fresh.get("resumed_task_id")):
             continue
         q = fresh
+        retry_not_before = _work_time(q.get("retry_not_before"))
+        if (retry_not_before is not None
+                and retry_not_before > datetime.datetime.now(datetime.timezone.utc)):
+            continue
         src_task = next((t for t in tasks if t.get("id") == q.get("task_id")), None)
         closed_reason = work_lifecycle_block(q.get("title", ""), src_task, tasks)
         if closed_reason:
@@ -5049,10 +5099,11 @@ def handle_answers(conf, workflows, workers, tasks):
                 tasks, stage, src_task or base_title(q.get("title", "")))
         except Exception:
             rounds = 0
+        infrastructure_retry = q.get("machine_action") == "retry_infrastructure"
         repository_id = q.get("repository_id", "")
         selected_worker = stage_worker(
             conf, stage, cx_hint, workers, repository_id=repository_id)
-        if rounds >= 2 and cx_hint != "high":
+        if rounds >= 2 and cx_hint != "high" and not infrastructure_retry:
             was = selected_worker
             candidate = stage_worker(
                 conf, stage, "high", workers, exact_tier=True,
@@ -5085,12 +5136,19 @@ def handle_answers(conf, workflows, workers, tasks):
         branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
+        if infrastructure_retry:
+            decision_context = (
+                f"Previous stage: {q['stage']} (временный инфраструктурный сбой; "
+                "автоматический повтор того же снимка)\n"
+                f"РЕШЕНИЕ ОРКЕСТРАТОРА: {q['answer']}\n\n")
+        else:
+            decision_context = (
+                f"Previous stage: {q['stage']} (остановлена, владелец ответил на вопрос)\n"
+                f"ВОПРОС АГЕНТА: {q.get('question','')}\n"
+                f"ОТВЕТ ВЛАДЕЛЬЦА (утверждено, действуй по нему): {q['answer']}\n\n")
         context = (
             f"Pipeline: {q['title']}\n"
-            f"Previous stage: {q['stage']} (остановлена, владелец ответил на вопрос)\n"
-            f"{branch_line}{head_line}"
-            f"ВОПРОС АГЕНТА: {q.get('question','')}\n"
-            f"ОТВЕТ ВЛАДЕЛЬЦА (утверждено, действуй по нему): {q['answer']}\n\n"
+            f"{decision_context}{branch_line}{head_line}"
             f"Отчёт остановленной стадии (сокращён):\n{squeeze(q.get('prior_result',''))}"
         )[:20000]
         body = {

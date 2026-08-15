@@ -5968,6 +5968,38 @@ class OrchestratorWaitActionTests(unittest.TestCase):
             pilot.load(self.conf_path, {})["stopped_pipelines"], ["Новая работа"])
         self.assertEqual(self.apply_answers_twice(), [])
 
+    def test_transient_infrastructure_wait_retries_same_stage_after_backoff(self):
+        verdict = {
+            "decision": "wait",
+            "reason": "GitHub недоступен: Could not resolve host: github.com",
+        }
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=verdict), \
+                mock.patch.object(pilot, "notify"), \
+                mock.patch.object(pilot, "load_limits", return_value={}):
+            self.assertFalse(pilot.route_question(
+                self.conf, "dns-question", "Specification", "Specification",
+                "Сетевая проверка", "repo-id", "BLOCKED: review infrastructure",
+                "Что делать дальше?", [],
+                "Could not resolve host: github.com", attempts_so_far=1,
+                branch="factory/network-check"))
+
+        path = os.path.join(self.question_dir, "dns-question.json")
+        question = pilot.load(path, {})
+        self.assertEqual(question["status"], "answered")
+        self.assertEqual(question["machine_action"], "retry_infrastructure")
+        self.assertEqual(question["resume_stage"], "Specification")
+        self.assertNotIn("Сетевая проверка", self.conf["stopped_pipelines"])
+        self.assertEqual(self.apply_answers_twice(), [])
+
+        question["retry_not_before"] = "2000-01-01T00:00:00Z"
+        pilot.save(path, question)
+        created = self.apply_answers_twice()
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["title"],
+                         "[auto] [1/1 Specification] Сетевая проверка")
+        self.assertIn("автоматический повтор того же снимка", created[0]["context"])
+        self.assertNotIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
+
     def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
         self.assertFalse(self.route({
             "decision": "answer",
