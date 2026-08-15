@@ -280,6 +280,16 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			// Keep recovery fail-closed even if the record says succeeded.
 			item.Status = "failed"
 		}
+		// A checker is an external process too.  After a broker restart we cannot
+		// prove that a checker recorded as running is still the one we started.
+		// Keep the release closed until a new explicit remediation cycle.
+		if item.AcceptanceStatus == "running" {
+			item.AcceptanceStatus = "failed"
+			item.AcceptanceReason = "acceptance_interrupted"
+			if err := b.persist(&item); err != nil {
+				return nil, err
+			}
+		}
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
@@ -369,13 +379,14 @@ func (b *Broker) Handler() http.Handler {
 	return mux
 }
 
-// ConfigureAcceptance limits live checks to one root-owned executable.  An
-// empty path keeps backwards-compatible release-only installations working.
+// ConfigureAcceptance limits live checks to one root-owned executable.
 func (b *Broker) ConfigureAcceptance(path string) error {
 	if path != "" && !filepath.IsAbs(path) {
 		return errors.New("acceptance executable must be absolute")
 	}
+	b.mu.Lock()
 	b.acceptanceExecutable = path
+	b.mu.Unlock()
 	return nil
 }
 
@@ -410,18 +421,22 @@ func (b *Broker) acceptance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, Response{Status: status, Reason: reason})
 		return
 	}
+	if item.AcceptanceStatus == "running" {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusOK, Response{Status: "running"})
+		return
+	}
 	if b.acceptanceExecutable == "" {
-		// Compatibility for explicitly legacy, unconfigured installations. The
-		// production unit always supplies the fixed checker and therefore never
-		// takes this path.
-		item.AcceptanceStatus = "passed"
+		// Never let an unconfigured broker turn a release into a verified one.
+		item.AcceptanceStatus = "failed"
+		item.AcceptanceReason = "acceptance_not_configured"
 		if err := b.persist(item); err != nil {
 			b.mu.Unlock()
 			http.Error(w, "cannot persist acceptance", http.StatusServiceUnavailable)
 			return
 		}
 		b.mu.Unlock()
-		writeJSON(w, http.StatusOK, Response{Status: "passed"})
+		writeJSON(w, http.StatusOK, Response{Status: "failed", Reason: "acceptance_not_configured"})
 		return
 	}
 	item.AcceptanceStatus = "running"
