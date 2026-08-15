@@ -6883,7 +6883,7 @@ class AdaptivePollingTests(unittest.TestCase):
             "id": f"implement-{number}",
             "title": "[auto] [2/3 Implement + Test] Одна работа",
             "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
-            "repository_id": "repo-id",
+            "repository_id": "repo-id", "work_id": "one-work",
         } for number in range(2)]
         created = []
 
@@ -7036,16 +7036,15 @@ class AdaptivePollingTests(unittest.TestCase):
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
-            handoff_hints = [pilot.cycle(conf, state) for _ in range(4)]
+            handoff_hint = pilot.cycle(conf, state)
             settled_hint = pilot.cycle(conf, state)
 
-        self.assertEqual(handoff_hints,
-                         [{"seconds": 2, "reason": "handoff"}] * 4)
+        self.assertEqual(handoff_hint, {"seconds": 2, "reason": "handoff"})
         self.assertEqual(settled_hint, {"seconds": 10, "reason": "active"})
         self.assertEqual(len(created), 4)
         self.assertEqual(len({task["title"] for task in created}), 4)
 
-    def test_terminal_backlog_is_limited_to_one_decision_per_cycle(self):
+    def test_terminal_backlog_is_bounded_to_four_decisions_per_cycle(self):
         conf = {
             "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
             "poll_seconds": 30,
@@ -7129,9 +7128,9 @@ class AdaptivePollingTests(unittest.TestCase):
             hint = pilot.cycle(conf, state)
 
         self.assertEqual(hint, {"seconds": 2, "reason": "handoff"})
-        self.assertEqual(decide.call_count, 1)
-        self.assertEqual(len(created), 1)
-        self.assertEqual(len(state["processed"]), 1)
+        self.assertEqual(decide.call_count, 4)
+        self.assertEqual(len(created), 4)
+        self.assertEqual(len(state["processed"]), 4)
         refill.assert_called_once()
         self.assertFalse(refill.call_args.kwargs["admit_new_plan"])
 
@@ -7231,7 +7230,6 @@ class AdaptivePollingTests(unittest.TestCase):
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
-            pilot.cycle(conf, state)
             pilot.cycle(conf, state)
 
         self.assertEqual(details_read, ["/tasks/spec-done", "/tasks/triage-done"])

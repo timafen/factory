@@ -54,7 +54,10 @@ FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
-MAX_TERMINAL_TASKS_PER_CYCLE = 1
+# A busy four-slot Factory must be able to refill all slots from completed
+# handoffs in one bounded pass.  The history window below still prevents the
+# old failure mode where every archival task was replayed in one cycle.
+MAX_TERMINAL_TASKS_PER_CYCLE = 4
 TERMINAL_HANDOFF_HISTORY_LIMIT = 200
 MERGE_CONFLICT_RE = re.compile(
     r"merge conflict|has merge conflicts|not mergeable|cannot be cleanly created",
@@ -611,9 +614,19 @@ def _note_admitted_task(conf, response, body):
     task.setdefault("title", body.get("title", ""))
     task.setdefault("state", "created")
     # Reserve an initial stage immediately even when the API response has not
-    # populated work_id yet. The next cycle replaces this local snapshot with
-    # the authoritative task list, which also releases completed works.
-    task.setdefault("work_id", body.get("work_id") or task.get("id"))
+    # populated work_id yet. A child must inherit its parent's identity here;
+    # otherwise two completed attempts of one work can both create the same
+    # heavy next stage while this cycle is refilling several slots.
+    work_id = body.get("work_id") or task.get("work_id")
+    parent_id = body.get("parent_task_id")
+    if not work_id and parent_id:
+        for key in ("_active_work_tasks", "_host_load_tasks"):
+            parent = next((candidate for candidate in ((conf or {}).get(key) or [])
+                           if candidate.get("id") == parent_id), None)
+            if parent:
+                work_id = task_work_id(parent)
+                break
+    task.setdefault("work_id", work_id or task.get("id"))
     for key in ("_active_work_tasks", "_host_load_tasks"):
         tasks = (conf or {}).get(key)
         if (isinstance(tasks, list)
