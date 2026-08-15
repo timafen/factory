@@ -2,28 +2,13 @@
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
+Status: Implemented in main — conflict reconciliation verified
+Branch: factory/26abe1c1-71d-c1ee55f7-009
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
-Evidence summary: `just check`, сборка, UI unit/browser и целевые 23 Python-теста прошли; мутация без production guard падает.
-One next action: human merge into main.
-
-- Status: Implemented and tested — уникальные номера и строгий HEAD-gate исправлены.
-- Branch: `factory/5b9cb945-2d5-c61f3f8a-cb6`.
-- What changed: после первого SPEC_HEAD rescue повторный missing/short/malformed HEAD безопасно останавливает переход в Implement; добавлен cycle test.
-- Evidence: `python3 -m unittest pilot.test_pilot.SpecificationBranchHandoffTests` → 18 tests, `OK`.
-- Next action: Провести независимый Review и слить ветку в `main`.
-
-### 2026-08-11 — Implement
-
-Обновлена доказательная регрессия для двух независимых Specification после конфликта
-нумерации карточек; implementation commit — `bee395269e7fc5e6aeba0c3a44077442f48ea968`.
-
-### 2026-08-11 — Implement
-
-После конфликта сохранены CARD-0070/CARD-0082 и добавлен жёсткий ворот Specification → Implement:
-отсутствующий, короткий или malformed `HEAD` возвращает Specification, точный полный SHA принимается.
-Целевые `SpecificationBranchHandoffTests` и полный Python-набор прошли; `py_compile` и `git diff --check` чисты.
+What changed: предыдущая ветка перебазирована на свежий `main`; устаревшие конфликтующие
+изменения исключены, потому что актуальный `main` уже содержит их расширенную реализацию.
+Evidence: 24 целевых Python-теста, 181 UI-тест и `just build` прошли; полный Go-набор зелёный.
+One next action: merge this reconciliation record into `main`.
 
 ## LOG
 
@@ -93,3 +78,12 @@ One next action: human merge into main.
 проверяет передачу `expected_card` в review gate. Кодовый коммит:
 `662de7f877f1de43ea5f240d348c688d2447b6d5`. Целевые 28 unittest,
 `py_compile`, `git diff --check` и полный `just test` прошли успешно.
+
+### 2026-08-15 — Implement
+
+По утверждённому перезапуску предыдущая поставка перенесена на свежий `main`.
+Все четыре её коммита уже были содержательно заменены более полными изменениями
+в основной ветке, поэтому конфликт разрешён без возврата старого кода. Уникальные
+резервы и handoff подтверждены 24 целевыми тестами; полный Go-набор, 181 UI-тест
+и сборка прошли. Вне области остаются две ошибки текущего `main` в tooling-gate:
+`FACTORY_V2_BUILD_DIR` и несогласованный минимум Go в `SECURITY.md`.
