@@ -1,20 +1,26 @@
-Implementation commit: 03afbb395aead09040d63be3591fb842ad47a4d3 — worker закрепляет GitHub CLI за репозиторием текущей задачи
+Implementation commit: b8c016200ce3889aba127ac6ccaaa37f58898cef — добавлена регрессия GH_REPO для назначенного timafen/factory
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
 ## HEAD
 
 Status: Implemented
-Branch: factory/8704e2dd-e6b-1479b9c9-320
+Branch: factory/e466d9d5-7e1-4d9fd24a-b5c
 Specification: `knowledge/specs/worker-gh-repository-context.md`
-What changed: identity из claim передаётся supervisor; runtime получает
-единственный `GH_REPO` только для валидного GitHub.com. Унаследованное
-или недостоверное значение всегда удаляется.
-Evidence: целевой integration test PASS (4.027s); весь `internal/worker`
-PASS (168.597s); `go build ./...` и `git diff --check` PASS.
+What changed: для `github.com/timafen/factory` runtime получает ровно
+`GH_REPO=timafen/factory`, заменяя унаследованный `owainlewis/factory`.
+Evidence: три целевых worker-теста PASS (4.519s), включая сквозной путь
+claim → supervisor → runtime; `git diff --check` PASS.
 One next action: Verify на свежем `origin/main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Добавлена явная регрессия для назначенного `github.com/timafen/factory`:
+runtime environment выдаёт единственный `GH_REPO=timafen/factory`, а не
+унаследованный контекст другого репозитория. Целевые environment и сквозной
+worker-тесты прошли за 4.519s.
 
 ### 2026-08-14 — Implement
 
