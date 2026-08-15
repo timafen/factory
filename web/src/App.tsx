@@ -273,7 +273,7 @@ export function App() {
             aria-current={route.page === "work" ? "page" : undefined}
             onClick={() => navigate({ page: "work" })}
           >
-            <ListChecks size={17} /> Работы
+            <ListChecks size={17} /> Работа
           </button>
           <button
             className={`nav-item ${route.page === "workflows" || route.page === "workflow" ? "active" : ""}`}
@@ -360,7 +360,7 @@ export function App() {
             {route.page === "say" && "Say"}
             {route.page === "epics" && "Epics"}
             {route.page === "answer" && "Нужен ответ"}
-            {route.page === "work" && "Работы"}
+            {route.page === "work" && "Работа"}
             {route.page === "workers" && "Исполнители"}
             {route.page === "task" && "Задача"}
             {route.page === "worker" && "Исполнитель"}

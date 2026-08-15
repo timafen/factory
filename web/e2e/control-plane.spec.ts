@@ -1309,7 +1309,7 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     { name: "answer", path: "/answer", ready: (page) => page.getByText(/Здесь конвейер спрашивает тебя/) },
     { name: "access", path: "/access", ready: (page) => page.getByRole("heading", { name: "Доступы" }) },
     { name: "sandbox-keys", path: "/sandbox-keys", ready: (page) => page.getByRole("heading", { name: "Ключи песочницы" }) },
-    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работы", exact: true }) },
+    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа", exact: true }) },
     { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Исполнители" }) },
     { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Репозитории" }) },
     { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },

@@ -75,7 +75,7 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    const work = await screen.findByRole("button", { name: /^Работы$/ });
+    const work = await screen.findByRole("button", { name: /^Работа$/ });
     const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(screen.getByRole("button", { name: /^Обзор$/ })).not.toHaveAttribute("aria-current");
     expect(work).toHaveAttribute("aria-current", "page");
@@ -93,7 +93,7 @@ describe("App", () => {
     renderApp();
 
     await screen.findByRole("heading", { name: "running task" });
-    const work = screen.getByRole("button", { name: /^Работы$/ });
+    const work = screen.getByRole("button", { name: /^Работа$/ });
     expect(work).toHaveClass("active");
     expect(work).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /^Исполнители$/ })).not.toHaveAttribute("aria-current");
@@ -108,7 +108,7 @@ describe("App", () => {
     const workers = screen.getByRole("button", { name: /^Исполнители$/ });
     expect(workers).toHaveClass("active");
     expect(workers).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /^Работы$/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /^Работа$/ })).not.toHaveAttribute("aria-current");
   });
 
   it("lists managed repositories and shows current acquisition readiness", async () => {
