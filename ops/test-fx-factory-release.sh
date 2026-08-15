@@ -142,6 +142,24 @@ EOF
 [ "${1:-}" = version ] && echo 'factory-worker test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
+  cat >"$case_dir/bin/browser-installer" <<'EOF'
+#!/bin/bash
+echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
+[ "$TEST_MODE" != browser-install-fail ] || exit 7
+factory_browser="$TEST_FACTORY_HOME/.cache/ms-playwright/chromium/chrome"
+root_browser="$TEST_ROOT_HOME/.cache/ms-playwright/chromium/chrome"
+mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_LIBEXEC" \
+  "$(dirname "$factory_browser")" "$(dirname "$root_browser")"
+printf 'const fs=require("node:fs"),path=require("node:path"); exports.chromium={executablePath:()=>{const browser=path.join(process.env.HOME,".cache/ms-playwright/chromium/chrome"); fs.appendFileSync(process.env.TEST_BROWSER_RESOLUTIONS,process.env.HOME+" -> "+browser+"\\n"); return browser},launch:async()=>({newPage:async()=>({route:async()=>{},setContent:async()=>{},pdf:async({path})=>fs.writeFileSync(path,"%%PDF-fixture")}),close:async()=>{}})};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
+printf '#!/bin/bash\n# factory cache\nexit 0\n' >"$factory_browser"
+printf '#!/bin/bash\n# root cache must never verify\nexit 0\n' >"$root_browser"
+chmod 755 "$factory_browser" "$root_browser"
+cp "$factory_browser" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
+cp "$factory_browser" "$FACTORY_BROWSER_LIBEXEC/factory-browser-isolated"
+printf 'browser_sha=%s\n' "$(sha256sum "$factory_browser" | awk '{print $1}')" >"$FACTORY_BROWSER_LIBEXEC/factory-browser-install.state"
+: >"$FACTORY_BROWSER_LIBEXEC/factory-browser.conf"
+printf '{"browser_fingerprint":"%s"}\n' "$(sha256sum "$factory_browser" | awk '{print $1}')" >"$FACTORY_BROWSER_READINESS_MARKER"
+EOF
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
   printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/fx"
@@ -183,6 +201,7 @@ GATE
   # artifacts instead of inheriting the caller's umask.
   chmod 755 "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
     "$case_dir/install/factory-release-broker" "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
+  chmod 755 "$case_dir/bin/browser-installer"
   chmod 644 "$case_dir/install/factory-release-broker.service" \
     "$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
@@ -214,6 +233,11 @@ case "$*" in
     /bin/cp "$TEST_RELEASE_SOURCE/pilot/context.md" "$destination/pilot/context.md"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/app.py" "$destination/intake/app.py"
     /bin/cp "$TEST_RELEASE_SOURCE/intake/plan.py" "$destination/intake/plan.py"
+    /bin/cp "$TEST_RELEASE_SOURCE/web/package.json" "$TEST_RELEASE_SOURCE/web/package-lock.json" "$destination/web/"
+    mkdir -p "$destination/web/report"
+    /bin/cp "$TEST_RELEASE_SOURCE/web/report/capture.mjs" "$TEST_RELEASE_SOURCE/web/report/render.mjs" "$destination/web/report/"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/factory-browser-sandbox" "$TEST_RELEASE_SOURCE/ops/factory-browser-isolated" \
+      "$TEST_RELEASE_SOURCE/ops/test-browser-sandbox.sh" "$TEST_RELEASE_SOURCE/ops/test-systemd-browser-firewall.sh" "$destination/ops/"
     cat >"$destination/ops/install-brain.sh" <<'BRAIN'
 #!/bin/bash
 echo "brain defer=${FACTORY_BRAIN_DEFER_PILOT_RESTART:-} marker=${FACTORY_BRAIN_RESTART_MARKER:-}" >>"$TEST_GATES"
@@ -563,15 +587,18 @@ exit 0
 EOF
   cat >"$case_dir/trusted/node" <<'EOF'
 #!/bin/bash
+[ "${1:-}" != -e ] || exec /usr/bin/node "$@"
 script=$1
 shift
 exec /bin/bash "$script" "$@"
 EOF
   cat >"$case_dir/trusted/sudo" <<'EOF'
 #!/bin/bash
-[ "${1:-}" != -H ] || shift
+switch_home=0
+if [ "${1:-}" = -H ]; then switch_home=1; shift; fi
 if [ "${1:-}" = -u ]; then shift 2; fi
 [ "${1:-}" != -- ] || shift
+[ "$switch_home" = 0 ] || export HOME="$TEST_FACTORY_HOME"
 exec "$@"
 EOF
   cat >"$case_dir/bin/sudo" <<'EOF'
@@ -816,8 +843,17 @@ run_release() {
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_FACTORY_HOME="$case_dir/factory-home" TEST_ROOT_HOME="$case_dir/root-home" \
+    TEST_BROWSER_RESOLUTIONS="$case_dir/browser-resolutions" HOME="$case_dir/root-home" \
     TEST_STUCK_CWD="$case_dir" \
-    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
+    FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
+    FACTORY_BROWSER_HELPER="$case_dir/browser-live/factory-browser-isolated" \
+    FACTORY_BROWSER_CONFIG="$case_dir/browser-live/factory-browser.conf" \
+    FACTORY_BROWSER_INSTALL_STATE="$case_dir/browser-live/factory-browser-install.state" \
+    FACTORY_BROWSER_SUDOERS="$case_dir/browser-live/sudoers" \
+    FACTORY_BROWSER_APPARMOR="$case_dir/browser-live/apparmor" \
+    FACTORY_BROWSER_READINESS_MARKER="$case_dir/browser-live/readiness.json" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_FX_BIN="$case_dir/install/fx" \
@@ -881,8 +917,17 @@ start_release() {
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_FACTORY_HOME="$case_dir/factory-home" TEST_ROOT_HOME="$case_dir/root-home" \
+    TEST_BROWSER_RESOLUTIONS="$case_dir/browser-resolutions" HOME="$case_dir/root-home" \
     TEST_STUCK_CWD="$case_dir" \
-    FACTORY_RELEASE_REPO="$case_dir/repo" \
+    FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
+    FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
+    FACTORY_BROWSER_HELPER="$case_dir/browser-live/factory-browser-isolated" \
+    FACTORY_BROWSER_CONFIG="$case_dir/browser-live/factory-browser.conf" \
+    FACTORY_BROWSER_INSTALL_STATE="$case_dir/browser-live/factory-browser-install.state" \
+    FACTORY_BROWSER_SUDOERS="$case_dir/browser-live/sudoers" \
+    FACTORY_BROWSER_APPARMOR="$case_dir/browser-live/apparmor" \
+    FACTORY_BROWSER_READINESS_MARKER="$case_dir/browser-live/readiness.json" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_FX_BIN="$case_dir/install/fx" \
