@@ -1,18 +1,18 @@
-Implementation commit: 90272561dcd7c8bcb4b3ef5694428e7ff983c461 — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
+Implementation commit: 57520292e77bb48ea9c6e2de40ada9eb38773eb7 — выпуск возвращает ошибку UI gate, а fixture запускает глубокие ворота
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
-Status: Blocked by release-fixture regression after rebase
-Branch: `factory/8ebc0078-797-76204680-988`
-Implementation commit: `90272561dcd7c8bcb4b3ef5694428e7ff983c461`
-What changed: generation parents и Chromium payload доступны группе служебного
-пользователя без права записи; installer проверен отдельной service identity.
-Cleanup возвращает browser live-state после любого сбоя между installer и prepared journal.
-Evidence: installer → PASS; `npx tsc -p tsconfig.app.json --noEmit` → PASS;
-`node --test report/report.test.mjs` → 5/5 PASS. Release fixture fails: `ui-test-fail returned 0 instead of build error 5`.
-One next action: restore the expected UI gate rejection and rerun the full release fixture.
+Status: Implemented and verified
+Branch: `factory/ad425558-8b0-e78a0fdd-36d`
+Implementation commit: 57520292e77bb48ea9c6e2de40ada9eb38773eb7 — выпуск возвращает ошибку UI gate, а fixture запускает глубокие ворота
+What changed: ошибка второй параллельной группы немедленно прерывает выпуск;
+асинхронные signal-сценарии явно включают полный UI/Go gate.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS;
+`npx tsc -p tsconfig.app.json --noEmit` → PASS;
+`node --test report/report.test.mjs` → 5/5 PASS.
+One next action: merge the verified branch; do not run a production release in this stage.
 
 ## LOG
 
@@ -56,3 +56,11 @@ installer и возвращает browser live-state при сбое до `prepa
 перебазирования. Installer — PASS, TypeScript — PASS, report tests — 5/5 PASS.
 Полный release fixture остановился на `ui-test-fail returned 0 instead of build error 5`;
 живой выпуск не выполнялся.
+
+### 2026-08-14 — Implement
+
+UI gate исправлен после возврата владельцем: провал второй параллельной группы
+теперь явно возвращает ненулевой статус, а асинхронный release fixture включает
+глубокие проверки после перехода штатного выпуска в быстрый режим.
+Проверки: release fixture — PASS; TypeScript — PASS; PDF report tests — 5/5 PASS.
+Боевой выпуск не запускался.
