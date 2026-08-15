@@ -7484,7 +7484,8 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
             continue
         existing = next((task for task in tasks
                          if task.get("parent_task_id") == task_id
-                         and task.get("correction_kind") == "merge_conflict_return"), None)
+                         and task.get("correction_kind") == "merge_conflict_return"
+                         and task.get("id")), None)
         if existing:
             intent.update({"phase": "repairing",
                            "repair_task_id": existing.get("id", "")})
@@ -7503,15 +7504,23 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         repository_id = parent.get("repository_id") or ""
         if not repository_id and detail:
             repository_id = ((detail.get("task") or {}).get("repository_id") or "")
-        worker_name = stage_worker(
-            conf, implementation, "high", workers,
-            repository_id=repository_id)
+        branch = intent.get("branch", "")
+        if not repository_id or not branch:
+            log(f"MERGE CONFLICT repair wait task={task_id}: "
+                "repository/branch missing")
+            continue
+        try:
+            worker_name = stage_worker(
+                conf, implementation, "high", workers,
+                repository_id=repository_id)
+        except Exception as error:
+            log(f"MERGE CONFLICT repair wait task={task_id}: worker lookup: {error}")
+            continue
         worker = workers.get(worker_name)
-        if not repository_id or not worker:
-            log(f"MERGE CONFLICT repair wait task={task_id}: worker/repository missing")
+        if not worker:
+            log(f"MERGE CONFLICT repair wait task={task_id}: worker missing")
             continue
         base = intent.get("base") or base_title(parent.get("title", ""))
-        branch = intent.get("branch", "")
         stage_number = stages.index(implementation) + 1
         context = (
             f"Pipeline: {base}\n"
@@ -7535,7 +7544,7 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
                 "timeout_seconds": conf.get("timeout_seconds", 7200),
                 "workflow_revision_id": workflow["revision_id"],
             }, parent, conf, "merge_conflict_return")
-        except (ParallelWorkLimit, RuntimeError) as error:
+        except Exception as error:
             log(f"MERGE CONFLICT repair deferred task={task_id}: {error}")
             continue
         repair_task_id = ((created or {}).get("task") or {}).get("id", "")
