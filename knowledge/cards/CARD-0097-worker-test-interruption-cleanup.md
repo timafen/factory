@@ -1,15 +1,15 @@
 # CARD-0097 — Прерванные worker-тесты очищают fake `gh` и `/tmp`
 
-Implementation commit: d27576bf659c9d2c7e01388bdae9efe56a26eaa1 — реальный blocking fake gh очищается вместе с process group и временным корнем после TERM, INT и HUP.
+Implementation commit: 5863c3f639cc3a5c2be2bcdb2e7d9267e633bff5 — реальный blocking fake gh очищается вместе с process group и временным корнем после TERM, INT и HUP.
 
 ## HEAD
 
 - Status: IMPLEMENTED, готово к повторной проверке.
-- Branch: factory/324d336b-c83-be853060-faa
-- Implementation commit: d27576bf659c9d2c7e01388bdae9efe56a26eaa1
+- Branch: factory/60e483c9-a17-bf5ad3aa-6b3
+- Implementation commit: 5863c3f639cc3a5c2be2bcdb2e7d9267e633bff5
 - What changed: обработчик ставится до `main.Run`; реальный `block-all` fake `gh`
   регистрирует process group, которая очищается с ожиданием production `Wait`.
-- Evidence: целевой worker-набор → PASS; `go test -timeout 5m ./...` → PASS.
+- Evidence: целевой worker-набор → PASS; `go test -timeout 5m ./...` → PASS (2026-08-15).
 - One next action: повторно проверить реализацию перед слиянием.
 - Specification: `knowledge/specs/worker-test-interruption-cleanup.md`.
 - Owner impact: остановка worker-теста не оставляет блокирующие fake `gh`, их
@@ -20,6 +20,13 @@ Implementation commit: d27576bf659c9d2c7e01388bdae9efe56a26eaa1 — реальн
   гарантия после `SIGKILL` без внешнего supervisor.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После перебазирования на свежий `main` целевой сценарий подтвердил очистку
+blocking fake `gh`, его PID/process group и выделенного `/tmp`-корня после
+TERM, INT и HUP. Целевой worker-набор и единственный полный `go test -timeout
+5m ./...` прошли.
 
 ### 2026-08-12 — Implement
 
