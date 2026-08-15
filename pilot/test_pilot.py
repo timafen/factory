@@ -6756,7 +6756,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(startup_seen, [True, False])
 
-    def test_startup_refill_runs_before_full_history_maintenance(self):
+    def test_startup_refill_defers_full_history_maintenance(self):
         conf = {
             "enabled": True,
             "poll_seconds": 30,
@@ -6764,7 +6764,8 @@ class AdaptivePollingTests(unittest.TestCase):
             "_startup_refill": True,
         }
         state = {"processed": []}
-        order = []
+        refills = []
+        history_calls = []
 
         def fake_api(path, body=None):
             self.assertIsNone(body)
@@ -6779,12 +6780,11 @@ class AdaptivePollingTests(unittest.TestCase):
             raise AssertionError(path)
 
         def refill(*_args, **_kwargs):
-            order.append("refill")
+            refills.append(True)
             return 0
 
         def history():
-            order.append("history")
-            self.assertIn("refill", order)
+            history_calls.append(True)
             return []
 
         noops = (
@@ -6815,7 +6815,15 @@ class AdaptivePollingTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        self.assertEqual(order[:2], ["refill", "history"])
+            self.assertTrue(refills)
+            self.assertEqual(history_calls, [])
+
+            state["full_history_maintenance_at"] = (
+                time.time() - pilot.FULL_HISTORY_MAINTENANCE_SECONDS - 1
+            )
+            pilot.cycle(conf, state)
+
+        self.assertEqual(history_calls, [True])
 
     def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
         conf = {"enabled": True, "poll_seconds": 30}
