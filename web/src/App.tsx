@@ -401,6 +401,7 @@ export function App() {
               onTask={(id) => navigate({ page: "task", id })}
               onAnswer={() => navigate({ page: "answer" })}
               onResume={(base) => resumeWork.mutateAsync(base).then(() => undefined)}
+              onSettings={() => navigate({ page: "settings" })}
               onDelegate={() => openDelegate()}
               onRefresh={() => void tasks.refetch()}
               hasMore={Boolean(taskHistoryCursor)}
