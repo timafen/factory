@@ -532,6 +532,32 @@ func TestHTTPDeleteTaskHistory(t *testing.T) {
 	}
 }
 
+func TestHTTPCreateTaskHourlyTaskCap(t *testing.T) {
+	fixture := newHTTPFixture(t)
+	worker := registerHTTPWorker(t, fixture, workerA, "factory", "github.com/example/hourly-cap-http", 20)
+	request := func(key string) protocol.CreateTaskRequest {
+		return protocol.CreateTaskRequest{
+			RequestKey: key, Title: "[auto] hourly task", Description: "test",
+			WorkerID: workerA, RepositoryID: worker.Repositories[0].ID, TimeoutSeconds: 60,
+		}
+	}
+	for i := 0; i < 10; i++ {
+		response := fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", fixture.server.URL, request(fmt.Sprintf("hourly-http-%d", i)))
+		requireStatus(t, response, http.StatusCreated)
+		response.Body.Close()
+	}
+	response := fixture.request(http.MethodPost, "/api/v1/tasks", "application/json", fixture.server.URL, request("hourly-http-10"))
+	requireStatus(t, response, http.StatusConflict)
+	errorBody := decodeResponse[struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}](t, response)
+	if errorBody.Error.Code != "hourly_task_cap" {
+		t.Fatalf("hourly task cap error code = %q", errorBody.Error.Code)
+	}
+}
+
 func TestHTTPContractLifecycleAndIdempotency(t *testing.T) {
 	fixture := newHTTPFixture(t)
 	a := registerHTTPWorker(t, fixture, workerA, "factory", "github.com/owainlewis/factory", 1)
