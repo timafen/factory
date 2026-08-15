@@ -1,17 +1,16 @@
-Implementation commit: a0570fc797bdc64c11b7355602d0703123a755c4 — Factory удаляет недоступные старые поколения после успешного выпуска
+Implementation commit: 1b465e687e07874d07a83ee17dde01ba69f2b79a — Factory проверяет зарегистрированный origin до сетевых Git-операций
 
 # CARD-0179: Проверка зарегистрированного origin
 
 ## HEAD
 
-Status: Planned
-Branch: factory/7ae7bc34-8b8-2a2890d0-a9a
+Status: Implemented
+Branch: factory/cfdbc503-816-7fc68d57-4d4
 Specification: `knowledge/specs/registered-origin-verification.md`
-What changed: определена защита временных Git-репозиториев от подменённого или
-неожиданного `origin` до любого чтения, сравнения или публикации ветки.
-Evidence: будущая реализация добавит `TemporaryRepositoryOriginTest` и выполнит
-`python3 -m unittest pilot.test_pilot.TemporaryRepositoryOriginTest`.
-One next action: Implement добавляет общий helper и тесты только в `pilot/`.
+What changed: временные review, refresh и rebuild сверяют зарегистрированный
+`origin` сразу после добавления; ошибка не раскрывает URL и останавливает поток.
+Evidence: `TemporaryRepositoryOriginTest` → 4 tests OK; `FreshDefaultBranchSnapshotTests` → 16 tests OK.
+One next action: Review проверяет поставку и контракт блокировки на полном diff.
 
 ## LOG
 
@@ -23,3 +22,11 @@ One next action: Implement добавляет общий helper и тесты т
 зарегистрированного remote и сверить его с каноническим URL проекта сразу после
 регистрации. Любая неопределённость блокирует поток до первой потенциально
 опасной Git-команды и не меняет рабочую ветку исполнителя.
+
+### 2026-08-15 — Implement
+
+Добавлен общий безопасный контроль URL зарегистрированного `origin` во всех трёх
+временных Git-потоках до первой сетевой операции. Подмена, отсутствие или ошибка
+чтения блокируют review/refresh и останавливают rebuild без публикации.
+Проверено `TemporaryRepositoryOriginTest` (4 OK) и
+`FreshDefaultBranchSnapshotTests` (16 OK).
