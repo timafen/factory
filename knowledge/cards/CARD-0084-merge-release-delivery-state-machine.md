@@ -1,13 +1,13 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: f7bac8680463825cddf7eecf2aaff2b3e158189a — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+Implementation commit: 42169605bf72c7274437141b20c7594555d0257a — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
 - Branch: `factory/6fd1bc3c-993-e185fb49-ba9`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `f7bac8680463825cddf7eecf2aaff2b3e158189a` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+- Implementation commit: `42169605bf72c7274437141b20c7594555d0257a` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
 - What changed: минимальная EXIT-ловушка ставится сразу после durable `launching`; lock и preflight ошибки оставляют `failed`, а новый delivery ID может выполнить повторный выпуск.
 - Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
 - Next action: Повторить Review на свежем `main`.
