@@ -1,4 +1,4 @@
-Implementation commit: 4d01a575218e3666ffdff41d9245ad9fc55a1bef — повторный откат транзакционно восстанавливает browser-среду
+Implementation commit: cb10e2e182e8b8e185087c9b0a22369b365c7472 — повторный откат транзакционно восстанавливает browser-среду
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
@@ -6,7 +6,7 @@ Implementation commit: 4d01a575218e3666ffdff41d9245ad9fc55a1bef — повтор
 
 Status: Implemented and verified
 Branch: `factory/db641bfe-a22-70413f54-5a3`
-Implementation commit: 4d01a575218e3666ffdff41d9245ad9fc55a1bef — повторный откат транзакционно восстанавливает browser-среду
+Implementation commit: cb10e2e182e8b8e185087c9b0a22369b365c7472 — повторный откат транзакционно восстанавливает browser-среду
 What changed: поставка перенесена на свежий `main`; повторное применение browser-поколения
 получает rollback backup, а fixture проверяет идемпотентный installer и новый heartbeat.
 Evidence: `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` → PASS;
