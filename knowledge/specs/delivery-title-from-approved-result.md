@@ -118,6 +118,12 @@ release/squash получает его через PR title, а успешные 
 
 `knowledge/cards/CARD-0164-delivery-title-from-approved-result.md`.
 
+## Готово-когда
+
+Реализация затрагивает только перечисленные ниже файлы; целевая команда
+должна завершаться с кодом 0 и доказывать выбор человеческого названия
+поставки.
+
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.DeliveryTitleTests
