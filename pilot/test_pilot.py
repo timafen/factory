@@ -1750,7 +1750,7 @@ class DiagnosisRepairTests(unittest.TestCase):
             pause_pipeline.assert_not_called()
             answer.assert_not_called()
 
-    def test_exhausted_loop_rescue_still_asks_orchestrator(self):
+    def test_loop_rescue_does_not_grant_another_full_round_allowance(self):
         rescues = {"LOOP": 0}
 
         def cap_rescues(_base, stage):
@@ -1779,10 +1779,11 @@ class DiagnosisRepairTests(unittest.TestCase):
                 [], "", attempts_so_far=9)
 
         self.assertFalse(first)
-        self.assertFalse(second)
-        self.assertEqual(rescues["LOOP"], 2)
-        pause.assert_not_called()
-        set_baseline.assert_not_called()
+        self.assertTrue(second)
+        pause.assert_called_once_with(conf, "Починить отчёт")
+        # Отсчёт обновляется только при настоящей остановке. Автоматическое
+        # решение не должно незаметно выдавать ещё восемь кругов.
+        set_baseline.assert_called_once_with("Починить отчёт", 9)
 
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
@@ -5438,7 +5439,7 @@ class AdminQuestionRoutingTests(unittest.TestCase):
         self.assertFalse(any(
             "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
 
-    def test_exhausted_loop_rescues_still_resolve_admin_action_before_owner(self):
+    def test_exhausted_loop_rescues_run_admin_check_but_keep_stop_guard(self):
         answers = [
             {"decision": "admin_action", "action": {
                 "scope": "staging", "verb": "health", "args": []}},
@@ -5448,6 +5449,8 @@ class AdminQuestionRoutingTests(unittest.TestCase):
                 mock.patch.object(pilot, "QUESTION_DIR", temporary), \
                 mock.patch.object(pilot, "selected_delivery", return_value=("", "")), \
                 mock.patch.object(pilot, "loop_baseline", return_value=0), \
+                mock.patch.object(pilot, "set_loop_baseline") as set_baseline, \
+                mock.patch.object(pilot, "pause_pipeline") as pause, \
                 mock.patch.object(pilot, "cap_rescues", return_value=2), \
                 mock.patch.object(pilot, "notify") as notify, \
                 mock.patch.object(pilot, "_fixed_command", return_value=(True, "HTTP 200")) as command, \
@@ -5461,14 +5464,17 @@ class AdminQuestionRoutingTests(unittest.TestCase):
             record = pilot.load(
                 os.path.join(temporary, "loop-admin-question.json"), {})
 
-        self.assertFalse(escalated)
+        self.assertTrue(escalated)
         self.assertEqual(orchestrator.call_count, 2)
         command.assert_called_once_with(
             ["sudo", "-n", "/usr/local/bin/fx", "staging", "health"], timeout=60)
         self.assertEqual(record["admin_result"], "executed")
-        self.assertEqual(record["answered_by"], "orchestrator")
-        self.assertFalse(record.get("owner_only", False))
-        self.assertFalse(any(
+        self.assertTrue(record["owner_only"])
+        pause.assert_called_once_with(
+            {"max_stage_attempts": 3, "max_work_rounds": 8,
+             "max_loop_rescues": 2}, "Проверить стенд")
+        set_baseline.assert_called_once_with("Проверить стенд", 8)
+        self.assertTrue(any(
             "Нужен твой ответ" in call.args[1] for call in notify.call_args_list))
 
     def test_allowed_staging_health_is_resolved_by_orchestrator_before_owner(self):

@@ -4167,7 +4167,8 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
 
 
 def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base, repo_id,
-                         situation, question, options, prior_result, branch):
+                         situation, question, options, prior_result, branch,
+                         allow_follow_up_answer=True):
     """Execute a permitted admin action; return None for non-admin verdicts."""
     if verdict.get("decision") != "admin_action":
         return None
@@ -4201,7 +4202,7 @@ def resolve_admin_action(conf, verdict, task_id, stage, resume_stage, base, repo
     follow_up = orchestrator_answer(
         conf, stage, base, situation, question, prior_result, repo_id,
         action_result="fx успешно выполнен:\n" + squeeze(output, 2000))
-    if follow_up.get("decision") == "answer":
+    if allow_follow_up_answer and follow_up.get("decision") == "answer":
         rec["status"] = "answered"
         rec["answer"] = follow_up["answer"]
         rec["answered_by"] = "orchestrator"
@@ -4257,14 +4258,23 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
         # делать нечего. К владельцу идём, только если оркестратор сам
         # скажет, что вопрос про деньги, прод или выбор продукта.
+        used = cap_rescues(base, "LOOP")
+        limit = int(conf.get("max_loop_rescues", 2))
         v = orchestrator_answer(conf, stage, base,
                                 situation + LOOP_NOTE.format(n=attempts_so_far),
                                 question, prior_result, repo_id)
         admin_result = resolve_admin_action(
             conf, v, task_id, stage, resume_stage, base, repo_id, situation,
-            question, options, prior_result, branch)
+            question, options, prior_result, branch,
+            allow_follow_up_answer=used < limit)
         if admin_result is not None:
+            if used >= limit and admin_result:
+                pause_pipeline(conf, base)
+                set_loop_baseline(base, attempts_so_far)
             return admin_result
+        if used >= limit:
+            v = {"decision": "owner",
+                 "reason": "orchestrator already broke this loop twice"}
         if resolve_orchestrator_wait(
                 conf, v, task_id, stage, resume_stage, base, repo_id, situation,
                 question, options, prior_result, branch):
