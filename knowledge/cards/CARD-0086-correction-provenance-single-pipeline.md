@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Implementation commit: 0c3eb07c0366ed11a8d61bdb31cd84b4fd38c094 — Pilot сохраняет границы поколений и delivery artifact по durable work_id.
+Implementation commit: faeea5d59af3d5e4ae6af947493a9d70cb08c15e — Pilot сохраняет границы поколений и delivery artifact по durable work_id.
 - Status: PASS — перенесено поверх свежего `origin/main`.
 - Branch: `factory/41c411be-17e-a852630a-f7e`.
 - What changed: Review/Verify corrections и одноимённые работы остаются в одном
