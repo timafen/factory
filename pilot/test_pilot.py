@@ -477,7 +477,7 @@ class DeliveryAreaTests(unittest.TestCase):
 
     def test_card_commit_gate_accepts_code_commit_before_final_card_commit(self):
         implementation = "a" * 40
-        card = ("# CARD-0100\n\nImplementation commit: `" + implementation
+        card = ("# CARD-0100\n\n## HEAD\n\n- Status: Implemented\n\nImplementation commit: `" + implementation
                 + "` — реализован устойчивый факт.\n")
         responses = [
             {"content": base64.b64encode(card.encode()).decode()},
@@ -492,7 +492,7 @@ class DeliveryAreaTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_card_commit_gate_rejects_old_head_requirement_without_stable_commit(self):
-        card = "# CARD-0100\n\nHead commit: git HEAD\n"
+        card = "# CARD-0100\n\n## HEAD\n\n- Status: Implemented\n\nHead commit: git HEAD\n"
         with mock.patch.object(pilot, "gh_json", return_value={
                 "content": base64.b64encode(card.encode()).decode()}):
             result = pilot.implementation_commit_gate(
@@ -504,7 +504,7 @@ class DeliveryAreaTests(unittest.TestCase):
 
     def test_card_commit_gate_rejects_invented_or_card_only_commit(self):
         implementation = "b" * 40
-        card = ("Implementation commit: " + implementation + " — якобы код.\n")
+        card = ("## HEAD\nStatus: Implemented\nImplementation commit: " + implementation + " — якобы код.\n")
         responses = [
             {"content": base64.b64encode(card.encode()).decode()},
             {"status": "ahead"},
@@ -515,6 +515,58 @@ class DeliveryAreaTests(unittest.TestCase):
                 "github.com/example/repo", "factory/task", ["knowledge/cards/CARD-0100.md"])
         self.assertTrue(result["back"])
         self.assertIn("только карточки", result["note"])
+
+
+class CardHeadStatusTests(unittest.TestCase):
+    def gate(self, status, *, card_path="knowledge/cards/CARD-0127-card-head-implemented-status.md",
+             inside_head=True):
+        implementation = "a" * 40
+        head = f"## HEAD\n\n{status}\n\n" if inside_head else f"{status}\n\n## HEAD\n\n"
+        card = (f"# CARD-0127\n\n{head}"
+                f"Implementation commit: {implementation} — код.\n")
+        responses = [
+            {"content": base64.b64encode(card.encode()).decode()},
+            {"status": "ahead"},
+            {"files": [{"filename": "pilot/pilot.py"}]},
+        ]
+        with mock.patch.object(pilot, "gh_json", side_effect=responses):
+            return pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", card_path])
+
+    def test_implemented_status_accepts_plain_and_markdown_forms(self):
+        for status in ("Status: Implemented", "- Status: IMPLEMENTED — awaiting Review"):
+            with self.subTest(status=status):
+                self.assertIsNone(self.gate(status))
+
+    def test_old_or_missing_status_returns_to_implement(self):
+        for status in ("- Status: Planned", "Implementation is ready", ""):
+            with self.subTest(status=status):
+                result = self.gate(status)
+                self.assertTrue(result["back"])
+                self.assertIn("Status: Implemented", result["note"])
+
+    def test_status_outside_head_does_not_pass(self):
+        result = self.gate("Status: Implemented", inside_head=False)
+        self.assertTrue(result["back"])
+
+    def test_remote_read_failure_is_not_misreported_as_bad_status(self):
+        with mock.patch.object(pilot, "gh_json", return_value=None):
+            self.assertIsNone(pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", "knowledge/cards/CARD-0127-card-head-implemented-status.md"]))
+
+    def test_review_rejects_foreign_card_before_review(self):
+        snapshot = {"state": "ok", "files": [
+            "pilot/pilot.py", "knowledge/cards/CARD-0999-other.md"],
+            "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+            "default_branch": "main"}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot):
+            result = pilot.review_gate({}, "Работа", "factory/task",
+                                       "github.com/example/repo",
+                                       expected_card="CARD-0127")
+        self.assertTrue(result["back"])
+        self.assertIn("CARD-0127", result["note"])
 
 
 class FreshDefaultBranchSnapshotTests(unittest.TestCase):
