@@ -4,17 +4,17 @@ Implementation commit: 328fc9f55c134918826341bcf03412550483996b — патрул
 
 ## HEAD
 
-- Статус: Implemented — готово к повторному Verify.
-- Ветка: `factory/7c9e1a81-ce2-85f0d92d-f73`.
+- Статус: Implemented — целевые проверки повторно пройдены.
+- Ветка: `factory/5d2c3ee1-280-555865f1-50f`.
 - Implementation commit: `328fc9f55c134918826341bcf03412550483996b` —
   патрули скрыты в обоих режимах «Работы», а находки и итог последней попытки
   доступны в истории Automation.
 - Спецификация: `knowledge/specs/patrol-findings-on-automations.md`.
 - Область: скрыть только встроенные патрули с экрана «Работа» и перенести
   наблюдение их запусков, находок и итогов на detail-экран Automation.
-- Evidence: 25 целевых UI-тестов и 2 целевых Go-теста — PASS; lint без
-  предупреждений, typecheck и production build — PASS; `web/dist` обновлён.
-- Следующее действие: повторить Verify на чистой доставленной ветке.
+- Evidence: целевые Go-проверки — PASS; 25 целевых UI-тестов — PASS; lint без
+  предупреждений, typecheck и production build — PASS.
+- Следующее действие: открыть detail-экран Automation патруля на стенде.
 
 ## LOG
 
@@ -66,3 +66,10 @@ Automation показывает состояние, явные строки `Н�
 Работа перенесена на свежий `origin/main`; экспортируемые helpers вынесены из
 `Automations.tsx`, а embedded UI пересобран и зафиксирован. Целевые Go-тесты и
 25 UI-тестов, lint без предупреждений, typecheck и production build прошли.
+
+### 2026-08-15 — Implement
+
+На ветке доставки повторно подтверждены скрытие встроенных патрулей в «Работе» и
+показ их итогов и находок в Automation. `go test ./internal/controlplane -run
+'TestTasks.*WorkClass|TestAutomationOccurrence.*AttemptResult'` прошёл; 25
+целевых UI-тестов, typecheck, lint и production build также прошли.
