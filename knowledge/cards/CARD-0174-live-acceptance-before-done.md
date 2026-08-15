@@ -1,19 +1,28 @@
 # CARD-0174 — Завершение только после живой приёмки
 
-Implementation commit: e0123dc69dc130b93e15da0ddce7c2a0a1efc691 — Pilot ждёт живую приёмку после выпуска, а broker сохраняет результат fixed read-only checker.
+Implementation commit: e0b5f52b40a03e2c6f48d7250694f73d40574372 — broker fail-closed выполняет живую приёмку ровно один раз и сохраняет безопасный результат после рестарта.
 
 ## HEAD
 
 - Status: Implemented — ожидает Verify.
-- Branch: `factory/3cc81421-187-9a740feb-827`.
-- Implementation commit: `e0123dc69dc130b93e15da0ddce7c2a0a1efc691`.
-- What changed: broker success становится durable `released`; PASS единственный
-  завершает waits. Fixed checker читает health/current release/workers и FAIL
-  возвращает Verify в `Implement + Test` без успешных артефактов.
-- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → PASS; `go test ./internal/releasebroker` → PASS; installer shell test → PASS.
-- Next action: на Verify добавить/запустить полный набор регрессий Pilot и живого checker.
+- Branch: `factory/de5afa43-4c3-962238f3-84d`.
+- Implementation commit: `e0b5f52b40a03e2c6f48d7250694f73d40574372`.
+- What changed: отсутствие fixed checker записывает FAIL, не PASS; повторный
+  POST при running не создаёт второй процесс; restart переводит uncertain
+  checker в durable FAIL. Добавлены регрессии broker и read-only fixture.
+- Evidence: `just check` → PASS; `go test ./internal/releasebroker` → PASS; acceptance and installer shell tests → PASS.
+- Next action: выполнить полный набор проверок на свежем `main` перед Verify.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Устранены блокеры Review: unconfigured broker больше не может завершить живую
+приёмку PASS, а параллельный POST видит durable `running` и не запускает checker
+повторно. После рестарта незавершённый checker fail-closed. Регрессии доказывают
+immutable identity, единственный запуск, restart recovery и read-only fixture:
+`go test ./internal/releasebroker`, `bash ops/test-factory-live-acceptance.sh`,
+`bash ops/test-install-project-release-broker.sh` — PASS.
 
 ### 2026-08-15 — Implement
 
