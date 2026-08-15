@@ -1782,8 +1782,9 @@ def load_restart_recovery_tasks(conf, tasks):
 
 def retry_terminal_task(conf, state, task_id):
     """Requeue a terminal task without advancing a startup recovery cursor."""
-    if task_id in state["processed"]:
-        state["processed"].remove(task_id)
+    processed = state.setdefault("processed", [])
+    if task_id in processed:
+        processed.remove(task_id)
     retry_ids = state.setdefault("terminal_retry_ids", [])
     if task_id not in retry_ids:
         retry_ids.append(task_id)
@@ -7780,7 +7781,7 @@ def _fail_generation(state, target, generation, category, now):
     })
 
 
-def _live_acceptance_failed(state, target, generation, response, now):
+def _live_acceptance_failed(conf, state, target, generation, response, now):
     """Fail closed and make each Verify wait eligible for an implementation lap."""
     reason = response.get("reason") if isinstance(response, dict) else "acceptance_unknown"
     generation["acceptance"] = {"status": "failed", "reason": reason}
@@ -7790,7 +7791,7 @@ def _live_acceptance_failed(state, target, generation, response, now):
     for task_id in generation.get("waits", {}):
         if task_id not in returned:
             returned[task_id] = reason
-            retry_terminal_task(state, task_id)
+            retry_terminal_task(conf, state, task_id)
 
 
 def dispatch_delivery_outbox(conf, state):
@@ -7874,7 +7875,9 @@ def poll_delivery_state(conf, state, now=None):
                     save(STATE_PATH, state)
                     _complete_generation(conf, state, generation)
                 elif (acceptance_response or {}).get("status") == "failed":
-                    _live_acceptance_failed(state, target, generation, acceptance_response, current_time)
+                    _live_acceptance_failed(
+                        conf, state, target, generation,
+                        acceptance_response, current_time)
                     save(STATE_PATH, state)
             elif generation["phase"] == "released" and status in ("pending", "running"):
                 generation["acceptance"] = {"status": status}
@@ -7886,7 +7889,9 @@ def poll_delivery_state(conf, state, now=None):
                 save(STATE_PATH, state)
                 _complete_generation(conf, state, generation)
             elif generation["phase"] == "released" and status == "failed":
-                _live_acceptance_failed(state, target, generation, response or {}, current_time)
+                _live_acceptance_failed(
+                    conf, state, target, generation,
+                    response or {}, current_time)
                 save(STATE_PATH, state)
             elif status == "locked":
                 generation["phase"] = "reserved"
