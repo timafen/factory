@@ -1,18 +1,32 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
-What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
-What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+Status: Verified
+Branch: factory/fb5711ae-125-3c6494a9-967.
+Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
+What changed: после `wait -n` выпуск принимает результат только от одного из зарегистрированных `setsid --fork --wait` launcher.
+What changed: неизвестный или пустой PID завершения останавливает Gate и не допускает установку.
+Evidence: `just ui-check`, `npx tsc -p tsconfig.app.json --noEmit`, `just ui-build 0` (чистый `web/dist`) и `just test-browser-critical` → PASS.
+One next action: влить проверенную поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По утверждённому ответу владельца UI-зависимости установлены исключительно через
+`web/npm ci` без изменения lock-файлов. `just ui-check` и отдельный `npx tsc -p
+tsconfig.app.json --noEmit` прошли; `just ui-build 0` не оставил изменений в
+`web/dist`. `just test-browser-critical` прошёл все 5 сценариев Playwright.
+
+### 2026-08-15 — Implement
+
+После `wait -n` выпуск сверяет PID с обоими launcher, созданными для Gate:
+только так kernel exit status может разрешить установку. Неизвестный PID прерывает
+release и останавливает Gate. `bash -n` и полный `ops/test-fx-factory-release.sh`
+прошли, включая forked failure и forged result.
 
 ### 2026-08-12 — Verify
 
