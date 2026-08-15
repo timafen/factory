@@ -137,7 +137,7 @@ cat >"$test_bin/id" <<'SH'
 case "${1:-}" in
   -u) if [ "${TEST_BROWSER_AS_USER:-0}" = 1 ]; then echo 1000; else echo 0; fi ;;
   -un) echo "${FACTORY_USER:-factory}" ;;
-  -gn) echo "${FACTORY_USER:-factory}" ;;
+  -gn) echo "${TEST_FACTORY_GROUP:-${FACTORY_USER:-factory}}" ;;
 esac
 exit 0
 SH
@@ -409,7 +409,7 @@ mkdir -p "$durable/libexec"
 printf 'previous browser launcher\n' >"$durable/libexec/factory-browser-sandbox"
 chmod 755 "$durable/libexec/factory-browser-sandbox"
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
-  TEST_BROWSER_MODULE_SOURCE="$share/web/node_modules" PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  TEST_BROWSER_MODULE_SOURCE="$share/web/node_modules" PATH="$test_bin:$PATH" FACTORY_USER=browser-fixture TEST_FACTORY_GROUP=factory \
   FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_RUNTIME="$runtime" \
   FACTORY_BROWSER_BACKUP_DIR="$durable/live-backup" \
   FACTORY_BROWSER_LIBEXEC="$durable/libexec" \
@@ -420,16 +420,26 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   || { sed -n '1,80p' "$durable/output" >&2; fail "installer не собрал отдельное browser-поколение"; }
 [ -f "$runtime/browser-readiness.json" ] && [ -d "$runtime/web/node_modules/playwright" ] \
   || fail "browser-поколение опубликовано без readiness или Playwright"
+# The release runs as root, but the renderer runs as a separate service UID.
+# The sudo fixture models that UID and this requires its module through the
+# published runtime (the old test accidentally selected the release UID).
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
+  sudo -H -u browser-fixture env /usr/bin/node -e 'require(process.argv[1])' \
+  "$runtime/web/node_modules/playwright" \
+  || fail "отдельный UID не может прочитать постоянный Chromium runtime"
+grep -F 'sudo-args=-H -u browser-fixture env /usr/bin/node' "$temporary/events" >/dev/null \
+  || fail "browser runtime не проверен отдельным UID службы"
 durable_pdf="$durable/daily.pdf"
 FACTORY_BROWSER_PAYLOAD="$runtime" FACTORY_BROWSER_LAUNCHER="$durable/libexec/factory-browser-sandbox" \
-  TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
+  FACTORY_USER=browser-fixture TEST_FACTORY_GROUP=factory TEST_BROWSER_AS_USER=1 \
+  TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
   node "$runtime/internal/controlplane/report_scripts/render.mjs" "$durable_pdf" \
   <<<'<h1>Ежедневный отчёт</h1>' \
   || fail "production renderer не работает из постоянного browser payload"
 [ "$(head -c 5 "$durable_pdf")" = '%PDF-' ] \
   || fail "production renderer не создал PDF из постоянного browser payload"
 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
-  FACTORY_USER="$(id -un)" FACTORY_BROWSER_LIBEXEC="$durable/libexec" \
+  FACTORY_USER=browser-fixture TEST_FACTORY_GROUP=factory FACTORY_BROWSER_LIBEXEC="$durable/libexec" \
   FACTORY_BROWSER_SUDOERS="$durable/sudoers/factory-browser" \
   FACTORY_BROWSER_APPARMOR="$durable/apparmor.d/factory-browser" \
   bash "$linked_installer" --restore-live-state "$durable/live-backup" \

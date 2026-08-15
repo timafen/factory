@@ -96,6 +96,7 @@ id "$FACTORY_USER" >/dev/null
   || { echo "unsafe Factory account name" >&2; exit 1; }
 FACTORY_HOME=$(getent passwd "$FACTORY_USER" | cut -d: -f6)
 [ -n "$FACTORY_HOME" ]
+FACTORY_GROUP=$(id -gn "$FACTORY_USER")
 
 [ -f "$SOURCE/web/package.json" ]
 [ -f "$SOURCE/web/package-lock.json" ]
@@ -112,8 +113,13 @@ command -v apparmor_parser >/dev/null \
 if [ "$RUNTIME" != "$SOURCE" ]; then
   [ ! -e "$RUNTIME" ] && [ ! -L "$RUNTIME" ] \
     || { echo "browser runtime target already exists" >&2; exit 1; }
-  install -d -m 700 "$(dirname "$RUNTIME")"
+  # Chromium is installed and later run as FACTORY_USER.  Keep the payload
+  # immutable to that user, but grant its primary group read/traverse access
+  # before asking Playwright for the browser path.
+  install -d -o root -g "$FACTORY_GROUP" -m 750 "$(dirname "$RUNTIME")"
   runtime_build=$(mktemp -d "$(dirname "$RUNTIME")/.browser-runtime.XXXXXX")
+  chgrp "$FACTORY_GROUP" "$runtime_build"
+  chmod 750 "$runtime_build"
   install -d -m 700 "$runtime_build/web" "$runtime_build/ops" \
     "$runtime_build/internal/controlplane/report_scripts"
   cp -f -- "$SOURCE/web/package.json" "$SOURCE/web/package-lock.json" "$runtime_build/web/"
@@ -125,6 +131,8 @@ if [ "$RUNTIME" != "$SOURCE" ]; then
     cp -f -- "$SOURCE/ops/$browser_helper" "$runtime_build/ops/$browser_helper"
     chmod 755 "$runtime_build/ops/$browser_helper"
   done
+  chgrp -R "$FACTORY_GROUP" "$runtime_build"
+  chmod -R g+rX "$runtime_build"
   PAYLOAD=$runtime_build
 fi
 
@@ -319,6 +327,8 @@ marker_tmp=
 if [ -n "$runtime_build" ]; then
   cp -f -- "$READINESS_MARKER" "$PAYLOAD/browser-readiness.json"
   chmod 644 "$PAYLOAD/browser-readiness.json"
+  chgrp -R "$FACTORY_GROUP" "$runtime_build"
+  chmod -R g+rX "$runtime_build"
   mv -- "$runtime_build" "$RUNTIME"
   runtime_build=
 fi
