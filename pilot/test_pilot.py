@@ -6735,6 +6735,27 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(recovery_seen,
                          [frozenset(("done",)), None])
 
+    def test_loop_requests_fast_refill_only_until_first_successful_cycle(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"processed": []}
+        startup_seen = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(cycle_conf, _state):
+            startup_seen.append(cycle_conf.get("_startup_refill"))
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=2, sleep_fn=lambda _seconds: None,
+                           clock_fn=iter((100.0, 200.0)).__next__)
+
+        self.assertEqual(startup_seen, [True, False])
+
     def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
         conf = {"enabled": True, "poll_seconds": 30}
         ids = [

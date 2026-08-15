@@ -8430,6 +8430,22 @@ def cycle(conf, state):
     except Exception as e:
         log("host_load_error", repr(e))
 
+    # A release restarts Pilot while the previous workers may finish their
+    # tasks.  Do one fast startup refill before diagnostics and the watchdog
+    # walk the historical backlog.  Answered continuations still get first
+    # claim inside refill_open_work_slots(); Plan receives only capacity that
+    # remains.  Ordinary cycles keep the normal terminal-first ordering below.
+    if conf.pop("_startup_refill", False):
+        try:
+            answered = refill_open_work_slots(conf, workflows, workers)
+            activity["answer_applied"] = (
+                activity["answer_applied"]
+                or answered is True
+                or (type(answered) is int and answered > 0)
+            )
+        except Exception as e:
+            log("startup_work_slot_refill_error", repr(e))
+
     # A merge conflict is pipeline work, not a reason to hammer GitHub or ask
     # the owner. Return the same branch to Implement, then require Review and
     # Verify again before another immutable merge intent is created.
@@ -9177,6 +9193,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     completed = 0
     recovery_ids = None
     recovery_watermark = None
+    startup_refill_pending = True
     while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
         state = normalize_pilot_state(load(STATE_PATH, {"processed": []}))
@@ -9197,6 +9214,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 recovery_watermark = ""
                 conf.pop("_restart_recovery_ids", None)
                 conf.pop("_restart_recovery_watermark", None)
+            conf["_startup_refill"] = startup_refill_pending
             if recovery_ids:
                 conf["_restart_recovery_ids"] = recovery_ids
                 conf["_restart_recovery_watermark"] = recovery_watermark
@@ -9207,6 +9225,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 cycle_now = clock_fn()
                 failures = 0
+                startup_refill_pending = False
                 if not conf.get("_restart_recovery_retry"):
                     state["terminal_handoff_watermark"] = (
                         datetime.datetime.fromtimestamp(
