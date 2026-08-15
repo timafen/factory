@@ -859,7 +859,7 @@ test("@critical starts work and completes it in a real Git worktree", async ({ p
   await dialog.getByRole("button", { name: "Delegate task" }).click();
 
   await expect(page.getByRole("heading", { name: "Prove the complete local workflow" })).toBeVisible();
-  await expect(page.getByText("Succeeded", { exact: true }).first()).toBeVisible({
+  await expect(page.getByText("Завершено", { exact: true }).first()).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByText("Created deterministic worktree evidence.")).toBeVisible();
@@ -1073,9 +1073,9 @@ test("confirms and deletes terminal task history", async ({ page, baseURL }) => 
   await page.goto(`/tasks/${identifiers.succeededTask}`);
   await expect(page.getByRole("heading", { name: "Ship the stable API client" })).toBeVisible();
   await page.waitForLoadState("networkidle");
-  await page.getByRole("button", { name: "Delete history" }).click();
-  await expect(page.getByText(/Permanently delete this task, prompt, attempts, and events/)).toBeVisible();
-  await page.getByRole("button", { name: "Confirm delete" }).click();
+  await page.getByRole("button", { name: "Удалить историю" }).click();
+  await expect(page.getByText(/Безвозвратно удалить задачу, промпт, попытки и события/)).toBeVisible();
+  await page.getByRole("button", { name: "Подтвердить удаление" }).click();
   await expect(page).toHaveURL("/work");
   await expect(page.getByText("Ship the stable API client")).toHaveCount(0);
   browser.assertClean();
