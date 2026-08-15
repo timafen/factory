@@ -1,18 +1,28 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+Implementation commit: f34cd15f0aa5e2f9fa9fa8bfaecde89a4519d81a — ошибка финальной записи выпуска возвращается как неуспех и запускает откат.
 
 ## HEAD
 
-- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
-- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
+- Status: Implemented — финальная запись выпуска проверена после перебазирования на свежий `main`.
+- Branch: `factory/9f36bf7a-c67-e40c5cc6-26e`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
-- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
+- Implementation commit: f34cd15f0aa5e2f9fa9fa8bfaecde89a4519d81a — ошибка финальной записи выпуска возвращается как неуспех и запускает откат.
+- What changed: публикация `current`, `previous` и журнала `committed` объединена в fail-closed цепочку; отказ не становится успешным выпуском.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `bash ops/test-fx-factory-release.sh` — PASS; `bash -n` и `git diff --check` — PASS.
+- Next action: Verify проверить свежую ветку по закреплённому implementation SHA.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Финальные указатели выпуска и запись `committed` объединены в одну проверяемую
+цепочку: отказ записи возвращает код 7, откатывает прежний комплект и не
+печатает успешный результат. Shell-fixture воспроизводит отказ `current`, а
+broker-тест отдельно подтверждает отображение кода 7 как `rollback_failed`.
+
+Доказательство: `go test -count=1 ./internal/releasebroker`,
+`bash ops/test-fx-factory-release.sh`, `bash -n` и `git diff --check` прошли.
 
 ### 2026-08-14 — Implement
 
