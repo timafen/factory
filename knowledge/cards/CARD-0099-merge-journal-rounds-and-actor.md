@@ -1,18 +1,19 @@
 # CARD-0099 — Журнал вливания хранит круги и участие владельца
 
-Implementation commit: pending — продуктовый код будет создан на этапе Implement + Test по этой спецификации.
+Implementation commit: 77c5e0bb3d4e6a0d50d31cee8f65927a47f0b781 — журнал фиксирует круги и источник вливания до внешнего эффекта.
 
 ## HEAD
 
-- Status: Specification complete — ready for Implement + Test.
-- Branch: `factory/10392cea-eb0-634df81f-354`.
-- Specification: `knowledge/specs/merge-journal-rounds-and-actor.md`.
-- Owner impact: история вливания будет неизменно показывать число кругов и
-  категорию участника без хранения лишних персональных данных.
-- Contract: новые строки получают `actor=automatic|owner`, nullable `actor_id`
-  и положительный `rounds`; legacy-строки означают automatic/unknown без миграции.
-- Next action: реализовать перечисленные в спецификации Pilot и efficiency
-  регрессии, затем заменить `pending` полным SHA кодового implementation commit.
+- Status: Implement + Test complete — ready for Review.
+- Branch: `factory/e30931f9-b61-ba3728c8-081`.
+- Implementation commit: `77c5e0bb3d4e6a0d50d31cee8f65927a47f0b781`.
+- What changed: новые merge receipts сохраняют `rounds`, `actor` и nullable
+  `actor_id`; crash-recovery не меняет заранее зафиксированные значения.
+- What changed: efficiency использует сохранённые круги, а legacy-строки
+  продолжают рассчитываться по доступной истории без перезаписи журнала.
+- Evidence: 4 целевых Python-теста и целевой Go-тест — OK; 313 Python-тестов,
+  `go test -timeout 5m ./...` и сборка трёх бинарников — OK.
+- Next action: провести Review реализации и контракта обратной совместимости.
 
 ## LOG
 
@@ -31,3 +32,10 @@ head. Выбран контракт, утверждённый владельце
 
 Обязательная проверка реализации уточнена до четырёх новых именованных тестов:
 трёх сценариев записи/recovery Pilot и одного сценария совместимости метрики.
+
+### 2026-08-14 — Implement
+
+Коммит `77c5e0bb3d4e6a0d50d31cee8f65927a47f0b781` сохраняет круги и категорию
+участника в merge journal; отдельная регрессия подтверждает перенос этих полей
+в durable delivery receipt. Четыре целевых Python-сценария и целевой Go-тест
+прошли; общий набор из 313 Python-тестов, весь Go-набор и сборка также успешны.
