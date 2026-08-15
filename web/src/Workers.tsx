@@ -29,6 +29,7 @@ import {
 
 const workerTabs = ["overview", "work", "capabilities", "settings"] as const;
 type WorkerTab = (typeof workerTabs)[number];
+const archiveWindowMs = 7 * 24 * 60 * 60 * 1000;
 
 const workerTabLabel: Record<WorkerTab, string> = {
   overview: "Overview",
@@ -36,6 +37,59 @@ const workerTabLabel: Record<WorkerTab, string> = {
   capabilities: "Capabilities",
   settings: "Settings",
 };
+
+function isArchivedWorker(worker: Worker, now = Date.now()) {
+  const heartbeat = Date.parse(worker.last_heartbeat);
+  return Number.isFinite(heartbeat) && heartbeat <= now && now - heartbeat >= archiveWindowMs;
+}
+
+function WorkerList({ workers, onWorker }: { workers: Worker[]; onWorker: (id: string) => void }) {
+  return (
+    <div className="workers-list">
+      <div className="worker-table-head" aria-hidden="true">
+        <span>Worker</span><span>Capacity</span><span>Repositories</span><span>Versions</span><span>Last seen</span><span />
+      </div>
+      {workers.map((worker) => (
+        <button className="worker-row" key={worker.id} onClick={() => onWorker(worker.id)}>
+          <span className="worker-identity">
+            <span className="worker-avatar"><Bot size={17} /></span>
+            <span>
+              <span className="worker-name-line">
+                <strong>{worker.name}</strong>
+                <span className={`presence ${worker.online ? "online" : "offline"}`} aria-hidden="true" />
+              </span>
+              <span className={`runtime-badge runtime-${worker.runtime}`}>
+                <Play size={10} /> {runtimeLabel(worker.runtime)}
+              </span>
+              <small>
+                {worker.online ? "Online" : "Offline"} ·{" "}
+                <span className={worker.health === "healthy" ? "healthy-text" : "danger-text"}>
+                  {stateLabel(worker.health)}
+                </span>
+              </small>
+              {worker.current_task_title && <em>{worker.current_task_title}</em>}
+            </span>
+          </span>
+          <span className="capacity-cell">
+            <strong>{worker.active_count}/{worker.capacity}</strong>
+            <span className="capacity-bar" aria-label={`${worker.active_count} of ${worker.capacity} slots active`}>
+              <span style={{ width: `${(worker.active_count / worker.capacity) * 100}%` }} />
+            </span>
+          </span>
+          <span className="repo-list">
+            {worker.repositories.map((repo) => <span className="tag" key={repo.id}>{repo.key}</span>)}
+          </span>
+          <span className="versions">
+            <small>{runtimeLabel(worker.runtime)} {worker.runtime_version || "unknown"}</small>
+            <small>Worker {worker.worker_version || "unknown"}</small>
+          </span>
+          <span className="last-seen">{timeAgo(worker.last_heartbeat)}</span>
+          <ChevronRight size={16} className="row-chevron" aria-hidden="true" />
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function WorkersView({
   workers,
@@ -51,11 +105,14 @@ export function WorkersView({
   error: Error | null;
   onWorker: (id: string) => void;
 }) {
+  const [archiveOpen, setArchiveOpen] = useState(false);
   if (pending) return <LoadingState label="Loading workers" />;
   if (error && !workers) return <ErrorState error={error} onRetry={onRefresh} />;
   const registered = workers ?? [];
-  const online = registered.filter((worker) => worker.online).length;
-  const availableSlots = registered.reduce(
+  const current = registered.filter((worker) => !isArchivedWorker(worker));
+  const archived = registered.filter((worker) => isArchivedWorker(worker));
+  const online = current.filter((worker) => worker.online).length;
+  const availableSlots = current.reduce(
     (total, worker) =>
       worker.online && worker.health === "healthy"
         ? total + Math.max(worker.capacity - worker.active_count, 0)
@@ -81,53 +138,18 @@ export function WorkersView({
       ) : (
         <>
           <div className="fleet-summary" aria-label="Fleet summary">
-            <div><span>Registered</span><strong>{registered.length}</strong></div>
+            <div><span>Current</span><strong>{current.length}</strong></div>
             <div><span>Online</span><strong>{online}</strong></div>
             <div><span>Available slots</span><strong>{availableSlots}</strong></div>
+            <div><span>Archived</span><strong>{archived.length}</strong></div>
           </div>
-          <div className="workers-list">
-            <div className="worker-table-head" aria-hidden="true">
-              <span>Worker</span><span>Capacity</span><span>Repositories</span><span>Versions</span><span>Last seen</span><span />
-            </div>
-            {registered.map((worker) => (
-              <button className="worker-row" key={worker.id} onClick={() => onWorker(worker.id)}>
-                <span className="worker-identity">
-                  <span className="worker-avatar"><Bot size={17} /></span>
-                  <span>
-                    <span className="worker-name-line">
-                      <strong>{worker.name}</strong>
-                      <span className={`presence ${worker.online ? "online" : "offline"}`} aria-hidden="true" />
-                    </span>
-                    <span className={`runtime-badge runtime-${worker.runtime}`}>
-                      <Play size={10} /> {runtimeLabel(worker.runtime)}
-                    </span>
-                    <small>
-                      {worker.online ? "Online" : "Offline"} ·{" "}
-                      <span className={worker.health === "healthy" ? "healthy-text" : "danger-text"}>
-                        {stateLabel(worker.health)}
-                      </span>
-                    </small>
-                    {worker.current_task_title && <em>{worker.current_task_title}</em>}
-                  </span>
-                </span>
-                <span className="capacity-cell">
-                  <strong>{worker.active_count}/{worker.capacity}</strong>
-                  <span className="capacity-bar" aria-label={`${worker.active_count} of ${worker.capacity} slots active`}>
-                    <span style={{ width: `${(worker.active_count / worker.capacity) * 100}%` }} />
-                  </span>
-                </span>
-                <span className="repo-list">
-                  {worker.repositories.map((repo) => <span className="tag" key={repo.id}>{repo.key}</span>)}
-                </span>
-                <span className="versions">
-                  <small>{runtimeLabel(worker.runtime)} {worker.runtime_version || "unknown"}</small>
-                  <small>Worker {worker.worker_version || "unknown"}</small>
-                </span>
-                <span className="last-seen">{timeAgo(worker.last_heartbeat)}</span>
-                <ChevronRight size={16} className="row-chevron" aria-hidden="true" />
-              </button>
-            ))}
-          </div>
+          {current.length === 0 ? <div className="workers-current-empty">No current workers</div> : <WorkerList workers={current} onWorker={onWorker} />}
+          {archived.length > 0 && <section className="workers-archive">
+            <button className="workers-archive-toggle" aria-expanded={archiveOpen} onClick={() => setArchiveOpen((open) => !open)}>
+              <span>Archive ({archived.length})</span><ChevronRight size={16} aria-hidden="true" />
+            </button>
+            {archiveOpen && <WorkerList workers={archived} onWorker={onWorker} />}
+          </section>}
         </>
       )}
     </div>

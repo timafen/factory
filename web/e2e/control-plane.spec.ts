@@ -1104,6 +1104,10 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
     onlineRepositories,
     1,
   );
+  const workers = await json<{ workers: Array<{ id: string; last_heartbeat: string }> }>(await api.get("/api/v1/workers"));
+  const archived = workers.workers.find((worker) => worker.id === workerOffline);
+  if (archived) archived.last_heartbeat = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  await page.route("**/api/v1/workers*", (route) => route.fulfill({ json: workers }));
   await api.dispose();
   await page.goto("/workers");
   await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
@@ -1111,11 +1115,19 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(workersNavigation).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
   const offlineRow = page.getByRole("button", { name: /Archive Mac/ });
+  await expect(offlineRow).toHaveCount(0);
+  await page.getByRole("button", { name: "Archive (1)" }).click();
   await expect(offlineRow).toBeVisible();
   await expect(offlineRow).toContainText("Offline");
   await expect(offlineRow).toContainText("Claude Code");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.evaluate(() => document.querySelector("main")!.scrollWidth <= document.querySelector("main")!.clientWidth)).resolves.toBe(true);
   await page.screenshot({ path: "test-results/screenshots/workers-desktop.png", fullPage: true });
 
+  await offlineRow.click();
+  await expect(page.getByRole("heading", { name: "Archive Mac" })).toBeVisible();
+  await page.getByRole("button", { name: "All workers" }).click();
+  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
   await page.getByRole("button", { name: /Build Mac/ }).click();
   await expect(page.getByRole("heading", { name: "Build Mac" })).toBeVisible();
   await expect(workersNavigation).toHaveClass(/active/);
