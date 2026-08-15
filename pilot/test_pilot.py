@@ -2693,6 +2693,32 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 0)
         self.assertEqual(self.notifications, [])
 
+    def test_full_capacity_does_not_scan_task_history(self):
+        self.conf["max_parallel_works"] = 1
+        self.conf["_active_work_tasks"] = [{
+            "id": "active", "work_id": "active",
+            "title": "[auto] [2/3 Implement] Busy work", "state": "running",
+        }]
+        self.memory = {
+            "Waiting work": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        tasks = [self.task()]
+        tasks.extend({
+            "id": f"history-{index}", "work_id": f"history-{index}",
+            "title": f"[auto] [1/3 Triage] Historical work {index}",
+            "state": "succeeded",
+        } for index in range(500))
+
+        with mock.patch.object(
+            pilot, "work_lifecycle_block",
+            side_effect=AssertionError("full-capacity watch scanned task history"),
+        ):
+            self.watch(tasks)
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Waiting work"]["since"], self.now)
+        self.assertEqual(self.memory["Waiting work"]["nudges"], 0)
+
     def test_records_for_vanished_works_are_purged(self):
         self.memory = {
             "Призрак давно закрытой работы": {"since": 1, "nudges": 2, "why": "give_up"}

@@ -2846,6 +2846,26 @@ def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
         return
+    mem = load(STALL_PATH, {}) or {}
+    now = int(time.time())
+    active_tasks = conf.get("_active_work_tasks")
+    if (isinstance(active_tasks, list)
+            and len(active_auto_works(active_tasks)) >= int(
+                conf.get("max_parallel_works", MAX_PARALLEL_WORKS))):
+        # Nothing in the stalled backlog can be admitted while every work slot
+        # is occupied.  Avoid rebuilding and cross-checking the entire task
+        # history (thousands of records in production) merely to rediscover
+        # that fact once per stalled work.  Preserve the soft-wait semantics so
+        # capacity deferral still consumes no nudge attempt.
+        capacity_deferred = 0
+        for rec in mem.values():
+            if (isinstance(rec, dict)
+                    and rec.get("why") not in ("closed", "owner", "give_up")):
+                rec["since"] = now
+                capacity_deferred += 1
+        save(STALL_PATH, mem)
+        log(f"watch_capacity_deferred count={capacity_deferred or 'all'}")
+        return
     stopped = set(conf.get("stopped_pipelines") or [])
     groups = {}
     for t in tasks:
@@ -2854,8 +2874,6 @@ def pipeline_watch(conf, tasks, workflows, workers):
             key = task_work_id(t)
             groups.setdefault(key, {"base": m.group(2).strip(), "tasks": []})[
                 "tasks"].append((m.group(1).strip(), t))
-    mem = load(STALL_PATH, {}) or {}
-    now = int(time.time())
     gave_up = []
     capacity_deferred = 0
     for work_key, group in groups.items():
