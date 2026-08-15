@@ -230,7 +230,7 @@ stop_factory_units() {
 }
 
 verify_generation_runtime() {
-  local selected=$1 unit pid exe worker_id body
+  local selected=$1 unit pid exe worker_id body previous_body previous_heartbeat registered attempt
   if systemctl -q is-active "$SERVER_SERVICE" 2>/dev/null; then
     pid=$(systemctl show -p MainPID --value "$SERVER_SERVICE" 2>/dev/null)
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
@@ -249,14 +249,31 @@ verify_generation_runtime() {
       || { fail "запущенный $unit не совпадает с выбранным manifest"; return 1; }
   done
   if systemctl -q is-active "$WORKER_SERVICE" 2>/dev/null; then
-    worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) || return
-    body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-    printf '%s' "$body" | python3 -c 'import datetime,json,sys
+    # The identity command deliberately locks the worker data directory. It
+    # cannot run beside the live worker that owns that lock, so a recovery
+    # verification must obtain the identity while the primary worker is
+    # stopped and then prove that the restarted process registered freshly.
+    systemctl stop "$WORKER_SERVICE" || return
+    worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
+      || { systemctl start "$WORKER_SERVICE" >/dev/null 2>&1 || true; return 1; }
+    previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+    previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("last_heartbeat", ""))
+except Exception: print("")' 2>/dev/null || true)
+    systemctl start "$WORKER_SERVICE" || return
+    registered=0
+    for ((attempt=1; attempt<=REGISTER_ATTEMPTS; attempt++)); do
+      body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+      if printf '%s' "$body" | python3 -c 'import datetime,json,sys
 try:
- w=json.load(sys.stdin); h=datetime.datetime.fromisoformat(w["last_heartbeat"].replace("Z","+00:00")); now=datetime.datetime.now(datetime.timezone.utc)
- ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and 0 <= (now-h).total_seconds() <= 120
+ w=json.load(sys.stdin); h=w.get("last_heartbeat", ""); old=sys.argv[2]
+ parsed=datetime.datetime.fromisoformat(h.replace("Z","+00:00")); now=datetime.datetime.now(datetime.timezone.utc)
+ ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and h and (not old or h>old) and 0 <= (now-parsed).total_seconds() <= 120
 except Exception: ok=False
-raise SystemExit(not ok)' "$worker_id" \
+raise SystemExit(not ok)' "$worker_id" "$previous_heartbeat"; then registered=1; break; fi
+      sleep "$REGISTER_DELAY"
+    done
+    [ "$registered" = 1 ] \
       || { fail "worker выбранного поколения не зарегистрировался свежим и healthy"; return 1; }
   fi
 }

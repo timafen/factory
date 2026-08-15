@@ -401,7 +401,8 @@ SERVER
 #!/bin/bash
 [ "${1:-}" = version ] && { echo 'factory-worker test 1234567890abcdef'; exit 0; }
 [ "${1:-}" = identity ] && {
-  grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null || exit 9
+  [ "$(grep -E '^(start|stop) factory-worker.service$' "$TEST_EVENTS" | tail -1)" \
+    = 'stop factory-worker.service' ] || exit 9
   if [ "$TEST_MODE" = identity-transient ] && [ ! -e "$TEST_IDENTITY_MARK" ]; then
     : >"$TEST_IDENTITY_MARK"
     echo 'data directory is still releasing its lock' >&2
