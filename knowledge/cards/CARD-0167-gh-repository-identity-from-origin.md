@@ -2,13 +2,14 @@
 
 ## HEAD
 
-Status: Implemented.
-Branch: `factory/1c5c6741-43a-0ebf7035-d70`.
+Status: Implemented
+Branch: `factory/3c382039-7ed-5f27e697-a7d`.
 Implementation commit: 495e840cfc6814d8bbc84905405e4158b43f43e4 — `gh repo view` получает репозиторий из origin поддерживаемым позиционным аргументом.
 What changed: диагностический GitHub-вызов больше не использует несуществующий
 `--repo`; bare-контекст остаётся заблокирован, а фактические аргументы CLI покрыты тестом.
 Evidence: `python3 -m unittest pilot.test_pilot` → OK (350 tests, 13 skipped);
-живой `gh repo view timafen/factory` → `timafen/factory`; browser-critical → 5 passed.
+живой bare-вызов → `owainlewis/factory`, позиционный → `timafen/factory`;
+`FACTORY_BUILD_DIR=/tmp/card0167-build just build` → OK.
 Next action: Review подтверждает итоговый diff перед слиянием.
 
 ## LOG
@@ -35,3 +36,9 @@ Pilot строит карту GitHub-целей только по `origin` то�
 Диагностический `gh repo view` переведён с неподдерживаемого `--repo` на
 позиционный репозиторий из `origin`. Новый subprocess-тест фиксирует фактический
 CLI-контракт; полный Verify на свежем `origin/main`, включая живой вызов, прошёл.
+
+### 2026-08-15 — Implement
+
+HEAD приведён к машиночитаемой строке `Status: Implemented` после
+повторной проверки целевых 350 тестов, сборки бинарников и живого
+сравнения bare/explicit `gh repo view`.
