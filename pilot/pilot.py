@@ -3183,6 +3183,15 @@ def _default_branch(url):
     return match.group(1), ""
 
 
+def _verify_registered_origin(work, expected_url):
+    """Reject a rewritten local origin before any network Git operation."""
+    rc, actual_url = _git(work, "remote", "get-url", "origin")
+    actual_url = actual_url.strip()
+    if rc or actual_url != expected_url:
+        return "registered origin does not match requested repository"
+    return ""
+
+
 def fresh_branch_snapshot(repo_identity, branch):
     """Fetch and pin the exact remote base and candidate in an isolated repo.
 
@@ -3194,9 +3203,6 @@ def fresh_branch_snapshot(repo_identity, branch):
     url = _remote_url(repo_identity)
     if not url or not branch:
         return {"state": "blocked", "reason": "missing repository or candidate branch"}
-    default, error = _default_branch(url)
-    if error:
-        return {"state": "blocked", "reason": error}
     try:
         with tempfile.TemporaryDirectory(prefix="factory-review-") as work:
             rc, out = _git(work, "init", "-q")
@@ -3205,6 +3211,12 @@ def fresh_branch_snapshot(repo_identity, branch):
             rc, out = _git(work, "remote", "add", "origin", url)
             if rc:
                 return {"state": "blocked", "reason": "cannot configure review remote: " + out[:180]}
+            error = _verify_registered_origin(work, url)
+            if error:
+                return {"state": "blocked", "reason": error}
+            default, error = _default_branch(url)
+            if error:
+                return {"state": "blocked", "reason": error}
             # A separate ls-remote lets a genuinely missing delivery remain a
             # delivery issue while every resolution/fetch failure is BLOCKED.
             rc, heads = _git(work, "ls-remote", "--heads", "origin", "refs/heads/" + branch)
@@ -3431,14 +3443,21 @@ def refresh_stale_branch(repo_identity, branch):
     url = _remote_url(repo_identity)
     if not url or not branch:
         return {"state": "blocked", "reason": "missing repository or candidate branch"}
-    default, error = _default_branch(url)
-    if error:
-        return {"state": "blocked", "reason": error}
     try:
         with tempfile.TemporaryDirectory(prefix="factory-refresh-") as work:
             for args in (("init", "-q"),
-                         ("remote", "add", "origin", url),
-                         ("fetch", "--prune", "origin",
+                         ("remote", "add", "origin", url)):
+                rc, out = _git(work, *args)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "cannot prepare stale candidate refresh: " + out.strip()[:240])}
+            error = _verify_registered_origin(work, url)
+            if error:
+                return {"state": "blocked", "reason": error}
+            default, error = _default_branch(url)
+            if error:
+                return {"state": "blocked", "reason": error}
+            for args in (("fetch", "--prune", "origin",
                           "+refs/heads/" + default + ":refs/remotes/origin/" + default,
                           "+refs/heads/" + branch + ":refs/remotes/origin/" + branch),
                          ("checkout", "-q", "-B", "candidate", "origin/" + branch)):
@@ -3499,12 +3518,17 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
         rc, out = _git(REBUILD_DIR, "init", "-q", work)
         if rc:
             log("rebuild: init " + out[:120]); return ""
+        rc, out = _git(work, "remote", "add", "origin", url)
+        if rc:
+            log("rebuild: remote " + out[:160]); return ""
+        error = _verify_registered_origin(work, url)
+        if error:
+            log("rebuild: " + error[:160]); return ""
         default, error = _default_branch(url)
         if error:
             log("rebuild: " + error[:160]); return ""
-        for args in (("remote", "add", "origin", url),
-                     ("fetch", "origin",
-                      "+refs/heads/" + default + ":refs/remotes/origin/" + default),
+        for args in (("fetch", "origin",
+                     "+refs/heads/" + default + ":refs/remotes/origin/" + default),
                      ("fetch", "origin",
                       "+refs/heads/" + dirty_branch + ":refs/remotes/origin/" + dirty_branch)):
             rc, out = _git(work, *args)
