@@ -1,10 +1,10 @@
-Implementation commit: 1492770e7f007489918550950a8b4d5d18b6a038 — lifecycle Plan, hard-stop, артефакты и merge receipt изолированы по work_id
+Implementation commit: 925e767dd88d93a5b4ed3ec36ace6090a689ee06 — lifecycle Plan, hard-stop, артефакты и merge receipt изолированы по work_id
 
 ## HEAD
 
 Status: Implemented — awaiting repeated Review
 Branch: factory/8e18c2fd-00f-ede6495e-506
-Implementation commit: 1492770e7f007489918550950a8b4d5d18b6a038
+Implementation commit: 925e767dd88d93a5b4ed3ec36ace6090a689ee06
 What changed: lifecycle Plan и архив ищут provenance `work_id`, hard-stop проверяется по durable key, а основной цикл передаёт ID через implementation/delivery artifacts и merge intent.
 What changed: writer merge-journal записывает `work_id`; title остаётся fallback только для legacy без provenance.
 Evidence: `python3 -m unittest -v pilot.test_pilot` → 226 OK, 13 skipped; `go build ./...` → OK.
@@ -30,3 +30,5 @@ One next action: повторить Review исправленных сквозн
 ### 2026-08-14 — Implement
 
 Исправлены четыре замечания повторного Review: Plan lifecycle и архив разделены по `work_id`, budget hard-stop больше не теряет аргумент durable key, цикл передаёт ID в artifacts и merge intent, а writer merge-journal сохраняет ID для восстановления epic. Добавлены сквозные проверки lifecycle/hard-stop и настоящей записи/чтения merge receipt. `python3 -m unittest -v pilot.test_pilot` — 226 OK, 13 skipped; `go build ./...` — OK.
+
+После перебазирования сохранён migration bridge для legacy Plan: потомок сопоставляется с legacy-карточкой по ID её корневой задачи, а карточки с provenance по-прежнему изолированы exact `work_id`. `python3 -m unittest -v pilot.test_pilot` — 312 OK, 13 skipped; `go build ./...` — OK.
