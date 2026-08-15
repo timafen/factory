@@ -1,12 +1,12 @@
 # CARD-0168 — закрывать устаревший PR после повторного AUTO-MERGE-конфликта
 
-Implementation commit: 19c34c03c1f65812480ab3507d480b7b9066b1e2 — Pilot не блокирует восстановление при сбое закрытия устаревшего PR.
+Implementation commit: 7654b331ccb4fa88d79557719f8d96d306d08b11 — Pilot закрывает устаревший PR после доказанного слияния той же работы и возвращает её в correction flow при ошибке.
 
 ## HEAD
 
-Status: Implemented — замечание Review исправлено, ожидает повторной проверки.
-Branch: `factory/b8e12c18-568-f685e900-0e9`.
-Implementation commit: 19c34c03c1f65812480ab3507d480b7b9066b1e2 — отказ `gh_close_pr` сохраняет восстановимый conflict.
+Status: Implemented — спецификация приёмки подготовлена.
+Branch: реализация влита в `main`; текущая спецификация передаёт её на приёмку.
+Implementation commit: 7654b331ccb4fa88d79557719f8d96d306d08b11 — отказ `gh_close_pr` сохраняет восстановимый conflict.
 What changed: новый PR Pilot получает marker immutable `work_id`; при втором
 conflict проверяется единственный открытый PR и единственный merged PR с тем же
 marker и base. Состояние становится terminal только после успешного закрытия;
