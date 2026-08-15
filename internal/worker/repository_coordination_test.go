@@ -48,12 +48,12 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   exit 0
 fi
 if [ "${1:-}" = "repo" ] && [ "${2:-}" = "view" ]; then
-  [ "$("$FACTORY_TEST_REAL_GIT" config --get remote.origin.gh-resolved)" = "base" ]
-  if "$FACTORY_TEST_REAL_GIT" config --get remote.upstream.gh-resolved >/dev/null 2>&1; then
+  [ "$("$FACTORY_TEST_REAL_GIT" config --get remote.upstream.gh-resolved)" = "base" ]
+  if "$FACTORY_TEST_REAL_GIT" config --get remote.origin.gh-resolved >/dev/null 2>&1; then
     exit 92
   fi
-  origin=$("$FACTORY_TEST_REAL_GIT" remote get-url origin)
-  slug=${origin#https://github.com/}
+  upstream=$("$FACTORY_TEST_REAL_GIT" remote get-url upstream)
+  slug=${upstream#https://github.com/}
   slug=${slug%.git}
   printf '{"nameWithOwner":"%s"}\n' "$slug"
   exit 0
@@ -123,7 +123,7 @@ exec "$FACTORY_TEST_REAL_GIT" \
 }
 
 func TestManagedRepositoryCacheSetsGitHubDefaultRepository(t *testing.T) {
-	t.Run("timafen origin wins over owainlewis upstream in new and existing cache", func(t *testing.T) {
+	t.Run("owainlewis upstream wins over timafen origin in new and existing cache", func(t *testing.T) {
 		fixture := newManagedAcquisitionFixture(t, "normal")
 		repository, err := fixture.manager.acquireManagedRepository(context.Background(), fixture.first)
 		if err != nil {
@@ -153,7 +153,7 @@ func TestManagedRepositoryCacheSetsGitHubDefaultRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("bare gh repo view: %v\n%s", err, output)
 		}
-		if got, want := strings.TrimSpace(string(output)), `{"nameWithOwner":"timafen/factory"}`; got != want {
+		if got, want := strings.TrimSpace(string(output)), `{"nameWithOwner":"owainlewis/factory"}`; got != want {
 			t.Fatalf("bare gh repository = %s, want %s", got, want)
 		}
 	})
@@ -173,13 +173,13 @@ func TestManagedRepositoryCacheSetsGitHubDefaultRepository(t *testing.T) {
 
 func assertManagedRepositoryGitHubDefaults(t *testing.T, cachePath string) {
 	t.Helper()
-	if got := runGitTest(t, cachePath, "config", "--get", "remote.origin.gh-resolved"); got != "base" {
-		t.Fatalf("origin gh-resolved = %q", got)
+	if got := runGitTest(t, cachePath, "config", "--get", "remote.upstream.gh-resolved"); got != "base" {
+		t.Fatalf("upstream gh-resolved = %q", got)
 	}
-	command := exec.Command("git", "config", "--get-all", "remote.upstream.gh-resolved")
+	command := exec.Command("git", "config", "--get-all", "remote.origin.gh-resolved")
 	command.Dir = cachePath
 	if output, err := command.CombinedOutput(); err == nil || len(output) != 0 {
-		t.Fatalf("upstream gh-resolved remains: %v, %q", err, output)
+		t.Fatalf("origin gh-resolved remains: %v, %q", err, output)
 	}
 	checks := map[string]string{
 		"remote.origin.url":   "https://github.com/timafen/factory.git",

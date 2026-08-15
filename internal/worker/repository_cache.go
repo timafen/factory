@@ -263,17 +263,17 @@ func (manager *Manager) cloneManagedRepository(
 
 func configureManagedRepositoryGitHubDefault(ctx context.Context, gitExecutable, repository string) error {
 	stdout, stderr, err := runGitCommand(ctx, gitExecutable, repository, 64<<10,
-		"config", "--unset-all", "remote.upstream.gh-resolved")
+		"config", "--unset-all", "remote.origin.gh-resolved")
 	if err != nil {
 		var exitError *exec.ExitError
 		if !errors.As(err, &exitError) || exitError.ExitCode() != 5 {
-			return commandFailure("remove upstream GitHub default", stdout, stderr, err)
+			return commandFailure("remove origin GitHub default", stdout, stderr, err)
 		}
 	}
 	stdout, stderr, err = runGitCommand(ctx, gitExecutable, repository, 64<<10,
-		"config", "--replace-all", "remote.origin.gh-resolved", "base")
+		"config", "--replace-all", "remote.upstream.gh-resolved", "base")
 	if err != nil {
-		return commandFailure("set origin GitHub default", stdout, stderr, err)
+		return commandFailure("set upstream GitHub default", stdout, stderr, err)
 	}
 	return nil
 }
