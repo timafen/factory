@@ -55,7 +55,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
-' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/unhealthy/worktrees/retained" "$TMP/healthy/worktrees/retained" "$TMP/healthy-reason" >"$TMP/server.log" 2>&1 &
+' "$TMP/request.json" "$TMP/request-path" "$TMP/worker/worktrees/retained" "$TMP/worker/worktrees/missing" "$TMP/worker/worktrees/unmoved" "$TMP/unhealthy-retained/worktrees/retained" "$TMP/healthy/worktrees/retained" "$TMP/healthy-reason" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in {1..100}; do
   PORT=$(head -1 "$TMP/server.log" || true)
@@ -98,6 +98,7 @@ test "$(grep -c 'stop factory-unhealthy.service\|start factory-unhealthy.service
 test "$(grep -c 'stop factory-unhealthy-retained.service\|start factory-unhealthy-retained.service' "$TMP/systemctl.log" || true)" -eq 2
 test "$(python3 -c 'import json; print("online-unhealthy" in json.load(open("'$TMP'/state/heals.json")))')" = False
 test "$(grep -c 'ОСВОБОЖДАЮ online-healthy' "$TMP/janitor.log" || true)" -eq 0
+test "$(grep -c 'stop factory-healthy.service\|start factory-healthy.service' "$TMP/systemctl.log" || true)" -eq 0
 test "$(wc -l <"$TMP/escalations.log")" -eq 1
 grep -q 'online-healthy.*attempt-healthy.*healthy/worktrees/retained.*reason=done' "$TMP/escalations.log"
 
