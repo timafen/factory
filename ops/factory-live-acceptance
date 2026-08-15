@@ -1,0 +1,44 @@
+#!/bin/bash
+# Read-only post-release acceptance.  Its JSON is the broker's durable input.
+set -euo pipefail
+generation_id=
+commit_sha=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --generation-id) generation_id=${2:-}; shift 2 ;;
+    --commit-sha) commit_sha=${2:-}; shift 2 ;;
+    *) exit 2 ;;
+  esac
+done
+if ! [[ "$generation_id" =~ ^[a-z0-9][a-z0-9-]{0,127}$ ]] || ! [[ "$commit_sha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+  printf '%s\n' '{"status":"failed","reason":"invalid_identity"}'; exit 0
+fi
+current=${FACTORY_CURRENT_RELEASE:-/opt/factory-data/releases/factory-current.json}
+api=${FACTORY_CONTROL_PLANE_API:-http://127.0.0.1:7337}
+if ! test -r "$current" || ! curl -fsS --max-time 10 "$api/healthz" >/dev/null; then
+  printf '%s\n' '{"status":"failed","reason":"service_unavailable"}'; exit 0
+fi
+if ! grep -q "$commit_sha" "$current"; then
+  printf '%s\n' '{"status":"failed","reason":"release_identity_mismatch"}'; exit 0
+fi
+workers=$(curl -fsS --max-time 10 "$api/api/v1/workers") || { printf '%s\n' '{"status":"failed","reason":"workers_unavailable"}'; exit 0; }
+# One parser handles both the mandatory synthetic contract and the live snapshot.
+if WORKERS="$workers" python3 - <<'PY'
+import json, os, sys
+def retained(value):
+    for worker in value if isinstance(value, list) else value.get('workers', []):
+        if not worker.get('online', True) and worker.get('retained_worktrees'):
+            return True
+    return False
+fixture=[{'name':'fixture','online':False,'retained_worktrees':[{'attempt':'fixture'}]}]
+if not retained(fixture): sys.exit(2)
+sys.exit(1 if retained(json.loads(os.environ['WORKERS'])) else 0)
+PY
+then
+  printf '%s\n' '{"status":"passed"}'
+  exit 0
+else
+  code=$?
+  if [ "$code" -eq 1 ]; then printf '%s\n' '{"status":"failed","reason":"offline_retained_worktree"}'; else printf '%s\n' '{"status":"failed","reason":"fixture_contract_failed"}'; fi
+  exit 0
+fi

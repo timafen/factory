@@ -7437,7 +7437,7 @@ DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/delivery-receipts.jsonl"
 DELIVERY_OUTBOX_PATH = f"{HOME}/pilot/delivery-outbox.jsonl"
 DELIVERY_BROKER_SOCKET = "/run/factory/project-release-broker.sock"
 DELIVERY_RETRY_DELAY = 60
-DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
+DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "released", "completed", "failed"))
 DELIVERY_TARGET_TITLES = {"factory": "Factory", "tarser-staging": "Tarser staging"}
 
 
@@ -7481,11 +7481,11 @@ def release_train_block(state, tasks, now):
         if current:
             phase = current["phase"]
             item["state"] = {"reserved": "waiting", "launching": "running", "running": "running",
-                             "completed": "succeeded", "failed": "failed"}[phase]
+                             "released": "running", "completed": "succeeded", "failed": "failed"}[phase]
             if isinstance(current.get("sequence"), int):
                 item["generation"] = current["sequence"]
             item["gate"] = {"reserved": "ожидает broker", "launching": "запускается",
-                            "running": "выполняется", "completed": "принят",
+                            "running": "выполняется", "released": "ожидает живую приёмку", "completed": "принят",
                             "failed": "не прошёл"}[phase]
             item["passengers"] = passengers(current.get("waits"))
             started = public_time(current.get("started_at") or current.get("reserved_at"))
@@ -7609,6 +7609,21 @@ def broker_operation(socket_path, method, operation_id, payload=None):
         return None
 
 
+def broker_acceptance(socket_path, method, operation_id, commit_sha=None):
+    """Ask the fixed broker acceptance operation; I/O is never a PASS."""
+    endpoint = "http://release-broker/v1/operations/" + operation_id + "/acceptance"
+    args = ["curl", "--silent", "--show-error", "--unix-socket", socket_path,
+            "--max-time", "10", "-X", method, endpoint]
+    if method == "POST":
+        args[args.index("-X"):args.index("-X")] = ["-H", "Content-Type: application/json",
+            "--data", json.dumps({"operation_id": operation_id, "commit_sha": commit_sha})]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def _delivery_record(path, record):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as stream:
@@ -7631,6 +7646,8 @@ def _delivery_record_once(path, record):
 
 
 def _complete_generation(conf, state, generation):
+    if generation.get("phase") != "completed":
+        return
     durable = _delivery_state(state)
     completed = generation.setdefault("completed_waits", {})
     for task_id, wait in generation["waits"].items():
@@ -7661,6 +7678,19 @@ def _fail_generation(state, target, generation, category, now):
         "target": DELIVERY_TARGET_TITLES.get(target.get("id"), "Проект"),
         "titles": titles, "category": category, "at": generation["finished_at"],
     })
+
+
+def _live_acceptance_failed(state, target, generation, response, now):
+    """Fail closed and make each Verify wait eligible for an implementation lap."""
+    reason = response.get("reason") if isinstance(response, dict) else "acceptance_unknown"
+    generation["acceptance"] = {"status": "failed", "reason": reason}
+    _fail_generation(state, target, generation, "live-failed", now)
+    generation["failure_id"] = generation["id"] + ":live-failed"
+    returned = generation.setdefault("returned_waits", {})
+    for task_id in generation.get("waits", {}):
+        if task_id not in returned:
+            returned[task_id] = reason
+            retry_terminal_task(state, task_id)
 
 
 def dispatch_delivery_outbox(conf, state):
@@ -7707,6 +7737,11 @@ def poll_delivery_state(conf, state, now=None):
                     {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
             elif generation["phase"] in ("launching", "running"):
                 response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "GET", generation["id"])
+            elif generation["phase"] == "released":
+                acceptance = generation.setdefault("acceptance", {"status": "pending"})
+                method = "POST" if acceptance.get("status") == "pending" else "GET"
+                response = broker_acceptance(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), method,
+                                             generation["id"], generation["commit_sha"])
             else:
                 response = None
             status = (response or {}).get("status")
@@ -7721,11 +7756,38 @@ def poll_delivery_state(conf, state, now=None):
                 # Terminal broker proof must survive before receipts/outbox.
                 # A restart from this exact point only finishes the local
                 # transaction and never POSTs a second physical release.
-                generation["phase"] = "completed"
-                generation["finished_at"] = time.strftime(
+                generation["phase"] = "released"
+                generation["released_at"] = time.strftime(
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                generation["acceptance"] = {"status": "pending"}
+                save(STATE_PATH, state)
+                # Start the separate operation only after the released
+                # boundary is durable.  A synchronous terminal answer is
+                # safe to consume here; a restart will otherwise poll it.
+                acceptance_response = broker_acceptance(
+                    conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST",
+                    generation["id"], generation["commit_sha"])
+                if (acceptance_response or {}).get("status") == "passed":
+                    generation["acceptance"] = {"status": "passed"}
+                    generation["phase"] = "completed"
+                    generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                    save(STATE_PATH, state)
+                    _complete_generation(conf, state, generation)
+                elif (acceptance_response or {}).get("status") == "failed":
+                    _live_acceptance_failed(state, target, generation, acceptance_response, current_time)
+                    save(STATE_PATH, state)
+            elif generation["phase"] == "released" and status in ("pending", "running"):
+                generation["acceptance"] = {"status": status}
+                save(STATE_PATH, state)
+            elif generation["phase"] == "released" and status == "passed":
+                generation["acceptance"] = {"status": "passed"}
+                generation["phase"] = "completed"
+                generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
                 save(STATE_PATH, state)
                 _complete_generation(conf, state, generation)
+            elif generation["phase"] == "released" and status == "failed":
+                _live_acceptance_failed(state, target, generation, response or {}, current_time)
+                save(STATE_PATH, state)
             elif status == "locked":
                 generation["phase"] = "reserved"
                 generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
