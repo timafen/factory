@@ -1,18 +1,25 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 37e7893cd340be90add2b7a971ad7925f511ed6e — release-driver сохраняет каждый статус через durable broker-запись и fail-closed восстановление.
+Implementation commit: ef1f4268f48ae236f124868c399c5b5c3dc6ebae — release-driver повторяет locked delivery, записывает terminal status после running и сохраняет точный итог отката.
 
 ## HEAD
 
-- Status: Implemented — ready for Verify after rebase on fresh `main`.
-- Branch: `factory/c955c55a-fff-8bd5811f-36c`.
+- Status: Implemented — ready for повторного Review.
+- Branch: `factory/a85069b2-7bc-2d06ff8e-a9c`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `37e7893cd340be90add2b7a971ad7925f511ed6e` — release-driver сохраняет каждый статус через durable broker-запись и fail-closed восстановление.
-- What changed: запись статуса использует fsync файла, atomic rename и fsync каталога; сбой terminal-синхронизации восстанавливает последний durable `running`.
-- Evidence: `go test -race -count=1 ./internal/releasebroker` — PASS; `bash ops/test-fx-factory-release.sh` — PASS; Pilot — 10 PASS; `just build` — PASS.
-- Next action: Передать ветку на Verify и проверить полный diff относительно свежего `main`.
+- Implementation commit: `ef1f4268f48ae236f124868c399c5b5c3dc6ebae` — release-driver повторяет locked delivery, записывает terminal status после running и сохраняет точный итог отката.
+- What changed: сохранённый `locked` возвращает операцию к захвату lock; общий terminal trap покрывает preflight и служебные режимы; автоматический откат сохраняет `release_failed_rolled_back` либо `rollback_failed`.
+- Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
+- Next action: Повторить Review на свежем `main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлены четыре замечания Review: locked delivery повторно захватывает lock,
+каждый выход после running оставляет terminal status, а результаты отката не
+теряют классификацию. Shell-fixture покрывает retry, terminal preflight и
+успешный автоматический откат; профильный broker-тест и сборка прошли.
 
 ### 2026-08-14 — Implement
 
