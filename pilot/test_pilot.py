@@ -1452,6 +1452,24 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(repeated, snapshot[0])
         self.assertEqual(opened, [path])
 
+    def test_snapshot_skips_rollouts_older_than_requested_window(self):
+        stale = self.write_rollout([
+            self.event("2026-08-01T10:00:01Z",
+                       {"input_tokens": 900, "output_tokens": 90}),
+        ])
+        recent = self.write_rollout([
+            self.event("2026-08-15T10:00:01Z",
+                       {"input_tokens": 100, "output_tokens": 10}),
+        ])
+        os.utime(stale, (10, 10))
+        os.utime(recent, (200, 200))
+
+        with mock.patch.object(pilot.glob, "glob", side_effect=[[stale, recent], []]):
+            snapshot = pilot.codex_usage_snapshot(100)
+
+        self.assertEqual(snapshot[100]["total_tokens"], 110)
+        self.assertNotIn(stale, pilot._codex_rollout_cache)
+
     def test_incomplete_jsonl_line_is_read_after_it_is_finished(self):
         path = self.write_rollout([])
         event = self.event("2026-08-09T10:00:01Z",
@@ -6814,9 +6832,13 @@ class AdaptivePollingTests(unittest.TestCase):
                 pilot, "refill_open_work_slots", side_effect=refill))
             stack.enter_context(mock.patch.object(
                 pilot, "load_restart_recovery_tasks", side_effect=recovery))
+            def usage_snapshot(*windows):
+                startup_events.append(
+                    "daily" if windows[0] == windows[-1] else "weekly")
+                return {window: {} for window in windows}
+
             stack.enter_context(mock.patch.object(
-                pilot, "codex_usage_snapshot",
-                side_effect=lambda day_start, _week_start: {day_start: {}}))
+                pilot, "codex_usage_snapshot", side_effect=usage_snapshot))
             stack.enter_context(mock.patch.object(
                 pilot, "day_budget_blocks", return_value=False))
             stack.enter_context(mock.patch.object(
@@ -6829,7 +6851,8 @@ class AdaptivePollingTests(unittest.TestCase):
             pilot.cycle(conf, state)
 
             self.assertTrue(refills)
-            self.assertEqual(startup_events[:2], ["refill", "recovery"])
+            self.assertEqual(startup_events[:4],
+                             ["daily", "refill", "weekly", "recovery"])
             self.assertEqual(history_calls, [])
             noop_mocks["reconcile_diag_repairs"].assert_not_called()
             noop_mocks["diag_sweep"].assert_not_called()
