@@ -1,16 +1,16 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: 92ac616c8c67345b027cf3fabe6bfa4eb78ceba4 — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
-What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
-What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+Status: IMPLEMENTED — целевой и полный наборы завершены успешно.
+Branch: factory/db338894-851-59cc6dbf-cf2.
+Implementation commit: 92ac616c8c67345b027cf3fabe6bfa4eb78ceba4 — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
+What changed: актуальный forked launcher из `main` сохраняет `--wait` и реальный status; фикстура больше не тратит 5 секунд после каждого успешного gate.
+What changed: production health-delay остаётся равным 5 секундам и проверяется как целое неотрицательное значение.
+Evidence: `timeout --kill-after=5s 300s bash ops/test-fx-factory-release.sh` → PASS; `env -u FACTORY_BUILD_DIR just check` → PASS (180 UI tests).
+One next action: проверить поставку ветки относительно свежего remote `main`.
 
 ## LOG
 
@@ -137,3 +137,10 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | Смежное release-поведение | `bash -n` для обоих скриптов; pinned `git diff --check` | PASS: синтаксис и пробелы корректны. |
 | Полный набор проекта | `timeout 1200s just check` | НАХОДКА вне области: format, vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
 | Закреплённая область поставки | isolated bare fetch; `git diff --name-only c28b5bfc0c5bbb22c7d69d0749c316a2b340841e...2be97a66737caee20ee1a7390d1ba68f38a9f606` | PASS: изменены только карточка и `ops/test-fx-factory-release.sh`; implementation commit `13c8e8e0a04854c17c352eb8128eb85bb16fd04d` — предок кандидата и меняет код. |
+
+### 2026-08-14 — Implement
+
+Трассировка `bash -x` и снимки процессов отделили старую ложную модель launcher
+от накопительной пятисекундной health-паузы. На свежем `main` уже действует
+waitable `setsid --fork --wait`; тестовая фикстура теперь отключает только паузу.
+Целевой release-сценарий и полный `just check` завершились успешно.
