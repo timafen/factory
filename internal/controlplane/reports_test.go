@@ -86,6 +86,31 @@ func TestDailyReportServiceAutomaticallyRetriesWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestCommandDailyReportRendererUsesReleaseBrowserRuntime(t *testing.T) {
+	directory := t.TempDir()
+	recordedEnvironment := filepath.Join(directory, "environment")
+	node := filepath.Join(directory, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nprintf '%s\\n%s\\n' \"$FACTORY_BROWSER_LAUNCHER\" \"$FACTORY_BROWSER_PAYLOAD\" >\"$RENDER_ENVIRONMENT\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("RENDER_ENVIRONMENT", recordedEnvironment)
+	t.Setenv("FACTORY_BROWSER_LAUNCHER", "/untrusted/launcher")
+	t.Setenv("FACTORY_BROWSER_PAYLOAD", "/untrusted/payload")
+
+	if err := (commandDailyReportRenderer{script: "production-renderer.mjs"}).Render(context.Background(), "<html/>", filepath.Join(directory, "report.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(recordedEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := factoryBrowserLauncher + "\n" + factoryBrowserPayload + "\n"
+	if string(got) != want {
+		t.Fatalf("renderer browser environment = %q, want %q", got, want)
+	}
+}
+
 type sequentialPNGWriter struct{ calls int }
 
 func (writer *sequentialPNGWriter) Capture(_ context.Context, _ protocol.VisualTarget, output string) error {
