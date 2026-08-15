@@ -5,6 +5,7 @@
 Status: Verified PASS — awaiting human merge
 Branch: factory/5b9cb945-2d5-c61f3f8a-cb6
 Implementation commit: bee395269e7fc5e6aeba0c3a44077442f48ea968 — после исчерпания возврата второй невалидный HEAD не запускает Implement.
+Specification: после конфликта в `main` сохранён контракт уникального резерва номера и точная целевая регрессия для следующего сопровождения.
 Evidence summary: `just check`, сборка, UI unit/browser и целевые 23 Python-теста прошли; мутация без production guard падает.
 One next action: human merge into main.
 
@@ -26,6 +27,14 @@ One next action: human merge into main.
 Целевые `SpecificationBranchHandoffTests` и полный Python-набор прошли; `py_compile` и `git diff --check` чисты.
 
 ## LOG
+
+### 2026-08-15 — Specification
+
+Уточнён воспроизводимый контракт поставки после конфликта: номер карточки
+резервируется по опубликованной ветке до создания Implement, сохраняется во
+всех handoff и сверяется перед Review. Реальными точками сопровождения остаются
+`pilot/pilot.py` и `pilot/test_pilot.py`; обязательная целевая проверка —
+`CardNumberReservationTests` вместе с `SpecificationBranchHandoffTests`.
 
 ### 2026-08-11 — Verify
 
