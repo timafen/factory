@@ -1,24 +1,24 @@
-Implementation commit: cc4b98eeeb0bdbd546ecb2488d2a57ee5bf2a703 — компактный План, сгруппированные Уведомления и единый русский интерфейс
+Implementation commit: c03f83be0578c46391785ce575076d4120622a91 — единое русское название «Работа» и точные браузерные проверки
 
 # CARD-0178 — Довести визуальный аудит до Плана, Уведомлений и единого языка
 
 ## HEAD
 
 - Status: Implemented
-- Branch: `factory/983946f1-777-5629fadc-f33`
-- Implementation commit: `cc4b98eeeb0bdbd546ecb2488d2a57ee5bf2a703`
-- What changed: обоснование карточки Плана скрыто до запроса, а действия и служебные данные остаются на виду.
-- What changed: Уведомления ограничены 30 свежими событиями, собраны по русским группам и раскрываются явно.
-- What changed: основные экраны Factory переведены на русский и адаптированы для desktop и phone.
-- Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 4 tests, OK.
-- Evidence: `npm --prefix web test -- --run src/App.test.tsx src/Settings.test.tsx` → 78 tests passed.
-- Evidence: typecheck, lint и production build → passed; 1739 modules transformed.
-- Evidence: Playwright `shows the real intake Plan and Alerts` → 1 passed; четыре снимка просмотрены вручную.
-- Evidence: Playwright `audits every Factory screen on desktop and phone` → 1 passed.
-- One next action: проверить `/intake/plan` на общем стенде после слияния ветки.
+- Branch: `factory/0734ceb7-d09-2d4ef532-4ba`
+- Implementation commit: `c03f83be0578c46391785ce575076d4120622a91`
+- What changed: раздел работ в заголовке, навигации и верхней строке называется «Работа».
+- What changed: критические браузерные проверки используют русские подписи исполнителя.
+- Evidence: `npm --prefix web test -- --run src/App.test.tsx src/WorkView.test.tsx` → 76 tests passed.
+- Evidence: Playwright `shows parallel worker capacity and current work` → 1 passed.
+- One next action: прогнать полный набор Verify перед слиянием.
 
 ## LOG
 
 ### 2026-08-15 — Implement
 
 Сделаны компактный План, сгруппированные Уведомления и русская терминология основных экранов. Реальные intake-обработчики проверены в Chromium на desktop и phone; общий визуальный аудит, компонентные и серверные тесты, типы, lint и production build прошли.
+
+### 2026-08-15 — Implement
+
+По решению владельца раздел возвращён к названию «Работа». Согласованы заголовок, навигация, верхняя строка и точные браузерные ожидания русских статусов исполнителя; целевые компонентные и критический сценарий профиля прошли.
