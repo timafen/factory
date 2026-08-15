@@ -403,8 +403,8 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "delivery-1.json")); err != nil {
 		t.Fatal(err)
 	}
-	// A restart cannot safely infer whether an old runner is still alive.  It
-	// records failure rather than executing the release a second time.
+	// An executor without durable delivery status cannot prove that its old
+	// child survived, so restart keeps the operation immutable and fails closed.
 	restarted, err := NewAt(dir, &recordingExecutor{})
 	if err != nil {
 		t.Fatal(err)

@@ -7132,6 +7132,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         """Run the real Go Unix broker against a blocking physical FX fixture."""
         socket_path = os.path.join(self.temporary.name, uuid.uuid4().hex + ".sock")
         state_dir = os.path.join(self.temporary.name, uuid.uuid4().hex + "-broker")
+        delivery_dir = os.path.join(self.temporary.name, uuid.uuid4().hex + "-deliveries")
         fx = os.path.join(self.temporary.name, uuid.uuid4().hex + "-fx")
         attempts = fx + ".attempts"
         success = fx + ".success"
@@ -7145,9 +7146,11 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "if [ -f \"" + lock_once + "\" ]; then rm -f \"" + lock_once + "\"; exit 8; fi\n"
                          "printf '%s\\n' \"$$\" > \"" + pid + "\"\n"
                          ": > \"" + started + "\"\n"
+                         "mkdir -p \"" + delivery_dir + "\"\n"
+                         "printf 'running\\n' > \"" + delivery_dir + "/$FACTORY_DELIVERY_ID.status\"\n"
                          "while [ ! -f \"" + release_gate + "\" ]; do sleep 0.01; done\n"
                          "case \"" + outcome + "\" in\n"
-                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
+                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; printf 'succeeded\\n' > \"" + delivery_dir + "/$FACTORY_DELIVERY_ID.status\"; exit 0 ;;\n"
                          "  rollback_failed) exit 1 ;;\n"
                          "  *) exit 7 ;;\n"
                          "esac\n")
@@ -7156,14 +7159,14 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
             with open(lock_once, "w", encoding="utf-8") as stream:
                 stream.write("locked once\n")
         broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
-                                   "-state-dir", state_dir, "-factory-release-executable", fx],
+                                   "-state-dir", state_dir, "-delivery-state-dir", delivery_dir, "-factory-release-executable", fx],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[socket_path] = broker
         self.addCleanup(self._stop_process, broker)
         for _ in range(100):
             if os.path.exists(socket_path):
                 return {"socket": socket_path, "broker_state": state_dir,
-                        "fx": fx,
+                        "fx": fx, "delivery_state": delivery_dir,
                         "attempts": attempts, "success": success, "fx_started": started,
                         "fx_pid": pid, "release_gate": release_gate}
             if broker.poll() is not None:
@@ -7174,7 +7177,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
     def _restart_process_broker(self, paths):
         """Replace a stopped broker while retaining its durable state and FX."""
         process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
-                                    "-state-dir", paths["broker_state"],
+                                    "-state-dir", paths["broker_state"], "-delivery-state-dir", paths["delivery_state"],
                                     "-factory-release-executable", paths["fx"]],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[paths["socket"]] = process
@@ -7358,6 +7361,33 @@ pilot.save(pilot.STATE_PATH, state)
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
         self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
+    def test_real_broker_pid_restart_observes_one_running_wrapper(self):
+        paths = self._process_paths(self._start_process_broker())
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("poll_once", paths, sha=self.sha)
+        for _ in range(250):
+            if os.path.exists(paths["fx_started"]):
+                break
+            time.sleep(.02)
+        else:
+            self.fail("physical FX did not start")
+        # This is a real process boundary: kill the broker PID while its
+        # wrapper is still blocked, then start a new broker against state.
+        old_broker = self.broker_processes[paths["socket"]]
+        old_broker.kill()
+        old_broker.wait(timeout=2)
+        self._restart_process_broker(paths)
+        with open(paths["release_gate"], "w", encoding="utf-8"):
+            pass
+        self._pilot_process("recover", paths, sha=self.sha)
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        with open(paths["attempts"], encoding="utf-8") as stream:
+            attempts = [line.strip() for line in stream if line.strip()]
+        self.assertEqual(generation["phase"], "completed")
+        self.assertEqual(attempts, [generation["id"]])
+
     def test_terminal_write_failure_survives_real_broker_restart_without_false_done(self):
         paths = self._process_paths(self._start_process_broker())
         self._pilot_process("seed", paths, sha=self.sha)
@@ -7407,15 +7437,13 @@ pilot.save(pilot.STATE_PATH, state)
         state = self._read_json(paths["state"])
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         generation = target["generations"][target["current_generation"]]
-        # Both accepted broker states are durable and non-terminal.  Under
-        # load the physical command can finish before the broker's launching
-        # record advances to running; neither state may create completion
-        # receipts, which is the invariant exercised below.
-        self.assertIn(generation["phase"], ("launching", "running"))
-        self.assertFalse(os.path.exists(paths["receipts"]))
-        self.assertFalse(os.path.exists(paths["outbox"]))
-        self.assertEqual(self._events(paths["events"], "mark_final"), [])
-        self.assertEqual(self._events(paths["events"], "owner_done"), [])
+        # The wrapper's durable marker now lets the live broker recover the
+        # terminal result even when its own final write had failed.
+        self.assertEqual(generation["phase"], "completed")
+        self.assertTrue(os.path.exists(paths["receipts"]))
+        self.assertTrue(os.path.exists(paths["outbox"]))
+        self.assertEqual(len(self._events(paths["events"], "mark_final")), 1)
+        self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
         old_broker = self.broker_processes[paths["socket"]]
         self._stop_process(old_broker)
@@ -7433,14 +7461,14 @@ pilot.save(pilot.STATE_PATH, state)
             attempts = [line.strip() for line in stream if line.strip()]
         with open(paths["success"], encoding="utf-8") as stream:
             successful = [line.strip() for line in stream if line.strip()]
-        self.assertEqual(generation["phase"], "failed")
-        self.assertEqual(broker_state["status"], "failed")
+        self.assertEqual(generation["phase"], "completed")
+        self.assertEqual(broker_state["status"], "succeeded")
         self.assertEqual(attempts, [generation["id"]])
         self.assertEqual(successful, [generation["id"]])
-        self.assertFalse(os.path.exists(paths["receipts"]))
+        self.assertTrue(os.path.exists(paths["receipts"]))
         with open(paths["outbox"], encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
-        self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(len(self._events(paths["events"], "mark_final")), 1)
         self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
     def test_failed_broker_terminal_never_completes_waits(self):
