@@ -3,10 +3,10 @@
 ## HEAD
 
 - Status: Implemented.
-- Branch: `factory/be6aa927-bcf-f8aea5c0-a16`.
-- Implementation commit: 33c71efc089682acbbc176ffcb52fd58562a5513 — исправлены запросы актуальной схемы и пагинация для server-side work_class; раздельные группы влитых работ и провалов, человеческие даты и подписи Overview.
+- Branch: `factory/53b60be3-af4-4042d14b-025`.
+- Implementation commit: 28a68d741e7aaf136b30d4288e2ac624859f1786 — обновлена встроенная витрина с раздельными группами влитых работ и провалов, человеческими датами и подписями Overview.
 - What changed: API Task вычисляет durable `work_class`; Pilot доверяет receipt и выдаёт независимые группы `merged`/`failed` с этапом и причиной. Overview отображает обе группы и безопасно форматирует даты.
-- Evidence: `go test ./...`, 285 Python tests, 181 web tests, typecheck, lint, build and `git diff --check` — зелёные.
+- Evidence: `go test ./...`, Pilot: 285 tests; web lint, typecheck, 181 tests and production build; `git diff --check` — зелёные.
 - One next action: после публикации проверить экран `/` на стенде и убедиться, что следующий dashboard snapshot содержит обе группы.
 
 ## LOG
@@ -22,3 +22,7 @@
 ### 2026-08-15 — Implement
 
 Ветка перенесена на актуальный `main`. Полные проверки подтверждают разделение влитых и неуспешных работ, человеческие даты и подписи: `go test ./...`, 285 тестов Pilot, 181 веб-тест, typecheck, lint и production build прошли.
+
+### 2026-08-15 — Implement
+
+Поставка повторно перенесена на свежий `origin/main`; карточка привязана к фактическому кодовому коммиту в этой ветке. Pilot (285), web lint/typecheck/test (181), production build и полный `go test ./...` прошли.
