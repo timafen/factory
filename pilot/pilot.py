@@ -3155,6 +3155,31 @@ def _remote_url(repo_identity):
     return f"https://github.com/{short}.git" if short and "/" in short else ""
 
 
+def _comparable_remote_url(url):
+    """Return the deliberately small set of harmless Git URL normalizations."""
+    value = str(url or "").strip()
+    # Git preserves the URL supplied to `remote add` today.  A final slash is
+    # the one representation we can safely treat as equivalent without
+    # guessing about protocols, credentials, hosts, or paths.
+    return value.rstrip("/") if value not in ("", "/") else value
+
+
+def _verify_registered_origin(work, canonical_url):
+    """Ensure this temporary repository's origin is the intended repository.
+
+    Do not include either URL in the diagnostic: an URL is allowed to contain
+    credentials, while the operator only needs to know that origin is unsafe.
+    """
+    rc, registered_url = _git(work, "remote", "get-url", "origin")
+    if rc:
+        return "cannot verify registered origin"
+    if not registered_url.strip():
+        return "registered origin is missing"
+    if _comparable_remote_url(registered_url) != _comparable_remote_url(canonical_url):
+        return "registered origin does not match the canonical repository"
+    return ""
+
+
 def _default_branch(url):
     """Resolve the remote's symbolic HEAD; never assume that it is `main`."""
     rc, out = _git(None, "ls-remote", "--symref", url, "HEAD")
@@ -3188,6 +3213,9 @@ def fresh_branch_snapshot(repo_identity, branch):
             rc, out = _git(work, "remote", "add", "origin", url)
             if rc:
                 return {"state": "blocked", "reason": "cannot configure review remote: " + out[:180]}
+            error = _verify_registered_origin(work, url)
+            if error:
+                return {"state": "blocked", "reason": error}
             # A separate ls-remote lets a genuinely missing delivery remain a
             # delivery issue while every resolution/fetch failure is BLOCKED.
             rc, heads = _git(work, "ls-remote", "--heads", "origin", "refs/heads/" + branch)
@@ -3419,9 +3447,15 @@ def refresh_stale_branch(repo_identity, branch):
         return {"state": "blocked", "reason": error}
     try:
         with tempfile.TemporaryDirectory(prefix="factory-refresh-") as work:
-            for args in (("init", "-q"),
-                         ("remote", "add", "origin", url),
-                         ("fetch", "--prune", "origin",
+            for args in (("init", "-q"), ("remote", "add", "origin", url)):
+                rc, out = _git(work, *args)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "cannot prepare stale candidate refresh: " + out.strip()[:240])}
+            error = _verify_registered_origin(work, url)
+            if error:
+                return {"state": "blocked", "reason": error}
+            for args in (("fetch", "--prune", "origin",
                           "+refs/heads/" + default + ":refs/remotes/origin/" + default,
                           "+refs/heads/" + branch + ":refs/remotes/origin/" + branch),
                          ("checkout", "-q", "-B", "candidate", "origin/" + branch)):
@@ -3485,8 +3519,13 @@ def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_rep
         default, error = _default_branch(url)
         if error:
             log("rebuild: " + error[:160]); return ""
-        for args in (("remote", "add", "origin", url),
-                     ("fetch", "origin",
+        rc, out = _git(work, "remote", "add", "origin", url)
+        if rc:
+            log("rebuild: remote " + out[:160]); return ""
+        error = _verify_registered_origin(work, url)
+        if error:
+            log("rebuild: " + error); return ""
+        for args in (("fetch", "origin",
                       "+refs/heads/" + default + ":refs/remotes/origin/" + default),
                      ("fetch", "origin",
                       "+refs/heads/" + dirty_branch + ":refs/remotes/origin/" + dirty_branch)):

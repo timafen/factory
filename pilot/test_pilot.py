@@ -942,6 +942,70 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertIn("BLOCKED: review infrastructure", blocked["note"])
 
 
+class TemporaryRepositoryOriginTest(unittest.TestCase):
+    def test_matching_origin_allows_safe_trailing_slash_form(self):
+        with mock.patch.object(pilot, "_git", return_value=(0, "https://github.com/acme/factory.git/\n")):
+            self.assertEqual(pilot._verify_registered_origin(
+                "/tmp/isolated", "https://github.com/acme/factory.git"), "")
+
+    def test_snapshot_blocks_substituted_origin_before_network_operations(self):
+        calls = []
+
+        def git(work, *args, **kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 0, "https://token@example.invalid/other.git\n"
+            return 0, ""
+
+        with mock.patch.object(pilot, "_default_branch", return_value=("main", "")), \
+                mock.patch.object(pilot, "_git", side_effect=git):
+            result = pilot.fresh_branch_snapshot("https://github.com/acme/factory.git", "factory/task")
+
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("registered origin", result["reason"])
+        self.assertNotIn("token", result["reason"])
+        self.assertFalse(any(call and call[0] in {"ls-remote", "fetch", "checkout", "merge", "diff", "push"}
+                             for call in calls))
+
+    def test_refresh_blocks_missing_origin_before_fetch_or_checkout(self):
+        calls = []
+
+        def git(work, *args, **kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 2, "origin missing"
+            return 0, ""
+
+        with mock.patch.object(pilot, "_default_branch", return_value=("main", "")), \
+                mock.patch.object(pilot, "_git", side_effect=git):
+            result = pilot.refresh_stale_branch("https://github.com/acme/factory.git", "factory/task")
+
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("registered origin", result["reason"])
+        self.assertFalse(any(call and call[0] in {"fetch", "checkout", "merge", "diff", "push"}
+                             for call in calls))
+
+    def test_rebuild_blocks_substituted_origin_before_fetch_or_push(self):
+        calls = []
+
+        def git(work, *args, **kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 0, "https://example.invalid/other.git\n"
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as rebuild_dir, \
+                mock.patch.object(pilot, "REBUILD_DIR", rebuild_dir), \
+                mock.patch.object(pilot, "_default_branch", return_value=("main", "")), \
+                mock.patch.object(pilot, "_git", side_effect=git):
+            result = pilot.rebuild_clean_branch("https://github.com/acme/factory.git",
+                                                "factory/task", ["pilot/pilot.py"], "Task")
+
+        self.assertEqual(result, "")
+        self.assertFalse(any(call and call[0] in {"fetch", "checkout", "merge", "diff", "push"}
+                             for call in calls))
+
+
 class SpecificationBranchHandoffTests(unittest.TestCase):
     def setUp(self):
         self.created = []
