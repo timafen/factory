@@ -1,21 +1,27 @@
-Implementation commit: 88883f6a630d28703573d6bde851376ed94fafc5 — экран исполнителей показывает живой парк и архив старых регистраций
+Implementation commit: f32656d2959e8c57d2e61efd71d0e191e5775644 — экран исполнителей показывает живой парк и архив старых регистраций
 
 # CARD-0174: Живой парк исполнителей и архив регистраций
 
 ## HEAD
 
 Status: Implemented — ready for Review and Verify
-Branch: factory/c0a0c8cd-895-47f61d98-589
+Branch: factory/18ec6f9c-96b-1d74c921-84d
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: 88883f6a630d28703573d6bde851376ed94fafc5 — экран
+Implementation commit: f32656d2959e8c57d2e61efd71d0e191e5775644 — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: текущие и архивные регистрации разделены на экране по границе
 семи суток; встроенный `web/dist` пересобран после перебазирования.
-Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `vitest run
-Workers.test.tsx`, `eslint`, `vite build` — успешно.
+Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `npm run lint`,
+`npm run test` (185 tests), `npm run build` — успешно.
 One next action: Review и Verify принимают поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Поставка перебазирована на свежий `origin/main` (`a0c931dcf46cc83723e243b3d2393603c06317a6`).
+Обязательная проверка TypeScript, lint, 185 UI-тестов и production-сборка прошли.
+В HEAD указан существующий кодовый коммит этой ветки после перебазирования.
 
 ### 2026-08-15 — Implement
 
