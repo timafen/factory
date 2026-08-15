@@ -1,19 +1,30 @@
 # CARD-0174 — Завершение только после живой приёмки
 
-Implementation commit: e0b5f52b40a03e2c6f48d7250694f73d40574372 — broker fail-closed выполняет живую приёмку ровно один раз и сохраняет безопасный результат после рестарта.
+Implementation commit: 8cc9e060e4418484fb0a52835a22679e86c39ff8 — broker публикует single-flight живую приёмку без ожидания checker, а завершённый выпуск получает finished_at после PASS.
 
 ## HEAD
 
-- Status: Implemented — ожидает Verify.
-- Branch: `factory/de5afa43-4c3-962238f3-84d`.
-- Implementation commit: `e0b5f52b40a03e2c6f48d7250694f73d40574372`.
-- What changed: отсутствие fixed checker записывает FAIL, не PASS; повторный
-  POST при running не создаёт второй процесс; restart переводит uncertain
-  checker в durable FAIL. Добавлены регрессии broker и read-only fixture.
-- Evidence: `just check` → PASS; `go test ./internal/releasebroker` → PASS; acceptance and installer shell tests → PASS.
-- Next action: выполнить полный набор проверок на свежем `main` перед Verify.
+- Status: Implemented — готово к выпуску и живой приёмке.
+- Branch: `factory/fa145a84-05f-669c58d2-270`.
+- Implementation commit: `8cc9e060e4418484fb0a52835a22679e86c39ff8`.
+- What changed: POST живой приёмки durable сохраняет `running`, запускает
+  checker в фоне и сразу открывает single-flight наблюдение; terminal результат
+  публикуется только после записи. Успешный тестовый выпуск моделирует PASS
+  приёмки и проверяет `finished_at` в dashboard-проекции.
+- Evidence: `just build`, `just format-check`, `just vet`, `just boundary`,
+  `just test`, `npx tsc -p tsconfig.app.json --noEmit` → PASS.
+- Next action: перебазировать на свежий `main`, выпустить штатно и принять на production.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлены блокеры Verify: HTTP POST больше не ждёт живой checker, поэтому
+повторный запрос немедленно наблюдает единственный durable `running`; после
+PASS результат появляется через GET. Dashboard-регрессия теперь проходит весь
+release → acceptance PASS переход и подтверждает `finished_at`. Полные gates
+`just build`, `just format-check`, `just vet`, `just boundary`, `just test` и
+`npx tsc -p tsconfig.app.json --noEmit` — PASS.
 
 ### 2026-08-15 — Implement
 
