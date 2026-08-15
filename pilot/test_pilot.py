@@ -6756,6 +6756,67 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(startup_seen, [True, False])
 
+    def test_startup_refill_runs_before_full_history_maintenance(self):
+        conf = {
+            "enabled": True,
+            "poll_seconds": 30,
+            "stages": [],
+            "_startup_refill": True,
+        }
+        state = {"processed": []}
+        order = []
+
+        def fake_api(path, body=None):
+            self.assertIsNone(body)
+            if path == "/tasks?limit=100":
+                return {"tasks": []}
+            if path == "/workers":
+                return {"workers": []}
+            if path == "/repositories":
+                return {"repositories": []}
+            if path == "/workflows":
+                return {"workflows": []}
+            raise AssertionError(path)
+
+        def refill(*_args, **_kwargs):
+            order.append("refill")
+            return 0
+
+        def history():
+            order.append("history")
+            self.assertIn("refill", order)
+            return []
+
+        noops = (
+            "collect_automation_findings", "recover_merge_intents",
+            "poll_delivery_state", "budget_guard",
+            "cleanup_completed_plan_cards", "reconcile_stale_plan_cards",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "resume_merge_conflicts", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "cleanup_work_archive",
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(pilot, "all_tasks", side_effect=history))
+            stack.enter_context(mock.patch.object(
+                pilot, "refill_open_work_slots", side_effect=refill))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        self.assertEqual(order[:2], ["refill", "history"])
+
     def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
         conf = {"enabled": True, "poll_seconds": 30}
         ids = [
