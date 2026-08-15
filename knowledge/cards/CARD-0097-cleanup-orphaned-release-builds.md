@@ -4,18 +4,27 @@ Implementation commit: 747815f7a5969233791b8134e5adad6954f8f782 — выпуск
 
 ## HEAD
 
-- Status: PASS: изменения перенесены на свежий `main`; целевой release-fixture подтвердил безопасную очистку.
-- Branch: `factory/838067ab-2c4-2eaf967d-ece`.
+- Status: BLOCKED: поздний сценарий signal-HUP повторно не завершился; до PASS слияние запрещено.
+- Branch: `factory/168c83fc-282-77192af6-0c2`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` — PASS;
-  `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh` — PASS.
-  Fixture удалил реальный `build-orphaned`, сохранил обычную папку, symlink и
-  его внешний target, а также подтвердил публикацию, rollback и signal-cleanup.
-- One next action: влить ветку после обычного review.
+  повтор `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh`
+  — FAIL: `timed out waiting for .../signal-HUP-1/ui-running`.
+  Внешний лимит 12 минут не сработал; диагностический вывод сохранён в
+  `/tmp/card-0097-release-fixture-retry.log` текущей среды.
+- One next action: доработать запуск позднего signal-HUP fixture и получить полный PASS.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По решению владельца целевой fixture повторён в свободной от другого release
+fixture среде с лимитом 120 секунд на выпуск и внешней диагностикой в 12 минут.
+Повтор снова дошёл до позднего `signal-HUP-1`, но не дождался `ui-running`;
+внешний лимит не был исчерпан. Изменение возвращено на доработку без слияния;
+диагностический вывод сохранён в `/tmp/card-0097-release-fixture-retry.log`.
 
 ### 2026-08-15 — Implement
 
