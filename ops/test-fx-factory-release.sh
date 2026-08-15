@@ -146,15 +146,19 @@ cat >"$case_dir/bin/browser-installer" <<'EOF'
 #!/bin/bash
 echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
 [ "$TEST_MODE" != browser-install-fail ] || exit 7
-mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_SHARE/chromium" "$FACTORY_BROWSER_LIBEXEC"
-printf 'const fs=require("node:fs"); exports.chromium={executablePath:()=>require("path").resolve(__dirname,"../../../chromium/chrome"),launch:async()=>({newPage:async()=>({route:async()=>{},setContent:async()=>{},pdf:async({path})=>fs.writeFileSync(path,"%%PDF-fixture")}),close:async()=>{}})};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
-printf '#!/bin/bash\nexit 0\n' >"$FACTORY_BROWSER_SHARE/chromium/chrome"
-chmod 755 "$FACTORY_BROWSER_SHARE/chromium/chrome"
-cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
-cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-isolated"
-printf 'browser_sha=%s\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_LIBEXEC/factory-browser-install.state"
+factory_browser="$TEST_FACTORY_HOME/.cache/ms-playwright/chromium/chrome"
+root_browser="$TEST_ROOT_HOME/.cache/ms-playwright/chromium/chrome"
+mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_LIBEXEC" \
+  "$(dirname "$factory_browser")" "$(dirname "$root_browser")"
+printf 'const fs=require("node:fs"),path=require("node:path"); exports.chromium={executablePath:()=>{const browser=path.join(process.env.HOME,".cache/ms-playwright/chromium/chrome"); fs.appendFileSync(process.env.TEST_BROWSER_RESOLUTIONS,process.env.HOME+" -> "+browser+"\\n"); return browser},launch:async()=>({newPage:async()=>({route:async()=>{},setContent:async()=>{},pdf:async({path})=>fs.writeFileSync(path,"%%PDF-fixture")}),close:async()=>{}})};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
+printf '#!/bin/bash\n# factory cache\nexit 0\n' >"$factory_browser"
+printf '#!/bin/bash\n# root cache must never verify\nexit 0\n' >"$root_browser"
+chmod 755 "$factory_browser" "$root_browser"
+cp "$factory_browser" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
+cp "$factory_browser" "$FACTORY_BROWSER_LIBEXEC/factory-browser-isolated"
+printf 'browser_sha=%s\n' "$(sha256sum "$factory_browser" | awk '{print $1}')" >"$FACTORY_BROWSER_LIBEXEC/factory-browser-install.state"
 : >"$FACTORY_BROWSER_LIBEXEC/factory-browser.conf"
-printf '{"browser_fingerprint":"%s"}\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_READINESS_MARKER"
+printf '{"browser_fingerprint":"%s"}\n' "$(sha256sum "$factory_browser" | awk '{print $1}')" >"$FACTORY_BROWSER_READINESS_MARKER"
 EOF
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
   printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
@@ -597,15 +601,18 @@ exit 0
 EOF
   cat >"$case_dir/trusted/node" <<'EOF'
 #!/bin/bash
+[ "${1:-}" != -e ] || exec /usr/bin/node "$@"
 script=$1
 shift
 exec /bin/bash "$script" "$@"
 EOF
   cat >"$case_dir/trusted/sudo" <<'EOF'
 #!/bin/bash
-[ "${1:-}" != -H ] || shift
+switch_home=0
+if [ "${1:-}" = -H ]; then switch_home=1; shift; fi
 if [ "${1:-}" = -u ]; then shift 2; fi
 [ "${1:-}" != -- ] || shift
+[ "$switch_home" = 0 ] || export HOME="$TEST_FACTORY_HOME"
 exec "$@"
 EOF
   cat >"$case_dir/bin/sudo" <<'EOF'
@@ -851,6 +858,8 @@ run_release() {
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_TRUSTED_GATE_ATTACK_STARTED="$case_dir/trusted-gate-attack-started" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_FACTORY_HOME="$case_dir/factory-home" TEST_ROOT_HOME="$case_dir/root-home" \
+    TEST_BROWSER_RESOLUTIONS="$case_dir/browser-resolutions" HOME="$case_dir/root-home" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
     FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
@@ -923,6 +932,8 @@ start_release() {
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
+    TEST_FACTORY_HOME="$case_dir/factory-home" TEST_ROOT_HOME="$case_dir/root-home" \
+    TEST_BROWSER_RESOLUTIONS="$case_dir/browser-resolutions" HOME="$case_dir/root-home" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
     FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
@@ -1058,6 +1069,11 @@ make_fixture "$success" parallel-success
 cp "$success/current.json" "$success/source-current.json"
 run_release "$success" parallel-success \
   || { cat "$success/output" >&2; fail "successful release failed"; }
+grep -Fx "$success/factory-home -> $success/factory-home/.cache/ms-playwright/chromium/chrome" \
+  "$success/browser-resolutions" >/dev/null \
+  || fail "browser runtime verification did not use the Factory HOME/cache"
+! grep -F "$success/root-home" "$success/browser-resolutions" >/dev/null \
+  || fail "browser runtime verification used the root cache"
 wait_for_file "$success/ui-started"
 wait_for_file "$success/go-started"
 for gate in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \

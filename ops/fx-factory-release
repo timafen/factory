@@ -80,6 +80,7 @@ BROWSER_STATE="${FACTORY_BROWSER_INSTALL_STATE:-/usr/local/libexec/factory/facto
 BROWSER_SUDOERS="${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}"
 BROWSER_APPARMOR="${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}"
 BROWSER_READINESS_MARKER="${FACTORY_BROWSER_READINESS_MARKER:-$BRAIN_LIVE/pilot/browser-readiness.json}"
+BROWSER_USER="${FACTORY_USER:-factory}"
 GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
@@ -351,7 +352,9 @@ restore_browser_runtime() {
 verify_browser_runtime() { # generation
   local generation=$1 browser fingerprint
   [ -d "$generation/web/node_modules/playwright" ] || return 1
-  browser=$(cd "$generation/web" && /usr/bin/node -e 'process.stdout.write(require("playwright").chromium.executablePath())') || return 1
+  browser=$("$TRUSTED_SUDO" -H -u "$BROWSER_USER" -- "$TRUSTED_BASH" -c \
+    'cd "$1" && exec "$2" -e "$3"' browser-runtime "$generation/web" "$TRUSTED_NODE" \
+    'process.stdout.write(require("playwright").chromium.executablePath())') || return 1
   [ -x "$browser" ] || { fail "Chromium browser executable отсутствует: $browser"; return 1; }
   [ -x "$BROWSER_LAUNCHER" ] && [ -x "$BROWSER_HELPER" ] \
     && [ -f "$BROWSER_CONFIG" ] && [ -f "$BROWSER_STATE" ] && [ -f "$BROWSER_READINESS_MARKER" ] \
@@ -386,6 +389,9 @@ for trusted_executable in "$TRUSTED_STAT" "$TRUSTED_SETSID" "$TRUSTED_SUDO" \
   validate_trusted_executable "$trusted_executable" \
     || { fail "нет доверенного executable для test gate: $trusted_executable"; exit 4; }
 done
+
+[[ "$BROWSER_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] \
+  || { fail "некорректный пользователь browser runtime"; exit 4; }
 
 # $AS is intentionally not accepted here. It is a convenience wrapper for
 # workspace operations and may be supplied by the caller, so it cannot be in
