@@ -68,6 +68,7 @@ BRAIN_LIVE="${FACTORY_BRAIN_LIVE:-/opt/factory-data}"
 GENERATIONS="$REL/generations"
 CURRENT="$REL/current"
 PREVIOUS="$REL/previous"
+BROWSER_CURRENT="${FACTORY_BROWSER_CURRENT:-$REL/browser-current}"
 JOURNAL="$REL/transaction"
 GATE_READY_ATTEMPTS="${FACTORY_RELEASE_GATE_READY_ATTEMPTS:-500}"
 GATE_STOP_ATTEMPTS="${FACTORY_RELEASE_GATE_STOP_ATTEMPTS:-100}"
@@ -137,6 +138,35 @@ read_journal() {
 
 manifest_hash() { sha256sum "$1/manifest.json" | awk '{print $1}'; }
 
+verify_browser_payload() {
+  local payload=$1
+  [ -d "$payload" ] && [ ! -L "$payload" ] \
+    && [ -f "$payload/web/package.json" ] && [ ! -L "$payload/web/package.json" ] \
+    && [ -f "$payload/web/package-lock.json" ] && [ ! -L "$payload/web/package-lock.json" ] \
+    && [ -d "$payload/web/node_modules/playwright" ] && [ ! -L "$payload/web/node_modules/playwright" ] \
+    && [ -f "$payload/internal/controlplane/report_scripts/render.mjs" ] \
+    && [ -f "$payload/internal/controlplane/report_scripts/capture.mjs" ] \
+    && [ -x "$payload/ops/install-server-browser.sh" ] \
+    && [ -f "$payload/browser-readiness.json" ] \
+    || { fail "browser runtime неполон: $payload"; return 1; }
+  python3 - "$payload/browser-readiness.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+assert set(d)=={"passed_at","browser_fingerprint"}
+assert len(d["browser_fingerprint"])==64 and all(c in "0123456789abcdef" for c in d["browser_fingerprint"])
+PY
+}
+
+select_browser_payload() {
+  local generation=$1
+  if verify_browser_payload "$generation/browser"; then
+    ln -sfn "$generation/browser" "$BROWSER_CURRENT.new" \
+      && mv -Tf "$BROWSER_CURRENT.new" "$BROWSER_CURRENT"
+  else
+    rm -f -- "$BROWSER_CURRENT.new" "$BROWSER_CURRENT"
+  fi
+}
+
 verify_generation() {
   local generation=$1
   [ -d "$generation" ] && [ ! -L "$generation" ] \
@@ -152,6 +182,13 @@ try:
     if hashlib.sha256(raw).hexdigest()!=expected: raise ValueError("hash manifest")
     data=json.loads(raw)
     if data.get("format")!=1 or not data.get("candidate_sha"): raise ValueError("format manifest")
+    browser=data.get("browser")
+    if browser:
+        payload=os.path.join(root,browser.get("payload",""))
+        if not os.path.isdir(payload) or os.path.islink(payload): raise ValueError("browser payload")
+        for name,key in (("web/package-lock.json","lock_sha256"),("browser-readiness.json","readiness_sha256")):
+            body=open(os.path.join(payload,name),"rb").read()
+            if hashlib.sha256(body).hexdigest()!=browser.get(key): raise ValueError("browser "+key)
     for item in data.get("artifacts",[]):
         path=os.path.join(root,item["source"])
         info=os.lstat(path)
@@ -288,11 +325,17 @@ print(values[-1] if values else 0)
 PY
 }
 
-rollback_to_generation() { # generation, owner-facing reason
-  local target=$1 reason=$2 live_ledger generation_ledger
+rollback_to_generation() { # target generation, owner-facing reason, incoming generation
+  local target=$1 reason=$2 incoming=${3:-} live_ledger generation_ledger
   fail "$reason — возвращаю полный прежний комплект"
   stop_factory_units || true
+  if [ -n "$incoming" ] && [ -f "$incoming/browser-rollback/backup.ready" ]; then
+    /bin/bash "$incoming/browser/ops/install-server-browser.sh" \
+      --restore-live-state "$incoming/browser-rollback" \
+      || { fail "привилегированная browser-среда не восстановлена"; return 1; }
+  fi
   install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
+  select_browser_payload "$target" || { fail "browser runtime прежнего выпуска не восстановлен"; return 1; }
   cp -f "$target/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
     && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" || return
   live_ledger=$(database_ledger "$DATABASE") || return
@@ -305,6 +348,10 @@ rollback_to_generation() { # generation, owner-facing reason
     return 9
   fi
   restore_service_state "$target/services.tsv" || return
+  if [ -d "$target/browser" ]; then
+    FACTORY_BROWSER_SHARE="$target/browser" FACTORY_BROWSER_RUNTIME="$target/browser" \
+      /bin/bash "$target/browser/ops/install-server-browser.sh" || return
+  fi
   verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
   ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
   if [ ! -e "$PREVIOUS" ] && [ ! -L "$PREVIOUS" ]; then
@@ -507,7 +554,7 @@ case "$ref" in
     [ -n "$target" ] && verify_generation "$target" || { fail "нет проверенного предыдущего поколения"; exit 4; }
     previous=$current_path
     write_journal prepared "$target" "$current_path" || exit 4
-    rollback_to_generation "$target" "откат Factory" || exit $?
+    rollback_to_generation "$target" "откат Factory" "$current_path" || exit $?
     [ -z "$current_path" ] || { ln -sfn "$current_path" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS"; }
     echo "== полный откат к $(basename "$target") завершён; база не изменялась"
     exit 0
@@ -555,7 +602,7 @@ if [ -e "$JOURNAL" ]; then
     committed) rm -f "$JOURNAL" ;;
     db_restore_required) fail "ожидается отдельное восстановление БД; новый выпуск запрещён"; exit 9 ;;
     *) [ -n "$previous" ] || { fail "незавершённый journal без безопасной точки отката"; exit 9; }
-       rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
+       rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" "$generation" || exit 9 ;;
   esac
 fi
 
@@ -1139,6 +1186,14 @@ print(hashlib.sha256(repr(rows).encode()).hexdigest())
 PY
 )
 
+step "готовлю постоянную среду Chromium до остановки служб"
+FACTORY_BROWSER_SHARE="$work/src" FACTORY_BROWSER_RUNTIME="$stage/browser" \
+  FACTORY_BROWSER_BACKUP_DIR="$stage/browser-rollback" \
+  /bin/bash "$work/src/ops/install-server-browser.sh" \
+  || { fail "browser runtime не готов — работающий выпуск не изменён"; cleanup; exit 4; }
+verify_browser_payload "$stage/browser" \
+  || { fail "browser runtime не прошёл проверку — работающий выпуск не изменён"; cleanup; exit 4; }
+
 python3 - "$stage/release-info.json" "$sha" "$subject" "$ref" "$release_id" <<'PY'
 import datetime,json,sys
 p,sha,subject,ref,rid=sys.argv[1:]
@@ -1149,9 +1204,9 @@ PY
 chmod 600 "$stage/release-info.json"
 printf 'release-info.json\t-\t600\t\n' >>"$inventory"
 
-python3 - "$stage" "$release_id" "$sha" "$ref" "$DATABASE" "$snapshot" "$ledger" "$schema_digest" "$inventory" "$processes" "$services" <<'PY'
+python3 - "$stage" "$release_id" "$sha" "$ref" "$DATABASE" "$snapshot" "$ledger" "$schema_digest" "$inventory" "$processes" "$services" "$stage/browser" <<'PY'
 import hashlib,json,os,stat,sys
-root,rid,sha,ref,db,snapshot,ledger,schema,inventory,processes,services=sys.argv[1:]
+root,rid,sha,ref,db,snapshot,ledger,schema,inventory,processes,services,browser=sys.argv[1:]
 items=[]
 for line in open(inventory):
  source,target,mode,owner=line.rstrip("\n").split("\t"); path=os.path.join(root,source); body=open(path,"rb").read()
@@ -1165,6 +1220,7 @@ for line in open(services):
 body=open(snapshot,"rb").read()
 marker=open(snapshot+".v2-control-plane","rb").read()
 data={"format":1,"release_id":rid,"candidate_sha":sha,"ref":ref,"artifacts":items,"processes":proc,"services":service_states,
+ "browser":{"payload":"browser","lock_sha256":hashlib.sha256(open(os.path.join(browser,"web/package-lock.json"),"rb").read()).hexdigest(),"readiness_sha256":hashlib.sha256(open(os.path.join(browser,"browser-readiness.json"),"rb").read()).hexdigest()},
  "database":{"live_path":db,"snapshot":"database.sqlite3","sha256":hashlib.sha256(body).hexdigest(),"size":len(body),"marker_sha256":hashlib.sha256(marker).hexdigest(),"ledger":int(ledger),"schema_digest":schema}}
 raw=(json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(",",":"))+"\n").encode()
 open(os.path.join(root,"manifest.json"),"wb").write(raw)
@@ -1232,7 +1288,7 @@ verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
 previous=$old_generation
 rollback_armed=1
-rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
+rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why" "$generation_path"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
 on_exit() { status=$?; [ "$rollback_armed" = 1 ] || return; [ "$status" -ne 0 ] || status=130; rollback "выпуск прерван" "$status"; }
 trap on_exit EXIT; trap 'rollback "сигнал HUP" 130' HUP; trap 'rollback "сигнал INT" 130' INT; trap 'rollback "сигнал TERM" 130' TERM
 
@@ -1240,6 +1296,7 @@ step "останавливаю прежний комплект и атомарн
 stop_factory_units || rollback "службы не остановились" 6
 write_journal old-stopped "$generation_path" "$old_generation" || rollback "journal не записан" 4
 install_generation "$generation_path" || rollback "полный комплект не установлен" 4
+select_browser_payload "$generation_path" || rollback "browser runtime не опубликован" 4
 write_journal pair-installed "$generation_path" "$old_generation" || rollback "journal не записан" 4
 systemctl start "$SERVER_SERVICE" || rollback "сервер не стартовал" 6
 sleep 5
