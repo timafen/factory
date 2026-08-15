@@ -1,14 +1,14 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 10e442726f3348d0b3470f59a3ba59ca835909d4 — release-driver fail-closed отклоняет повреждённый status и сохраняет failed при ранней ошибке после running.
+Implementation commit: f7bac8680463825cddf7eecf2aaff2b3e158189a — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
-- Branch: `factory/0e061e2b-457-c027e11e-b09`.
+- Branch: `factory/6fd1bc3c-993-e185fb49-ba9`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `10e442726f3348d0b3470f59a3ba59ca835909d4` — release-driver fail-closed отклоняет повреждённый status и сохраняет failed при ранней ошибке после running.
-- What changed: неизвестный или повреждённый status останавливает delivery без повторного запуска; cleanup-trap надёжно пишет `failed` при preflight-ошибке после durable `running`.
+- Implementation commit: `f7bac8680463825cddf7eecf2aaff2b3e158189a` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+- What changed: минимальная EXIT-ловушка ставится сразу после durable `launching`; lock и preflight ошибки оставляют `failed`, а новый delivery ID может выполнить повторный выпуск.
 - Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
 - Next action: Повторить Review на свежем `main`.
 
@@ -177,3 +177,10 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 | Прочие некорректные `.json`-записи fail-closed | тесты `TestDiskBrokerFailsClosedOnInvalidOperationState` и `TestDiskBrokerFailsClosedOnJSONDirectory` | OK: corrupt JSON, чужое имя, неверный adapter/status и каталог не восстанавливаются. |
 | Соседнее восстановление | тот же пакет | OK: terminal state сохраняется после restart, незавершённый запуск становится `failed`, повторный executor не запускается. |
 | Полный проектный регресс | `just check` | Форматирование, `vet`, `govulncheck`, `staticcheck` и `internal/releasebroker` OK; вне области timeout 5m: `internal/controlplane`, `internal/worker` (включая flaky worker integration tests). |
+
+### 2026-08-15 — Implement
+
+После durable `launching` минимальная EXIT-ловушка сразу фиксирует `failed`,
+поэтому ошибки подготовки и захвата release lock не оставляют delivery в
+неопределённом состоянии. Shell-fixture подтверждает terminal `failed` для
+lock/preflight и успешный повторный выпуск с новым delivery ID; Go-пакет и сборка прошли.
