@@ -25,10 +25,12 @@
 Открытый риск: pilot не участвует в общем межпроцессном lock; конфликт API определяется по версии непосредственно перед atomic replace.
 
 ## HEAD
-Status: Verified PASS — ожидает слияния человеком. Branch: `factory/8c403f0f-741-e39c1023-e85`. Head commit: будет указан в завершающем коммите Verify.
-What changed: UI-тесты `App.test.tsx` сверены с переименованными экранами и элементами управления; дифф от точки ветвления содержит только этот тест и карточку.
-Evidence: после чистого `npm ci` пройдены `npx vitest run src/App.test.tsx` (60/60) и `npx tsc -p tsconfig.app.json --noEmit`; полный `npm test` — 93/94, единственное известное падение в неизменённом `src/Settings.test.tsx` ожидает старый набор `notify_groups` без ключа `escalate`.
-One next action: влить ветку в `main`.
+Status: Implemented.
+Branch: `factory/7cfe2211-cd7-3469d304-395`.
+Implementation commit: 496b6a3a6682133b4d5c3e804a334466977d7c21 — перед выпуском удаляются осиротевшие каталоги вне `generations/`.
+What changed: очистка охватывает каталоги с любым префиксом, включая скрытые; ссылки и история `generations/` сохраняются.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS.
+One next action: проверить и влить ветку в `main`.
 
 ## LOG
 
