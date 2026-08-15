@@ -1002,7 +1002,11 @@ def work_lifecycle_block(base, task=None, tasks=None):
     and tasks created after it do.  Terminal Plan cards and archive receipts
     close the preceding generation across Pilot restarts.
     """
-    matching = [idea for idea in ideas_all() if _same_work(idea.get("title"), base)]
+    work_id = task_durable_work_id(task, tasks)
+    matching = [idea for idea in ideas_all()
+                if (str(idea.get("work_id") or "").strip() == work_id
+                    if work_id else
+                    (not idea.get("work_id") and _same_work(idea.get("title"), base)))]
     active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
     if active:
         current = active[-1]
@@ -1031,7 +1035,7 @@ def work_lifecycle_block(base, task=None, tasks=None):
                  else "карточка Плана отклонена"))
 
     works = load(WORKS_PATH, {}) or {}
-    meta = next((value for name, value in works.items() if _same_work(name, base)), {})
+    meta = works.get(work_storage_key(base, work_id, task, tasks)) or {}
     if task and any(item.get("task_id") == task.get("id")
                     for item in meta.get("archived_attempts", [])):
         return "эту попытку заменила более новая попытка работы"
@@ -2538,7 +2542,7 @@ def autostart_plan(conf, tasks, workflows, workers):
     if not stage_name or not workflow.get("enabled"):
         return None
     for rec in candidates:
-        if is_stopped(conf, rec.get("title") or ""):
+        if is_stopped(conf, rec.get("title") or "", rec.get("work_id") or ""):
             log("PLAN paused " + repr(rec.get("title", "")[:70]))
             continue
         if rec.get("state") == "new":
@@ -2669,7 +2673,8 @@ def next_poll_hint(conf, tasks, fast=False):
     active = any(
         str(task.get("title") or "").startswith(PREFIX)
         and task.get("state") in POLL_ACTIVE_STATES
-        and not is_stopped(conf or {}, base_title(task.get("title", "")))
+        and not is_stopped(conf or {}, base_title(task.get("title", "")),
+                           task_durable_work_id(task, tasks))
         for task in (tasks or [])
     )
     if active:
@@ -2688,7 +2693,8 @@ def remember_new_terminal_tasks(conf, state, tasks):
     ]
     fast = any(
         task.get("id") not in already_seen
-        and not is_stopped(conf or {}, base_title(task.get("title", "")))
+        and not is_stopped(conf or {}, base_title(task.get("title", "")),
+                           task_durable_work_id(task, tasks))
         for task in terminal
     )
     seen_ids.extend(
@@ -4067,10 +4073,12 @@ def diag_sweep(conf, tasks):
         if not m:
             continue
         base = m.group(2).strip()
-        if base in seen:
+        work_id = task_durable_work_id(t, tasks)
+        seen_key = work_id or base
+        if seen_key in seen:
             continue
-        seen.add(base)
-        if is_stopped(conf, base):
+        seen.add(seen_key)
+        if is_stopped(conf, base, work_id):
             continue
         # The live sweep is an early warning, not a minute-by-minute brain
         # loop. A terminal stage can still invoke deep_diagnose later through
@@ -4822,9 +4830,10 @@ def handle_answers(conf, workflows, workers, tasks):
             log(f"answer: no workflow/worker for {stage}")
             continue
         base = base_title(q.get("title", ""))
+        work_id = str(q.get("work_id") or task_durable_work_id(src_task, tasks)).strip()
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
-              or branch_from_history(tasks, base))
-        br, implementation_head = selected_delivery(base, br)
+              or branch_from_history(tasks, base, work_id=work_id))
+        br, implementation_head = selected_delivery(base, br, work_id=work_id)
         branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -4847,7 +4856,7 @@ def handle_answers(conf, workflows, workers, tasks):
         }
         # Защита от дублей: тот же ответ мог прийти по двум путям (вопрос от
         # Review и повтор отменённой стадии) — второй раз задачу не создаём.
-        if is_stopped(conf, q.get("title", "")):
+        if is_stopped(conf, q.get("title", ""), work_id):
             q["status"] = "resolved"
             q["escalation_reason"] = "работа остановлена владельцем — конвейер не возобновляется"
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
@@ -6866,12 +6875,15 @@ def limits_view():
     return out
 
 
-def is_stopped(conf, base):
+def is_stopped(conf, base, work_id=""):
     """Работа, которую владелец закрыл насовсем. Пилот её не двигает и не
     перезапускает, что бы ни отвечал оркестратор."""
-    b = (base or "").strip().lower()
+    key = work_storage_key(base, work_id)
     for s in conf.get("stopped_pipelines") or []:
-        if s.strip().lower() in b:
+        if work_id:
+            if str(s).strip() == key:
+                return True
+        elif _same_work(s, base):
             return True
     return False
 
@@ -7623,6 +7635,8 @@ def recover_merge_intents(conf, state):
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            if intent.get("work_id"):
+                receipt["work_id"] = str(intent["work_id"])
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
             # let an already-processed Verify task suppress its missing wait.
@@ -8009,7 +8023,7 @@ def cycle(conf, state):
             rid = detail["task"].get("repository_id") or ""
             # Отменённая/упавшая задача, которую уже перекрыла другая по той же
             # работе, вопросов не порождает — иначе эпик встанет на пустом месте.
-            if is_stopped(conf, base):
+            if is_stopped(conf, base, task_durable_work_id(t, tasks)):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
             newer = live_or_done_at(
@@ -8091,7 +8105,8 @@ def cycle(conf, state):
                 record_implementation_artifact(
                     base_title(title), tid, title, result,
                     detail.get("context") or detail["task"].get("context") or "",
-                    repo_identity_by_id.get(rid_i, ""))
+                    repo_identity_by_id.get(rid_i, ""),
+                    work_id=task_durable_work_id(t, tasks))
             except Exception as e:
                 # A transport failure must not erase the last proven artifact;
                 # the next cycle can safely retry this completed task.
@@ -8119,7 +8134,8 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': delivery wait already exists")
                     continue
                 branch, implementation_head = selected_delivery(
-                    base_title(title), extract_branch(result, detail.get("context", "")))
+                    base_title(title), extract_branch(result, detail.get("context", "")),
+                    work_id=task_durable_work_id(t, tasks))
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
@@ -8145,7 +8161,8 @@ def cycle(conf, state):
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head,
+                        "work_id": task_durable_work_id(t, tasks), "link": link or ""}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -8230,7 +8247,7 @@ def cycle(conf, state):
         # Idempotency guard: if this work already has a task at the next stage
         # (or beyond) that is live or done, do NOT create another one. Without
         # this, any re-processing of an old task duplicates the whole tail.
-        if is_stopped(conf, base):
+        if is_stopped(conf, base, task_durable_work_id(t, tasks)):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
         dup = live_or_done_at(
@@ -8454,7 +8471,8 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch, g.get("head", ""))
+                    record_delivery_artifact(base, branch, g.get("head", ""),
+                                             work_id=task_durable_work_id(t, tasks))
                     branch_line = f"Branch: {branch}\n"
                     head_line = (f"Implementation head: {g['head']}\n"
                                  if g.get("head") else "")
