@@ -1,21 +1,24 @@
-Implementation commit: 5eccdaa3d565ff15be29a99c5a4c9abfd0792ea6 — кэш назначает origin основным репозиторием GitHub CLI, сохраняя upstream.
+Implementation commit: 48ae3f9f5d4010e2577932a1f390d54e52f70ece — кэш назначает upstream GitHub CLI default, сохраняя origin.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
 ## HEAD
 
 - Status: Implemented
-- Ветка: `factory/80c66ee4-e6e-5f29b750-ad5`.
-- Implementation commit: `5eccdaa3d565ff15be29a99c5a4c9abfd0792ea6`.
-- Что изменилось: кэш удаляет `remote.upstream.gh-resolved`, назначает
-  `remote.origin.gh-resolved=base` для новых и существующих кэшей и закрывает
-  выдачу репозитория при ошибке Git-конфигурации.
-- Evidence: целевой тест, `go test ./...` и `go build ./...` — PASS; bare
-  `gh repo view --json nameWithOwner` ожидает `timafen/factory`, тогда как
-  fixture сохраняет `owainlewis/factory` в роли upstream.
-- Следующее действие: Verify подтверждает выпуск по критерию `timafen/factory`.
+- Branch: `factory/8c401f07-2c6-808aca56-426`.
+- Implementation commit: `48ae3f9f5d4010e2577932a1f390d54e52f70ece`.
+- What changed: новые и существующие кэши снимают `gh-resolved` с `origin` и
+  назначают `remote.upstream.gh-resolved=base`, не меняя URL и tracking.
+- Evidence: `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS; bare `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
+- Next action: Verify проверяет diff и выпуск после rebase на свежий `main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+- По утверждённому владельцем исходному критерию GitHub CLI default перенесён с
+  `origin` на `upstream`; bare-команда возвращает `owainlewis/factory`.
+- `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS.
 
 ### 2026-08-15 — Implement
 
