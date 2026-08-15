@@ -1,17 +1,15 @@
-Implementation commit: отсутствует — этап Specification не меняет продуктовый код; реализационный коммит будет добавлен этапом Implement до финальной карточки.
-
 # CARD-0167: идентичность GitHub-репозитория только из origin
 
 ## HEAD
 
-Status: Specified.
-Branch: `factory/07c2b18e-7d5-3a2022f0-57c`.
-What changed: определён безопасный переход от неявного контекста `gh` к
-явному репозиторию, полученному из `origin` рабочей копии.
-Evidence: на свежем `origin/main` воспроизведён bare-ответ
-`owainlewis/factory` при `origin=github.com/timafen/factory`; спецификация
-требует explicit `--repo timafen/factory` и регрессию этого расхождения.
-Next action: Implement добавляет resolver и целевые тесты из спецификации.
+Status: Implemented.
+Branch: `factory/9feaa5f8-af6-4c723584-32a`.
+Implementation commit: a57b7041c48423d741ab4a8676a7c60b4afa0855 — GitHub-действия Pilot получают цель только из origin управляемой копии.
+What changed: цикл больше не передаёт `remote_identity` control plane в GitHub API,
+PR или merge; адрес выводится из `origin` и отсутствие либо неоднозначность копии
+безопасно исключает действие.
+Evidence: `python3 -m unittest pilot.test_pilot` → OK (348 tests, 13 skipped).
+Next action: Review проверяет сквозной сценарий с чужим default-repo `gh`.
 
 ## LOG
 
@@ -25,3 +23,9 @@ GitHub-действия. Несовпадение должно блокиров�
 
 Полный план, реальные файлы, критерии и обязательная проверка находятся в
 `knowledge/specs/gh-repository-identity-from-origin.md`.
+
+### 2026-08-15 — Implement
+
+Pilot строит карту GitHub-целей только по `origin` точных managed worktree и
+не использует `remote_identity` как адрес действия. Регрессии подтверждают,
+что чужое `owainlewis/factory` не заменяет `timafen/factory`; целевой набор — OK.
