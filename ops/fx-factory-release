@@ -59,6 +59,7 @@ RELEASE_DRIVER="${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}"
 BROKER_BIN="${FACTORY_RELEASE_BROKER_BIN:-/opt/factory-data/bin/factory-release-broker}"
 BROKER_UNIT="${FACTORY_RELEASE_BROKER_UNIT:-/etc/systemd/system/factory-release-broker.service}"
 BROKER_DROPIN="${FACTORY_RELEASE_BROKER_PILOT_DROPIN:-/etc/systemd/system/factory-pilot.service.d/50-project-release-broker.conf}"
+ACCEPTANCE_BIN="${FACTORY_LIVE_ACCEPTANCE_BIN:-/usr/local/lib/factory-live-acceptance}"
 BROKER_SERVICE="${FACTORY_RELEASE_BROKER_SERVICE:-factory-release-broker.service}"
 BROKER_GROUP="${FACTORY_RELEASE_BROKER_GROUP:-factory-release}"
 BROKER_OWNER="${FACTORY_RELEASE_BROKER_OWNER-root:root}"
@@ -1014,7 +1015,7 @@ done < <("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
   ls-tree -r -z --name-only "$sha" -- ops/systemd)
 [ "$trusted_systemd_files" -gt 0 ] \
   || { fail "в кандидате нет обязательного дерева systemd для gate"; cleanup; exit 4; }
-for trusted_gate_path in ops/install-project-release-broker.sh ops/fx pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
+for trusted_gate_path in ops/install-project-release-broker.sh ops/factory-live-acceptance ops/fx pilot/pilot.py pilot/context.md intake/app.py intake/plan.py; do
   expected_gate_dependency_blob=$("$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
     rev-parse "$sha:$trusted_gate_path") || { fail "в кандидате нет обязательной зависимости gate: $trusted_gate_path"; cleanup; exit 4; }
   if ! "$TRUSTED_GIT" -c safe.directory="$work/src" -C "$work/src" \
@@ -1025,7 +1026,7 @@ for trusted_gate_path in ops/install-project-release-broker.sh ops/fx pilot/pilo
     exit 4
   fi
 done
-"$TRUSTED_CHMOD" 555 "$trusted_gate_root/ops/install-project-release-broker.sh" "$trusted_gate_root/ops/fx" \
+"$TRUSTED_CHMOD" 555 "$trusted_gate_root/ops/install-project-release-broker.sh" "$trusted_gate_root/ops/factory-live-acceptance" "$trusted_gate_root/ops/fx" \
   && "$TRUSTED_CHMOD" 444 "$trusted_gate_root/pilot/pilot.py" "$trusted_gate_root/pilot/context.md" \
     "$trusted_gate_root/intake/app.py" "$trusted_gate_root/intake/plan.py" \
   && "$TRUSTED_CHMOD" 711 "$trusted_gate_dir" "$trusted_gate_root/ops" "$trusted_gate_root/ops/systemd" \
@@ -1114,6 +1115,7 @@ add_artifact "$work/factory-server" factory-server "$SERVER_BIN" 755 "$OWNER" \
   && add_artifact "$work/factory-release-broker" factory-release-broker "$BROKER_BIN" 755 "$BROKER_OWNER" \
   && add_artifact "$work/src/ops/systemd/factory-release-broker.service" factory-release-broker.service "$BROKER_UNIT" 644 "$BROKER_OWNER" \
   && add_artifact "$work/factory-release-broker-dropin.conf" factory-release-broker-dropin.conf "$BROKER_DROPIN" 644 "$BROKER_OWNER" \
+  && add_artifact "$work/src/ops/factory-live-acceptance" factory-live-acceptance "$ACCEPTANCE_BIN" 755 "$BROKER_OWNER" \
   && add_artifact "$work/src/ops/fx" fx "$FX_BIN" 755 "$CONTROL_OWNER" \
   && add_artifact "$work/src/ops/fx-factory-release" fx-factory-release "$RELEASE_DRIVER" 755 "$CONTROL_OWNER" \
   && add_artifact "$work/src/pilot/pilot.py" pilot.py "$BRAIN_LIVE/pilot/pilot.py" 644 "$BRAIN_OWNER" \
@@ -1202,6 +1204,7 @@ if [ "$bootstrap_release" = 1 ]; then
     && old_add "$BROKER_BIN" factory-release-broker "$BROKER_BIN" 755 "$BROKER_OWNER" \
     && old_add "$BROKER_UNIT" factory-release-broker.service "$BROKER_UNIT" 644 "$BROKER_OWNER" \
     && old_add "$BROKER_DROPIN" factory-release-broker-dropin.conf "$BROKER_DROPIN" 644 "$BROKER_OWNER" \
+    && old_add "$ACCEPTANCE_BIN" factory-live-acceptance "$ACCEPTANCE_BIN" 755 "$BROKER_OWNER" \
     && old_add "$FX_BIN" fx "$FX_BIN" 755 "$CONTROL_OWNER" \
     && old_add "$RELEASE_DRIVER" fx-factory-release "$RELEASE_DRIVER" 755 "$CONTROL_OWNER" \
     && old_add "$BRAIN_LIVE/pilot/pilot.py" pilot.py "$BRAIN_LIVE/pilot/pilot.py" 644 "$BRAIN_OWNER" \
