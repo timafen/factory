@@ -2,7 +2,7 @@
 
 ## HEAD
 
-Implementation commit: ce21de10f4e3c82d5a065d2fcafd865e7840ea49 — после `gh repo clone` зарегистрированный GitHub URL закрепляется за `origin` до проверки и публикации кэша.
+Implementation commit: 35cb54daeecf082cfd4ced4ecae36a17d987891d — после `gh repo clone` зарегистрированный GitHub URL закрепляется за `origin` до проверки и публикации кэша.
 
 Status: Implemented
 Branch: `factory/baeb072c-39a-9dbd1243-563`.
