@@ -5,13 +5,13 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 ## HEAD
 
 Status: Implemented and tested
-Branch: `factory/f5fc51eb-1e4-bb5b800e-31f`
+Branch: `factory/ece50a12-217-9a78997e-626`
 Specification: `knowledge/specs/current-checkout-github-origin-context.md`
 What changed: зафиксирован контракт для checkout с `origin=timafen/factory` и
 `upstream=owainlewis/factory`; существующая реализация передаёт в runtime
 `GH_REPO=timafen/factory` из доверенной identity и отсекает чужое значение.
-Evidence: целевые тесты политики и пути claim → supervisor → fake Codex → PASS
-(2.269s); `git diff --check` → PASS.
+Evidence: `go test -count=1 ./internal/worker` → PASS; `web: npx tsc -p
+tsconfig.app.json --noEmit` → PASS.
 One next action: на Verify выполнить полный пакет `go test -count=1 ./internal/worker`.
 
 ## LOG
@@ -38,3 +38,9 @@ GitHub.com-репозиторий задачи добавляется единс
 `fee29b0c65cc12058cc8c08d6ad87855367bdec8` уже является предком свежего
 `origin/main`, поэтому продуктовый код не дублировался. Целевые проверки политики
 окружения и реального пути claim → supervisor → fake Codex прошли успешно.
+
+### 2026-08-15 — Implement
+
+Поставка перенесена на свежий `origin/main` в ветку `factory/ece50a12-217-9a78997e-626`.
+Полный пакет `go test -count=1 ./internal/worker` и обязательная проверка TypeScript
+`npx tsc -p tsconfig.app.json --noEmit` завершились успешно.
