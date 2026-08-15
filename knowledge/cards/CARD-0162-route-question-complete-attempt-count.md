@@ -1,4 +1,4 @@
-Implementation commit: 99113ff04c63e34431e29edc0f5828cc8c8fc23c — `route_question()` считает попытки по полной строгой истории задач
+Implementation commit: 93db3f1a2c3fb6e39203c2133c73c32582d6870b — `route_question()` считает попытки по полной строгой истории задач
 
 # CARD-0162 — Стоп-кран считает всю историю попыток
 
@@ -6,18 +6,18 @@ Implementation commit: 99113ff04c63e34431e29edc0f5828cc8c8fc23c — `route_quest
 
 Status: Implement + Test — готово к Review.
 
-Branch: `factory/ac0278a6-7a9-cc42c4bf-582`.
+Branch: `factory/6831045e-ae2-6a1638ef-4b3`.
 
-Implementation commit: `99113ff04c63e34431e29edc0f5828cc8c8fc23c`.
+Implementation commit: `93db3f1a2c3fb6e39203c2133c73c32582d6870b`.
 
 What changed: перед всеми нетехническими порогами `route_question()` получает
 полную постраничную историю, дедуплицирует `task.id` и считает попытки той же
 работы по `work_id` (с прежним legacy fallback). Неполная история снимает
 терминальную задачу с `processed` без автоответа, паузы, вопроса или уведомления.
 
-Evidence: `python3 -m unittest -v pilot.test_pilot` — 296 passed, 13 skipped;
-целевые `RouteQuestionCompleteAttemptCountTests` покрывают вторую страницу,
-разные `work_id`, дубль, повтор cursor, ошибку API и нулевой режим ворот.
+Evidence: `python3 -m unittest -v pilot.test_pilot.RouteQuestionCompleteAttemptCountTests pilot.test_pilot.DiagnosisRepairTests` — 22 tests, OK;
+целевые проверки покрывают вторую страницу, разные `work_id`, дубль, повтор
+cursor, ошибку API и нулевой режим ворот.
 
 One next action: проверить изменения в Review на свежем `main`.
 
@@ -36,4 +36,4 @@ One next action: проверить изменения в Review на свеже
 `route_question()` теперь получает авторитетный счётчик только из строгого
 постраничного обхода задач; повтор cursor, предел страниц и ошибка API не
 порождают внешних действий и возвращают терминальную задачу на следующий цикл.
-Проверено: `python3 -m unittest -v pilot.test_pilot` — 296 passed, 13 skipped.
+Проверено: `python3 -m unittest -v pilot.test_pilot.RouteQuestionCompleteAttemptCountTests pilot.test_pilot.DiagnosisRepairTests` — 22 tests, OK.
