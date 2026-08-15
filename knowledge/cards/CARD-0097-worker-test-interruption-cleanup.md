@@ -5,12 +5,12 @@ Implementation commit: 2eae3cc07562ba731b35a22335fc127e53971029 — штатны
 ## HEAD
 
 - Status: IMPLEMENTED, проверки пройдены.
-- Branch: factory/f9ffb253-548-c91f8b7e-2e5
+- Branch: factory/8e8a1ce4-e06-afa4b014-acf
 - Implementation commit: 2eae3cc07562ba731b35a22335fc127e53971029
 - What changed: обработчик включён для каждого `TestMain` worker-пакета, а не
   только helper-режима; все managed-clone sync-каталоги регистрируются штатно.
-- Evidence: целевой worker-набор и `go test -timeout 5m ./...` → PASS (2026-08-15).
-- One next action: перед слиянием проверить изменение в review.
+- Evidence: `go test -timeout 5m ./...` и `npx tsc -p tsconfig.app.json --noEmit` → PASS (2026-08-15).
+- One next action: перед слиянием провести review изменения.
 - Specification: `knowledge/specs/worker-test-interruption-cleanup.md`.
 - Owner impact: остановка worker-теста не оставляет блокирующие fake `gh`, их
   process group и тестовые каталоги в `/tmp`.
@@ -20,6 +20,12 @@ Implementation commit: 2eae3cc07562ba731b35a22335fc127e53971029 — штатны
   гарантия после `SIGKILL` без внешнего supervisor.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+В `web/` установлены зависимости строго по lock-файлу; обязательная проверка
+`npx tsc -p tsconfig.app.json --noEmit` прошла. Рабочая ветка перенесена на
+актуальный `main`; кодовая реализация остаётся в указанном implementation commit.
 
 ### 2026-08-15 — Implement
 
