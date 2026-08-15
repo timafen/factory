@@ -794,7 +794,9 @@ configure_release_mode() {
       ;;
   esac
   fixture_release_owner=''
-  [ "$mode" != path-shadow-chain ] || fixture_release_owner=factory:factory
+  case "$mode" in
+    path-shadow-chain|owner-release) fixture_release_owner=factory:factory ;;
+  esac
 }
 
 run_release() {
@@ -855,7 +857,7 @@ run_driver() {
     FACTORY_DATABASE="$case_dir/database/factory.sqlite3" FACTORY_RELEASE_DIR="$case_dir/releases" \
     FACTORY_RELEASE_TRUSTED_GATE_DIR="$case_dir/root-owned-gates" \
     FACTORY_RELEASE_INFO="$case_dir/current.json" FACTORY_RELEASE_LOCK="$case_dir/release.lock" \
-    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER='' FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
+    FACTORY_RELEASE_AS='' FACTORY_RELEASE_OWNER="${fixture_release_owner:-}" FACTORY_CONTROL_OWNER='' FACTORY_BRAIN_OWNER='' FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
@@ -1160,6 +1162,20 @@ assert_preflight_refusal "$partial_history"
 [ -L "$partial_history/releases/current" ] && [ -d "$partial_history/releases/generations/unfinished" ] \
   || fail "partial history refusal rewrote the existing history"
 
+dangling_history="$temporary/dangling-history"
+make_fixture "$dangling_history" dangling-history
+mkdir -p "$dangling_history/releases/generations"
+ln -s "$dangling_history/releases/generations/missing-current" "$dangling_history/releases/current"
+ln -s "$dangling_history/releases/generations/missing-previous" "$dangling_history/releases/previous"
+set +e
+run_release "$dangling_history" dangling-history
+status=$?
+set -e
+[ "$status" -eq 4 ] || fail "two dangling release links were not rejected before release work"
+assert_preflight_refusal "$dangling_history"
+grep -F 'не указывают на проверенные поколения' "$dangling_history/output" >/dev/null \
+  || fail "two dangling links did not explain the rejected history"
+
 identity_retry="$temporary/identity-transient"
 make_fixture "$identity_retry" identity-transient
 run_release "$identity_retry" identity-transient \
@@ -1459,7 +1475,7 @@ grep -F 'процесс factory-server.service использует deleted-inod
 
 rollback_case="$temporary/full-rollback"
 make_fixture "$rollback_case" parallel-success
-run_release "$rollback_case" parallel-success || fail "rollback fixture release failed"
+run_release "$rollback_case" owner-release || fail "rollback fixture release failed"
 candidate=$(readlink -f "$rollback_case/releases/current")
 snapshot="$candidate/database.sqlite3"
 manifest=$(<"$candidate/manifest.sha256")
@@ -1492,6 +1508,15 @@ compgen -G "$rollback_case/database/factory.sqlite3.failed.*" >/dev/null \
   || fail "explicit restore did not preserve the failed DB"
 [ ! -e "$rollback_case/releases/transaction" ] || fail "successful restore left a journal"
 [ "$before_db" != "$migrated_db" ] || fail "DB rollback fixture did not actually migrate the live ledger"
+
+# A release after rollback must accept the metadata republished from the old
+# generation when Factory owns it explicitly, as production does.
+run_driver "$rollback_case" --rollback >"$rollback_case/second-rollback-output" 2>&1 \
+  || { cat "$rollback_case/second-rollback-output" >&2; fail "second rollback with release owner failed"; }
+[ "$(stat -c %U:%G "$rollback_case/current.json")" = factory:factory ] \
+  || fail "rollback did not restore the configured owner on release metadata"
+run_release "$rollback_case" owner-release \
+  || { cat "$rollback_case/output" >&2; fail "release after rollback with owner failed"; }
 
 tampered="$temporary/tampered-manifest"
 make_fixture "$tampered" parallel-success

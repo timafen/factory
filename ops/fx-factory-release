@@ -293,7 +293,8 @@ rollback_to_generation() { # generation, owner-facing reason
   fail "$reason — возвращаю полный прежний комплект"
   stop_factory_units || true
   install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
-  cp -f "$target/release-info.json" "$INFO.new" && mv -f "$INFO.new" "$INFO" || return
+  cp -f "$target/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
+    && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" || return
   live_ledger=$(database_ledger "$DATABASE") || return
   generation_ledger=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("database",{}).get("ledger",-1))' "$target/manifest.json")
   if [ "$generation_ledger" -ge 0 ] && [ "$live_ledger" -gt "$generation_ledger" ]; then
@@ -401,6 +402,11 @@ validate_release_history() {
     && [ "$(dirname "$current_generation")" = "$generations_real" ] \
     && [ "$(dirname "$previous_generation")" = "$generations_real" ] \
     || { preflight_fail "ссылки current/previous не указывают на опубликованные поколения"; return 1; }
+
+  for candidate in "$current_generation" "$previous_generation"; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] && verify_generation "$candidate" \
+      || { preflight_fail "ссылки current/previous не указывают на проверенные поколения"; return 1; }
+  done
 
   while IFS= read -r -d '' candidate; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] \
