@@ -992,6 +992,7 @@ type PilotSettings struct {
 	Note                     string       `json:"_note,omitempty"`
 	Enabled                  bool         `json:"enabled"`
 	PollSeconds              float64      `json:"poll_seconds"`
+	ReleaseBatchSeconds      float64      `json:"release_batch_seconds,omitempty"`
 	TimeoutSeconds           float64      `json:"timeout_seconds"`
 	AutoMerge                bool         `json:"auto_merge"`
 	AutoAnswer               bool         `json:"auto_answer"`

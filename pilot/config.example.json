@@ -98,6 +98,7 @@
  "owner_chat_url": "https://claude.ai/code/session_01NMZVSSJpRQfYECuiG8T3hn",
  "owner_ui_url": "https://factory.timafen.com/work",
  "poll_seconds": 30,
+ "release_batch_seconds": 120,
  "skip_stages_for_low": [
   "Triage",
   "Specification"
