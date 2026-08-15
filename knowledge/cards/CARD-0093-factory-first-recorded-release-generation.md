@@ -1,21 +1,20 @@
 # CARD-0093 — Первое записанное поколение выпуска Factory
 
-Implementation commit: b5c3c3bc379605e155414500c94a72a6cbe55919 — первый выпуск
-проверяет исходную точку, записывает полный bootstrap-комплект и отказывается
-от небезопасной истории до сборки или остановки служб.
+Implementation commit: 68f71c9566c20f9c1be406b2ced8c6760a9e7661 — откат вновь
+публикует защищённые metadata, а битые указатели поколений останавливают выпуск
+до build gates.
 
 ## HEAD
 
-- Status: Implemented — готово к Review.
-- Branch: `factory/910b60bc-5fc-707047a7-630`.
-- Implementation commit: b5c3c3bc379605e155414500c94a72a6cbe55919 — fail-closed
-  bootstrap первого recorded release с полным проверяемым rollback-комплектом.
-- What changed: preflight до сборки проверяет пустую/целую историю, metadata
-  `0600`, `release_id`, SHA и живые rollback artifacts; bootstrap содержит
-  исходные metadata, inventory, service state и SQLite-снимок.
-- Evidence: `bash ops/test-fx-factory-release.sh` → PASS; сценарии `0644`,
-  отсутствующего `release_id` и частичной истории не запускают сборку или службы.
-- Next action: передать в Review без живого выпуска и без ручной правки metadata.
+- Status: Implemented — повторно готово к Review.
+- Branch: `factory/baf5d7a6-bd0-985f9f59-ec7`.
+- Implementation commit: 68f71c9566c20f9c1be406b2ced8c6760a9e7661 — откат
+  возвращает ownership/mode/sync metadata; preflight отклоняет два dangling-указателя.
+- What changed: rollback восстанавливает owner, `0600` и fsync `release-info.json`;
+  `current` и `previous` проверяются как существующие валидные поколения до сборки.
+- Evidence: `bash ops/test-fx-factory-release.sh` → PASS; повторный выпуск после
+  rollback с `OWNER=factory:factory` и две dangling-ссылки покрыты регрессиями.
+- Next action: повторно запустить Review.
 
 ## LOG
 
@@ -40,7 +39,14 @@ Implementation commit: b5c3c3bc379605e155414500c94a72a6cbe55919 — первый
 защитой test gate. `bash ops/test-fx-factory-release.sh` завершился PASS:
 bootstrap, metadata `0644`, отсутствие `release_id` и частичная история покрыты.
 
+### 2026-08-15 — Implement
+
+Исправлены замечания Review: при rollback metadata возвращается с ожидаемым
+owner, mode `0600` и синхронизацией каталога, а обе dangling-ссылки на
+поколения прерывают preflight до build gates. `bash ops/test-fx-factory-release.sh`
+завершился PASS, включая повторный выпуск с `OWNER=factory:factory`.
+
 ## Следующее действие
 
-Передать карточку в Review. До отдельного решения владельца не исправлять
-права живой metadata и не запускать `fx factory release`.
+Повторно запустить Review. До отдельного решения владельца не запускать
+`fx factory release` в production.
