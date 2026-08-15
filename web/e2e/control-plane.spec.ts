@@ -416,7 +416,7 @@ async function expectInteractiveOverflowRegression(page: Page) {
 }
 
 async function exerciseMobileNavigation(page: Page) {
-  const toggle = page.getByRole("button", { name: "Toggle navigation" });
+  const toggle = page.getByRole("button", { name: "Открыть навигацию" });
   const sidebar = page.locator(".sidebar");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -427,7 +427,7 @@ async function exerciseMobileNavigation(page: Page) {
   await expect(sidebar).not.toBeInViewport();
 
   await toggle.click();
-  const scrim = page.getByRole("button", { name: "Close navigation" });
+  const scrim = page.getByRole("button", { name: "Закрыть навигацию" });
   await expect(scrim).toBeVisible();
   await scrim.click({ position: { x: 380, y: 100 } });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -779,7 +779,7 @@ test("@critical sends release and rollback through the browser", async ({ page }
 test("creates, pins, revises, and disables a reusable Workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");
-  await expect(page.getByRole("heading", { name: "Runbooks", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сценарии", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Create runbook" }).first().click();
   const create = page.getByRole("dialog", { name: "Create runbook" });
   await create.getByLabel("Title").fill("E2E pinned review");
@@ -795,7 +795,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   await expect(page.getByRole("heading", { name: "E2E pinned review" })).toBeVisible();
   const workflowURL = page.url();
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
   const delegate = page.getByRole("dialog", { name: "Delegate task" });
   await delegate.getByLabel("Workflow").selectOption({ label: "E2E pinned review · revision 1" });
   await delegate.getByLabel("Title").fill("Pinned Workflow browser task");
@@ -829,7 +829,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   await page.getByRole("button", { name: "Disable" }).click();
   await page.getByRole("button", { name: "Confirm disable" }).click();
   await expect(page.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
   await expect(page.getByRole("dialog").getByLabel("Workflow").getByRole("option", { name: /E2E pinned review/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   browser.assertClean();
@@ -838,7 +838,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
 test("@critical starts work and completes it in a real Git worktree", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Delegate task" });
   await dialog.getByLabel("Worker").selectOption(realWorker);
   await expect(
@@ -896,7 +896,7 @@ test("@critical starts work and completes it in a real Git worktree", async ({ p
 test("cancels active work running in the real worker", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Delegate task" });
   await dialog.getByLabel("Worker").selectOption(realWorker);
   await dialog.getByLabel("Title").fill("Cancel a real active Codex process");
@@ -1106,7 +1106,7 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   );
   await api.dispose();
   await page.goto("/workers");
-  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Исполнители" })).toBeVisible();
   const workersNavigation = page.getByRole("button", { name: "Исполнители", exact: true });
   await expect(workersNavigation).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
@@ -1120,23 +1120,23 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(page.getByRole("heading", { name: "Build Mac" })).toBeVisible();
   await expect(workersNavigation).toHaveClass(/active/);
   await expect(workersNavigation).not.toHaveAttribute("aria-current");
-  const profileTabs = page.getByRole("tablist", { name: "Worker profile" });
-  await expect(profileTabs.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  const profileTabs = page.getByRole("tablist", { name: "Профиль исполнителя" });
+  await expect(profileTabs.getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("region", { name: "Worker summary" })).toBeVisible();
 
-  await profileTabs.getByRole("tab", { name: "Work" }).click();
+  await profileTabs.getByRole("tab", { name: "Работа" }).click();
   await expect(page.getByText("factory-worker cleanup attempt-retained-001 --confirm")).toBeVisible();
 
-  await profileTabs.getByRole("tab", { name: "Capabilities" }).click();
+  await profileTabs.getByRole("tab", { name: "Возможности" }).click();
   await expect(page.getByRole("tabpanel")).toContainText("0.42.0-test");
   await expect(page.getByRole("tabpanel")).toContainText("github.com/example/factory");
 
-  await profileTabs.getByRole("tab", { name: "Settings" }).click();
+  await profileTabs.getByRole("tab", { name: "Настройки" }).click();
   await expect(page.getByRole("heading", { name: "Execution" })).toBeVisible();
   await expect(page.getByText("Read only")).toBeVisible();
   await expect(page.getByRole("meter", { name: "Worker concurrency" })).toHaveAttribute("max", "2");
   await expect(page.getByRole("tabpanel")).toContainText("restart the worker");
-  const assign = page.getByRole("button", { name: "Assign work" });
+  const assign = page.getByRole("button", { name: "Назначить работу" });
   await assign.click();
   await expect(page.getByRole("dialog").getByLabel("Worker")).toHaveValue(workerOnline);
   await page.keyboard.press("Escape");
@@ -1147,7 +1147,7 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
 test("delegates with worker-specific repositories and preserves the task on refresh", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Delegate task" }).first().click();
+  await page.getByRole("button", { name: "Поставить задачу" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Delegate task" });
   await dialog.getByLabel("Worker").selectOption(workerOffline);
   await expect(dialog.getByText(/task will queue until it returns/i)).toBeVisible();
@@ -1239,10 +1239,10 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await page.screenshot({ path: "test-results/screenshots/work-narrow.png", fullPage: true });
 
   await page.goto("/workers");
-  await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Исполнители" })).toBeVisible();
   await page.screenshot({ path: "test-results/screenshots/workers-narrow.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
   const dialog = page.getByRole("dialog", { name: "Delegate task" });
   await dialog.getByLabel("Worker").selectOption(realWorker);
   await dialog.getByLabel("Title").fill("Narrow viewport delegation");
@@ -1309,14 +1309,14 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     { name: "answer", path: "/answer", ready: (page) => page.getByText(/Здесь конвейер спрашивает тебя/) },
     { name: "access", path: "/access", ready: (page) => page.getByRole("heading", { name: "Доступы" }) },
     { name: "sandbox-keys", path: "/sandbox-keys", ready: (page) => page.getByRole("heading", { name: "Ключи песочницы" }) },
-    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа", exact: true }) },
-    { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Execution capacity" }) },
-    { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Managed repositories" }) },
+    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работы", exact: true }) },
+    { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Исполнители" }) },
+    { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Репозитории" }) },
     { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },
-    { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Runbooks", exact: true }) },
+    { name: "workflows", path: "/workflows", ready: (page) => page.getByRole("heading", { name: "Сценарии", exact: true }) },
     { name: "pipeline", path: "/pipeline", ready: (page) => page.getByRole("heading", { name: "Pipeline", exact: true }) },
-    { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Cards", exact: true }) },
-    { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Automations", exact: true }) },
+    { name: "cards", path: "/cards", ready: (page) => page.getByRole("heading", { name: "Карточки", exact: true }) },
+    { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { name: "Автоматизации", exact: true }) },
     { name: "settings", path: "/settings", ready: (page) => page.getByRole("heading", { name: "Настройки" }) },
     { name: "dialog", path: "/dialog", ready: (page) => page.getByRole("heading", { name: "Диалог", exact: true }) },
   ];
@@ -1358,7 +1358,7 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
     if (viewport.name === "phone") await exerciseMobileNavigation(page);
-    await page.getByRole("button", { name: "Delegate task" }).click();
+    await page.getByRole("button", { name: "Поставить задачу" }).click();
     const dialog = page.getByRole("dialog", { name: "Delegate task" });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Worker").selectOption(workerOffline);
@@ -1379,7 +1379,7 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
 test("opens and closes delegation from the keyboard", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
-  const delegate = page.getByRole("button", { name: "Delegate task" }).first();
+  const delegate = page.getByRole("button", { name: "Поставить задачу" }).first();
   await delegate.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByLabel("Title")).toBeFocused();
@@ -1415,7 +1415,7 @@ test("manages repository routing end to end and preserves add input while pollin
   );
 
   await page.goto("/repositories");
-  const repositoriesNavigation = page.getByRole("button", { name: "Repositories", exact: true });
+  const repositoriesNavigation = page.getByRole("button", { name: "Репозитории", exact: true });
   await expect(repositoriesNavigation).toHaveAttribute("aria-current", "page");
   const input = page.getByLabel("Canonical identity");
   await input.fill("github.com/example/browser-managed");
@@ -1470,7 +1470,7 @@ test("manages repository routing end to end and preserves add input while pollin
   const enabledTask = await enabledRoute.json() as { execution: { assigned_worker_id: string } };
   expect([managedWorker, realWorker]).toContain(enabledTask.execution.assigned_worker_id);
 
-  await page.getByRole("button", { name: "Delegate task" }).click();
+  await page.getByRole("button", { name: "Поставить задачу" }).click();
   const delegate = page.getByRole("dialog", { name: "Delegate task" });
   await delegate.getByLabel("Title").fill("Delegate configured managed repository");
   await delegate.getByLabel("Context").fill("Acquire this repository on the selected worker.");

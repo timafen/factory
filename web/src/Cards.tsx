@@ -43,13 +43,13 @@ export function CardsView() {
   if (selected) {
     return <CardDetail card={selected} onBack={() => setSelected(null)} />;
   }
-  if (cards.isPending) return <LoadingState label="Loading cards" />;
+  if (cards.isPending) return <LoadingState label="Загружаем карточки" />;
   if (!cards.data) return <ErrorState error={cards.error} onRetry={() => void cards.refetch()} />;
 
   return (
     <div className="page">
       <ViewHeader
-        title="Cards"
+        title="Карточки"
         fetching={cards.isFetching}
         updatedAt={cards.dataUpdatedAt}
         onRefresh={() => void cards.refetch()}
