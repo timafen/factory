@@ -120,7 +120,8 @@ worker_service_list() {
   # worker units when the caller has not supplied an explicit fixture/list.
   printf '%s\n' "$WORKER_SERVICE"
   for path in "$WORKER_UNIT_DIR"/factory-worker*.service \
-              "$WORKER_UNIT_DIR"/factory-codex-*.service; do
+              "$WORKER_UNIT_DIR"/factory-codex-*.service \
+              "$WORKER_UNIT_DIR"/factory-claude-*.service; do
     [ -f "$path" ] || continue
     service=${path##*/}
     [ "$service" = "$WORKER_SERVICE" ] || printf '%s\n' "$service"

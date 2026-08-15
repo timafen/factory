@@ -122,6 +122,7 @@ make_fixture() {
     "$case_dir/live/pilot" "$case_dir/live/intake" "$case_dir/database"
   : >"$case_dir/units/factory-worker.service"
   : >"$case_dir/units/factory-worker-2.service"
+  : >"$case_dir/units/factory-claude-fable.service"
   cat >"$case_dir/install/factory-server" <<'EOF'
 #!/bin/bash
 # old-server
@@ -1075,7 +1076,9 @@ PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 grep -F 'stop factory-worker-2.service' "$success/events" >/dev/null \
   || fail "release did not stop a discovered model worker"
-grep -F 'start factory-worker.service factory-worker-2.service' "$success/events" >/dev/null \
+grep -F 'stop factory-claude-fable.service' "$success/events" >/dev/null \
+  || fail "release did not stop a discovered Claude worker"
+grep -F 'start factory-worker.service factory-worker-2.service factory-claude-fable.service' "$success/events" >/dev/null \
   || fail "release did not start discovered workers together"
 ! grep -Fx 'stop factory-release-broker.service' "$success/events" >/dev/null \
   || fail "release stopped its parent broker before terminal persistence"
