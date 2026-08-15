@@ -4,17 +4,16 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 
 ## HEAD
 
-Status: Implemented; environment-policy test passed
-Branch: `factory/d56e1255-1d5-5a589118-af3`
+Status: Ready for review
+Branch: `factory/57e1f81b-e47-ff22bf24-86f`
 Specification: `knowledge/specs/current-checkout-github-origin-context.md`
-What changed: зафиксирован контракт для checkout с `origin=timafen/factory` и
-`upstream=owainlewis/factory`; существующая реализация передаёт в runtime
-`GH_REPO=timafen/factory` из доверенной identity и отсекает чужое значение.
-Evidence: `go test -count=1 ./internal/worker -run
-'^TestRuntimeEnvironmentGitHubRepositoryPolicy$'` → PASS; `web: npx tsc -p
-tsconfig.app.json --noEmit` → PASS.
-One next action: выполнить сквозной worker-тест в среде, где корень ФС имеет
-доверенного владельца.
+Implementation commit: `fee29b0c65cc12058cc8c08d6ad87855367bdec8` — worker
+передаёт GitHub-репозиторий claim в runtime и отсекает чужой контекст.
+What changed: контракт закрепляет checkout с `origin=timafen/factory` и
+`upstream=owainlewis/factory`; общий runtime environment задаёт единственный
+`GH_REPO=timafen/factory` из доверенной identity.
+Evidence: `go test -count=1 ./internal/worker -run '^(TestRuntimeEnvironmentGitHubRepositoryPolicy|TestWorkerRuntimeUsesClaimGitHubRepositoryContext)$'` → PASS; `web: npx tsc -p tsconfig.app.json --noEmit` → PASS.
+One next action: проверить и влить документацию контракта.
 
 ## LOG
 
@@ -55,3 +54,10 @@ GitHub.com-репозиторий задачи добавляется единс
 worker-тестом и TypeScript-проверкой. Сквозной worker-тест в этом sandbox
 останавливается до runtime: корень ФС имеет UID `nobody`, который защита пути
 БД намеренно не считает доверенным.
+
+### 2026-08-15 — Implement
+
+Поставка перебазирована на `origin/main` в ветку
+`factory/57e1f81b-e47-ff22bf24-86f`. Политика окружения и сквозной путь
+claim → supervisor → runtime прошли целевую worker-проверку; TypeScript
+проверен командой `npx tsc -p tsconfig.app.json --noEmit` из `web`.
