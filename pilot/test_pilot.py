@@ -4049,11 +4049,9 @@ class LegacyPlanCardCleanupTest(unittest.TestCase):
                 self.cutoff, apply=apply,
                 now_fn=lambda: datetime.datetime(2026, 8, 12, tzinfo=datetime.timezone.utc))
 
-    def test_dry_run_finds_old_final_failure_and_missing_link_without_writing(self):
+    def test_dry_run_finds_only_accepted_final_without_writing(self):
         cases = (
             ([self.task()], "root"),
-            ([self.task(state="failed", stage="3/5 Implement + Test")], "root"),
-            ([], "deleted"),
         )
         for tasks, task_id in cases:
             with self.subTest(task_id=task_id, state=tasks[0]["state"] if tasks else "missing"):
@@ -4075,15 +4073,17 @@ class LegacyPlanCardCleanupTest(unittest.TestCase):
         self.assertEqual(self.run_cleanup([self.task()], apply=True), 0)
         self.assertEqual(self.bytes_on_disk(), after)
 
-        pilot.save(self.path, [dict(self.idea, task_id="deleted")])
+        pilot.save(self.path, [dict(self.idea, task_id="deleted",
+                                    created_at="2026-08-10T11:00:00Z")])
         self.assertEqual(self.run_cleanup([], apply=True), 1)
         missing = pilot.load(self.path, [])[0]
-        self.assertEqual(missing["cleanup_reason"], "linked_task_missing")
+        self.assertEqual(missing["cleanup_reason"], "linked_task_missing_before_cutoff")
         self.assertEqual(missing["task_id"], "deleted")
 
     def test_protective_cases_stay_byte_identical(self):
         cases = (
             ([self.task(state="running")], {}, "active"),
+            ([self.task(state="failed")], {}, "failed"),
             ([self.task(state="cancelled")], {}, "cancelled"),
             ([self.task(stage="3/5 Implement + Test")], {}, "intermediate"),
             ([self.task()], {"detail_time": self.cutoff}, "at_cutoff"),
@@ -4116,6 +4116,24 @@ class LegacyPlanCardCleanupTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.run_cleanup([self.task()], apply=True, api_error=RuntimeError("detail failed"))
         self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_missing_link_requires_proven_old_card_date(self):
+        cases = (
+            ({}, "no_date"),
+            ({"created_at": "2026-08-10T12:00:00Z"}, "at_cutoff"),
+            ({"created_at": "2026-08-10 11:00"}, "timezone_missing"),
+            ({"created_at": "2026-08-10T11:00:00Z"}, "old_proven"),
+        )
+        for fields, label in cases:
+            with self.subTest(label=label):
+                pilot.save(self.path, [dict(self.idea, task_id="deleted", **fields)])
+                before = self.bytes_on_disk()
+                expected = 1 if label == "old_proven" else 0
+                self.assertEqual(self.run_cleanup([], apply=True), expected)
+                if expected:
+                    self.assertEqual(pilot.load(self.path, [])[0]["state"], "done")
+                else:
+                    self.assertEqual(self.bytes_on_disk(), before)
 
     def test_all_tasks_rejects_unfinished_pagination(self):
         with mock.patch.object(pilot, "api", return_value={"tasks": [], "next_cursor": "more"}):

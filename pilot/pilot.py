@@ -2421,6 +2421,19 @@ def _cleanup_task_time(task_id):
     return _rfc3339(value)
 
 
+def _cleanup_missing_link_time(idea):
+    """Return a timezone-qualified card date, or None when it is not proof."""
+    for field in ("updated_at", "created_at"):
+        value = idea.get(field)
+        if not value:
+            continue
+        try:
+            return _rfc3339(value)
+        except ValueError:
+            continue
+    return None
+
+
 def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
     """Find, and optionally atomically close, cards left before auto-cleanup."""
     cutoff = _rfc3339(before)
@@ -2430,8 +2443,6 @@ def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
     if not isinstance(items, list):
         raise ValueError("ideas.json must contain a list")
     changes, skipped = [], []
-    terminal = {"succeeded", "failed", "cancelled"}
-
     for idea in items:
         if idea.get("state") not in ("planned", "in_work"):
             continue
@@ -2441,7 +2452,11 @@ def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
             continue
         linked = by_id.get(task_id)
         if not linked:
-            changes.append((idea, "linked_task_missing"))
+            missing_since = _cleanup_missing_link_time(idea)
+            if missing_since is None or missing_since >= cutoff:
+                skipped.append((idea, "missing_link_date_unproven"))
+                continue
+            changes.append((idea, "linked_task_missing_before_cutoff"))
             continue
 
         work_id = linked.get("work_id")
@@ -2462,15 +2477,14 @@ def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
         boundary.sort(key=lambda task: (task.get("created_at") or "", task.get("id") or ""))
         latest = boundary[-1] if boundary else None
         state = (latest or {}).get("state")
-        if not latest or state not in terminal or state == "cancelled":
-            skipped.append((idea, "work_not_terminal"))
+        if not latest or state != "succeeded":
+            skipped.append((idea, "work_not_accepted_final"))
             continue
-        if state == "succeeded":
-            match = PIPELINE_TITLE.match(latest.get("title") or "")
-            if (not match or match.group(1) != match.group(2)
-                    or not final_ok(latest.get("id"), strict=True)):
-                skipped.append((idea, "success_not_accepted_final"))
-                continue
+        match = PIPELINE_TITLE.match(latest.get("title") or "")
+        if (not match or match.group(1) != match.group(2)
+                or not final_ok(latest.get("id"), strict=True)):
+            skipped.append((idea, "success_not_accepted_final"))
+            continue
         if _cleanup_task_time(latest["id"]) >= cutoff:
             skipped.append((idea, "terminal_not_before_cutoff"))
             continue
