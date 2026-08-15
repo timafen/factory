@@ -4,16 +4,17 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 
 ## HEAD
 
-Status: Ready for review
-Branch: `factory/57e1f81b-e47-ff22bf24-86f`
+Status: Implemented
+Branch: `factory/ac5d6898-79a-3f38dd03-060`
 Specification: `knowledge/specs/current-checkout-github-origin-context.md`
 Implementation commit: `fee29b0c65cc12058cc8c08d6ad87855367bdec8` — worker
 передаёт GitHub-репозиторий claim в runtime и отсекает чужой контекст.
 What changed: контракт закрепляет checkout с `origin=timafen/factory` и
 `upstream=owainlewis/factory`; общий runtime environment задаёт единственный
 `GH_REPO=timafen/factory` из доверенной identity.
-Evidence: `go test -count=1 ./internal/worker -run '^(TestRuntimeEnvironmentGitHubRepositoryPolicy|TestWorkerRuntimeUsesClaimGitHubRepositoryContext)$'` → PASS; `web: npx tsc -p tsconfig.app.json --noEmit` → PASS.
-One next action: проверить и влить документацию контракта.
+Evidence: целевые worker-тесты → PASS; `npm run typecheck` и
+`npm run build` в `web` → PASS.
+One next action: влить опубликованную ветку в `main`.
 
 ## LOG
 
@@ -61,3 +62,10 @@ worker-тестом и TypeScript-проверкой. Сквозной worker-т
 `factory/57e1f81b-e47-ff22bf24-86f`. Политика окружения и сквозной путь
 claim → supervisor → runtime прошли целевую worker-проверку; TypeScript
 проверен командой `npx tsc -p tsconfig.app.json --noEmit` из `web`.
+
+### 2026-08-15 — Implement
+
+Карточка переведена в статус `Implemented` после повторной проверки
+политики `GH_REPO` и сквозного пути claim → supervisor → runtime.
+Целевые Go-тесты, TypeScript-проверка и web-сборка завершились
+успешно в ветке `factory/ac5d6898-79a-3f38dd03-060`.
