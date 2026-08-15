@@ -7,10 +7,70 @@ LOG=${FACTORY_JANITOR_LOG:-/var/log/factory-janitor.log}
 STATE=${FACTORY_JANITOR_STATE:-/var/lib/factory-janitor/heals.json}
 QUAR=${FACTORY_JANITOR_QUARANTINE:-/opt/factory-data/quarantine}
 API=${FACTORY_JANITOR_API:-http://127.0.0.1:7337/api/v1}
+ESCALATION_URL=${FACTORY_JANITOR_ESCALATION_URL-https://ntfy.sh/timafen-a8523d037f21}
 mkdir -p "$(dirname "$STATE")" "$QUAR"
 [ -f "$LOG" ] && [ "$(stat -c%s "$LOG")" -gt 5000000 ] \
   && tail -c 1000000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 say() { echo "$(date -Is) $*" >>"$LOG"; }
+
+# Healthy workers own their retained results.  Never feed these records into
+# the quarantine path below; notify the owner and remember the exact snapshot.
+while IFS=$'\t' read -r name attempt_id repository_id path reason snapshot; do
+  [ -n "$name" ] || continue
+  seen=$(python3 - "$STATE" "$snapshot" <<'PY'
+import json, os, sys
+state, snapshot = sys.argv[1:]
+data = json.load(open(state)) if os.path.exists(state) else {}
+print(int(snapshot in data.get("healthy_retained_escalations", [])))
+PY
+  )
+  [ "$seen" = 0 ] || continue
+
+  message="ТРЕБУЕТ ПРОВЕРКИ: healthy воркер $name удерживает результат attempt=$attempt_id repository=$repository_id path=$path reason=$reason. Проверьте результат и выполните cleanup вручную."
+  delivered=0
+  if [ -z "$ESCALATION_URL" ]; then
+    say "$message Канал эскалации не настроен; уведомление зафиксировано только в журнале."
+    delivered=1
+  elif curl --fail --silent --show-error --data-binary "$message" \
+      "$ESCALATION_URL" >>"$LOG" 2>&1; then
+    say "эскалация healthy retained отправлена: воркер=$name attempt=$attempt_id path=$path"
+    delivered=1
+  else
+    say "не удалось отправить эскалацию healthy retained: воркер=$name attempt=$attempt_id path=$path"
+  fi
+
+  if [ "$delivered" = 1 ]; then
+    python3 - "$STATE" "$snapshot" <<'PY'
+import json, os, sys, tempfile
+state, snapshot = sys.argv[1:]
+data = json.load(open(state)) if os.path.exists(state) else {}
+items = data.setdefault("healthy_retained_escalations", [])
+if snapshot not in items:
+    items.append(snapshot)
+os.makedirs(os.path.dirname(state), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(state))
+with os.fdopen(fd, "w") as stream:
+    json.dump(data, stream)
+os.replace(tmp, state)
+PY
+  fi
+done < <(python3 - "$API" <<'PY'
+import hashlib, json, sys, urllib.request
+try:
+    data = json.loads(urllib.request.urlopen(sys.argv[1] + "/workers", timeout=20).read())
+except Exception:
+    raise SystemExit
+for worker in data.get("workers", []):
+    if not worker.get("online") or worker.get("health") != "healthy":
+        continue
+    for retained in worker.get("retained_worktrees") or []:
+        fields = [worker.get("name", ""), retained.get("attempt_id", ""),
+                  retained.get("repository_id", ""), retained.get("path", ""),
+                  retained.get("reason", "")]
+        snapshot = hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
+        print(*fields, snapshot, sep="\t")
+PY
+)
 
 declare -A UNIT
 while read -r unit; do
@@ -115,8 +175,10 @@ except Exception:
     raise SystemExit
 for worker in data.get("workers", []):
     retained = worker.get("retained_worktrees") or []
-    offline_with_retained = not worker.get("online") and retained
-    if not worker.get("active_count") and offline_with_retained:
+    cleanup_with_retained = retained and (
+        not worker.get("online") or worker.get("health") != "healthy"
+    )
+    if not worker.get("active_count") and cleanup_with_retained:
         print(worker["name"], worker["id"], b64encode(json.dumps(retained).encode()).decode(), sep="\t")
 PY
 )

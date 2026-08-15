@@ -170,6 +170,7 @@ func (manager *Manager) runAttempt(parent context.Context, claim protocol.Claim,
 	process, err := startSupervisor(manager.options.SupervisorCommand, supervisorInit{
 		Runtime:           manager.config.Runtime,
 		RuntimeExecutable: manager.options.RuntimeExecutable,
+		RemoteIdentity:    claim.Repository.RemoteIdentity,
 		Worktree:          value.Path,
 		ResultPath:        path,
 		Prompt:            prompt,

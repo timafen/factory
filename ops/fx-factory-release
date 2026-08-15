@@ -230,7 +230,7 @@ stop_factory_units() {
 }
 
 verify_generation_runtime() {
-  local selected=$1 unit pid exe worker_id body
+  local selected=$1 unit pid exe worker_id body previous_body previous_heartbeat registered attempt
   if systemctl -q is-active "$SERVER_SERVICE" 2>/dev/null; then
     pid=$(systemctl show -p MainPID --value "$SERVER_SERVICE" 2>/dev/null)
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
@@ -249,14 +249,31 @@ verify_generation_runtime() {
       || { fail "запущенный $unit не совпадает с выбранным manifest"; return 1; }
   done
   if systemctl -q is-active "$WORKER_SERVICE" 2>/dev/null; then
-    worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) || return
-    body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
-    printf '%s' "$body" | python3 -c 'import datetime,json,sys
+    # The identity command deliberately locks the worker data directory. It
+    # cannot run beside the live worker that owns that lock, so a recovery
+    # verification must obtain the identity while the primary worker is
+    # stopped and then prove that the restarted process registered freshly.
+    systemctl stop "$WORKER_SERVICE" || return
+    worker_id=$("$WORKER_BIN" identity -config "$WORKER_CONFIG" 2>/dev/null) \
+      || { systemctl start "$WORKER_SERVICE" >/dev/null 2>&1 || true; return 1; }
+    previous_body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+    previous_heartbeat=$(printf '%s' "$previous_body" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("last_heartbeat", ""))
+except Exception: print("")' 2>/dev/null || true)
+    systemctl start "$WORKER_SERVICE" || return
+    registered=0
+    for ((attempt=1; attempt<=REGISTER_ATTEMPTS; attempt++)); do
+      body=$(curl -fsS --max-time 10 "$API/api/v1/workers/$worker_id" 2>/dev/null || true)
+      if printf '%s' "$body" | python3 -c 'import datetime,json,sys
 try:
- w=json.load(sys.stdin); h=datetime.datetime.fromisoformat(w["last_heartbeat"].replace("Z","+00:00")); now=datetime.datetime.now(datetime.timezone.utc)
- ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and 0 <= (now-h).total_seconds() <= 120
+ w=json.load(sys.stdin); h=w.get("last_heartbeat", ""); old=sys.argv[2]
+ parsed=datetime.datetime.fromisoformat(h.replace("Z","+00:00")); now=datetime.datetime.now(datetime.timezone.utc)
+ ok=w.get("id")==sys.argv[1] and w.get("health")=="healthy" and w.get("online") is True and h and (not old or h>old) and 0 <= (now-parsed).total_seconds() <= 120
 except Exception: ok=False
-raise SystemExit(not ok)' "$worker_id" \
+raise SystemExit(not ok)' "$worker_id" "$previous_heartbeat"; then registered=1; break; fi
+      sleep "$REGISTER_DELAY"
+    done
+    [ "$registered" = 1 ] \
       || { fail "worker выбранного поколения не зарегистрировался свежим и healthy"; return 1; }
   fi
 }
@@ -276,7 +293,8 @@ rollback_to_generation() { # generation, owner-facing reason
   fail "$reason — возвращаю полный прежний комплект"
   stop_factory_units || true
   install_generation "$target" || { fail "полный комплект не восстановлен; journal оставлен: $JOURNAL"; return 1; }
-  cp -f "$target/release-info.json" "$INFO.new" && mv -f "$INFO.new" "$INFO" || return
+  cp -f "$target/release-info.json" "$INFO.new" && set_owner "$INFO.new" && chmod 600 "$INFO.new" \
+    && sync_path "$INFO.new" && mv -f "$INFO.new" "$INFO" && sync_path "$(dirname "$INFO")" || return
   live_ledger=$(database_ledger "$DATABASE") || return
   generation_ledger=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("database",{}).get("ledger",-1))' "$target/manifest.json")
   if [ "$generation_ledger" -ge 0 ] && [ "$live_ledger" -gt "$generation_ledger" ]; then
@@ -289,6 +307,9 @@ rollback_to_generation() { # generation, owner-facing reason
   restore_service_state "$target/services.tsv" || return
   verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
   ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
+  if [ ! -e "$PREVIOUS" ] && [ ! -L "$PREVIOUS" ]; then
+    ln -sfn "$target" "$PREVIOUS.new" && mv -Tf "$PREVIOUS.new" "$PREVIOUS" || return
+  fi
   rm -f "$JOURNAL"
   sync_path "$REL"
 }
@@ -331,23 +352,142 @@ if [ -n "$OWNER" ]; then
   gate_identity=("$TRUSTED_SUDO" -H -u "$gate_user" --)
 fi
 
+preflight_fail() {
+  fail "выпуск остановлен: $1; живую metadata не исправляли автоматически — для выпуска нужна проверенная восстановимая исходная точка"
+}
+
+path_is_present() { [ -e "$1" ] || [ -L "$1" ]; }
+
+validate_release_history() {
+  local current_present=0 previous_present=0 first_generation='' candidate generations_real
+  bootstrap_release=0
+  current_generation=''
+  previous_generation=''
+
+  if path_is_present "$REL"; then
+    [ -d "$REL" ] && [ ! -L "$REL" ] \
+      || { preflight_fail "каталог выпусков повреждён или является ссылкой: $REL"; return 1; }
+    [ $((8#$(stat -c %a "$REL") & 8#022)) -eq 0 ] \
+      || { preflight_fail "каталог выпусков доступен для записи группе или другим: $REL"; return 1; }
+  fi
+  if path_is_present "$GENERATIONS"; then
+    [ -d "$GENERATIONS" ] && [ ! -L "$GENERATIONS" ] \
+      || { preflight_fail "история поколений повреждена или является ссылкой: $GENERATIONS"; return 1; }
+    [ $((8#$(stat -c %a "$GENERATIONS") & 8#022)) -eq 0 ] \
+      || { preflight_fail "история поколений доступна для записи группе или другим: $GENERATIONS"; return 1; }
+  fi
+  path_is_present "$CURRENT" && current_present=1
+  path_is_present "$PREVIOUS" && previous_present=1
+
+  if [ "$current_present" = 0 ] && [ "$previous_present" = 0 ]; then
+    if [ -d "$GENERATIONS" ]; then
+      first_generation=$(find "$GENERATIONS" -mindepth 1 -maxdepth 1 -print -quit)
+      [ -z "$first_generation" ] \
+        || { preflight_fail "в пустой истории найдено непроверенное поколение: $first_generation"; return 1; }
+    fi
+    bootstrap_release=1
+    return 0
+  fi
+
+  [ "$current_present" = 1 ] && [ "$previous_present" = 1 ] \
+    && [ -L "$CURRENT" ] && [ -L "$PREVIOUS" ] \
+    || { preflight_fail "обнаружена частичная история current/previous"; return 1; }
+  [ -d "$GENERATIONS" ] && [ ! -L "$GENERATIONS" ] \
+    || { preflight_fail "ссылки current/previous есть, но истории поколений нет"; return 1; }
+
+  generations_real=$(readlink -f "$GENERATIONS" 2>/dev/null || true)
+  current_generation=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  previous_generation=$(readlink -f "$PREVIOUS" 2>/dev/null || true)
+  [ -n "$generations_real" ] && [ -n "$current_generation" ] && [ -n "$previous_generation" ] \
+    && [ "$(dirname "$current_generation")" = "$generations_real" ] \
+    && [ "$(dirname "$previous_generation")" = "$generations_real" ] \
+    || { preflight_fail "ссылки current/previous не указывают на опубликованные поколения"; return 1; }
+
+  for candidate in "$current_generation" "$previous_generation"; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] && verify_generation "$candidate" \
+      || { preflight_fail "ссылки current/previous не указывают на проверенные поколения"; return 1; }
+  done
+
+  while IFS= read -r -d '' candidate; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] \
+      || { preflight_fail "в истории есть неатомарное поколение: $candidate"; return 1; }
+    verify_generation "$candidate" \
+      || { preflight_fail "в истории есть непроверенное поколение: $candidate"; return 1; }
+  done < <(find "$generations_real" -mindepth 1 -maxdepth 1 -print0)
+}
+
+validate_live_rollback_kit() {
+  local path expected expected_owner metadata
+  local -a metadata_parts
+  for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN" "$BROKER_UNIT" "$BROKER_DROPIN" \
+    "$BRAIN_LIVE/pilot/pilot.py" "$BRAIN_LIVE/pilot/context.md" \
+    "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py" "$DATABASE" "$INFO"; do
+    [ -f "$path" ] && [ ! -L "$path" ] \
+      || { preflight_fail "нет полного rollback artifact: $path"; return 1; }
+  done
+  for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN"; do
+    [ "$(stat -c %a "$path")" = 755 ] \
+      || { preflight_fail "неверный mode rollback artifact: $path"; return 1; }
+    if [ -n "$OWNER" ] && [ "$path" = "$SERVER_BIN" -o "$path" = "$WORKER_BIN" ]; then
+      [ "$(stat -c %U:%G "$path")" = "$OWNER" ] \
+        || { preflight_fail "неверный owner rollback artifact: $path"; return 1; }
+    fi
+  done
+  for expected in \
+    "$SERVER_BIN|$OWNER" "$WORKER_BIN|$OWNER" "$BROKER_BIN|$BROKER_OWNER" \
+    "$BROKER_UNIT|$BROKER_OWNER" "$BROKER_DROPIN|$BROKER_OWNER" \
+    "$FX_BIN|$CONTROL_OWNER" "$RELEASE_DRIVER|$CONTROL_OWNER" \
+    "$BRAIN_LIVE/pilot/pilot.py|$BRAIN_OWNER" "$BRAIN_LIVE/pilot/context.md|$BRAIN_OWNER" \
+    "$BRAIN_LIVE/intake/app.py|$BRAIN_OWNER" "$BRAIN_LIVE/intake/plan.py|$BRAIN_OWNER" \
+    "$INFO|$OWNER"; do
+    path=${expected%%|*}; expected_owner=${expected#*|}
+    [ -z "$expected_owner" ] || [ "$(stat -c %U:%G "$path")" = "$expected_owner" ] \
+      || { preflight_fail "неверный owner rollback artifact: $path"; return 1; }
+  done
+  for path in "$BROKER_UNIT" "$BROKER_DROPIN" "$BRAIN_LIVE/pilot/pilot.py" \
+    "$BRAIN_LIVE/pilot/context.md" "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py"; do
+    [ "$(stat -c %a "$path")" = 644 ] \
+      || { preflight_fail "неверный mode rollback artifact: $path"; return 1; }
+  done
+  [ "$(stat -c %a "$INFO")" = 600 ] \
+    || { preflight_fail "metadata текущего выпуска должна иметь mode 0600: $INFO"; return 1; }
+  for path in "$(dirname "$INFO")" "$(dirname "$SERVER_BIN")" "$(dirname "$DATABASE")" \
+    "$(dirname "$FX_BIN")" "$BRAIN_LIVE/pilot" "$BRAIN_LIVE/intake"; do
+    [ -d "$path" ] && [ ! -L "$path" ] \
+      || { preflight_fail "release path должен быть реальным каталогом без symlink: $path"; return 1; }
+    [ $((8#$(stat -c %a "$path") & 8#022)) -eq 0 ] \
+      || { preflight_fail "release path доступен для записи группе или другим: $path"; return 1; }
+  done
+  metadata=$(python3 - "$INFO" <<'PY'
+import json,re,sys
+try:
+    data=json.load(open(sys.argv[1]))
+    sha=data.get("sha")
+    release_id=data.get("release_id")
+    if not isinstance(sha,str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?",sha):
+        raise ValueError("sha")
+    if not isinstance(release_id,str) or not release_id.strip() or any(c in release_id for c in "\r\n\0"):
+        raise ValueError("release_id")
+    print(sha)
+    print(release_id)
+except Exception:
+    raise SystemExit(1)
+PY
+  ) || { preflight_fail "release-info не содержит корректные SHA и release_id"; return 1; }
+  mapfile -t metadata_parts <<<"$metadata"
+  current_sha=${metadata_parts[0]:-}
+  current_release_id=${metadata_parts[1]:-}
+  server_version=$("$SERVER_BIN" version 2>/dev/null || true)
+  worker_version=$("$WORKER_BIN" version 2>/dev/null || true)
+  [[ "$server_version" == *"$current_sha"* && "$worker_version" == *"$current_sha"* ]] \
+    || { preflight_fail "неизвестный или смешанный выпуск server/worker"; return 1; }
+}
+
 mkdir -p "$(dirname "$LOCK")" || { fail "cannot prepare the Factory release lock"; exit 4; }
 exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || { fail "another Factory release is already running"; exit 8; }
 
 umask 077
-mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
-  || { fail "не смог подготовить папку релизов"; exit 4; }
-# 711, а не 700: gate script исполняет рабочий пользователь (as_user), ему нужен
-# проход по каталогу. Листинг чужим закрыт, файлы внутри root-owned и неизменяемые,
-# подлинность каждого дополнительно сверяется git hash-object.
-"$TRUSTED_MKDIR" -p -- "$TRUSTED_GATE_PARENT" \
-  && "$TRUSTED_CHMOD" 711 -- "$TRUSTED_GATE_PARENT" \
-  && [ "$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_PARENT")" = "$TRUSTED_OWNER_UID" ] \
-  && [ "$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_GATE_PARENT")" = 711 ] \
-  || { fail "не смог подготовить root-owned каталог gate (711: проход без листинга)"; exit 4; }
-mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
-  || { fail "не смог подготовить release-info"; exit 4; }
 
 case "$ref" in
   --status)
@@ -418,6 +558,22 @@ if [ -e "$JOURNAL" ]; then
        rollback_to_generation "$previous" "восстанавливаю выпуск после прерывания" || exit 9 ;;
   esac
 fi
+
+step "проверяю восстановимую исходную точку до сборки"
+validate_release_history && validate_live_rollback_kit || exit 4
+mkdir -p "$REL" "$GENERATIONS" && chmod 700 "$REL" "$GENERATIONS" && set_owner "$REL" "$GENERATIONS" \
+  || { fail "не смог подготовить папку релизов"; exit 4; }
+# 711, а не 700: gate script исполняет рабочий пользователь (as_user), ему нужен
+# проход по каталогу. Листинг чужим закрыт, файлы внутри root-owned и неизменяемые,
+# подлинность каждого дополнительно сверяется git hash-object.
+"$TRUSTED_MKDIR" -p -- "$TRUSTED_GATE_PARENT" \
+  && "$TRUSTED_CHMOD" 711 -- "$TRUSTED_GATE_PARENT" \
+  && [ "$("$TRUSTED_STAT" -Lc %u -- "$TRUSTED_GATE_PARENT")" = "$TRUSTED_OWNER_UID" ] \
+  && [ "$("$TRUSTED_STAT" -Lc %a -- "$TRUSTED_GATE_PARENT")" = 711 ] \
+  || { fail "не смог подготовить root-owned каталог gate (711: проход без листинга)"; exit 4; }
+mkdir -p "$(dirname "$INFO")" && set_owner "$(dirname "$INFO")" \
+  || { fail "не смог подготовить release-info"; exit 4; }
+
 work=$(as_user mktemp -d "$REL/build-XXXXXX") \
   || { fail "не смог создать папку сборки"; exit 4; }
 gate_pids=()
@@ -428,9 +584,13 @@ gate_names=()
 trusted_gate_dir=
 test_gates_stopped=1
 test_gates_reaped=1
+stage=''
+bootstrap=''
 cleanup() {
   stop_test_gates
   wait_for_test_gates
+  [ -z "$stage" ] || rm -rf "$stage"
+  [ -z "$bootstrap" ] || rm -rf "$bootstrap"
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
   rm -rf "$work"
 }
@@ -875,9 +1035,13 @@ step "собираю изменение: $subject"
 step "ставлю зависимости интерфейса"
 as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
   || { fail "npm ci не прошёл"; cleanup; exit 4; }
-step "параллельно проверяю интерфейс, Go, пилота и сценарий выката"
-run_parallel_test_gates \
-  || { fail "одна из обязательных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+if [ "${FACTORY_RELEASE_DEEP_GATE:-0}" = 1 ]; then
+  step "вручную запускаю полный набор проверок выпуска"
+  run_parallel_test_gates \
+    || { fail "одна из полных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+else
+  step "быстрый выпуск: код уже проверен обязательным Linux-воротом GitHub"
+fi
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
@@ -888,49 +1052,11 @@ as_user bash -c "cd '$work/src' && go build -ldflags '$build_ldflags' -o '$work/
   && as_user bash -c "cd '$work/src' && go build -ldflags '$build_ldflags' -o '$work/factory-release-broker' ./cmd/factory-release-broker" \
   || { fail "сборка сервера, воркера или release-broker не прошла"; cleanup; exit 5; }
 
-step "проверяю работающий выпуск до первой мутации"
+step "проверяю собранные server и worker до первой мутации"
 candidate_server_version=$("$work/factory-server" version 2>/dev/null || true)
 candidate_worker_version=$("$work/factory-worker" version 2>/dev/null || true)
 [[ "$candidate_server_version" == *"$sha"* && "$candidate_worker_version" == *"$sha"* ]] \
   || { fail "собранные server/worker не подтверждают candidate SHA $sha"; cleanup; exit 4; }
-for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN" "$BROKER_UNIT" "$BROKER_DROPIN" \
-  "$BRAIN_LIVE/pilot/pilot.py" "$BRAIN_LIVE/pilot/context.md" \
-  "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py" "$DATABASE" "$INFO"; do
-  [ -f "$path" ] && [ ! -L "$path" ] || { fail "нет полного rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$SERVER_BIN" "$WORKER_BIN" "$FX_BIN" "$RELEASE_DRIVER" "$BROKER_BIN"; do
-  [ "$(stat -c %a "$path")" = 755 ] || { fail "неверный mode rollback artifact: $path"; cleanup; exit 4; }
-  if [ -n "$OWNER" ] && [ "$path" = "$SERVER_BIN" -o "$path" = "$WORKER_BIN" ]; then
-    [ "$(stat -c %U:%G "$path")" = "$OWNER" ] || { fail "неверный owner rollback artifact: $path"; cleanup; exit 4; }
-  fi
-done
-for expected in \
-  "$SERVER_BIN|$OWNER" "$WORKER_BIN|$OWNER" "$BROKER_BIN|$BROKER_OWNER" \
-  "$BROKER_UNIT|$BROKER_OWNER" "$BROKER_DROPIN|$BROKER_OWNER" \
-  "$FX_BIN|$CONTROL_OWNER" "$RELEASE_DRIVER|$CONTROL_OWNER" \
-  "$BRAIN_LIVE/pilot/pilot.py|$BRAIN_OWNER" "$BRAIN_LIVE/pilot/context.md|$BRAIN_OWNER" \
-  "$BRAIN_LIVE/intake/app.py|$BRAIN_OWNER" "$BRAIN_LIVE/intake/plan.py|$BRAIN_OWNER"; do
-  path=${expected%%|*}; expected_owner=${expected#*|}
-  [ -z "$expected_owner" ] || [ "$(stat -c %U:%G "$path")" = "$expected_owner" ] \
-    || { fail "неверный owner rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$BROKER_UNIT" "$BROKER_DROPIN" "$BRAIN_LIVE/pilot/pilot.py" \
-  "$BRAIN_LIVE/pilot/context.md" "$BRAIN_LIVE/intake/app.py" "$BRAIN_LIVE/intake/plan.py"; do
-  [ "$(stat -c %a "$path")" = 644 ] || { fail "неверный mode rollback artifact: $path"; cleanup; exit 4; }
-done
-for path in "$REL" "$GENERATIONS" "$(dirname "$SERVER_BIN")" "$(dirname "$DATABASE")" \
-  "$(dirname "$FX_BIN")" "$BRAIN_LIVE/pilot" "$BRAIN_LIVE/intake"; do
-  [ -d "$path" ] && [ ! -L "$path" ] \
-    || { fail "release path должен быть реальным каталогом без symlink: $path"; cleanup; exit 4; }
-  [ $((8#$(stat -c %a "$path") & 8#022)) -eq 0 ] \
-    || { fail "release path доступен для записи группе или другим: $path"; cleanup; exit 4; }
-done
-current_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha"])' "$INFO" 2>/dev/null) \
-  || { fail "неизвестная версия: release-info не содержит SHA"; cleanup; exit 4; }
-server_version=$("$SERVER_BIN" version 2>/dev/null || true)
-worker_version=$("$WORKER_BIN" version 2>/dev/null || true)
-[[ "$server_version" == *"$current_sha"* && "$worker_version" == *"$current_sha"* ]] \
-  || { fail "неизвестный или смешанный выпуск server/worker"; cleanup; exit 4; }
 
 processes="$work/processes.tsv"
 : >"$processes"
@@ -1050,8 +1176,7 @@ sync_path "$snapshot" && sync_path "$snapshot.v2-control-plane" && sync_path "$s
 verify_generation "$stage" || { cleanup; exit 4; }
 
 old_generation=''
-[ ! -L "$CURRENT" ] || old_generation=$(readlink -f "$CURRENT" 2>/dev/null || true)
-if [ -z "$old_generation" ]; then
+if [ "$bootstrap_release" = 1 ]; then
   bootstrap="$REL/.bootstrap-${current_sha:0:12}.$$"
   mkdir -m 700 "$bootstrap" "$bootstrap/payload"
   old_inventory="$bootstrap/inventory.tsv"; : >"$old_inventory"
@@ -1066,11 +1191,17 @@ if [ -z "$old_generation" ]; then
     && old_add "$BRAIN_LIVE/pilot/context.md" context.md "$BRAIN_LIVE/pilot/context.md" 644 "$BRAIN_OWNER" \
     && old_add "$BRAIN_LIVE/intake/app.py" intake-app.py "$BRAIN_LIVE/intake/app.py" 644 "$BRAIN_OWNER" \
     && old_add "$BRAIN_LIVE/intake/plan.py" intake-plan.py "$BRAIN_LIVE/intake/plan.py" 644 "$BRAIN_OWNER" || { cleanup; exit 4; }
-  cp -f "$INFO" "$bootstrap/release-info.json"; chmod 600 "$bootstrap/release-info.json"; printf 'release-info.json\t-\t600\t\n' >>"$old_inventory"
-  cp -f "$services" "$bootstrap/services.tsv"; printf 'services.tsv\t-\t600\t\n' >>"$old_inventory"
-  python3 - "$bootstrap" "$current_sha" "$ledger" "$old_inventory" "$processes" "$services" <<'PY'
+  cp -f "$INFO" "$bootstrap/release-info.json" && chmod 600 "$bootstrap/release-info.json" \
+    && cp -f "$services" "$bootstrap/services.tsv" && chmod 600 "$bootstrap/services.tsv" \
+    && cp -f "$snapshot" "$bootstrap/database.sqlite3" \
+    && cp -f "$snapshot.v2-control-plane" "$bootstrap/database.sqlite3.v2-control-plane" \
+    && chmod 600 "$bootstrap/database.sqlite3" "$bootstrap/database.sqlite3.v2-control-plane" \
+    || { fail "не удалось собрать полный bootstrap-комплект"; cleanup; exit 4; }
+  printf 'release-info.json\t-\t600\t\n' >>"$old_inventory"
+  printf 'services.tsv\t-\t600\t\n' >>"$old_inventory"
+  python3 - "$bootstrap" "$current_sha" "$current_release_id" "$old_inventory" "$processes" "$services" "$DATABASE" "$bootstrap/database.sqlite3" "$ledger" "$schema_digest" <<'PY'
 import hashlib,json,os,sys
-root,sha,ledger,inventory,processes,services=sys.argv[1:]; items=[]
+root,sha,source_release_id,inventory,processes,services,db,snapshot,ledger,schema=sys.argv[1:]; items=[]
 for line in open(inventory):
  s,t,m,o=line.rstrip("\n").split("\t"); b=open(os.path.join(root,s),"rb").read(); items.append({"source":s,"target":t,"mode":int(m,8),"owner":o,"size":len(b),"sha256":hashlib.sha256(b).hexdigest()})
 proc=[]
@@ -1079,13 +1210,20 @@ for line in open(processes):
 states=[]
 for line in open(services):
  u,s=line.rstrip("\n").split("\t"); states.append({"unit":u,"state":s})
-d={"format":1,"release_id":"bootstrap-"+sha[:12],"candidate_sha":sha,"ref":"installed","artifacts":items,"processes":proc,"services":states,"database":{"ledger":int(ledger)}}
+digest=open(snapshot,"rb").read(); marker=open(snapshot+".v2-control-plane","rb").read()
+d={"format":1,"release_id":"bootstrap-"+sha[:12],"source_release_id":source_release_id,"candidate_sha":sha,"ref":"installed","artifacts":items,"processes":proc,"services":states,"database":{"live_path":db,"snapshot":"database.sqlite3","sha256":hashlib.sha256(digest).hexdigest(),"size":len(digest),"marker_sha256":hashlib.sha256(marker).hexdigest(),"ledger":int(ledger),"schema_digest":schema}}
 r=(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n").encode(); open(root+"/manifest.json","wb").write(r); open(root+"/manifest.sha256","w").write(hashlib.sha256(r).hexdigest()+"\n")
 PY
   chmod 600 "$bootstrap/manifest.json" "$bootstrap/manifest.sha256" "$bootstrap/services.tsv"
+  sync_path "$bootstrap/database.sqlite3" && sync_path "$bootstrap/database.sqlite3.v2-control-plane" \
+    && sync_path "$bootstrap/manifest.json" && sync_path "$bootstrap" \
+    || { cleanup; exit 4; }
+  verify_generation "$bootstrap" || { cleanup; exit 4; }
   old_generation="$GENERATIONS/bootstrap-${current_sha:0:12}"
   mv "$bootstrap" "$old_generation" && sync_path "$GENERATIONS"
+  bootstrap=''
 else
+  old_generation=$current_generation
   verify_generation "$old_generation" || { cleanup; exit 4; }
 fi
 

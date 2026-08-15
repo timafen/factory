@@ -2,16 +2,16 @@
 
 ## HEAD
 
-Implementation commit: afd3d9b7acce926389aa79f5eed1b85e4e8a39a9 — устойчивое provenance и реальный перезапуск Review/Verify-конвейера Pilot.
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ed7ee7b4-87a-19b13995-d52`.
-- What changed: проверка полного цикла теперь запускает первый и второй Pilot
-  в разных Python-процессах; второй получает только устойчивые JSON-фикстуры и state.
-- What changed: корректировка с изменённым заголовком продолжает тот же work_id
-  через Review и Verify до финального merge/terminal verdict, без нового root.
-- Evidence: `go test ./...` — PASS; `python3 -m unittest -v pilot.test_pilot` —
-  230 OK (13 skipped); реальный subprocess-рестарт Review/Verify — 7 OK.
-- Next action: Человеку проверить evidence и принять решение о merge.
+Implementation commit: 8b189f33b8bf3d11fccb5d8e35424b32090b9a9b — внешний merge завершает исходное ожидание в том же перезапущенном Review/Verify-конвейере.
+- Status: Implemented; повторный Review уже дал APPROVE, ожидается Verify.
+- Branch: `factory/b59bd67b-e7c-d1816795-613`.
+- What changed: внешний репозиторий получает устойчивую merge-only generation;
+  подтверждённый merge завершает её без неподдерживаемого deploy-адаптера.
+- What changed: subprocess-регрессия проводит Review и Verify через настоящий
+  рестарт до одного merge, terminal verdict и отправленного owner-события.
+- Evidence: `CorrectionProvenanceStormTests` — PASS (11 tests);
+  `go test ./internal/controlplane -count=1` — PASS; `git diff --check` — PASS.
+- Next action: запустить Verify на этой ветке и при PASS передать на merge.
 
 ## LOG
 
@@ -91,3 +91,11 @@ outbox и их целевые тесты. Первый subprocess создаёт
 final verdict и merge, читая только JSON state/API-фикстуры. `python3 -m unittest
 pilot.test_pilot.CorrectionProvenanceStormTests` дал 7 OK; `go test ./internal/controlplane`
 и `python3 -m py_compile pilot/test_pilot.py` прошли.
+
+### 2026-08-14 — Implement
+
+После подтверждённого APPROVE работа перенесена на свежий `origin/main` без
+новой задачи или ветки. Устаревшие изменения опубликованной миграции 027 сняты;
+итоговая поставка содержит только external merge-only completion и process-level
+проверку единого Review/Verify-конвейера. Все 11 `CorrectionProvenanceStormTests`
+и пакет `internal/controlplane` прошли, Python-файлы компилируются, diff чист.

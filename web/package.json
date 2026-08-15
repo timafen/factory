@@ -10,17 +10,19 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "test:browser": "npm run build && git diff --exit-code -- dist && playwright test"
+    "test:browser": "npm run build && git diff --exit-code -- dist && playwright test",
+    "test:browser:critical": "playwright test --grep @critical"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.83.0",
     "lucide-react": "^0.536.0",
+    "playwright": "1.62.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.54.1",
+    "@playwright/test": "1.62.0",
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",

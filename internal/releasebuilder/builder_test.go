@@ -200,14 +200,14 @@ func TestProductionNPMInventoryIsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 6 {
-		t.Fatalf("production npm package count = %d, want 6", len(packages))
+	if len(packages) != 9 {
+		t.Fatalf("production npm package count = %d, want 9", len(packages))
 	}
 	names := make([]string, len(packages))
 	for index, item := range packages {
 		names[index] = item.Name
 	}
-	for _, want := range []string{"@tanstack/query-core", "@tanstack/react-query", "lucide-react", "react", "react-dom", "scheduler"} {
+	for _, want := range []string{"@tanstack/query-core", "@tanstack/react-query", "fsevents", "lucide-react", "playwright", "playwright-core", "react", "react-dom", "scheduler"} {
 		if !contains(names, want) {
 			t.Fatalf("production npm inventory is missing %s: %v", want, names)
 		}

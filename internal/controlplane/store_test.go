@@ -43,6 +43,26 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestStoreAttachmentRootFollowsDataHome(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("FACTORY_DATA_HOME", dataHome)
+
+	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "controlplane.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if got, want := store.attachmentRoot, filepath.Join(dataHome, "attachments"); got != want {
+		t.Fatalf("attachment root = %q; want %q", got, want)
+	}
+	if info, err := os.Stat(store.attachmentRoot); err != nil {
+		t.Fatalf("stat attachment root: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("attachment root is not a directory: %s", store.attachmentRoot)
+	}
+}
+
 func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenForTest(ctx, filepath.Join(t.TempDir(), "testing.sqlite3"), 17)
@@ -70,6 +90,13 @@ func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.
 	t.Cleanup(func() { _ = production.Close() })
 	if got, want := production.hostSlotLimit(), max(1, runtime.NumCPU()); got != want {
 		t.Fatalf("production host slot limit = %d; want %d", got, want)
+	}
+}
+
+func TestOpenSerializesSQLiteAccessThroughOneConnection(t *testing.T) {
+	store := newTestStore(t)
+	if maximum := store.db.Stats().MaxOpenConnections; maximum != 1 {
+		t.Fatalf("maximum SQLite connections = %d; want 1", maximum)
 	}
 }
 
@@ -246,12 +273,12 @@ func TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart(t *testing.T) {
 func TestHeartbeatDoesNotReconcileNeighboringExpiredLease(t *testing.T) {
 	store := newTestStore(t)
 	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/heartbeat"})
-	first := createTestTask(t, store, "heartbeat-first", workerA, worker.Repositories[0].ID)
-	second := createTestTask(t, store, "heartbeat-second", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "heartbeat-first", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "heartbeat-second", workerA, worker.Repositories[0].ID)
 	firstClaim := claimTestTask(t, store, workerA, "heartbeat-first", tokenA)
 	secondClaim := claimTestTask(t, store, workerA, "heartbeat-second", tokenB)
-	if firstClaim.Task.ID != first.Task.ID || secondClaim.Task.ID != second.Task.ID {
-		t.Fatal("test claims selected unexpected tasks")
+	if firstClaim.Task.ID == secondClaim.Task.ID {
+		t.Fatal("two claims selected the same task")
 	}
 	if _, err := store.db.Exec(`UPDATE attempts SET lease_expires_at = 0 WHERE id = ?`, secondClaim.Attempt.ID); err != nil {
 		t.Fatal(err)

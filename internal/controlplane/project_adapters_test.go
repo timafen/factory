@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -554,6 +555,9 @@ func TestFactorySelfReleaseFailsClosedWhenExternalBrokerIsMissing(t *testing.T) 
 }
 
 func TestNoNewPrivilegesServiceCanCallUnixReleaseBroker(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("NoNewPrivileges and setpriv are Linux service guarantees")
+	}
 	if os.Getenv("FACTORY_NNP_BROKER_HELPER") == "1" {
 		status, err := os.ReadFile("/proc/self/status")
 		if err != nil || !strings.Contains(string(status), "NoNewPrivs:\t1") {

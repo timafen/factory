@@ -270,6 +270,51 @@ func TestBrokerRestartsOnlyAfterUpdatedExecutableAndDurableSuccess(t *testing.T)
 	}
 }
 
+func TestBrokerRestartsAfterUpdatedExecutableAndDurableRollbackFailure(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "factory-release-broker")
+	candidate := filepath.Join(dir, "factory-release-broker.candidate")
+	if err := os.WriteFile(executable, []byte("old broker\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidate, []byte("new broker\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(dir, "driver")
+	if err := os.WriteFile(driver, []byte("#!/bin/sh\nmv '"+candidate+"' '"+executable+"'\nexit 7\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "state")
+	broker, err := NewAt(state, FXExecutor{FactoryReleaseExecutable: driver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan struct{}, 1)
+	if err := broker.RestartWhenExecutableChanges(executable, func() { restarted <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	body := `{"operation_id":"updated-broker-rollback-failed","adapter":"fx-factory-release","commit_sha":"` + testSHA + `"}`
+	if got := postStatus(t, server, body); got != http.StatusAccepted {
+		t.Fatalf("POST status=%d", got)
+	}
+	waitForOperationStatus(t, server, "updated-broker-rollback-failed", "rollback_failed")
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("updated executable did not request a broker restart after rollback failure")
+	}
+	recovered, err := NewAt(state, &recordingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, ok := operationSnapshot(recovered, "updated-broker-rollback-failed")
+	if !ok || item.Status != "rollback_failed" {
+		t.Fatalf("restart preceded durable rollback failure: %#v, found=%v", item, ok)
+	}
+}
+
 func TestBrokerDoesNotRestartWhenExecutableIsUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	executable := filepath.Join(dir, "factory-release-broker")
@@ -720,6 +765,13 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	}
 	if got := postStatus(t, restartedServer, body); got != http.StatusOK {
 		t.Fatalf("duplicate POST status=%d", got)
+	}
+	secondRestart, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, ok := operationSnapshot(secondRestart, "delivery-write-failure"); !ok || item.Status != "failed" {
+		t.Fatalf("second restart lost durable failure: %+v", item)
 	}
 	if executor.callCount() != 1 {
 		t.Fatalf("executor repeated after ambiguous durability: calls=%d", executor.callCount())

@@ -1,2 +1,3 @@
 *.sh text eol=lf
 ops/fx text eol=lf
+web/dist/index.html text eol=lf

@@ -687,6 +687,95 @@ test("shows project readiness card", async ({ page }) => {
   browser.assertClean();
 });
 
+test("@critical sends release and rollback through the browser", async ({ page }) => {
+  const browser = observeBrowser(page);
+  const projectID = "critical-release-project";
+  const commitSHA = "a".repeat(40);
+  const now = "2026-08-14T12:00:00Z";
+  const project = {
+    id: projectID,
+    repository_id: "critical-release-repository",
+    name: "Critical release",
+    remote_identity: "github.com/timafen/factory",
+    main_branch: "main",
+    project_type: "factory-single-instance",
+    executor_group: "factory",
+    required_checks: ["secret-scan", "static-typecheck", "tests", "build"],
+    environments: [{
+      name: "staging",
+      url: "https://factory.timafen.com",
+      health_url: "https://factory.timafen.com/api/v1/dashboard",
+      blocked: false,
+      release_adapter: "fx-factory-release",
+      rollback_adapter: "fx-factory-rollback",
+      required_secrets: ["GITHUB_TOKEN"],
+      web_hosts: ["factory.timafen.com"],
+    }],
+    created_at: now,
+    updated_at: now,
+  };
+  const operations = new Map<string, Record<string, unknown>>();
+  const requestedKinds: string[] = [];
+
+  await page.route("**/api/v1/projects", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: { projects: [project] } });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route(`**/api/v1/projects/${projectID}/**`, async (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname.endsWith("/readiness")) {
+      await route.fulfill({ json: {
+        ready: true,
+        commit_sha: commitSHA,
+        gates: ["secret-scan", "static-typecheck", "tests", "build"].map((name) => ({
+          name, ready: true, reason: `${name} passed`, commit_sha: commitSHA, checked_at: now,
+        })),
+        secrets: [{ name: "GITHUB_TOKEN", present: true }],
+      } });
+      return;
+    }
+    const kind = pathname.endsWith("/release") ? "release" : pathname.endsWith("/rollback") ? "rollback" : "";
+    if (route.request().method() === "POST" && kind) {
+      const body = route.request().postDataJSON() as { commit_sha: string };
+      expect(body.commit_sha).toBe(commitSHA);
+      requestedKinds.push(kind);
+      const operation = {
+        id: `critical-${kind}`,
+        project_id: projectID,
+        environment: "staging",
+        kind,
+        commit_sha: commitSHA,
+        status: "succeeded",
+        message: kind === "release" ? "Выпуск подтверждён" : "Откат подтверждён",
+        owner_confirmed: true,
+        created_at: now,
+        updated_at: now,
+      };
+      operations.set(operation.id, operation);
+      await route.fulfill({ json: operation });
+      return;
+    }
+    const operationID = pathname.split("/").at(-1)!;
+    if (route.request().method() === "GET" && operations.has(operationID)) {
+      await route.fulfill({ json: operations.get(operationID) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/projects");
+  await page.getByLabel("Проверенный SHA Critical release").fill(commitSHA);
+  await page.getByRole("button", { name: "Выпустить staging" }).click();
+  await expect(page.getByRole("status")).toHaveText("Выпуск подтверждён");
+  await page.getByRole("button", { name: "Вернуть staging" }).click();
+  await expect(page.getByRole("status")).toHaveText("Откат подтверждён");
+  expect(requestedKinds).toEqual(["release", "rollback"]);
+  browser.assertClean();
+});
+
 test("creates, pins, revises, and disables a reusable Workflow", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/workflows");
@@ -746,7 +835,7 @@ test("creates, pins, revises, and disables a reusable Workflow", async ({ page, 
   browser.assertClean();
 });
 
-test("runs the complete UI to real-worker and Git-worktree workflow", async ({ page, baseURL }) => {
+test("@critical starts work and completes it in a real Git worktree", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Delegate task" }).first().click();
@@ -830,11 +919,11 @@ test("cancels active work running in the real worker", async ({ page }) => {
   browser.assertClean();
 });
 
-test("renders grouped work and saves the desktop Work view", async ({ page }) => {
+test("@critical shows the pipeline stages in the Work view", async ({ page }) => {
   const browser = observeBrowser(page);
   await page.goto("/work");
-  await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Work", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("heading", { name: "Работа", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Работа", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
@@ -850,7 +939,7 @@ test("renders grouped work and saves the desktop Work view", async ({ page }) =>
   browser.assertClean();
 });
 
-test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin protected", async ({ page, baseURL }) => {
+test("@critical resumes a paused pipeline through the real HTTPS proxy and keeps Origin protected", async ({ page, baseURL }) => {
   expect(baseURL).toMatch(/^https:\/\/127\.0\.0\.1:/);
   const httpsOrigin = baseURL!;
 
@@ -932,8 +1021,14 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
     "x-factory-e2e-backend-forwarded-host": new URL(httpsOrigin).host,
     "x-factory-e2e-backend-forwarded-proto": "https",
   });
-  await expect(page.getByText("Поставлено на паузу")).toHaveCount(0);
-  await expect(page.getByText("В очереди Factory").first()).toBeVisible();
+  await page.reload();
+  // The real worker may claim and even finish the resumed task before the
+  // next render. The contract here is that the work remains visible and is
+  // no longer paused, not that it spends a minimum time in the queue.
+  const resumedCard = page.getByText(pausedHTTPSWork, { exact: true })
+    .locator("xpath=ancestor::section[contains(@class, 'work-card')]");
+  await expect(resumedCard).toBeVisible();
+  await expect(resumedCard.getByText("Поставлено на паузу")).toHaveCount(0);
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-desktop.png", fullPage: true });
 
   const resumedSettings = await page.evaluate(async () => {
@@ -963,11 +1058,12 @@ test("resumes a paused pipeline through the real HTTPS proxy and keeps Origin pr
   expect(completedSettings.settings.stopped_pipelines).not.toContain(completedHTTPSWork);
 
   await page.goto("/work");
-  const completedCard = page.getByText(completedHTTPSWork, { exact: true })
-    .locator("xpath=ancestor::section[contains(@class, 'work-card')]");
+  const completedCard = page.locator("section.work-card")
+    .filter({ has: page.getByText(completedHTTPSWork, { exact: true }) })
+    .filter({ has: page.getByText("Ожидает слияния и выпуска", { exact: true }) });
   await expect(completedCard).toBeVisible();
   await expect(completedCard.getByText("Поставлено на паузу")).toHaveCount(0);
-  await expect(completedCard.getByText("работа завершена", { exact: true })).toBeVisible();
+  await expect(completedCard.getByText("Ожидает слияния и выпуска", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "test-results/screenshots/pause-resume-https-phone.png", fullPage: true });
 });
@@ -990,7 +1086,7 @@ test("confirms and deletes terminal task history", async ({ page, baseURL }) => 
   await api.dispose();
 });
 
-test("shows worker capacity, current work, retained cleanup, and saves Workers", async ({ page, baseURL }) => {
+test("@critical shows parallel worker capacity and current work", async ({ page, baseURL }) => {
   const browser = observeBrowser(page);
   if (runningHeartbeat) clearInterval(runningHeartbeat);
   const heartbeat = await fixtureAPI!.put(
@@ -1011,7 +1107,7 @@ test("shows worker capacity, current work, retained cleanup, and saves Workers",
   await api.dispose();
   await page.goto("/workers");
   await expect(page.getByRole("heading", { name: "Execution capacity" })).toBeVisible();
-  const workersNavigation = page.getByRole("button", { name: "Workers", exact: true });
+  const workersNavigation = page.getByRole("button", { name: "Исполнители", exact: true });
   await expect(workersNavigation).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
   const offlineRow = page.getByRole("button", { name: /Archive Mac/ });
@@ -1093,7 +1189,7 @@ test("shows ordered progress and long task detail", async ({ page }) => {
     }
   });
   await page.goto(`/tasks/${identifiers.runningTask}`);
-  const workNavigation = page.getByRole("button", { name: "Work", exact: true });
+  const workNavigation = page.getByRole("button", { name: "Работа", exact: true });
   await expect(workNavigation).toHaveClass(/active/);
   await expect(workNavigation).not.toHaveAttribute("aria-current");
   const events = page.locator(".event-list li");
@@ -1131,7 +1227,7 @@ test("supports narrow grouped layouts and saves narrow screenshots", async ({ pa
   await page.screenshot({ path: "test-results/screenshots/overview-narrow.png", fullPage: true });
 
   await page.goto("/work");
-  await expect(page.getByRole("heading", { name: "Работа агентов" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Работа", exact: true })).toBeVisible();
   const explanation = page.locator(".work-explanation").first();
   await expect(explanation).toBeVisible();
   expect(await page.evaluate(
@@ -1213,7 +1309,7 @@ test("audits every Factory screen on desktop and phone", async ({ context, baseU
     { name: "answer", path: "/answer", ready: (page) => page.getByText(/Здесь конвейер спрашивает тебя/) },
     { name: "access", path: "/access", ready: (page) => page.getByRole("heading", { name: "Доступы" }) },
     { name: "sandbox-keys", path: "/sandbox-keys", ready: (page) => page.getByRole("heading", { name: "Ключи песочницы" }) },
-    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа агентов" }) },
+    { name: "work", path: "/work", ready: (page) => page.getByRole("heading", { name: "Работа", exact: true }) },
     { name: "workers", path: "/workers", ready: (page) => page.getByRole("heading", { name: "Execution capacity" }) },
     { name: "repositories", path: "/repositories", ready: (page) => page.getByRole("heading", { name: "Managed repositories" }) },
     { name: "projects", path: "/projects", ready: (page) => page.getByRole("heading", { name: "Безопасные проекты" }) },

@@ -31,6 +31,7 @@ const (
 type supervisorInit struct {
 	Runtime           string `json:"runtime"`
 	RuntimeExecutable string `json:"runtime_executable"`
+	RemoteIdentity    string `json:"remote_identity"`
 	Worktree          string `json:"worktree"`
 	ResultPath        string `json:"result_path"`
 	Prompt            string `json:"prompt"`
@@ -222,7 +223,7 @@ func superviseRuntime(
 	displayName := runtimeDisplayName(init.Runtime)
 	command := exec.Command(init.RuntimeExecutable, arguments...)
 	command.Dir = init.Worktree
-	command.Env = runtimeEnvironment(init.Worktree)
+	command.Env = runtimeEnvironment(init.Worktree, init.RemoteIdentity)
 	configureExistingProcessGroup(command, groupID)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -401,7 +402,7 @@ func superviseRuntime(
 	return writer.send(message)
 }
 
-func runtimeEnvironment(worktree string) []string {
+func runtimeEnvironment(worktree, remoteIdentity string) []string {
 	// Service-only Factory paths must never leak into an agent command. In
 	// production FACTORY_DATA_HOME points at the live installation, and a
 	// harmless `just build` would otherwise overwrite the running binaries.
@@ -416,7 +417,7 @@ func runtimeEnvironment(worktree string) []string {
 	environment := make([]string, 0, len(os.Environ())+3)
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "LANG" || name == "LC_ALL" {
+		if name == "LANG" || name == "LC_ALL" || name == "GH_REPO" {
 			continue
 		}
 		if _, unsafe := blocked[name]; unsafe {
@@ -424,11 +425,15 @@ func runtimeEnvironment(worktree string) []string {
 		}
 		environment = append(environment, entry)
 	}
-	return append(environment,
+	environment = append(environment,
 		"FACTORY_BUILD_DIR="+filepath.Join(worktree, ".factory-build"),
 		"LANG="+runtimeUTF8Locale,
 		"LC_ALL="+runtimeUTF8Locale,
 	)
+	if _, repository, err := normalizeManagedGitHubIdentity(remoteIdentity); err == nil {
+		environment = append(environment, "GH_REPO="+repository)
+	}
+	return environment
 }
 
 func finishSupervisorStartFailure(anchor *exec.Cmd, identity string, writer *synchronizedEncoder, cause error) error {

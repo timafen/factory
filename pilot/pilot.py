@@ -18,6 +18,7 @@ Planner layer (epics):
   task per subtask, then marks the epic 'running'. A UI Start button can call
   the same mechanism later.
 """
+import argparse
 import base64
 import calendar
 import datetime
@@ -53,7 +54,11 @@ FAST_POLL_SECONDS = 2
 ACTIVE_POLL_SECONDS = 10
 ERROR_BACKOFF_MAX_SECONDS = 300
 MAX_PARALLEL_WORKS = 4
-MAX_TERMINAL_TASKS_PER_CYCLE = 1
+# A busy four-slot Factory must be able to refill all slots from completed
+# handoffs in one bounded pass.  The history window below still prevents the
+# old failure mode where every archival task was replayed in one cycle.
+MAX_TERMINAL_TASKS_PER_CYCLE = 4
+TERMINAL_HANDOFF_HISTORY_LIMIT = 200
 MERGE_CONFLICT_RE = re.compile(
     r"merge conflict|has merge conflicts|not mergeable|cannot be cleanly created",
     re.I,
@@ -83,6 +88,8 @@ def all_tasks():
         cursor = page.get("next_cursor") or ""
         if not cursor:
             break
+    if cursor:
+        raise RuntimeError("task pagination did not finish")
     return tasks
 
 
@@ -607,9 +614,19 @@ def _note_admitted_task(conf, response, body):
     task.setdefault("title", body.get("title", ""))
     task.setdefault("state", "created")
     # Reserve an initial stage immediately even when the API response has not
-    # populated work_id yet. The next cycle replaces this local snapshot with
-    # the authoritative task list, which also releases completed works.
-    task.setdefault("work_id", body.get("work_id") or task.get("id"))
+    # populated work_id yet. A child must inherit its parent's identity here;
+    # otherwise two completed attempts of one work can both create the same
+    # heavy next stage while this cycle is refilling several slots.
+    work_id = body.get("work_id") or task.get("work_id")
+    parent_id = body.get("parent_task_id")
+    if not work_id and parent_id:
+        for key in ("_active_work_tasks", "_host_load_tasks"):
+            parent = next((candidate for candidate in ((conf or {}).get(key) or [])
+                           if candidate.get("id") == parent_id), None)
+            if parent:
+                work_id = task_work_id(parent)
+                break
+    task.setdefault("work_id", work_id or task.get("id"))
     for key in ("_active_work_tasks", "_host_load_tasks"):
         tasks = (conf or {}).get(key)
         if (isinstance(tasks, list)
@@ -1607,13 +1624,47 @@ def orchestrator_answer(conf, stage, base, situation, question, prior_result,
         return {"decision": "escalate", "answer": "", "reason": f"сбой авто-ответа: {e}"}
 
 
+def archived_attempt_ids(reference):
+    """Task IDs archived for this exact work generation."""
+    works = load(WORKS_PATH, {}) or {}
+    if not isinstance(works, dict):
+        return set()
+
+    metas = []
+    if isinstance(reference, dict) and reference.get("work_id"):
+        meta = works.get(reference["work_id"])
+        if isinstance(meta, dict):
+            metas.append(meta)
+    else:
+        title = (base_title(reference.get("title") or "")
+                 if isinstance(reference, dict) else str(reference or ""))
+        metas.extend(
+            meta for name, meta in works.items()
+            if isinstance(meta, dict)
+            and _same_work(meta.get("base_title") or name, title)
+        )
+
+    archived_ids = set()
+    for meta in metas:
+        attempts = meta.get("archived_attempts") or []
+        if not isinstance(attempts, list):
+            continue
+        archived_ids.update(
+            item.get("task_id") for item in attempts
+            if isinstance(item, dict) and item.get("task_id")
+        )
+    return archived_ids
+
+
 def stage_attempts(tasks, stage, base):
     """How many times this exact work already went through this exact stage."""
+    archived_ids = archived_attempt_ids(base)
     n = 0
     for t in tasks:
         m = STAGE_TITLE_RE.match(t.get("title", ""))
         if (m and m.group(1).strip() == stage
-                and same_task_work(t, base)):
+                and same_task_work(t, base)
+                and t.get("id") not in archived_ids):
             n += 1
     return n
 
@@ -1644,6 +1695,32 @@ def prioritize_terminal_handoffs(tasks, processed, recovery_ids=()):
         reverse=True,
     )
     return urgent + rest
+
+
+def recent_terminal_handoff_history(tasks, limit=TERMINAL_HANDOFF_HISTORY_LIMIT,
+                                    pinned_ids=()):
+    """Keep the live handoff scan bounded to the newest task-list window.
+
+    ``all_tasks()`` is still used as the source of truth for duplicate and
+    lifecycle checks.  Treating every never-recorded archival task as a new
+    handoff, however, makes a newly upgraded Pilot replay years of history
+    before it reaches a completion that only just fell beyond page one.
+    """
+    try:
+        limit = max(int(limit), 1)
+    except (TypeError, ValueError):
+        limit = TERMINAL_HANDOFF_HISTORY_LIMIT
+    tasks = list(tasks or [])
+    bounded = tasks[:limit]
+    pinned_ids = set(pinned_ids or ())
+    if not pinned_ids:
+        return bounded
+    included = {task.get("id") for task in bounded}
+    bounded.extend(
+        task for task in tasks[limit:]
+        if task.get("id") in pinned_ids and task.get("id") not in included
+    )
+    return bounded
 
 
 def live_or_done_at(tasks, base, stage_no, since=None):
@@ -1727,6 +1804,9 @@ def retry_terminal_task(conf, state, task_id):
     """Requeue a terminal task without advancing a startup recovery cursor."""
     if task_id in state["processed"]:
         state["processed"].remove(task_id)
+    retry_ids = state.setdefault("terminal_retry_ids", [])
+    if task_id not in retry_ids:
+        retry_ids.append(task_id)
     if task_id in (conf.get("_restart_recovery_ids") or ()):
         conf["_restart_recovery_retry"] = True
 
@@ -2149,6 +2229,8 @@ IDEA_KINDS = ("idea", "finding")
 IDEA_STATES = ("new", "planned", "in_work", "done", "rejected")
 IDEA_SKIP = ("нет", "none", "-", "н/д", "нету", "n/a")
 FINDING_ORIGINS = ("worker", "agent")  # ``agent`` keeps old worker records valid.
+PLAN_REVALIDATE_AFTER_SECONDS = 3600
+PLAN_REVALIDATION_QUEUE = 10
 
 
 def ideas_all():
@@ -2298,6 +2380,183 @@ def cleanup_completed_plan_cards(tasks, final_stage_no):
         closed.append(idea["id"])
         log(f"PLAN DONE idea={idea['id']} task={final.get('id')}")
     return closed
+
+
+def reconcile_stale_plan_cards(tasks, now=None):
+    """Return abandoned Plan runs to Triage instead of pretending they run.
+
+    A short gap belongs to the ordinary continuation watcher.  Once a linked
+    generation has had no live task for an hour, its original finding may no
+    longer describe current ``main``.  Queue a bounded fresh Triage generation
+    so the normal first-stage verdict can close duplicates and already-fixed
+    work before any expensive implementation stage is admitted.
+    """
+    now = time.time() if now is None else float(now)
+    items = ideas_all()
+    room = max(0, PLAN_REVALIDATION_QUEUE - sum(
+        1 for item in items
+        if item.get("state") == "planned" and item.get("revalidation")
+    ))
+    if not room:
+        return []
+    by_id = {task.get("id"): task for task in tasks or [] if task.get("id")}
+    open_questions = [q for q in load_questions() if q.get("status") == "open"]
+    queued = []
+
+    def activity_epoch(task):
+        for field in ("updated_at", "completed_at", "created_at"):
+            parsed = _work_time((task or {}).get(field))
+            if parsed is not None:
+                return parsed.timestamp()
+        return 0
+
+    def idea_epoch(item):
+        value = str(item.get("updated") or item.get("created") or "")
+        try:
+            return time.mktime(time.strptime(value, "%Y-%m-%d %H:%M"))
+        except (OverflowError, TypeError, ValueError):
+            return 0
+
+    for idea in items:
+        if room <= 0:
+            break
+        if idea.get("state") != "in_work":
+            continue
+        linked_id = idea.get("task_id") or ""
+        linked = by_id.get(linked_id)
+        boundary = (linked or {}).get("created_at") or ""
+        title = idea.get("title") or ""
+        generation = [task for task in (tasks or []) if (
+            task_work_id(task) == linked_id
+            or (linked and _same_work(task.get("title"), title)
+                and (task.get("created_at") or "") >= boundary)
+        )]
+        if any(task.get("state") in PLAN_ACTIVE_STATES for task in generation):
+            continue
+        generation_ids = {task.get("id") for task in generation if task.get("id")}
+        if any(
+            question.get("task_id") in generation_ids
+            or question.get("work_id") == linked_id
+            or _same_work(question.get("title"), title)
+            for question in open_questions
+        ):
+            continue
+        last_activity = max(
+            [activity_epoch(task) for task in generation] + [idea_epoch(idea)]
+        )
+        if last_activity and now - last_activity < PLAN_REVALIDATE_AFTER_SECONDS:
+            continue
+        run_generation = str(uuid.uuid4())
+        idea.update({
+            "state": "planned",
+            "task_id": "",
+            "run_generation": run_generation,
+            "revalidation": True,
+            "reason": (
+                "Предыдущий запуск давно остановился без живого этапа. "
+                "Актуальность будет повторно проверена на Разборе."
+            ),
+            "updated": time.strftime("%Y-%m-%d %H:%M"),
+        })
+        queued.append(idea.get("id"))
+        room -= 1
+        log("PLAN RECHECK " + repr(title[:70]))
+    if queued:
+        save(IDEAS_PATH, items)
+    return queued
+
+
+def _rfc3339(value):
+    """Parse an RFC3339 timestamp and require an explicit timezone."""
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("--before must be an RFC3339 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("--before must include a timezone")
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _cleanup_task_time(task_id):
+    detail = api(f"/tasks/{task_id}")
+    task = detail.get("task") or {}
+    execution = detail.get("execution") or task.get("execution") or {}
+    value = execution.get("updated_at")
+    if not value:
+        raise ValueError(f"task {task_id} has no execution.updated_at")
+    return _rfc3339(value)
+
+
+def cleanup_legacy_plan_cards(before, apply=False, now_fn=None):
+    """Find, and optionally atomically close, cards left before auto-cleanup."""
+    cutoff = _rfc3339(before)
+    tasks = all_tasks()
+    by_id = {task.get("id"): task for task in tasks if task.get("id")}
+    items = load(IDEAS_PATH, None)
+    if not isinstance(items, list):
+        raise ValueError("ideas.json must contain a list")
+    changes, skipped = [], []
+    terminal = {"succeeded", "failed", "cancelled"}
+
+    for idea in items:
+        if idea.get("state") not in ("planned", "in_work"):
+            continue
+        task_id = str(idea.get("task_id") or "").strip()
+        if not task_id:
+            skipped.append((idea, "no_task_id"))
+            continue
+        linked = by_id.get(task_id)
+        if not linked:
+            changes.append((idea, "linked_task_missing"))
+            continue
+
+        work_id = linked.get("work_id")
+        if work_id:
+            boundary = [task for task in tasks if task.get("work_id") == work_id]
+        else:
+            repo = linked.get("repository_id") or ""
+            title = base_title(linked.get("title") or "")
+            since = linked.get("created_at") or ""
+            if not repo or not title or not since:
+                skipped.append((idea, "ambiguous_legacy_link"))
+                continue
+            boundary = [task for task in tasks
+                        if not task.get("work_id")
+                        and task.get("repository_id") == repo
+                        and base_title(task.get("title") or "") == title
+                        and (task.get("created_at") or "") >= since]
+        boundary.sort(key=lambda task: (task.get("created_at") or "", task.get("id") or ""))
+        latest = boundary[-1] if boundary else None
+        state = (latest or {}).get("state")
+        if not latest or state not in terminal or state == "cancelled":
+            skipped.append((idea, "work_not_terminal"))
+            continue
+        if state == "succeeded":
+            match = PIPELINE_TITLE.match(latest.get("title") or "")
+            if (not match or match.group(1) != match.group(2)
+                    or not final_ok(latest.get("id"), strict=True)):
+                skipped.append((idea, "success_not_accepted_final"))
+                continue
+        if _cleanup_task_time(latest["id"]) >= cutoff:
+            skipped.append((idea, "terminal_not_before_cutoff"))
+            continue
+        changes.append((idea, "terminal_before_cutoff"))
+
+    for idea, reason in changes:
+        log(f"CLEANUP PLAN {idea.get('id')} {idea.get('title', '')!r} reason={reason}")
+    for idea, reason in skipped:
+        log(f"CLEANUP SKIP {idea.get('id')} {idea.get('title', '')!r} reason={reason}")
+    log(f"CLEANUP TOTAL changes={len(changes)} skipped={len(skipped)} apply={bool(apply)}")
+    if apply and changes:
+        stamp = (now_fn or (lambda: datetime.datetime.now(datetime.timezone.utc)))()
+        stamp = stamp.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        for idea, reason in changes:
+            idea.update(state="done", reason="закрыто уборкой", cleanup_at=stamp,
+                        cleanup_reason=reason,
+                        updated=time.strftime("%Y-%m-%d %H:%M"))
+        save(IDEAS_PATH, items)
+    return len(changes)
 
 
 def collect_ideas(result, repo_id="", source=""):
@@ -2654,6 +2913,26 @@ def pipeline_watch(conf, tasks, workflows, workers):
     stages = stage_names(conf)
     if not stages:
         return
+    mem = load(STALL_PATH, {}) or {}
+    now = int(time.time())
+    active_tasks = conf.get("_active_work_tasks")
+    if (isinstance(active_tasks, list)
+            and len(active_auto_works(active_tasks)) >= int(
+                conf.get("max_parallel_works", MAX_PARALLEL_WORKS))):
+        # Nothing in the stalled backlog can be admitted while every work slot
+        # is occupied.  Avoid rebuilding and cross-checking the entire task
+        # history (thousands of records in production) merely to rediscover
+        # that fact once per stalled work.  Preserve the soft-wait semantics so
+        # capacity deferral still consumes no nudge attempt.
+        capacity_deferred = 0
+        for rec in mem.values():
+            if (isinstance(rec, dict)
+                    and rec.get("why") not in ("closed", "owner", "give_up")):
+                rec["since"] = now
+                capacity_deferred += 1
+        save(STALL_PATH, mem)
+        log(f"watch_capacity_deferred count={capacity_deferred or 'all'}")
+        return
     stopped = set(conf.get("stopped_pipelines") or [])
     groups = {}
     for t in tasks:
@@ -2662,9 +2941,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
             key = task_work_id(t)
             groups.setdefault(key, {"base": m.group(2).strip(), "tasks": []})[
                 "tasks"].append((m.group(1).strip(), t))
-    mem = load(STALL_PATH, {}) or {}
-    now = int(time.time())
     gave_up = []
+    capacity_deferred = 0
     for work_key, group in groups.items():
         base, lst = group["base"], group["tasks"]
         allowed = []
@@ -2711,6 +2989,17 @@ def pipeline_watch(conf, tasks, workflows, workers):
             if rec.get("why") != "give_up":
                 rec["why"] = "give_up"
                 gave_up.append((base, stages[far]))
+            continue
+        active_tasks = conf.get("_active_work_tasks")
+        if (isinstance(active_tasks, list)
+                and len(active_auto_works(active_tasks)) >= int(
+                    conf.get("max_parallel_works", MAX_PARALLEL_WORKS))):
+            # Capacity is already known from the shared cycle snapshot.  Do
+            # not ask the control plane the same doomed question once per
+            # stale work: after a release restart that can be hundreds of
+            # sequential HTTP 400s before Pilot records the release result.
+            rec["since"] = now
+            capacity_deferred += 1
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
@@ -2770,6 +3059,8 @@ def pipeline_watch(conf, tasks, workflows, workers):
             # задач этой работы больше нет в панели — запись выдохлась,
             # держать её значит толкать призраков вместо живых работ
             mem.pop(key, None)
+    if capacity_deferred:
+        log(f"watch_capacity_deferred count={capacity_deferred}")
     if gave_up:
         if len(gave_up) == 1:
             base, stage = gave_up[0]
@@ -2977,6 +3268,10 @@ def branch_report(repo_identity, branch):
 IMPLEMENTATION_COMMIT_LINE = re.compile(
     r"^\s*(?:[-*]\s*)?Implementation commit:\s*`?([0-9a-f]{40})`?\s*[—-]\s*\S",
     re.M)
+CARD_IMPLEMENTED_STATUS_LINE = re.compile(
+    r"^\s*(?:[-*]\s*)?Status:\s*Implemented(?:\s+[—-].*)?\s*$",
+    re.I | re.M)
+CARD_HEAD_SECTION = re.compile(r"^## HEAD\s*$([\s\S]*?)(?=^## |\Z)", re.M)
 CARD_LINE = re.compile(r"^Card:\s*(CARD-\d{4,})\s*$", re.M)
 SPECIFICATION_HEAD_LINE = re.compile(r"^HEAD:\s*([0-9a-f]{40})\s*$", re.M)
 CARD_FILE_NUMBER = re.compile(r"^CARD-(\d+)\b")
@@ -3071,6 +3366,12 @@ def implementation_commit_gate(repo_identity, branch, files):
             body = base64.b64decode(data["content"]).decode("utf-8")
         except (ValueError, UnicodeDecodeError, TypeError):
             return {"back": True, "note": f"Машинная проверка: карточка {path} повреждена или не читается как UTF-8."}
+        head = CARD_HEAD_SECTION.search(body)
+        if not head or not CARD_IMPLEMENTED_STATUS_LINE.search(head.group(1)):
+            return {"back": True, "note": (
+                f"Машинная проверка: в опубликованной карточке {path} нет строки "
+                "`Status: Implemented` в HEAD. Верни работу в Implement и обнови "
+                "статус только после успешной реализации и тестов.")}
         match = IMPLEMENTATION_COMMIT_LINE.search(body)
         if not match:
             return {"back": True, "note": (
@@ -3111,6 +3412,67 @@ def _git(cwd, *args, timeout=180, input_text=None):
     p = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True,
                        text=True, timeout=timeout, env=env, input=input_text)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def refresh_stale_branch(repo_identity, branch):
+    """Bring a published candidate onto the current default branch before Review.
+
+    A candidate can wait behind an overlapping work for hours.  Letting that
+    stale head pass Review and Verify only discovers a predictable merge
+    conflict after all expensive checks have run.  Merge the freshly fetched
+    default branch into the same candidate instead: this preserves the
+    implementation commit recorded by the card and makes a concurrent remote
+    update fail safely at push time.
+    """
+    url = _remote_url(repo_identity)
+    if not url or not branch:
+        return {"state": "blocked", "reason": "missing repository or candidate branch"}
+    default, error = _default_branch(url)
+    if error:
+        return {"state": "blocked", "reason": error}
+    try:
+        with tempfile.TemporaryDirectory(prefix="factory-refresh-") as work:
+            for args in (("init", "-q"),
+                         ("remote", "add", "origin", url),
+                         ("fetch", "--prune", "origin",
+                          "+refs/heads/" + default + ":refs/remotes/origin/" + default,
+                          "+refs/heads/" + branch + ":refs/remotes/origin/" + branch),
+                         ("checkout", "-q", "-B", "candidate", "origin/" + branch)):
+                rc, out = _git(work, *args)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "cannot prepare stale candidate refresh: " + out.strip()[:240])}
+            rc, old_head = _git(work, "rev-parse", "HEAD")
+            if rc or not GIT_SHA.fullmatch(old_head.strip()):
+                return {"state": "blocked", "reason": "cannot pin stale candidate head"}
+            old_head = old_head.strip()
+            rc, out = _git(work, "-c", "user.name=Factory Pilot",
+                           "-c", "user.email=pilot@factory", "merge", "--no-edit",
+                           "refs/remotes/origin/" + default)
+            if rc:
+                _git(work, "merge", "--abort")
+                return {"state": "conflict", "reason": out.strip()[:400]}
+            rc, new_head = _git(work, "rev-parse", "HEAD")
+            if rc or not GIT_SHA.fullmatch(new_head.strip()):
+                return {"state": "blocked", "reason": "cannot pin refreshed candidate head"}
+            new_head = new_head.strip()
+            if new_head != old_head:
+                rc, out = _git(work, "push", "origin",
+                               "HEAD:refs/heads/" + branch)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "candidate changed while it was being refreshed: "
+                        + out.strip()[:240])}
+            snapshot = fresh_branch_snapshot(repo_identity, branch)
+            if snapshot.get("state") != "ok":
+                return {"state": "blocked", "reason": snapshot.get("reason")
+                        or "refreshed candidate is not published"}
+            if snapshot.get("base_advanced"):
+                return {"state": "blocked", "reason": (
+                    "default branch advanced again while candidate was being refreshed")}
+            return {"state": "ok", "branch": branch, "snapshot": snapshot}
+    except Exception as e:
+        return {"state": "blocked", "reason": "candidate refresh failed: " + str(e)[:240]}
 
 
 def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo=""):
@@ -3383,7 +3745,36 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                              + "\n".join("  - " + f for f in sorted(mine))
                              + "\nУбери чужое из ветки: git checkout origin/main -- <файл>; "
                              "запушь и сдай снова. Если область расширилась осознанно — "
-                             "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
+                              "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
+
+        # An area lock can keep a finished implementation waiting while main
+        # moves underneath it.  Refresh only after the overlap has cleared;
+        # otherwise two works could mutate the shared area concurrently.
+        if snapshot.get("base_advanced"):
+            refreshed = refresh_stale_branch(repo_identity, branch)
+            if refreshed.get("state") == "conflict":
+                return {"back": True,
+                        "alert": "Вернул сам: ветка конфликтует со свежей основной",
+                        "alert_msg": ("Пока работа ждала, основная ветка изменилась в тех же "
+                                      "местах. Конфликт нужно устранить до Ревью."),
+                        "note": ("Машинная проверка перед Ревью: ветка отстала от основной "
+                                 "и не объединяется автоматически. Подтяни свежую основную "
+                                 "ветку в эту же ветку, разреши конфликт, прогони целевые "
+                                 "тесты, запушь и сдай снова.")}
+            if refreshed.get("state") != "ok":
+                return {"blocked": True, "note": (
+                    "BLOCKED: review infrastructure. Отставшую ветку нельзя безопасно "
+                    "обновить перед Review. Причина: "
+                    + refreshed.get("reason", "unknown refresh failure"))}
+            snapshot = refreshed["snapshot"]
+            files = snapshot.get("files") or []
+            listing = "\n".join("  - " + f for f in files)
+            missing_after_refresh = sorted(set(promised_files) - set(files))
+            if missing_after_refresh:
+                return {"blocked": True, "note": (
+                    "BLOCKED: review infrastructure. После обновления ветки исчезли "
+                    "обещанные файлы:\n"
+                    + "\n".join("  - " + f for f in missing_after_refresh))}
 
         # Обещания: что Спецификация записала как «готово, когда».
         missing = [f for f in (prom.get("files") or []) if f not in files]
@@ -4832,15 +5223,21 @@ def handle_answers(conf, workflows, workers, tasks):
     return applied
 
 
-def refill_open_work_slots(conf, workflows, workers):
-    """Give unfinished continuations every newly opened slot before Plan."""
+def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
+    """Give unfinished continuations every newly opened slot before Plan.
+
+    A terminal handoff backlog means an already-started work is waiting for
+    its next stage.  Keep newly opened capacity reserved for that backlog
+    instead of admitting another root task which can starve the continuation.
+    """
     tasks = api("/tasks?limit=100").get("tasks") or []
     # All admissions in this pass share the same authoritative snapshot.
     # handle_answers/create_task appends successful continuations to it, so
     # replenish_plan can only use capacity which really remains afterwards.
     conf["_active_work_tasks"] = tasks
     answered = handle_answers(conf, workflows, workers, tasks)
-    replenish_plan(conf, tasks, workflows, workers)
+    if admit_new_plan:
+        replenish_plan(conf, tasks, workflows, workers)
     return answered
 
 
@@ -5059,12 +5456,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
         }
         previous = meta.get("implementation_artifact") or {}
         meta["implementation_artifact"] = artifact
-        # Re-reading the same completed Implement task happens after a
-        # watcher restart.  It must keep review_gate's rebuilt delivery
-        # branch.  Only a genuinely different implementation can invalidate
-        # that selected branch for this generation.
-        identity = ("branch", "head", "task_id", "generation")
-        if any(previous.get(key) != artifact[key] for key in identity):
+        # Re-reading the same completed Implement task happens after
+        # review_gate has refreshed its branch onto a newer main.  The remote
+        # head then legitimately differs from the original Implement report,
+        # but the gate-selected delivery head is still the authority for
+        # Review, Verify, and merge.  Only a genuinely different Implement
+        # task/branch/generation may invalidate that selection.
+        implementation_identity = ("branch", "task_id", "generation")
+        if any(previous.get(key) != artifact[key]
+               for key in implementation_identity):
             meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
@@ -5874,7 +6274,7 @@ def detect_limits(conf, tasks, workers_by_id):
     """Разбор свежих неудач: если этап упал из-за лимита подписки, это не повод
     перезапускать его три раза — это повод подождать."""
     for t in tasks[:15]:                       # только свежие, вглубь не лезем
-        if t.get("state") not in ("failed", "succeeded", "cancelled"):
+        if t.get("state") != "failed":
             continue
         wname = (workers_by_id.get(t.get("worker_id")) or {}).get("name", "")
         prov = provider_of(wname)
@@ -5885,26 +6285,13 @@ def detect_limits(conf, tasks, workers_by_id):
         except Exception:
             continue
         atts = detail.get("attempts") or []
-        # и ошибка, и отчёт: Codex про исчерпанный лимит часто пишет прямо в вывод
-        text = " ".join(str(a.get("error") or "") + " " + str(a.get("result") or "")[-4000:]
-                        for a in atts[-2:])
+        # Только ошибка последней неудачной попытки является сигналом провайдера.
+        # Result — свободный отчёт агента: в нём могут законно обсуждаться лимиты.
+        text = str((atts[-1] if atts else {}).get("error") or "").strip()
         if not text or not LIMIT_SIGNS.search(text):
             continue
         # Сбой входа/сети — не лимит подписки, а поломка окружения.
         if INFRA_SIGNS.search(text):
-            continue
-        # Слова «rate limit» в чужом отчёте или в диффе — не лимит подписки.
-        # Если настоящий счётчик говорит, что запас есть, а слова нашлись
-        # только в тексте отчёта (не в ошибке запуска), — не верим словам.
-        err_only = " ".join(str(a.get("error") or "") for a in atts[-2:])
-        real = (load(PROVIDER_LIMITS_PATH, {}) or {}).get(prov) or {}
-        up = real.get("used_percent")
-        if not isinstance(up, (int, float)):
-            up = (real.get("percents") or {}).get("seven_day.utilization")
-        fresh = time.time() - (real.get("at") or real.get("asked_at") or 0) < 10800
-        # Живой счётчик провайдера главнее слов в чужом выводе: если подписка
-        # израсходована меньше чем на 80%, никакие фразы её не блокируют.
-        if isinstance(up, (int, float)) and up < 80 and fresh:
             continue
         m = RESET_AT.search(text)
         note_limit(conf, prov, text, m.group(1) if m else "")
@@ -7182,6 +7569,11 @@ def _delivery_target(repo_identity):
         return "factory", "fx-factory-release"
     if identity.endswith("timafen/tarser-operations"):
         return "tarser-staging", "tarser-staging-deploy-release"
+    if identity:
+        # An ordinary repository has no Factory-owned release adapter.  Its
+        # durable delivery boundary is the accepted merge itself, but it must
+        # still enter the same state machine so owner completion is replayable.
+        return "external-" + hashlib.sha256(identity.encode()).hexdigest()[:16], "external-merge"
     return "", ""
 
 
@@ -7217,6 +7609,10 @@ def _delivery_generation(state, repo_identity, commit_sha, wait, now=None):
         "merge_receipts": [wait["merge_receipt"]],
         "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(
             time.time() if now is None else now))}
+    if adapter == "external-merge":
+        # The merge receipt is the terminal delivery proof for a repository
+        # whose deployment is not operated by Factory.
+        generation["phase"] = "completed"
     target["current_generation"] = gid
     target["generations"][gid] = generation
     return generation
@@ -7267,8 +7663,11 @@ def _complete_generation(conf, state, generation):
     for task_id, wait in generation["waits"].items():
         if task_id in completed:
             continue
-        receipt = {"id": generation["id"] + ":" + task_id, "generation_id": generation["id"],
-                   "task_id": task_id, "base": wait.get("base", ""), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        receipt = dict(wait.get("merge_receipt") or {})
+        receipt.update({"id": generation["id"] + ":" + task_id,
+                        "generation_id": generation["id"], "task_id": task_id,
+                        "base": wait.get("base", ""),
+                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         _delivery_record_once(DELIVERY_RECEIPTS_PATH, receipt)
         completed[task_id] = receipt["id"]
         mark_final(task_id, "Verify", True)
@@ -7392,6 +7791,9 @@ def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None
     generation = _delivery_generation(state, repo_identity, commit_sha, wait, now)
     if generation:
         save(STATE_PATH, state)
+        if generation["phase"] == "completed":
+            _complete_generation(conf, state, generation)
+            dispatch_delivery_outbox(conf, state)
     return generation
 
 
@@ -7448,6 +7850,25 @@ def _merged_commit_sha(repo, branch, expected_head=""):
     return ""
 
 
+def _merge_rounds(tasks, reference):
+    """Return completed rounds for this work generation, including replacements.
+
+    Archived attempts no longer spend the retry limit in ``stage_attempts``,
+    but they remain real rounds for the delivery journal.  Durable ``work_id``
+    provenance keeps completed generations with the same title out.
+    """
+    counts = []
+    for stage in ("Implement + Test", "Review", "Verify"):
+        count = 0
+        for task in tasks:
+            match = STAGE_TITLE_RE.match(task.get("title", ""))
+            if (match and match.group(1).strip() == stage
+                    and same_task_work(task, reference)):
+                count += 1
+        counts.append(count)
+    return max(counts, default=0)
+
+
 def recover_merge_intents(conf, state):
     """Resume merge → receipt → delivery in that order before `processed`.
 
@@ -7482,8 +7903,12 @@ def recover_merge_intents(conf, state):
                 save(STATE_PATH, state)
                 continue
             if exact_merge:
+                intent.setdefault("actor", "owner")
                 merged = True
             else:
+                intent["actor"] = "automatic"
+                intent["phase"] = "merging"
+                save(STATE_PATH, state)
                 ok, output = gh_merge(repo, branch, intent.get("base", branch),
                                       expected_head)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
@@ -7502,7 +7927,10 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
-                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "actor": intent.get("actor", "automatic"),
+                       "actor_id": intent.get("actor_id"),
+                       "rounds": max(1, int(intent.get("rounds") or 0))}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
             # let an already-processed Verify task suppress its missing wait.
@@ -7545,7 +7973,8 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
             continue
         existing = next((task for task in tasks
                          if task.get("parent_task_id") == task_id
-                         and task.get("correction_kind") == "merge_conflict_return"), None)
+                         and task.get("correction_kind") == "merge_conflict_return"
+                         and task.get("id")), None)
         if existing:
             intent.update({"phase": "repairing",
                            "repair_task_id": existing.get("id", "")})
@@ -7564,15 +7993,23 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
         repository_id = parent.get("repository_id") or ""
         if not repository_id and detail:
             repository_id = ((detail.get("task") or {}).get("repository_id") or "")
-        worker_name = stage_worker(
-            conf, implementation, "high", workers,
-            repository_id=repository_id)
+        branch = intent.get("branch", "")
+        if not repository_id or not branch:
+            log(f"MERGE CONFLICT repair wait task={task_id}: "
+                "repository/branch missing")
+            continue
+        try:
+            worker_name = stage_worker(
+                conf, implementation, "high", workers,
+                repository_id=repository_id)
+        except Exception as error:
+            log(f"MERGE CONFLICT repair wait task={task_id}: worker lookup: {error}")
+            continue
         worker = workers.get(worker_name)
-        if not repository_id or not worker:
-            log(f"MERGE CONFLICT repair wait task={task_id}: worker/repository missing")
+        if not worker:
+            log(f"MERGE CONFLICT repair wait task={task_id}: worker missing")
             continue
         base = intent.get("base") or base_title(parent.get("title", ""))
-        branch = intent.get("branch", "")
         stage_number = stages.index(implementation) + 1
         context = (
             f"Pipeline: {base}\n"
@@ -7596,7 +8033,7 @@ def resume_merge_conflicts(conf, state, tasks, workflows, workers):
                 "timeout_seconds": conf.get("timeout_seconds", 7200),
                 "workflow_revision_id": workflow["revision_id"],
             }, parent, conf, "merge_conflict_return")
-        except (ParallelWorkLimit, RuntimeError) as error:
+        except Exception as error:
             log(f"MERGE CONFLICT repair deferred task={task_id}: {error}")
             continue
         repair_task_id = ((created or {}).get("task") or {}).get("id", "")
@@ -7628,6 +8065,15 @@ def cycle(conf, state):
     if not isinstance(overlap_wait_decisions, dict):
         overlap_wait_decisions = {}
         state["overlap_wait_decisions"] = overlap_wait_decisions
+    terminal_retry_ids = state.setdefault("terminal_retry_ids", [])
+    if not isinstance(terminal_retry_ids, list):
+        terminal_retry_ids = []
+        state["terminal_retry_ids"] = terminal_retry_ids
+    processed_ids = set(state.get("processed") or ())
+    terminal_retry_ids[:] = [
+        task_id for task_id in terminal_retry_ids
+        if task_id and task_id not in processed_ids
+    ]
 
     tasks = api("/tasks?limit=100").get("tasks") or []
     # The normal cycle only needs a small current snapshot.  Restart recovery
@@ -7641,12 +8087,29 @@ def cycle(conf, state):
         # A transient read or Plan write failure must not mark the run as
         # processed. The next cycle retries it through the durable cursor.
         log("automation_findings_error", repr(e))
+    # The first API page is intentionally small and can push the linked root
+    # or final stage of an older Plan card out of view.  Reuse the complete
+    # history already required by the dashboard and terminal handoffs for all
+    # lifecycle reconciliation in this cycle.  Otherwise old cards remain
+    # labelled ``in_work`` forever and leave automatic planning with a false
+    # picture of its queue.
+    complete_tasks = None
+    try:
+        complete_tasks = all_tasks()
+    except Exception as e:
+        log("task_history_error", repr(e))
+    lifecycle_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
+
     # Сначала убрать выполненное из открытого Плана. Автоподбор (когда он
     # включён) ниже по циклу уже не увидит эту карточку как planned.
     try:
-        cleanup_completed_plan_cards(tasks, len(stages))
+        cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
     except Exception as e:
         log("plan_cleanup_error", repr(e))
+    try:
+        reconcile_stale_plan_cards(lifecycle_tasks)
+    except Exception as e:
+        log("plan_reconcile_error", repr(e))
     workers = best_workers(api("/workers")["workers"])
     repo_identity_by_id = {r["id"]: r["remote_identity"]
                            for r in (api("/repositories").get("repositories") or [])}
@@ -7667,8 +8130,11 @@ def cycle(conf, state):
     codex_snapshot = codex_usage_snapshot(day_start, week_start)
 
     # Снимок для главного экрана. Никогда не должен ломать цикл.
+    # The same complete snapshot feeds terminal handoffs below. Looking only
+    # at /tasks?limit=100 there loses a completed stage once service traffic
+    # pushes it off the first page.
     try:
-        write_dashboard(conf, all_tasks(), {w["id"]: w for w in api("/workers")["workers"]},
+        write_dashboard(conf, lifecycle_tasks, {w["id"]: w for w in api("/workers")["workers"]},
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
@@ -7794,12 +8260,12 @@ def cycle(conf, state):
     # Сторож использует тот же снимок цикла после ответов владельца: так
     # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
     try:
-        pipeline_watch(conf, tasks, workflows, workers)
+        pipeline_watch(conf, lifecycle_tasks, workflows, workers)
     except Exception as e:
         log("pipeline_watch_error", repr(e))
 
     try:
-        cleanup_work_archive(conf, tasks)
+        cleanup_work_archive(conf, lifecycle_tasks)
     except Exception as e:
         log("work_archive_cleanup_error", repr(e))
 
@@ -7809,18 +8275,27 @@ def cycle(conf, state):
                      MAX_TERMINAL_TASKS_PER_CYCLE)),
         1,
     )
-    terminal_tasks = list(tasks)
+    handoff_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
+    terminal_tasks = recent_terminal_handoff_history(
+        handoff_tasks,
+        conf.get("terminal_handoff_history_limit",
+                 TERMINAL_HANDOFF_HISTORY_LIMIT),
+        set(terminal_retry_ids) | set(overlap_wait_decisions) | set(recovery_ids),
+    )
+    # A full Plan can leave dozens of completed early stages behind. Continue
+    # work nearest to delivery first; otherwise a fresh Implement/Review/Verify
+    # result waits behind old Triage fragments for many expensive cycles.
+    terminal_tasks = prioritize_terminal_handoffs(
+        terminal_tasks, state.get("processed"), recovery_ids)
+    # Apply the durable cursor after stage priority. Applying it before the
+    # sort lets a capacity-deferred late stage jump back to the front on every
+    # cycle and starve earlier-stage continuations forever.
     terminal_cursor = state.get("terminal_cursor")
     cursor_index = next((index for index, task in enumerate(terminal_tasks)
                          if task.get("id") == terminal_cursor), None)
     if cursor_index is not None:
         terminal_tasks = (terminal_tasks[cursor_index + 1:]
                           + terminal_tasks[:cursor_index + 1])
-    # A full Plan can leave dozens of completed early stages behind. Continue
-    # work nearest to delivery first; otherwise a fresh Implement/Review/Verify
-    # result waits behind old Triage fragments for many expensive cycles.
-    terminal_tasks = prioritize_terminal_handoffs(
-        terminal_tasks, state.get("processed"), recovery_ids)
     for t in terminal_tasks:
         tid, title, tstate = t["id"], t.get("title", ""), t.get("state")
         if not title.startswith(PREFIX):
@@ -7836,7 +8311,7 @@ def cycle(conf, state):
                 conf["_restart_recovery_retry"] = True
             continue
 
-        closed_reason = work_lifecycle_block(base_title(title), t, tasks)
+        closed_reason = work_lifecycle_block(base_title(title), t, handoff_tasks)
         if closed_reason:
             overlap_wait_decisions.pop(tid, None)
             if tid not in state["processed"]:
@@ -7870,7 +8345,8 @@ def cycle(conf, state):
             if is_stopped(conf, base):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
-            newer = live_or_done_at(tasks, t, stage_no_of(title), since=t.get("created_at"))
+            newer = live_or_done_at(
+                handoff_tasks, t, stage_no_of(title), since=t.get("created_at"))
             if newer and newer["id"] != tid:
                 log(f"stage_ended state={tstate} task={tid} stage={wf} "
                     f"— перекрыта задачей {newer['id'][:8]}, вопрос не создаю")
@@ -7901,7 +8377,7 @@ def cycle(conf, state):
                     log("infra_retry_error", repr(e))
                     continue
 
-            done = stage_attempts(tasks, wf, t)
+            done = stage_attempts(handoff_tasks, wf, t)
             if done >= conf.get("max_stage_attempts", 3):
                 expl = {"situation_ru": f"Этап «{wf}» уже выполнялся {done} раз(а) и снова упал.",
                         "question_ru": "Что делать: разобраться вручную, поменять подход или отменить задачу?",
@@ -8002,7 +8478,9 @@ def cycle(conf, state):
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
+                        "actor_id": None,
+                        "rounds": max(1, _merge_rounds(tasks, t))}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -8026,7 +8504,7 @@ def cycle(conf, state):
                     verdict.get("question_ru") or "Что делать: доделать работу заново или разобраться руками?",
                     verdict.get("options_ru") or ["Доделай сам и проверь заново",
                                                  "Покажи подробности", "Отмени эту задачу"],
-                    squeeze(result), attempts_so_far=stage_attempts(tasks, back, t),
+                    squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
                     branch=selected_delivery(
                         base, extract_branch(result, detail.get("context", "")))[0])
                 attach_question_work_id(t)
@@ -8048,7 +8526,7 @@ def cycle(conf, state):
                            situation or verdict.get("reason", ""),
                            question or "Что делать дальше?",
                            verdict.get("options_ru") or [], result,
-                           attempts_so_far=stage_attempts(tasks, back, t),
+                           attempts_so_far=stage_attempts(handoff_tasks, back, t),
                            branch=selected_delivery(
                                base, extract_branch(result, detail.get("context", "")))[0])
             attach_question_work_id(t)
@@ -8090,7 +8568,8 @@ def cycle(conf, state):
         if is_stopped(conf, base):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
-        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(
+            handoff_tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -8336,7 +8815,8 @@ def cycle(conf, state):
         # The decision and delivery gates above can take long enough for
         # another Pilot to create the continuation. Re-check the shared
         # snapshot at the last possible moment before the external write.
-        dup = live_or_done_at(tasks, t, idx + 2, since=t.get("created_at"))
+        dup = live_or_done_at(
+            handoff_tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
             log(f"skip: '{base}' продолжение появилось перед созданием "
                 f"({dup['id'][:8]} {dup.get('state')})")
@@ -8357,6 +8837,8 @@ def cycle(conf, state):
                 and not any(item.get("id") == created_task.get("id")
                             for item in tasks)):
             tasks.append(created_task)
+            if handoff_tasks is not tasks:
+                handoff_tasks.append(created_task)
         log(f"advanced pipeline='{title}' {wf} -> {next_stage} complexity={complexity} "
             f"worker={worker_name} branch={branch or '-'} "
             f"new_task={created.get('task', {}).get('id')}")
@@ -8373,7 +8855,10 @@ def cycle(conf, state):
     # answered continuations before admitting Plan so a full Plan cannot
     # starve an unfinished correction forever.
     try:
-        answered = refill_open_work_slots(conf, workflows, workers)
+        answered = refill_open_work_slots(
+            conf, workflows, workers,
+            admit_new_plan=not activity["terminal_backlog"],
+        )
         activity["answer_applied"] = (
             activity["answer_applied"]
             or answered is True
@@ -8419,6 +8904,18 @@ def record_poll_hint(state, hint, now=None):
         log(f"next_poll seconds={chosen['seconds']:g} reason={chosen['reason']}")
 
 
+def normalize_pilot_state(state):
+    """Restore required cursors without discarding surviving durable state."""
+    if not isinstance(state, dict):
+        state = {}
+    for key in (
+            "processed", "automation_results_processed", "epics_processed",
+            "epic_starts_processed", "poll_terminal_seen"):
+        if not isinstance(state.get(key), list):
+            state[key] = []
+    return state
+
+
 def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     sleep_fn = sleep_fn or time.sleep
     clock_fn = clock_fn or time.time
@@ -8428,7 +8925,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     recovery_watermark = None
     while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
-        state = load(STATE_PATH, {"processed": []})
+        state = normalize_pilot_state(load(STATE_PATH, {"processed": []}))
         hint = {"seconds": 60, "reason": "no_config"}
         if conf and conf.get("enabled", True):
             if recovery_ids is None:
@@ -8492,7 +8989,15 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
         completed += 1
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "cleanup-plan-cards":
+        parser = argparse.ArgumentParser(prog="pilot.py cleanup-plan-cards")
+        parser.add_argument("--before", required=True)
+        parser.add_argument("--apply", action="store_true")
+        args = parser.parse_args(argv[1:])
+        cleanup_legacy_plan_cards(args.before, apply=args.apply)
+        return
     log("factory-pilot started")
     run_loop()
 

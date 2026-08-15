@@ -1,16 +1,33 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
+Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
+- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
+- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
+- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
+- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Перебазировано на `origin/main` `f1db2b40`; implementation commit после
+перебазирования закреплён отдельной строкой. Полный Go-регресс прошёл; первая
+общая проверка остановилась из-за отсутствующего локального `eslint`, после
+штатного `npm ci` UI lint и typecheck прошли. Риск: `npm audit` сообщает две
+high-severity зависимости, не затрагивающие эту поставку.
+
+### 2026-08-14 — Implement
+
+Восстановление выполнено на свежем `origin/main`, где защита terminal write уже
+присутствует. Regression усилен вторым свежим запуском broker: durable `failed`
+сохраняется, а executor остаётся вызван ровно один раз. Целевые Go-тесты прошли;
+10 реальных Pilot→broker сценариев также прошли.
 
 ### 2026-08-12 — Verify
 

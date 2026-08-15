@@ -477,7 +477,7 @@ class DeliveryAreaTests(unittest.TestCase):
 
     def test_card_commit_gate_accepts_code_commit_before_final_card_commit(self):
         implementation = "a" * 40
-        card = ("# CARD-0100\n\nImplementation commit: `" + implementation
+        card = ("# CARD-0100\n\n## HEAD\n\n- Status: Implemented\n\nImplementation commit: `" + implementation
                 + "` — реализован устойчивый факт.\n")
         responses = [
             {"content": base64.b64encode(card.encode()).decode()},
@@ -492,7 +492,7 @@ class DeliveryAreaTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_card_commit_gate_rejects_old_head_requirement_without_stable_commit(self):
-        card = "# CARD-0100\n\nHead commit: git HEAD\n"
+        card = "# CARD-0100\n\n## HEAD\n\n- Status: Implemented\n\nHead commit: git HEAD\n"
         with mock.patch.object(pilot, "gh_json", return_value={
                 "content": base64.b64encode(card.encode()).decode()}):
             result = pilot.implementation_commit_gate(
@@ -504,7 +504,7 @@ class DeliveryAreaTests(unittest.TestCase):
 
     def test_card_commit_gate_rejects_invented_or_card_only_commit(self):
         implementation = "b" * 40
-        card = ("Implementation commit: " + implementation + " — якобы код.\n")
+        card = ("## HEAD\nStatus: Implemented\nImplementation commit: " + implementation + " — якобы код.\n")
         responses = [
             {"content": base64.b64encode(card.encode()).decode()},
             {"status": "ahead"},
@@ -515,6 +515,58 @@ class DeliveryAreaTests(unittest.TestCase):
                 "github.com/example/repo", "factory/task", ["knowledge/cards/CARD-0100.md"])
         self.assertTrue(result["back"])
         self.assertIn("только карточки", result["note"])
+
+
+class CardHeadStatusTests(unittest.TestCase):
+    def gate(self, status, *, card_path="knowledge/cards/CARD-0127-card-head-implemented-status.md",
+             inside_head=True):
+        implementation = "a" * 40
+        head = f"## HEAD\n\n{status}\n\n" if inside_head else f"{status}\n\n## HEAD\n\n"
+        card = (f"# CARD-0127\n\n{head}"
+                f"Implementation commit: {implementation} — код.\n")
+        responses = [
+            {"content": base64.b64encode(card.encode()).decode()},
+            {"status": "ahead"},
+            {"files": [{"filename": "pilot/pilot.py"}]},
+        ]
+        with mock.patch.object(pilot, "gh_json", side_effect=responses):
+            return pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", card_path])
+
+    def test_implemented_status_accepts_plain_and_markdown_forms(self):
+        for status in ("Status: Implemented", "- Status: IMPLEMENTED — awaiting Review"):
+            with self.subTest(status=status):
+                self.assertIsNone(self.gate(status))
+
+    def test_old_or_missing_status_returns_to_implement(self):
+        for status in ("- Status: Planned", "Implementation is ready", ""):
+            with self.subTest(status=status):
+                result = self.gate(status)
+                self.assertTrue(result["back"])
+                self.assertIn("Status: Implemented", result["note"])
+
+    def test_status_outside_head_does_not_pass(self):
+        result = self.gate("Status: Implemented", inside_head=False)
+        self.assertTrue(result["back"])
+
+    def test_remote_read_failure_is_not_misreported_as_bad_status(self):
+        with mock.patch.object(pilot, "gh_json", return_value=None):
+            self.assertIsNone(pilot.implementation_commit_gate(
+                "github.com/example/repo", "factory/task",
+                ["pilot/pilot.py", "knowledge/cards/CARD-0127-card-head-implemented-status.md"]))
+
+    def test_review_rejects_foreign_card_before_review(self):
+        snapshot = {"state": "ok", "files": [
+            "pilot/pilot.py", "knowledge/cards/CARD-0999-other.md"],
+            "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+            "default_branch": "main"}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=snapshot):
+            result = pilot.review_gate({}, "Работа", "factory/task",
+                                       "github.com/example/repo",
+                                       expected_card="CARD-0127")
+        self.assertTrue(result["back"])
+        self.assertIn("CARD-0127", result["note"])
 
 
 class FreshDefaultBranchSnapshotTests(unittest.TestCase):
@@ -645,6 +697,65 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             self.assertTrue(snapshot["base_advanced"])
             self.assertEqual(self.git(observer, "symbolic-ref", "--short", "HEAD"), before)
 
+    def test_stale_candidate_is_merged_with_fresh_main_before_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "README.md", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+            self.git(author, "checkout", "-qb", "factory/candidate", "main")
+            self.commit(author, "pilot/change.py", "candidate\n")
+            implementation = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "main-only.txt", "advanced\n")
+            current_main = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-q", "origin", "main")
+
+            result = pilot.refresh_stale_branch("file://" + remote,
+                                                "factory/candidate")
+
+            self.assertEqual(result["state"], "ok")
+            self.assertFalse(result["snapshot"]["base_advanced"])
+            self.assertEqual(result["snapshot"]["base_sha"], current_main)
+            refreshed = result["snapshot"]["candidate_sha"]
+            self.git(author, "fetch", "-q", "origin", "factory/candidate")
+            self.git(author, "merge-base", "--is-ancestor", implementation,
+                     refreshed)
+            self.assertEqual(result["branch"], "factory/candidate")
+
+    def test_conflicting_refresh_leaves_remote_candidate_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote.git")
+            author = os.path.join(tmp, "author")
+            self.git(tmp, "init", "--bare", remote)
+            self.git(tmp, "init", "-q", author)
+            self.git(author, "checkout", "-qb", "main")
+            self.git(author, "remote", "add", "origin", remote)
+            self.commit(author, "shared.txt", "root\n")
+            self.git(author, "push", "-qu", "origin", "main")
+            self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+            self.git(author, "checkout", "-qb", "factory/candidate", "main")
+            self.commit(author, "shared.txt", "candidate\n")
+            candidate = self.git(author, "rev-parse", "HEAD")
+            self.git(author, "push", "-qu", "origin", "factory/candidate")
+            self.git(author, "checkout", "-q", "main")
+            self.commit(author, "shared.txt", "main\n")
+            self.git(author, "push", "-q", "origin", "main")
+
+            result = pilot.refresh_stale_branch("file://" + remote,
+                                                "factory/candidate")
+
+            self.assertEqual(result["state"], "conflict")
+            self.assertEqual(self.git(tmp, "--git-dir", remote, "rev-parse",
+                                      "refs/heads/factory/candidate"), candidate)
+
     def test_fetch_or_default_resolution_failure_is_blocked_without_cached_fallback(self):
         snapshot = pilot.fresh_branch_snapshot("file:///definitely/not/a/repository", "factory/candidate")
         self.assertEqual(snapshot["state"], "blocked")
@@ -658,6 +769,82 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertNotIn("REQUEST CHANGES", result["note"])
         self.assertIn("review infrastructure", result["note"])
+
+    def test_review_gate_refreshes_stale_candidate_after_area_is_free(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 3, "ahead_by": 2, "files": files}
+        fresh = dict(stale, base_sha="d" * 40, candidate_sha="e" * 40,
+                     merge_base_sha="d" * 40, base_advanced=False,
+                     base_ahead_by=0)
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "ok", "branch": "factory/candidate", "snapshot": fresh}) as refresh:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertFalse(result["back"])
+        self.assertEqual(result["head"], "e" * 40)
+        refresh.assert_called_once_with("github.com/example/repo", "factory/candidate")
+        self.assertNotIn("Основная ветка продвинулась", result["note"])
+
+    def test_review_gate_waits_for_overlap_before_refreshing_stale_branch(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value={"pilot/pilot.py"}), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch") as refresh:
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo", active_tasks=[])
+
+        self.assertTrue(result["wait"])
+        refresh.assert_not_called()
+
+    def test_review_gate_returns_conflicting_refresh_to_implement(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "conflict", "reason": "content conflict"}):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertTrue(result["back"])
+        self.assertIn("перед Ревью", result["note"])
+
+    def test_review_gate_blocks_when_stale_refresh_cannot_be_published(self):
+        files = ["pilot/pilot.py", "knowledge/cards/CARD-0163-x.md"]
+        stale = {"state": "ok", "default_branch": "main",
+                 "base_sha": "a" * 40, "candidate_sha": "b" * 40,
+                 "merge_base_sha": "c" * 40, "base_advanced": True,
+                 "base_ahead_by": 1, "ahead_by": 2, "files": files}
+        with mock.patch.object(pilot, "fresh_branch_snapshot", return_value=stale), \
+                mock.patch.object(pilot, "implementation_commit_gate", return_value=None), \
+                mock.patch.object(pilot, "other_areas", return_value=[]), \
+                mock.patch.object(pilot, "load", return_value={}), \
+                mock.patch.object(pilot, "refresh_stale_branch", return_value={
+                    "state": "blocked", "reason": "push rejected"}):
+            result = pilot.review_gate({}, "Работа", "factory/candidate",
+                                       "github.com/example/repo")
+
+        self.assertTrue(result["blocked"])
+        self.assertIn("push rejected", result["note"])
 
     def test_review_gate_returns_empty_pinned_delivery_with_one_message(self):
         snapshot = {
@@ -1918,7 +2105,7 @@ def run_full_cycle(fixture):
             return {"workers": list(fixture["workers"].values())}
         if path == "/repositories":
             return {"repositories": [{"id": "repo-id",
-                                      "remote_identity": "github.com/timafen/factory"}]}
+                                      "remote_identity": "github.com/acme/repo"}]}
         if path == "/workflows":
             return {"workflows": [{"id": stage, "enabled": True,
                 "current_revision": {"id": data["revision_id"], "title": stage}}
@@ -2222,6 +2409,16 @@ else:
         with open(self.merges_path, encoding="utf-8") as stream:
             merged = [json.loads(line)["task_id"] for line in stream if line.strip()]
         self.assertEqual(merged, [verify["id"]])
+        state = pilot.load(self.state_path, {})
+        target_key, adapter = pilot._delivery_target("github.com/acme/repo")
+        self.assertEqual(adapter, "external-merge")
+        delivery = state[pilot.DELIVERY_STATE_KEY]["targets"][target_key]
+        generation = delivery["generations"][delivery["current_generation"]]
+        self.assertEqual(generation["phase"], "completed")
+        self.assertEqual(set(generation["completed_waits"]), {verify["id"]})
+        self.assertEqual(
+            state[pilot.DELIVERY_STATE_KEY]["outbox"][generation["id"] + ":done"]["status"],
+            "sent")
 
     def test_review_and_verify_discovery_survives_real_process_restart(self):
         for kind in ("review_return", "verify_return"):
@@ -2297,6 +2494,91 @@ else:
         self.assertEqual(pilot.stage_attempts(tasks, "Triage", other), 1)
         self.assertIs(
             pilot.live_or_done_at(tasks, other, 1), other)
+
+    def test_archived_attempt_does_not_spend_current_retry_limit(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        receipt = {
+            "task_id": old["id"], "closed": "2026-08-11T20:02:00Z",
+            "closed_reason": "Попытку заменила более новая попытка этой работы.",
+        }
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину", "archived_attempts": [receipt],
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 1)
+        self.assertEqual(
+            pilot.load(self.works_path, {})[self.root["id"]]["archived_attempts"],
+            [receipt])
+
+    def test_merge_rounds_include_archived_attempts_of_current_generation_only(self):
+        archived = dict(
+            self.correction("review_return"), id="archived-implement",
+            state="succeeded")
+        current = dict(
+            self.correction("verify_return"), id="current-implement",
+            state="succeeded")
+        verify = {
+            "id": "current-verify", "work_id": self.root["id"],
+            "title": "[auto] [5/5 Verify] Исправить корзину",
+            "state": "succeeded", "created_at": "2026-08-11T20:03:00Z",
+        }
+        previous_generation = [dict(
+            archived, id=f"previous-{number}", work_id="previous-root")
+            for number in range(3)
+        ]
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину",
+            "archived_attempts": [{"task_id": archived["id"]}],
+        }})
+
+        self.assertEqual(
+            pilot._merge_rounds(
+                previous_generation + [archived, current, verify], verify),
+            2)
+
+    def test_unarchived_terminal_attempt_still_spends_retry_limit(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину",
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 2)
+
+    def test_archive_isolated_between_identically_titled_work_ids(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        pilot.save(self.works_path, {"other-work": {
+            "base_title": "Исправить корзину",
+            "archived_attempts": [{"task_id": old["id"]}],
+        }})
+
+        self.assertEqual(
+            pilot.stage_attempts([old, current], "Implement + Test", current), 2)
+
+    def test_missing_or_malformed_work_archive_keeps_attempt_count(self):
+        old = dict(
+            self.correction("review_return"), id="old-attempt", state="failed")
+        current = dict(
+            self.correction("verify_return"), id="current-attempt", state="running")
+        tasks = [old, current]
+
+        self.assertEqual(
+            pilot.stage_attempts(tasks, "Implement + Test", current), 2)
+        pilot.save(self.works_path, {self.root["id"]: {
+            "base_title": "Исправить корзину", "archived_attempts": 42,
+        }})
+        self.assertEqual(
+            pilot.stage_attempts(tasks, "Implement + Test", current), 2)
 
     @mock.patch.object(pilot, "load_questions", return_value=[{
         "task_id": "waiting-work", "status": "open",
@@ -2518,6 +2800,60 @@ class PipelineWatchTests(unittest.TestCase):
         self.assertNotEqual(rec.get("why"), "nudge_failed")
         self.assertEqual(self.notifications, [])
 
+    def test_full_capacity_defers_without_requesting_each_stalled_work(self):
+        self.conf["max_parallel_works"] = 2
+        self.conf["_active_work_tasks"] = [
+            {
+                "id": "active-one", "work_id": "active-one",
+                "title": "[auto] [2/3 Implement] Первая занятая работа",
+                "state": "running",
+            },
+            {
+                "id": "active-two", "work_id": "active-two",
+                "title": "[auto] [2/3 Implement] Вторая занятая работа",
+                "state": "running",
+            },
+        ]
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": 0,
+            }
+        }
+
+        self.watch()
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Встроенный патруль"]["since"], self.now)
+        self.assertEqual(self.memory["Встроенный патруль"]["nudges"], 0)
+        self.assertEqual(self.notifications, [])
+
+    def test_full_capacity_does_not_scan_task_history(self):
+        self.conf["max_parallel_works"] = 1
+        self.conf["_active_work_tasks"] = [{
+            "id": "active", "work_id": "active",
+            "title": "[auto] [2/3 Implement] Busy work", "state": "running",
+        }]
+        self.memory = {
+            "Waiting work": {"since": self.now - pilot.STALL_WAIT, "nudges": 0}
+        }
+        tasks = [self.task()]
+        tasks.extend({
+            "id": f"history-{index}", "work_id": f"history-{index}",
+            "title": f"[auto] [1/3 Triage] Historical work {index}",
+            "state": "succeeded",
+        } for index in range(500))
+
+        with mock.patch.object(
+            pilot, "work_lifecycle_block",
+            side_effect=AssertionError("full-capacity watch scanned task history"),
+        ):
+            self.watch(tasks)
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.memory["Waiting work"]["since"], self.now)
+        self.assertEqual(self.memory["Waiting work"]["nudges"], 0)
+
     def test_records_for_vanished_works_are_purged(self):
         self.memory = {
             "Призрак давно закрытой работы": {"since": 1, "nudges": 2, "why": "give_up"}
@@ -2651,7 +2987,7 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
             "generation": "generation-1",
         }
         delivery = {
-            "branch": "factory/real-clean", "head": "f" * 40,
+            "branch": "factory/real-clean", "head": "e" * 40,
             "selected_at": "2026-08-11T10:01:00Z",
             "generation": "generation-1",
         }
@@ -2669,6 +3005,35 @@ class CanonicalImplementationBranchTests(unittest.TestCase):
                 "BRANCH: factory/real", "", "github.com/timafen/factory")
 
         self.assertEqual(artifact["branch"], "factory/real")
+        self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
+
+    def test_refreshed_head_from_same_implementation_keeps_delivery_pin(self):
+        original_head = "a" * 40
+        refreshed_head = "b" * 40
+        delivery = {
+            "branch": "factory/real", "head": refreshed_head,
+            "selected_at": "2026-08-11T10:01:00Z",
+            "generation": "generation-1",
+        }
+        pilot.save(self.works_path, {"Настоящая работа": {
+            "run_generation": "generation-1",
+            "implementation_artifact": {
+                "branch": "factory/real", "head": original_head,
+                "task_id": "implement-task",
+                "recorded_at": "2026-08-11T10:00:00Z",
+                "generation": "generation-1",
+            },
+            "delivery_artifact": delivery,
+        }})
+
+        with mock.patch.object(pilot, "gh_json", side_effect=self.github(
+                branch="factory/real", head=refreshed_head)):
+            artifact = pilot.record_implementation_artifact(
+                "Настоящая работа", "implement-task",
+                "[auto] [3/5 Implement + Test] Настоящая работа",
+                "BRANCH: factory/real", "", "github.com/timafen/factory")
+
+        self.assertEqual(artifact["head"], refreshed_head)
         self.assertEqual(pilot.delivery_artifact("Настоящая работа"), delivery)
 
     def test_new_implementation_invalidates_delivery_branch(self):
@@ -3411,6 +3776,24 @@ class MergeConflictRecoveryTests(unittest.TestCase):
             "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
             "link": "",
         }
+        self.conf = {
+            "stages": [{"workflow": name} for name in
+                       ("Triage", "Specification", "Implement + Test", "Review", "Verify")],
+            "timeout_seconds": 7200,
+        }
+        self.workflows = {
+            "Implement + Test": {"enabled": True, "revision_id": "implement-revision"},
+        }
+        self.workers = {"worker": {"id": "worker-id"}}
+        self.parent = {
+            "id": "verify-1", "title": "[auto] [5/5 Verify] Resolve once",
+            "state": "succeeded", "repository_id": "repo-id", "work_id": "work-1",
+        }
+
+    def conflict_state(self):
+        intent = dict(self.intent)
+        intent.update({"phase": "conflict", "merge_error": "merge conflict details"})
+        return {"merge_intents": {"verify-1": intent}}
 
     def test_content_conflict_is_journaled_and_not_retried_each_cycle(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}
@@ -3478,42 +3861,122 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         deploy.assert_not_called()
 
     def test_conflict_returns_same_work_to_implement_once(self):
-        intent = dict(self.intent)
-        intent.update({"phase": "conflict", "merge_error": "merge conflict"})
-        state = {"merge_intents": {"verify-1": intent}}
-        parent = {
-            "id": "verify-1", "title": "[auto] [5/5 Verify] Resolve once",
-            "state": "succeeded", "repository_id": "repo-id", "work_id": "work-1",
-        }
-        conf = {
-            "stages": [{"workflow": name} for name in
-                       ("Triage", "Specification", "Implement + Test", "Review", "Verify")],
-            "timeout_seconds": 7200,
-        }
-        workflows = {
-            "Implement + Test": {"enabled": True, "revision_id": "implement-revision"},
-        }
-        workers = {"worker": {"id": "worker-id"}}
+        state = self.conflict_state()
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                 mock.patch.object(pilot, "stage_worker", return_value="worker"), \
                 mock.patch.object(
                     pilot, "create_child_task",
                     return_value={"task": {"id": "repair-1"}}) as create:
             self.assertEqual(pilot.resume_merge_conflicts(
-                conf, state, [parent], workflows, workers), 1)
+                self.conf, state, [self.parent], self.workflows, self.workers), 1)
             self.assertEqual(pilot.resume_merge_conflicts(
-                conf, state, [parent], workflows, workers), 0)
+                self.conf, state, [self.parent], self.workflows, self.workers), 0)
 
         create.assert_called_once()
         body, source, passed_conf, correction_kind = create.call_args.args
         self.assertEqual(body["title"],
                          "[auto] [3/5 Implement + Test] Resolve once")
         self.assertIn("Branch: factory/topic", body["context"])
-        self.assertEqual(source, parent)
-        self.assertIs(passed_conf, conf)
+        self.assertIn("Previous verified head: " + "a" * 40, body["context"])
+        self.assertIn("Fetch origin/main", body["context"])
+        self.assertIn("rebase or merge", body["context"])
+        self.assertIn("full required test set", body["context"])
+        self.assertIn("push the updated branch", body["context"])
+        self.assertIn("merge conflict details", body["context"])
+        self.assertEqual(body["request_key"],
+                         "merge-conflict-return:verify-1:" + "a" * 40)
+        self.assertEqual(body["repository_id"], "repo-id")
+        self.assertEqual(body["worker_id"], "worker-id")
+        self.assertEqual(body["workflow_revision_id"], "implement-revision")
+        self.assertEqual(source, self.parent)
+        self.assertIs(passed_conf, self.conf)
         self.assertEqual(correction_kind, "merge_conflict_return")
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "repairing")
         self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"], "repair-1")
+
+    def test_restart_links_existing_correction_without_duplicate(self):
+        state = self.conflict_state()
+        correction = {
+            "id": "repair-existing", "parent_task_id": "verify-1",
+            "correction_kind": "merge_conflict_return",
+        }
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "create_child_task") as create, \
+                mock.patch.object(pilot, "api") as api_call:
+            created = pilot.resume_merge_conflicts(
+                self.conf, state, [correction], self.workflows, self.workers)
+
+        self.assertEqual(created, 0)
+        create.assert_not_called()
+        api_call.assert_not_called()
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "repairing")
+        self.assertEqual(state["merge_intents"]["verify-1"]["repair_task_id"],
+                         "repair-existing")
+
+    def test_missing_parent_is_loaded_from_detail_api(self):
+        state = self.conflict_state()
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(
+                    pilot, "api", return_value={"task": dict(self.parent)}) as api_call, \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-detail"}}) as create:
+            created = pilot.resume_merge_conflicts(
+                self.conf, state, [], self.workflows, self.workers)
+
+        self.assertEqual(created, 1)
+        api_call.assert_called_once_with("/tasks/verify-1")
+        self.assertEqual(create.call_args.args[1]["work_id"], "work-1")
+
+    def test_unavailable_routes_and_create_error_keep_conflict_for_retry(self):
+        cases = (
+            ("workflow", {"Implement + Test": {"enabled": False,
+                                                 "revision_id": "implement-revision"}},
+             [self.parent], self.workers, None),
+            ("repository", self.workflows,
+             [dict(self.parent, repository_id="")], self.workers, None),
+            ("branch", self.workflows, [self.parent], self.workers, ""),
+            ("worker", self.workflows, [self.parent], {}, None),
+            ("api", self.workflows, [self.parent], self.workers, None),
+        )
+        for name, workflows, tasks, workers, branch in cases:
+            with self.subTest(name=name):
+                state = self.conflict_state()
+                if branch is not None:
+                    state["merge_intents"]["verify-1"]["branch"] = branch
+                error = (urllib.error.URLError("control plane unavailable")
+                         if name == "api" else AssertionError("must not create"))
+                with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                        mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                        mock.patch.object(pilot, "create_child_task", side_effect=error):
+                    created = pilot.resume_merge_conflicts(
+                        self.conf, state, tasks, workflows, workers)
+                self.assertEqual(created, 0)
+                self.assertEqual(state["merge_intents"]["verify-1"]["phase"],
+                                 "conflict")
+
+    def test_only_new_verify_intent_can_merge_after_repair(self):
+        state = {"merge_intents": {
+            "verify-old": dict(self.intent, phase="repairing",
+                               repair_task_id="repair-1"),
+            "verify-new": dict(self.intent, phase="intent", commit_sha="b" * 40),
+        }}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "b" * 40}}
+            if "/pulls?" in args[-1]:
+                return []
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge", return_value=(False, "pending")) as merge:
+            pilot.recover_merge_intents({}, state)
+
+        merge.assert_called_once_with(
+            "github.com/acme/repo", "factory/topic", "Resolve once", "b" * 40)
 
 
 class PipelineWatchMergeTests(unittest.TestCase):
@@ -3523,6 +3986,57 @@ class PipelineWatchMergeTests(unittest.TestCase):
                        {"workflow": "Review"}],
             "timeout_seconds": 900,
         }
+
+    def _recover_merge(self, intent, already_merged=False, merge_ok=True):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        state = {"merge_intents": {"verify-1": dict(intent)}}
+        with mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "STATE_PATH", os.path.join(temporary.name, "state.json")), \
+                mock.patch.object(pilot, "gh_json", return_value={"commit": {"sha": "a" * 40}}), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=already_merged), \
+                mock.patch.object(pilot, "gh_merge", return_value=(merge_ok, "merged")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge", return_value=None):
+            pilot.recover_merge_intents({}, state)
+        with open(journal, encoding="utf-8") as stream:
+            records = [json.loads(line) for line in stream]
+        return state, records, merge
+
+    def test_merge_journal_records_rounds_and_automatic_actor(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 3, "actor_id": None,
+        })
+
+        merge.assert_called_once()
+        self.assertEqual(records, [{"task_id": "verify-1", "base": "Круги",
+            "at": records[0]["at"], "actor": "automatic", "actor_id": None,
+            "rounds": 3}])
+
+    def test_owner_merge_records_owner_and_preserves_rounds(self):
+        _, records, merge = self._recover_merge({
+            "phase": "intent", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 2, "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual((records[0]["actor"], records[0]["actor_id"], records[0]["rounds"]),
+                         ("owner", None, 2))
+
+    def test_merge_recovery_preserves_actor_and_rounds(self):
+        state, records, merge = self._recover_merge({
+            "phase": "merging", "base": "Круги", "branch": "factory/rounds",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "rounds": 4, "actor": "automatic", "actor_id": None,
+        }, already_merged=True)
+
+        merge.assert_not_called()
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["actor"], records[0]["rounds"]), ("automatic", 4))
+        self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "journaled")
 
     def test_verify_pass_is_processed_once(self):
         """A restart after a successful Verify must not merge it a second time."""
@@ -3770,6 +4284,192 @@ class PlanCardCleanupTest(unittest.TestCase):
         verdict.assert_not_called()
 
 
+class StalePlanRevalidationTest(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.datetime(2026, 8, 14, 20, 0,
+                                     tzinfo=datetime.timezone.utc).timestamp()
+        self.idea = {
+            "id": "idea-stale", "state": "in_work", "task_id": "triage-old",
+            "title": "Проверить старую проблему", "created": "2026-08-13 10:00",
+            "updated": "2026-08-13 10:00",
+        }
+        self.tasks = [{
+            "id": "triage-old", "work_id": "triage-old",
+            "title": "[auto] [1/5 Triage] Проверить старую проблему",
+            "state": "succeeded", "created_at": "2026-08-13T15:00:00Z",
+        }]
+
+    def reconcile(self, ideas=None, questions=None):
+        saved = []
+        with mock.patch.object(pilot, "ideas_all",
+                               return_value=ideas or [self.idea]), \
+                mock.patch.object(pilot, "load_questions",
+                                  return_value=questions or []), \
+                mock.patch.object(pilot, "save",
+                                  side_effect=lambda path, value: saved.append((path, value))):
+            queued = pilot.reconcile_stale_plan_cards(self.tasks, now=self.now)
+        return queued, saved
+
+    def test_old_generation_returns_to_triage_with_new_generation(self):
+        queued, saved = self.reconcile()
+
+        self.assertEqual(queued, ["idea-stale"])
+        self.assertEqual(self.idea["state"], "planned")
+        self.assertEqual(self.idea["task_id"], "")
+        self.assertTrue(self.idea["run_generation"])
+        self.assertTrue(self.idea["revalidation"])
+        self.assertEqual(len(saved), 1)
+
+    def test_live_recent_or_question_blocked_generation_is_not_requeued(self):
+        cases = (
+            ({"state": "running"}, [], self.now),
+            ({"updated_at": "2026-08-14T19:30:00Z"}, [], self.now),
+            ({}, [{"status": "open", "task_id": "triage-old"}], self.now),
+        )
+        for task_update, questions, now in cases:
+            with self.subTest(task_update=task_update, questions=questions):
+                self.idea["state"] = "in_work"
+                self.idea["task_id"] = "triage-old"
+                self.tasks[0].pop("updated_at", None)
+                self.tasks[0].pop("completed_at", None)
+                self.tasks[0].update({"state": "succeeded"})
+                self.tasks[0].update(task_update)
+                queued, saved = self.reconcile(questions=questions)
+                self.assertEqual(queued, [])
+                self.assertEqual(saved, [])
+
+    def test_revalidation_queue_is_bounded(self):
+        ideas = []
+        tasks = []
+        for index in range(15):
+            task_id = f"old-{index}"
+            ideas.append({
+                "id": f"idea-{index}", "state": "in_work", "task_id": task_id,
+                "title": f"Старая проблема {index}",
+                "created": "2026-08-13 10:00", "updated": "2026-08-13 10:00",
+            })
+            tasks.append({
+                "id": task_id, "work_id": task_id,
+                "title": f"[auto] [1/5 Triage] Старая проблема {index}",
+                "state": "succeeded", "created_at": "2026-08-13T15:00:00Z",
+            })
+        self.tasks = tasks
+        queued, _ = self.reconcile(ideas=ideas)
+
+        self.assertEqual(len(queued), pilot.PLAN_REVALIDATION_QUEUE)
+        self.assertEqual(sum(i.get("state") == "planned" for i in ideas),
+                         pilot.PLAN_REVALIDATION_QUEUE)
+
+
+class LegacyPlanCardCleanupTest(unittest.TestCase):
+    cutoff = "2026-08-10T12:00:00Z"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = os.path.join(self.temporary.name, "ideas.json")
+        self.idea = {"id": "idea-1", "title": "Старая работа", "state": "in_work",
+                     "task_id": "root", "reason": "", "kept": 7}
+        pilot.save(self.path, [dict(self.idea)])
+
+    def task(self, task_id="root", state="succeeded", created="2026-08-10T09:00:00Z",
+             stage="5/5 Verify", work_id="work-1", title="Старая работа"):
+        return {"id": task_id, "title": f"[auto] [{stage}] {title}", "state": state,
+                "created_at": created, "repository_id": "repo-1", "work_id": work_id}
+
+    def bytes_on_disk(self):
+        with open(self.path, "rb") as stream:
+            return stream.read()
+
+    def run_cleanup(self, tasks, apply=False, detail_time="2026-08-10T11:00:00Z",
+                    api_error=None):
+        def fake_api(path, _body=None):
+            if api_error:
+                raise api_error
+            return {"execution": {"updated_at": detail_time}}
+        with mock.patch.object(pilot, "IDEAS_PATH", self.path), \
+                mock.patch.object(pilot, "all_tasks", return_value=tasks), \
+                mock.patch.object(pilot, "api", side_effect=fake_api), \
+                mock.patch.object(pilot, "final_ok", return_value=True), \
+                mock.patch.object(pilot, "log"):
+            return pilot.cleanup_legacy_plan_cards(
+                self.cutoff, apply=apply,
+                now_fn=lambda: datetime.datetime(2026, 8, 12, tzinfo=datetime.timezone.utc))
+
+    def test_dry_run_finds_old_final_failure_and_missing_link_without_writing(self):
+        cases = (
+            ([self.task()], "root"),
+            ([self.task(state="failed", stage="3/5 Implement + Test")], "root"),
+            ([], "deleted"),
+        )
+        for tasks, task_id in cases:
+            with self.subTest(task_id=task_id, state=tasks[0]["state"] if tasks else "missing"):
+                data = dict(self.idea, task_id=task_id)
+                pilot.save(self.path, [data])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks), 1)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_apply_preserves_record_and_marks_exact_reason_idempotently(self):
+        self.assertEqual(self.run_cleanup([self.task()], apply=True), 1)
+        record = pilot.load(self.path, [])[0]
+        self.assertEqual(record["state"], "done")
+        self.assertEqual(record["reason"], "закрыто уборкой")
+        self.assertEqual(record["cleanup_reason"], "terminal_before_cutoff")
+        self.assertEqual(record["cleanup_at"], "2026-08-12T00:00:00Z")
+        self.assertEqual((record["task_id"], record["kept"]), ("root", 7))
+        after = self.bytes_on_disk()
+        self.assertEqual(self.run_cleanup([self.task()], apply=True), 0)
+        self.assertEqual(self.bytes_on_disk(), after)
+
+        pilot.save(self.path, [dict(self.idea, task_id="deleted")])
+        self.assertEqual(self.run_cleanup([], apply=True), 1)
+        missing = pilot.load(self.path, [])[0]
+        self.assertEqual(missing["cleanup_reason"], "linked_task_missing")
+        self.assertEqual(missing["task_id"], "deleted")
+
+    def test_protective_cases_stay_byte_identical(self):
+        cases = (
+            ([self.task(state="running")], {}, "active"),
+            ([self.task(state="cancelled")], {}, "cancelled"),
+            ([self.task(stage="3/5 Implement + Test")], {}, "intermediate"),
+            ([self.task()], {"detail_time": self.cutoff}, "at_cutoff"),
+            ([self.task(), self.task("new", "running", "2026-08-10T10:00:00Z")], {}, "new_active"),
+        )
+        for tasks, kwargs, label in cases:
+            with self.subTest(label=label):
+                pilot.save(self.path, [dict(self.idea)])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks, apply=True, **kwargs), 0)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_empty_link_closed_states_and_ambiguous_legacy_stay_open(self):
+        for state, task_id, tasks in (
+                ("in_work", "", []), ("new", "root", []), ("done", "root", []),
+                ("rejected", "root", []),
+                ("in_work", "root", [self.task(work_id="") | {"repository_id": ""}])):
+            with self.subTest(state=state, task_id=task_id):
+                pilot.save(self.path, [dict(self.idea, state=state, task_id=task_id)])
+                before = self.bytes_on_disk()
+                self.assertEqual(self.run_cleanup(tasks, apply=True), 0)
+                self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_invalid_cutoff_or_detail_error_never_writes(self):
+        before = self.bytes_on_disk()
+        with mock.patch.object(pilot, "IDEAS_PATH", self.path):
+            with self.assertRaises(ValueError):
+                pilot.cleanup_legacy_plan_cards("not-a-date", apply=True)
+        self.assertEqual(self.bytes_on_disk(), before)
+        with self.assertRaises(RuntimeError):
+            self.run_cleanup([self.task()], apply=True, api_error=RuntimeError("detail failed"))
+        self.assertEqual(self.bytes_on_disk(), before)
+
+    def test_all_tasks_rejects_unfinished_pagination(self):
+        with mock.patch.object(pilot, "api", return_value={"tasks": [], "next_cursor": "more"}):
+            with self.assertRaises(RuntimeError):
+                pilot.all_tasks()
+
+
 class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -3894,6 +4594,109 @@ class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
 
         self.assertEqual(conf["stopped_pipelines"], [])
         self.assertEqual(self.disk_config()["stopped_pipelines"], [])
+
+
+class ProviderLimitDetectionTest(unittest.TestCase):
+    def setUp(self):
+        self.conf = {"name": "test"}
+        self.workers = {"worker-claude": {"name": "claude-1"}}
+        self.details = {}
+        self.note_limit_calls = []
+
+        def fake_api(path):
+            task_id = path.removeprefix("/tasks/")
+            return self.details[task_id]
+
+        self.api_patch = mock.patch.object(pilot, "api", side_effect=fake_api)
+        self.note_patch = mock.patch.object(
+            pilot, "note_limit",
+            side_effect=lambda *args: self.note_limit_calls.append(args),
+        )
+        self.provider_limits_patch = mock.patch.object(pilot, "load")
+        self.api_mock = self.api_patch.start()
+        self.note_patch.start()
+        self.provider_limits_mock = self.provider_limits_patch.start()
+        self.addCleanup(self.api_patch.stop)
+        self.addCleanup(self.note_patch.stop)
+        self.addCleanup(self.provider_limits_patch.stop)
+
+    @staticmethod
+    def task(task_id, state):
+        return {"id": task_id, "state": state, "worker_id": "worker-claude"}
+
+    def test_succeeded_report_never_blocks_regardless_of_limit_snapshot(self):
+        markers = "rate limit; quota exceeded; usage limit reached"
+        self.details["patrol"] = {"attempts": [{"error": "", "result": markers}]}
+
+        for snapshot in ({}, {"claude": {"used_percent": 99, "at": time.time()}}):
+            with self.subTest(snapshot=snapshot):
+                self.provider_limits_mock.return_value = snapshot
+                pilot.detect_limits(
+                    self.conf, [self.task("patrol", "succeeded")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_not_called()
+        self.provider_limits_mock.assert_not_called()
+
+    def test_result_only_markers_do_not_block_failed_or_cancelled_task(self):
+        report = "Проверены rate limit и quota exceeded; это только отчёт."
+        self.details["failed"] = {"attempts": [{"error": "", "result": report}]}
+        self.details["cancelled"] = {"attempts": [{"error": "", "result": report}]}
+
+        pilot.detect_limits(
+            self.conf,
+            [self.task("failed", "failed"), self.task("cancelled", "cancelled")],
+            self.workers,
+        )
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_called_once_with("/tasks/failed")
+
+    def test_successful_retry_does_not_reuse_previous_limit_error(self):
+        self.details["retried"] = {"attempts": [
+            {"state": "failed", "error": "rate limit reached"},
+            {"state": "succeeded", "error": "", "result": "Готово"},
+        ]}
+
+        pilot.detect_limits(
+            self.conf, [self.task("retried", "succeeded")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+        self.api_mock.assert_not_called()
+
+    def test_only_latest_attempt_error_is_considered(self):
+        self.details["failed"] = {"attempts": [
+            {"state": "failed", "error": "rate limit reached"},
+            {"state": "failed", "error": "обычная ошибка"},
+        ]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
+
+    def test_latest_failed_error_blocks_provider_with_reset_time(self):
+        error = "usage limit reached; resets at 2026-08-16T07:30:00Z"
+        self.details["failed"] = {"attempts": [
+            {"state": "failed", "error": "обычная ошибка"},
+            {"state": "failed", "error": error, "result": "rate limit в отчёте"},
+        ]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(
+            self.note_limit_calls,
+            [(self.conf, "claude", error, "2026-08-16T07:30:00Z")],
+        )
+
+    def test_infrastructure_error_is_not_a_subscription_limit(self):
+        self.details["failed"] = {"attempts": [{
+            "state": "failed",
+            "error": "rate limit reached after 401 Unauthorized",
+        }]}
+
+        pilot.detect_limits(self.conf, [self.task("failed", "failed")], self.workers)
+
+        self.assertEqual(self.note_limit_calls, [])
 
 
 class BrainFallbackTest(unittest.TestCase):
@@ -4952,6 +5755,23 @@ class AnswerEscalationTests(unittest.TestCase):
         self.assertEqual(order, ["answer", "plan"])
         self.assertIs(conf["_active_work_tasks"], fresh_tasks)
 
+    def test_terminal_backlog_reserves_open_slot_before_new_plan_work(self):
+        conf = {"max_parallel_works": 4}
+        fresh_tasks = [{
+            "id": "running", "title": "[auto] [1/5 Triage] Existing",
+            "state": "running",
+        }]
+
+        with mock.patch.object(
+                pilot, "api", return_value={"tasks": fresh_tasks}), \
+                mock.patch.object(pilot, "handle_answers", return_value=0), \
+                mock.patch.object(pilot, "replenish_plan") as replenish:
+            pilot.refill_open_work_slots(
+                conf, {}, {}, admit_new_plan=False)
+
+        replenish.assert_not_called()
+        self.assertIs(conf["_active_work_tasks"], fresh_tasks)
+
 
 class OrchestratorWaitActionTests(unittest.TestCase):
     def setUp(self):
@@ -5210,7 +6030,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         noops = (
             "collect_automation_findings", "cleanup_completed_plan_cards",
-            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "write_dashboard", "dashboard_slow", "provider_limits_tick", "detect_limits",
             "record_new_works", "budget_guard", "handle_epics",
             "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
             "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
@@ -5323,6 +6143,133 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(len(tasks), 101)
         api.assert_called_once_with("/tasks/old-terminal")
+
+    def test_normal_cycle_advances_terminal_task_beyond_first_page(self):
+        conf = {
+            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "poll_seconds": 30,
+        }
+        state = {"processed": []}
+        recent = [{
+            "id": f"recent-{number}", "title": f"service task {number}",
+            "state": "succeeded", "created_at": "2026-08-10T11:00:00Z",
+        } for number in range(100)]
+        hidden = {
+            "id": "hidden-triage",
+            "title": "[auto] [1/2 Triage] Hidden continuation",
+            "state": "succeeded", "created_at": "2026-08-10T09:00:00Z",
+            "repository_id": "repo-id",
+        }
+        created = []
+
+        def fake_api(path, body=None):
+            if path == "/tasks?limit=100":
+                return {"tasks": list(recent)}
+            if path == "/tasks/hidden-triage":
+                return {
+                    "task": {"repository_id": "repo-id"},
+                    "workflow": {"title": "Triage"},
+                    "context": "",
+                    "attempts": [{"result": "READY"}],
+                }
+            if path == "/workers":
+                return {"workers": [{
+                    "id": "worker-id", "name": "worker", "online": True,
+                    "health": "healthy", "capacity": 1, "active_count": 0,
+                }]}
+            if path == "/repositories":
+                return {"repositories": [{
+                    "id": "repo-id", "remote_identity": "github.com/acme/repo",
+                }]}
+            if path == "/workflows":
+                return {"workflows": [{
+                    "id": "spec", "enabled": True,
+                    "current_revision": {
+                        "id": "rev-spec", "title": "Specification",
+                    },
+                }]}
+            raise AssertionError(path)
+
+        noops = (
+            "collect_automation_findings",
+            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "record_new_works", "budget_guard", "handle_epics",
+            "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
+            "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
+            "handle_answers", "advance_epics", "pipeline_watch",
+            "autostart_plan", "area_extend",
+            "collect_ideas",
+        )
+        plan_cleanup_histories = []
+        archive_cleanup_histories = []
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
+            stack.enter_context(mock.patch.object(
+                pilot, "all_tasks", return_value=recent + [hidden]))
+            stack.enter_context(mock.patch.object(
+                pilot, "cleanup_completed_plan_cards",
+                side_effect=lambda tasks, _stages:
+                plan_cleanup_histories.append(list(tasks))))
+            stack.enter_context(mock.patch.object(
+                pilot, "cleanup_work_archive",
+                side_effect=lambda _conf, tasks:
+                archive_cleanup_histories.append(list(tasks))))
+            stack.enter_context(mock.patch.object(
+                pilot, "codex_usage_snapshot",
+                side_effect=lambda day_start, _week_start: {day_start: {}}))
+            stack.enter_context(mock.patch.object(
+                pilot, "day_budget_blocks", return_value=False))
+            stack.enter_context(mock.patch.object(
+                pilot, "host_block", return_value={"state": "ok"}))
+            stack.enter_context(mock.patch.object(
+                pilot, "stage_worker", return_value="worker"))
+            stack.enter_context(mock.patch.object(
+                pilot, "area_busy", return_value=""))
+            stack.enter_context(mock.patch.object(
+                pilot, "work_lifecycle_block", return_value=""))
+            stack.enter_context(mock.patch.object(pilot, "decide", return_value={
+                "action": "advance", "next_complexity": "medium", "handoff": "",
+            }))
+            stack.enter_context(mock.patch.object(
+                pilot, "create_task", side_effect=lambda body, _conf:
+                created.append(body) or {"task": {
+                    "id": "spec-created", "title": body["title"],
+                    "state": "created", "repository_id": "repo-id",
+                }}))
+            for name in noops:
+                stack.enter_context(mock.patch.object(pilot, name))
+
+            pilot.cycle(conf, state)
+
+        self.assertEqual(len(plan_cleanup_histories), 1)
+        self.assertEqual(len(archive_cleanup_histories), 1)
+        self.assertIn(hidden, plan_cleanup_histories[0])
+        self.assertIn(hidden, archive_cleanup_histories[0])
+        self.assertEqual([body["title"] for body in created], [
+            "[auto] [2/2 Specification] Hidden continuation",
+        ])
+        self.assertIn("hidden-triage", state["processed"])
+
+    def test_terminal_handoff_history_keeps_second_page_without_replaying_archive(self):
+        tasks = [{"id": f"task-{number}"} for number in range(350)]
+
+        bounded = pilot.recent_terminal_handoff_history(
+            tasks, pinned_ids={"task-300"})
+
+        self.assertEqual(len(bounded), 201)
+        self.assertEqual(bounded[100]["id"], "task-100")
+        self.assertEqual(bounded[199]["id"], "task-199")
+        self.assertEqual(bounded[-1]["id"], "task-300")
+        self.assertNotIn("task-200", {task["id"] for task in bounded})
+
+    def test_retry_terminal_task_keeps_deferred_handoff_pinned(self):
+        state = {"processed": ["deferred"]}
+
+        pilot.retry_terminal_task({}, state, "deferred")
+        pilot.retry_terminal_task({}, state, "deferred")
+
+        self.assertEqual(state["processed"], [])
+        self.assertEqual(state["terminal_retry_ids"], ["deferred"])
 
     def test_restart_recovery_skips_unavailable_ids_individually(self):
         conf = {
@@ -5543,6 +6490,32 @@ class AdaptivePollingTests(unittest.TestCase):
                 "epic_starts_processed", "poll_terminal_seen"):
             self.assertEqual(state[key], ids)
 
+    def test_loop_restores_missing_required_cursors_without_losing_state(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"delivery_state_v2": {"targets": {"factory": {}}}}
+        observed = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(_conf, cycle_state):
+            observed.append(cycle_state)
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertIs(observed[0], state)
+        self.assertEqual(state["delivery_state_v2"], {"targets": {"factory": {}}})
+        for key in (
+                "processed", "automation_results_processed", "epics_processed",
+                "epic_starts_processed", "poll_terminal_seen"):
+            self.assertEqual(state[key], [])
+
     def test_fully_idle_pipeline_keeps_thirty_second_interval(self):
         self.assertEqual(pilot.next_poll_hint({"poll_seconds": 30}, []), {
             "seconds": 30, "reason": "idle",
@@ -5676,7 +6649,7 @@ class AdaptivePollingTests(unittest.TestCase):
 
         noops = (
             "collect_automation_findings", "cleanup_completed_plan_cards",
-            "write_dashboard", "provider_limits_tick", "detect_limits",
+            "write_dashboard", "dashboard_slow", "provider_limits_tick", "detect_limits",
             "record_new_works", "budget_guard", "money_guard", "handle_epics",
             "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
             "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
@@ -5867,7 +6840,7 @@ class AdaptivePollingTests(unittest.TestCase):
             "id": f"implement-{number}",
             "title": "[auto] [2/3 Implement + Test] Одна работа",
             "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
-            "repository_id": "repo-id",
+            "repository_id": "repo-id", "work_id": "one-work",
         } for number in range(2)]
         created = []
 
@@ -6020,16 +6993,15 @@ class AdaptivePollingTests(unittest.TestCase):
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
-            handoff_hints = [pilot.cycle(conf, state) for _ in range(4)]
+            handoff_hint = pilot.cycle(conf, state)
             settled_hint = pilot.cycle(conf, state)
 
-        self.assertEqual(handoff_hints,
-                         [{"seconds": 2, "reason": "handoff"}] * 4)
+        self.assertEqual(handoff_hint, {"seconds": 2, "reason": "handoff"})
         self.assertEqual(settled_hint, {"seconds": 10, "reason": "active"})
         self.assertEqual(len(created), 4)
         self.assertEqual(len({task["title"] for task in created}), 4)
 
-    def test_terminal_backlog_is_limited_to_one_decision_per_cycle(self):
+    def test_terminal_backlog_is_bounded_to_four_decisions_per_cycle(self):
         conf = {
             "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
             "poll_seconds": 30,
@@ -6105,38 +7077,55 @@ class AdaptivePollingTests(unittest.TestCase):
             decide = stack.enter_context(mock.patch.object(pilot, "decide", return_value={
                 "action": "advance", "next_complexity": "medium", "handoff": "",
             }))
+            refill = stack.enter_context(mock.patch.object(
+                pilot, "refill_open_work_slots", return_value=0))
             for name in noops:
                 stack.enter_context(mock.patch.object(pilot, name))
 
             hint = pilot.cycle(conf, state)
 
         self.assertEqual(hint, {"seconds": 2, "reason": "handoff"})
-        self.assertEqual(decide.call_count, 1)
-        self.assertEqual(len(created), 1)
-        self.assertEqual(len(state["processed"]), 1)
+        self.assertEqual(decide.call_count, 4)
+        self.assertEqual(len(created), 4)
+        self.assertEqual(len(state["processed"]), 4)
+        refill.assert_called_once()
+        self.assertFalse(refill.call_args.kwargs["admit_new_plan"])
 
     def test_deferred_terminal_handoff_does_not_starve_next_terminal(self):
         conf = {
-            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "stages": [
+                {"workflow": "Triage"},
+                {"workflow": "Specification"},
+                {"workflow": "Implement + Test"},
+            ],
             "poll_seconds": 30,
         }
         state = {"processed": []}
-        tasks = [{
-            "id": f"done-{number}",
-            "title": f"[auto] [1/2 Triage] Work {number}",
-            "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
-            "repository_id": "repo-id",
-        } for number in range(2)]
+        tasks = [
+            {
+                "id": "triage-done",
+                "title": "[auto] [1/3 Triage] Earlier stage",
+                "state": "succeeded", "created_at": "2026-08-10T10:01:00Z",
+                "repository_id": "repo-id",
+            },
+            {
+                "id": "spec-done",
+                "title": "[auto] [2/3 Specification] Later stage",
+                "state": "succeeded", "created_at": "2026-08-10T10:00:00Z",
+                "repository_id": "repo-id",
+            },
+        ]
         details_read = []
 
         def fake_api(path, body=None):
             if path == "/tasks?limit=100":
                 return {"tasks": list(tasks)}
-            if path.startswith("/tasks/done-"):
+            if path in ("/tasks/triage-done", "/tasks/spec-done"):
                 details_read.append(path)
+                stage = "Specification" if path.endswith("spec-done") else "Triage"
                 return {
                     "task": {"repository_id": "repo-id"},
-                    "workflow": {"title": "Triage"},
+                    "workflow": {"title": stage},
                     "context": "",
                     "attempts": [{"result": "READY"}],
                 }
@@ -6150,10 +7139,20 @@ class AdaptivePollingTests(unittest.TestCase):
                     "id": "repo-id", "remote_identity": "github.com/acme/repo",
                 }]}
             if path == "/workflows":
-                return {"workflows": [{
-                    "id": "spec", "enabled": True,
-                    "current_revision": {"id": "rev-spec", "title": "Specification"},
-                }]}
+                return {"workflows": [
+                    {
+                        "id": "spec", "enabled": True,
+                        "current_revision": {
+                            "id": "rev-spec", "title": "Specification",
+                        },
+                    },
+                    {
+                        "id": "implement", "enabled": True,
+                        "current_revision": {
+                            "id": "rev-implement", "title": "Implement + Test",
+                        },
+                    },
+                ]}
             raise AssertionError(path)
 
         noops = (
@@ -6189,10 +7188,9 @@ class AdaptivePollingTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(pilot, name))
 
             pilot.cycle(conf, state)
-            pilot.cycle(conf, state)
 
-        self.assertEqual(details_read, ["/tasks/done-0", "/tasks/done-1"])
-        self.assertEqual(state["terminal_cursor"], "done-1")
+        self.assertEqual(details_read, ["/tasks/spec-done", "/tasks/triage-done"])
+        self.assertEqual(state["terminal_cursor"], "triage-done")
 
 
 class BudgetGuardTests(unittest.TestCase):
@@ -7273,18 +8271,27 @@ pilot.save(pilot.STATE_PATH, state)
     def test_outbox_and_notification_journals_are_immutable(self):
         state = {}
         notifications = os.path.join(self.temporary.name, "notifications.jsonl")
+        wait = self.wait()
+        wait["merge_receipt"].update({
+            "actor": "owner", "actor_id": None, "rounds": 3,
+        })
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
                 mock.patch.object(pilot, "mark_final"), \
                 mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
-            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, self.wait())
+            pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, wait)
             pilot.poll_delivery_state({}, state)
             restored = pilot.load(self.state_path, {})
             pilot.poll_delivery_state({}, restored)
         with open(self.receipts, encoding="utf-8") as stream:
-            self.assertEqual(len(stream.readlines()), 1)
+            receipts = [json.loads(line) for line in stream]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(
+            (receipts[0]["actor"], receipts[0]["actor_id"], receipts[0]["rounds"]),
+            ("owner", None, 3),
+        )
         with open(self.outbox, encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
         with open(notifications, encoding="utf-8") as stream:

@@ -12,6 +12,7 @@ SYSTEMCTL=${FACTORY_RELEASE_BROKER_SYSTEMCTL:-systemctl}
 GETENT=${FACTORY_RELEASE_BROKER_GETENT:-getent}
 GROUPADD=${FACTORY_RELEASE_BROKER_GROUPADD:-groupadd}
 BROKER_GROUP=${FACTORY_RELEASE_BROKER_GROUP:-factory-release}
+SYNC=${FACTORY_RELEASE_BROKER_SYNC:-sync}
 
 [ -x "$SOURCE_BINARY" ]
 [ -f "$SOURCE_UNIT" ]
@@ -46,9 +47,11 @@ else
   install -m 644 "$SOURCE_UNIT" "$unit_tmp"
 fi
 chmod 644 "$dropin_tmp"
+"$SYNC" -f "$binary_tmp" "$unit_tmp" "$dropin_tmp"
 mv -f -- "$binary_tmp" "$BINARY_TARGET"
 mv -f -- "$unit_tmp" "$UNIT_TARGET"
 mv -f -- "$dropin_tmp" "$PILOT_DROPIN_TARGET"
+"$SYNC" -f "$(dirname "$BINARY_TARGET")" "$(dirname "$UNIT_TARGET")" "$(dirname "$PILOT_DROPIN_TARGET")"
 # The real socket consumer is now safely configured; only then remove the old,
 # ineffective server override left by previous installations.
 if [ "$LEGACY_SERVER_DROPIN" != "$PILOT_DROPIN_TARGET" ]; then

@@ -144,10 +144,25 @@ func openStore(ctx context.Context, path string, existingOnly bool, hostMaxConcu
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(8)
+	// SQLite permits a single writer. Keeping the pool to one connection makes
+	// concurrent heartbeats wait in database/sql instead of competing for a
+	// write lock until their HTTP request expires.
+	db.SetMaxOpenConns(1)
 	// Attachments deliberately live outside the database directory: the Factory
 	// host owns their retention and workers receive these exact paths in context.
-	attachmentRoot := "/opt/factory-data/attachments"
+	// Production explicitly points FACTORY_DATA_HOME at /opt/factory-data. Local
+	// and CI runs must remain writable on non-Linux hosts instead of trying to
+	// create that production-only absolute path.
+	dataHome := strings.TrimSpace(os.Getenv("FACTORY_DATA_HOME"))
+	if dataHome == "" {
+		userHome, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("resolve attachment data home: %w", homeErr)
+		}
+		dataHome = filepath.Join(userHome, ".factory")
+	}
+	attachmentRoot := filepath.Join(dataHome, "attachments")
 	store := &Store{db: db, attachmentRoot: attachmentRoot, projectSecretRoot: "/etc/factory/projects", projectSecretGroupID: lookupProjectSecretGroupID, now: time.Now, sweepEvery: 5 * time.Second, hostMaxConcurrent: hostMaxConcurrent}
 	if err := os.MkdirAll(attachmentRoot, 0o700); err != nil {
 		db.Close()
