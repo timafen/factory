@@ -2,18 +2,23 @@
 
 ## HEAD
 
-Implementation commit: 8b189f33b8bf3d11fccb5d8e35424b32090b9a9b — внешний merge завершает исходное ожидание в том же перезапущенном Review/Verify-конвейере.
-- Status: Implemented; повторный Review уже дал APPROVE, ожидается Verify.
-- Branch: `factory/b59bd67b-e7c-d1816795-613`.
-- What changed: внешний репозиторий получает устойчивую merge-only generation;
-  подтверждённый merge завершает её без неподдерживаемого deploy-адаптера.
-- What changed: subprocess-регрессия проводит Review и Verify через настоящий
-  рестарт до одного merge, terminal verdict и отправленного owner-события.
-- Evidence: `CorrectionProvenanceStormTests` — PASS (11 tests);
-  `go test ./internal/controlplane -count=1` — PASS; `git diff --check` — PASS.
-- Next action: запустить Verify на этой ветке и при PASS передать на merge.
+Implementation commit: cc1529ee976ab0cafe4720f1e04455966ee37b32 — durable merge-intent принимает только сериализуемый ID поколения, а receipts разделяются по work_id.
+- Status: PASS — перенесено поверх свежего main.
+- Branch: `factory/3917a24c-b6d-31bdcadc-621`.
+- What changed: повторные корректировки с совпадающим заголовком остаются в одном
+  устойчивом конвейере; migration 027 не применяется без схемы 026.
+- Evidence: `go test ./...`, `go build ./...`, полный Pilot и 7 restart-storm
+  проверок — PASS.
+- Next action: повторно выполнить Verify для запушенного candidate.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Работа CARD-0086 перенесена на актуальный `origin/main`; уже вошедшие изменения
+Git исключил, а оставшиеся migration/provenance/merge-intent изменения сохранены.
+Целевые Go provenance-проверки и семь restart-storm тестов Pilot прошли; также
+прошли `go test ./...`, `go build ./...` и полный `pilot.test_pilot`.
 
 ### 2026-08-12 — Verify
 
@@ -95,11 +100,3 @@ outbox и их целевые тесты. Первый subprocess создаёт
 final verdict и merge, читая только JSON state/API-фикстуры. `python3 -m unittest
 pilot.test_pilot.CorrectionProvenanceStormTests` дал 7 OK; `go test ./internal/controlplane`
 и `python3 -m py_compile pilot/test_pilot.py` прошли.
-
-### 2026-08-14 — Implement
-
-После подтверждённого APPROVE работа перенесена на свежий `origin/main` без
-новой задачи или ветки. Устаревшие изменения опубликованной миграции 027 сняты;
-итоговая поставка содержит только external merge-only completion и process-level
-проверку единого Review/Verify-конвейера. Все 11 `CorrectionProvenanceStormTests`
-и пакет `internal/controlplane` прошли, Python-файлы компилируются, diff чист.
