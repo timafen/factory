@@ -537,9 +537,9 @@ run_parallel_test_gates() {
     print_test_gate_logs
     return 1
   fi
-  if ! start_test_gate "Go-проверки и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
-    "$TRUSTED_BASH" -c 'umask 077; cd "$1" && "$2" test ./... && "$3" "$4"' \
-    "$TRUSTED_BASH" "$source_dir" "$TRUSTED_GO" "$TRUSTED_BASH" "$trusted_gate_script"; then
+  if ! start_test_gate "Go-проверки, тесты пилота и сценарий выката" "$work/go-checks.log" "$work/go-checks.session" \
+    "$TRUSTED_BASH" -c 'umask 077; cd "$1" && "$2" test ./... && "$3" -m unittest pilot.test_pilot && "$4" "$5"' \
+    "$TRUSTED_BASH" "$source_dir" "$TRUSTED_GO" "$TRUSTED_PYTHON" "$TRUSTED_BASH" "$trusted_gate_script"; then
     stop_test_gates
     wait_for_test_gates
     trap - HUP INT TERM
@@ -656,7 +656,7 @@ step "ставлю зависимости интерфейса"
   || { fail "подготовка зависимостей изменила доверенный checkout"; cleanup; exit 4; }
 "$TRUSTED_CHMOD" -R a-w "$source_dir" \
   || { fail "не смог заморозить доверенный checkout"; cleanup; exit 4; }
-step "параллельно проверяю интерфейс, Go и сценарий выката"
+step "параллельно проверяю интерфейс, Go, пилота и сценарий выката"
 run_parallel_test_gates \
   || { fail "одна из обязательных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
 step "собираю интерфейс"

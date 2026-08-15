@@ -6,17 +6,21 @@ set -euo pipefail
 SRC=${1:?путь к исходникам Factory}
 FX_TARGET=${FACTORY_FX_BIN:-/usr/local/bin/fx}
 RELEASE_TARGET=${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}
+CGROUP_TARGET=${FACTORY_GATE_CGROUP_HELPER:-/usr/local/libexec/factory-gate-cgroup}
 OWNER=${FACTORY_CONTROL_OWNER-root:root}
 
 fx_source=$SRC/ops/fx
 release_source=$SRC/ops/fx-factory-release
+cgroup_source=$SRC/ops/factory-gate-cgroup
 [ -f "$fx_source" ]
 [ -f "$release_source" ]
+[ -f "$cgroup_source" ]
 bash -n "$fx_source"
 bash -n "$release_source"
+bash -n "$cgroup_source"
 
-declare -a targets=("$FX_TARGET" "$RELEASE_TARGET")
-declare -a sources=("$fx_source" "$release_source")
+declare -a targets=("$FX_TARGET" "$RELEASE_TARGET" "$CGROUP_TARGET")
+declare -a sources=("$fx_source" "$release_source" "$cgroup_source")
 declare -a prepared=()
 declare -a backups=()
 committed=0
