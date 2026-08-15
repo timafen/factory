@@ -19,6 +19,9 @@ type Dash = {
     wasted_usd?: number; day_cost_defined?: boolean; week_cost_defined?: boolean;
     day_base_estimate?: boolean; week_base_estimate?: boolean;
     day_unknown_models?: string[]; week_unknown_models?: string[];
+    waste?: { duplicate_usd: number; cancelled_usd: number; unfinished_usd: number;
+      total_usd: number; priced_attempts: number; unpriced_attempts: number;
+      window_started_at: string; generated_at: string };
     worst?: { usd: number; title: string; id: string } | null;
   };
   workers?: Record<string, { total: number; healthy: number }>;
@@ -603,10 +606,19 @@ export function Overview({ onNav }: { onNav?: (page: string) => void }) {
             <div><div style={{ color: muted, fontSize: 12 }}>за неделю</div>
                  <strong style={{ fontSize: 18 }}>{d.spend?.week_cost_defined === false ? "стоимость не определена" : `$${(d.spend?.week_usd ?? 0).toFixed(2)}`}</strong>
                  {(d.spend?.week_tokens ?? 0) > 0 && <div style={{ color: muted, fontSize: 11 }}>{(d.spend?.week_tokens ?? 0).toLocaleString("ru-RU")} токенов Codex</div>}</div>
-            <div><div style={{ color: muted, fontSize: 12 }}>впустую за сутки</div>
+            <div><div style={{ color: muted, fontSize: 12 }}>{d.spend?.waste?.unpriced_attempts ? "известно не меньше, впустую за 24 часа" : "впустую за 24 часа"}</div>
                  <strong style={{ fontSize: 18, color: (d.spend?.wasted_usd ?? 0) > 0 ? "#e0cf9f" : undefined }}>
-                   ${(d.spend?.wasted_usd ?? 0).toFixed(2)}</strong></div>
+                   ${(d.spend?.wasted_usd ?? 0).toFixed(2)}</strong>
+                 {!d.spend?.waste && <div style={{ color: muted, fontSize: 11 }}>без разбивки</div>}</div>
           </div>
+          {d.spend?.waste && <div style={{ marginTop: 10, fontSize: 12.5 }}>
+            <div>Отменённые задачи: ${d.spend.waste.cancelled_usd.toFixed(2)}</div>
+            <div>Повторные стадии: ${d.spend.waste.duplicate_usd.toFixed(2)}</div>
+            <div>Остановились до слияния: ${d.spend.waste.unfinished_usd.toFixed(2)}</div>
+            <div style={{ color: muted, marginTop: 4 }}>
+              Окно: {new Date(d.spend.waste.window_started_at).toLocaleString("ru-RU")} — {new Date(d.spend.waste.generated_at).toLocaleString("ru-RU")}; покрытие: {d.spend.waste.priced_attempts} / {d.spend.waste.priced_attempts + d.spend.waste.unpriced_attempts} попыток
+            </div>
+          </div>}
           {d.spend?.worst && (
             <div style={{ marginTop: 10, fontSize: 12.5, color: muted }}>
               самая дорогая за сутки: ${d.spend.worst.usd} — {d.spend.worst.title}
