@@ -1,6 +1,6 @@
 # CARD-0097 — Осиротевшие папки release-сборок освобождают место безопасно
 
-Implementation commit: 0851ce6b0a9687ac475c067518f77ecae6775836 — signal-fixture запускает обязательный UI/Go gate до позднего HUP.
+Implementation commit: bb93d7c8df3ff50f4ffb8b5f86575bd89a36f18b — signal-fixture запускает обязательный UI/Go gate до позднего HUP.
 
 ## HEAD
 
