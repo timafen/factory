@@ -2145,6 +2145,8 @@ IDEA_KINDS = ("idea", "finding")
 IDEA_STATES = ("new", "planned", "in_work", "done", "rejected")
 IDEA_SKIP = ("нет", "none", "-", "н/д", "нету", "n/a")
 FINDING_ORIGINS = ("worker", "agent")  # ``agent`` keeps old worker records valid.
+PLAN_REVALIDATE_AFTER_SECONDS = 3600
+PLAN_REVALIDATION_QUEUE = 10
 
 
 def ideas_all():
@@ -2294,6 +2296,90 @@ def cleanup_completed_plan_cards(tasks, final_stage_no):
         closed.append(idea["id"])
         log(f"PLAN DONE idea={idea['id']} task={final.get('id')}")
     return closed
+
+
+def reconcile_stale_plan_cards(tasks, now=None):
+    """Return abandoned Plan runs to Triage instead of pretending they run.
+
+    A short gap belongs to the ordinary continuation watcher.  Once a linked
+    generation has had no live task for an hour, its original finding may no
+    longer describe current ``main``.  Queue a bounded fresh Triage generation
+    so the normal first-stage verdict can close duplicates and already-fixed
+    work before any expensive implementation stage is admitted.
+    """
+    now = time.time() if now is None else float(now)
+    items = ideas_all()
+    room = max(0, PLAN_REVALIDATION_QUEUE - sum(
+        1 for item in items
+        if item.get("state") == "planned" and item.get("revalidation")
+    ))
+    if not room:
+        return []
+    by_id = {task.get("id"): task for task in tasks or [] if task.get("id")}
+    open_questions = [q for q in load_questions() if q.get("status") == "open"]
+    queued = []
+
+    def activity_epoch(task):
+        for field in ("updated_at", "completed_at", "created_at"):
+            parsed = _work_time((task or {}).get(field))
+            if parsed is not None:
+                return parsed.timestamp()
+        return 0
+
+    def idea_epoch(item):
+        value = str(item.get("updated") or item.get("created") or "")
+        try:
+            return time.mktime(time.strptime(value, "%Y-%m-%d %H:%M"))
+        except (OverflowError, TypeError, ValueError):
+            return 0
+
+    for idea in items:
+        if room <= 0:
+            break
+        if idea.get("state") != "in_work":
+            continue
+        linked_id = idea.get("task_id") or ""
+        linked = by_id.get(linked_id)
+        boundary = (linked or {}).get("created_at") or ""
+        title = idea.get("title") or ""
+        generation = [task for task in (tasks or []) if (
+            task_work_id(task) == linked_id
+            or (linked and _same_work(task.get("title"), title)
+                and (task.get("created_at") or "") >= boundary)
+        )]
+        if any(task.get("state") in PLAN_ACTIVE_STATES for task in generation):
+            continue
+        generation_ids = {task.get("id") for task in generation if task.get("id")}
+        if any(
+            question.get("task_id") in generation_ids
+            or question.get("work_id") == linked_id
+            or _same_work(question.get("title"), title)
+            for question in open_questions
+        ):
+            continue
+        last_activity = max(
+            [activity_epoch(task) for task in generation] + [idea_epoch(idea)]
+        )
+        if last_activity and now - last_activity < PLAN_REVALIDATE_AFTER_SECONDS:
+            continue
+        run_generation = str(uuid.uuid4())
+        idea.update({
+            "state": "planned",
+            "task_id": "",
+            "run_generation": run_generation,
+            "revalidation": True,
+            "reason": (
+                "Предыдущий запуск давно остановился без живого этапа. "
+                "Актуальность будет повторно проверена на Разборе."
+            ),
+            "updated": time.strftime("%Y-%m-%d %H:%M"),
+        })
+        queued.append(idea.get("id"))
+        room -= 1
+        log("PLAN RECHECK " + repr(title[:70]))
+    if queued:
+        save(IDEAS_PATH, items)
+    return queued
 
 
 def collect_ideas(result, repo_id="", source=""):
@@ -7623,12 +7709,29 @@ def cycle(conf, state):
         # A transient read or Plan write failure must not mark the run as
         # processed. The next cycle retries it through the durable cursor.
         log("automation_findings_error", repr(e))
+    # The first API page is intentionally small and can push the linked root
+    # or final stage of an older Plan card out of view.  Reuse the complete
+    # history already required by the dashboard and terminal handoffs for all
+    # lifecycle reconciliation in this cycle.  Otherwise old cards remain
+    # labelled ``in_work`` forever and leave automatic planning with a false
+    # picture of its queue.
+    complete_tasks = None
+    try:
+        complete_tasks = all_tasks()
+    except Exception as e:
+        log("task_history_error", repr(e))
+    lifecycle_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
+
     # Сначала убрать выполненное из открытого Плана. Автоподбор (когда он
     # включён) ниже по циклу уже не увидит эту карточку как planned.
     try:
-        cleanup_completed_plan_cards(tasks, len(stages))
+        cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
     except Exception as e:
         log("plan_cleanup_error", repr(e))
+    try:
+        reconcile_stale_plan_cards(lifecycle_tasks)
+    except Exception as e:
+        log("plan_reconcile_error", repr(e))
     workers = best_workers(api("/workers")["workers"])
     repo_identity_by_id = {r["id"]: r["remote_identity"]
                            for r in (api("/repositories").get("repositories") or [])}
@@ -7652,10 +7755,8 @@ def cycle(conf, state):
     # The same complete snapshot feeds terminal handoffs below. Looking only
     # at /tasks?limit=100 there loses a completed stage once service traffic
     # pushes it off the first page.
-    complete_tasks = None
     try:
-        complete_tasks = all_tasks()
-        write_dashboard(conf, complete_tasks, {w["id"]: w for w in api("/workers")["workers"]},
+        write_dashboard(conf, lifecycle_tasks, {w["id"]: w for w in api("/workers")["workers"]},
                         codex_snapshot, (day_start, week_start))
     except Exception as e:
         log("dashboard_error", repr(e))
@@ -7781,12 +7882,12 @@ def cycle(conf, state):
     # Сторож использует тот же снимок цикла после ответов владельца: так
     # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
     try:
-        pipeline_watch(conf, tasks, workflows, workers)
+        pipeline_watch(conf, lifecycle_tasks, workflows, workers)
     except Exception as e:
         log("pipeline_watch_error", repr(e))
 
     try:
-        cleanup_work_archive(conf, tasks)
+        cleanup_work_archive(conf, lifecycle_tasks)
     except Exception as e:
         log("work_archive_cleanup_error", repr(e))
 
