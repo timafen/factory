@@ -9151,7 +9151,7 @@ class DeliveryTitleTests(unittest.TestCase):
                 mock.patch.object(pilot, "deploy_after_merge", return_value=None):
             pilot.recover_merge_intents({}, restored)
         merge.assert_called_once_with(
-            "github.com/acme/repo", "factory/topic", title, "a" * 40)
+            "github.com/acme/repo", "factory/topic", title, "a" * 40, "work-1")
         receipt = restored["merge_intents"]["verify"]
         self.assertEqual(receipt["delivery_title"], title)
         with open(journal, encoding="utf-8") as stream:

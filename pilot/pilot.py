@@ -8006,8 +8006,10 @@ def recover_merge_intents(conf, state):
                 intent["actor"] = "automatic"
                 intent["phase"] = "merging"
                 save(STATE_PATH, state)
-                ok, output = gh_merge(repo, branch, delivery_title,
-                                      expected_head, intent.get("work_id", ""))
+                merge_args = (repo, branch, delivery_title, expected_head)
+                if intent.get("work_id"):
+                    merge_args += (intent["work_id"],)
+                ok, output = gh_merge(*merge_args)
                 log(f"AUTO-MERGE recovery branch={branch} ok={ok} :: {output[:200]}")
                 if not ok:
                     if MERGE_CONFLICT_RE.search(output or ""):
