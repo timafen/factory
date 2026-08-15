@@ -1,18 +1,19 @@
-Implementation commit: 3d4a15f2d9e74a6f5e88c22ef2f3fa0a5c63dc86 — Pilot закрывает устаревший PR уже после первого AUTO-MERGE-конфликта
+Implementation commit: ecdac4dbc0dce2ead042ba974e3c525874d2acb1 — Pilot закрывает устаревший PR уже после первого AUTO-MERGE-конфликта
 
 # CARD-0165: закрывать устаревший PR уже влитой работы
 
 ## HEAD
 
 Status: Implemented and tested — awaiting Review
-Branch: factory/b9871961-9c1-7fb37fa7-002
-Implementation commit: `3d4a15f2d9e74a6f5e88c22ef2f3fa0a5c63dc86` — проверка уже
+Branch: factory/5db83753-34d-2d34f8db-65e
+Implementation commit: `ecdac4dbc0dce2ead042ba974e3c525874d2acb1` — проверка уже
 влитого PR запускается при первом AUTO-MERGE-конфликте.
 What changed: Pilot закрывает и комментирует только свой открытый устаревший PR
 с точным `work_id`, включая `rounds=1`; несовпадения и ошибки GitHub оставляют
 обычный repair flow.
 Evidence: `python3 -m unittest -v pilot.test_pilot.MergeConflictRecoveryTests`
-→ 12 tests, OK; `git diff --check` → OK.
+→ 10 tests, OK; `python3 -m unittest pilot.test_pilot` → 351 tests, OK
+(13 skipped); `git diff --check` → OK.
 One next action: Review проверить первый конфликт, идемпотентность закрытия и
 комментария без создания repair-задачи.
 
@@ -33,3 +34,10 @@ positive flow, идемпотентность, fail-closed ошибки и от�
 ищет влитый PR с тем же точным `work_id`, закрывает устаревший PR и не создаёт
 repair-задачу. Целевой `MergeConflictRecoveryTests` прошёл: 12 tests, OK;
 `git diff --check` прошёл.
+
+### 2026-08-15 — Implement
+
+После rebase на свежий `main` сохранена безопасная проверка точного `work_id`,
+а условие второго конфликта снято: stale PR закрывается уже после первого.
+`python3 -m unittest -v pilot.test_pilot.MergeConflictRecoveryTests` — 10 OK;
+`python3 -m unittest pilot.test_pilot` — 351 OK, 13 skipped.
