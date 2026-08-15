@@ -58,6 +58,7 @@ DRAIN_DELAY="${FACTORY_RELEASE_DRAIN_DELAY:-5}"
 LOCK="${FACTORY_RELEASE_LOCK:-/run/lock/factory-release.lock}"
 DELIVERY_ID="${FACTORY_DELIVERY_ID:-}"
 DELIVERY_DIR="${FACTORY_DELIVERY_STATE_DIR:-/var/lib/factory/release-deliveries}"
+DELIVERY_TESTING="${FACTORY_RELEASE_TESTING:-0}"
 DATABASE="${FACTORY_DATABASE:-/opt/factory-data/server/factory.sqlite3}"
 FX_BIN="${FACTORY_FX_BIN:-/usr/local/bin/fx}"
 RELEASE_DRIVER="${FACTORY_RELEASE_DRIVER:-/usr/local/lib/fx-factory-release}"
@@ -104,6 +105,12 @@ TRUSTED_MKDIR=/usr/bin/mkdir
 delivery_status() {
   [ -n "$DELIVERY_ID" ] || return 0
   local status=$1
+  if [ "$DELIVERY_TESTING" != 1 ]; then
+    [ -d "$DELIVERY_DIR" ] || { echo "!! delivery status directory is missing" >&2; return 1; }
+    [ ! -L "$DELIVERY_DIR" ] || { echo "!! delivery status directory is a symlink" >&2; return 1; }
+    [ "$(stat -Lc %u -- "$DELIVERY_DIR" 2>/dev/null)" = 0 ] || { echo "!! delivery status directory is not root-owned" >&2; return 1; }
+    [ "$(stat -Lc %a -- "$DELIVERY_DIR" 2>/dev/null)" = 700 ] || { echo "!! delivery status directory is not mode 0700" >&2; return 1; }
+  fi
   python3 - "$DELIVERY_DIR" "$DELIVERY_FILE" "$status" <<'PY'
 import os, sys
 directory, target, status = sys.argv[1:]
@@ -174,7 +181,9 @@ on_delivery_exit() {
 
 if [ -n "$DELIVERY_ID" ]; then
   case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
-  mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
+  if [ "$DELIVERY_TESTING" = 1 ]; then
+    mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
+  fi
   DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
 
   # Arm the handler before any durable transition.  A signal or an early

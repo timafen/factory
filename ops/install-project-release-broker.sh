@@ -25,7 +25,7 @@ grep -qx "Group=$BROKER_GROUP" "$SOURCE_UNIT"
 # with setpriv. With the unit's isolation profile, NoNewPrivileges removes the
 # CAP_SETUID needed for that transition; the unit documents this exception.
 grep -qx 'NoNewPrivileges=false' "$SOURCE_UNIT"
-grep -qx 'StateDirectory=factory/release-broker' "$SOURCE_UNIT"
+grep -qx 'StateDirectory=factory/release-broker factory/release-deliveries' "$SOURCE_UNIT"
 grep -qx 'ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker --live-acceptance-executable /usr/local/lib/factory-live-acceptance' "$SOURCE_UNIT"
 
 if ! "$GETENT" group "$BROKER_GROUP" >/dev/null 2>&1; then
