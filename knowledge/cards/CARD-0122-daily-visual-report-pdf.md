@@ -1,17 +1,24 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 9bb6d2a2dd294c43148d7a6fe3452a4f79e3571f — повторный релиз проверяет готовность browser runtime и полностью его откатывает
+Implementation commit: 22ee920eabfa3794999daba7df45bf1b2a4e7b82 — повторный релиз проверяет готовность browser runtime и полностью его откатывает
 
 ## HEAD
 
-- Status: IMPLEMENTED — штатный релиз проверяет и атомарно откатывает browser runtime.
-- Branch: `factory/8ef44471-f9d-5d0d0c44-401`
-- Implementation commit: `9bb6d2a2dd294c43148d7a6fe3452a4f79e3571f` — Chromium, launcher и readiness marker проверяются также при повторном выпуске
-- What changed: перед browser installer сохраняется внешний комплект; любой поздний сбой возвращает его и прежний `current`.
-- Evidence: `bash ops/test-fx-factory-release.sh` PASS; fixture покрывает чистый выпуск, повторную готовность и rollback после сбоев.
-- One next action: Verify запускает полный набор критериев 3–5 на чистом штатном хосте.
+- Status: IMPLEMENTED — штатный релиз устанавливает, проверяет и атомарно откатывает browser runtime.
+- Branch: `factory/8451085f-138-5294ea00-11d`
+- Implementation commit: `22ee920eabfa3794999daba7df45bf1b2a4e7b82` — Chromium, launcher и readiness marker проверяются также при повторном выпуске.
+- What changed: browser payload переживает удаление checkout; поздний сбой возвращает внешний комплект и прежний `current`.
+- Evidence: release fixture PASS; 4/4 Node PDF-теста PASS; shell syntax PASS после rebase на `f3cd37a53fef36ff7540cc006df278727907732b`.
+- One next action: Verify проверяет чистый штатный выпуск на релизном хосте.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Кандидат перебазирован на свежий `main`; конфликт разрешён с сохранением проверки
+бинарников до первой мутации и полного browser rollback. Асинхронная fixture получила
+изолированные browser-пути и корректную модель повторной регистрации. Release fixture,
+4 Node PDF-теста и shell syntax завершились PASS.
 
 ### 2026-08-14 — Implement
 
