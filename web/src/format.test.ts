@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventSummary } from "./format";
+import { duration, eventSummary, stateLabel, timeAgo } from "./format";
 import type { AttemptEvent } from "./types";
 
 function event(payload: unknown, kind = "codex"): AttemptEvent {
@@ -109,18 +109,32 @@ describe("eventSummary", () => {
   it("never serializes an unknown object as raw JSON", () => {
     const summary = eventSummary(event({ unfamiliar: { deeply: "nested" } }));
 
-    expect(summary).toEqual({ label: "Runtime", text: "Runtime update" });
+    expect(summary).toEqual({ label: "Среда выполнения", text: "Обновление среды выполнения" });
     expect(summary?.text).not.toContain("unfamiliar");
   });
 
   it("preserves existing string and top-level message events", () => {
     expect(eventSummary(event("Plain progress", "progress"))).toEqual({
-      label: "Progress",
+      label: "Событие",
       text: "Plain progress",
     });
     expect(eventSummary(event({ message: "Task completed" }, "progress"))).toEqual({
-      label: "Progress",
+      label: "Событие",
       text: "Task completed",
     });
+  });
+});
+
+describe("отображение статусов и времени", () => {
+  it("переводит известные статусы и безопасно обрабатывает неизвестный", () => {
+    expect(stateLabel("queued")).toBe("В очереди");
+    expect(stateLabel("SUCCEEDED")).toBe("Завершено");
+    expect(stateLabel("backend-new-state")).toBe("Неизвестно");
+  });
+
+  it("показывает длительность и относительное время по-русски", () => {
+    const now = Date.parse("2026-08-15T12:00:00Z");
+    expect(timeAgo("2026-08-15T11:58:00Z", now)).toBe("2 мин назад");
+    expect(duration("2026-08-15T10:00:00Z", "2026-08-15T11:02:03Z", now)).toBe("1 ч 2 мин");
   });
 });
