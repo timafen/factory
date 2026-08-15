@@ -1,13 +1,13 @@
 # CARD-0078 — Старый restart Пилота не прерывает новый выпуск
 
-Implementation commit: aed58a5970a744f4e6c938f2db80b5b6d3cdeb3a — rollback отменяет отложенный restart Пилота после сбоя финализации.
+Implementation commit: 4466b40d9e19b3aceb6077f994add145641dab88 — rollback отменяет отложенный restart Пилота после сбоя финализации.
 
 ## HEAD
 
 - Status: Implemented — ready for review.
-- Branch: `factory/10d44ecc-3cd-9a57f061-633`.
+- Branch: `factory/8e1c3a13-abf-0dfe5ba5-2b6`.
 - Specification: `knowledge/specs/pilot-restart-current-release.md`.
-- Implementation commit: aed58a5970a744f4e6c938f2db80b5b6d3cdeb3a — rollback
+- Implementation commit: 4466b40d9e19b3aceb6077f994add145641dab88 — rollback
   отменяет transient timer и service до восстановления прежнего поколения.
 - What changed: сбой после успешного `systemd-run` останавливает отложенный
   restart; обычный restart по-прежнему защищён общим release-lock.
@@ -16,6 +16,14 @@ Implementation commit: aed58a5970a744f4e6c938f2db80b5b6d3cdeb3a — rollback о�
 - Next action: провести review и влить изменение.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Карточка привязана к проверяемой ветке поставки и фактическому кодовому
+коммиту-предку: он отменяет transient restart при откате выпуска. Проверка
+истории подтверждает, что коммит меняет `ops/fx-factory-release` и его тест,
+а `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` и
+`bash ops/test-fx-factory-release.sh` проходят.
 
 ### 2026-08-14 — Implement
 
