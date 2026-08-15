@@ -762,38 +762,6 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["state"], "blocked")
         self.assertIn("default branch", snapshot["reason"])
 
-    def test_origin_mismatch_blocks_before_default_branch_or_network(self):
-        """All isolated Git flows check their configured remote before lookup."""
-        expected_url = "https://github.com/acme/repo.git"
-
-        for name, invoke in (
-                ("snapshot", lambda: pilot.fresh_branch_snapshot(expected_url, "factory/candidate")),
-                ("refresh", lambda: pilot.refresh_stale_branch(expected_url, "factory/candidate")),
-                ("rebuild", lambda: pilot.rebuild_clean_branch(
-                    expected_url, "factory/candidate", ["pilot/pilot.py"], "Работа"))):
-            calls = []
-
-            def fake_git(cwd, *args, **_kwargs):
-                calls.append(args)
-                if args == ("remote", "get-url", "origin"):
-                    return 0, "https://github.com/attacker/repo.git\n"
-                return 0, ""
-
-            with self.subTest(flow=name), tempfile.TemporaryDirectory() as rebuild_dir, \
-                    mock.patch.object(pilot, "REBUILD_DIR", rebuild_dir), \
-                    mock.patch.object(pilot, "_git", side_effect=fake_git), \
-                    mock.patch.object(pilot, "_default_branch") as default_branch:
-                result = invoke()
-
-            if isinstance(result, dict):
-                self.assertEqual(result["state"], "blocked")
-                self.assertIn("registered origin", result["reason"])
-            else:
-                self.assertEqual(result, "")
-            default_branch.assert_not_called()
-            self.assertFalse(any(args and args[0] in {"fetch", "ls-remote", "push"}
-                                 for args in calls), calls)
-
     def test_review_gate_keeps_infrastructure_failure_out_of_request_changes(self):
         with mock.patch.object(pilot, "fresh_branch_snapshot", return_value={
                 "state": "blocked", "reason": "cannot fetch authoritative refs"}):
@@ -973,6 +941,84 @@ class FreshDefaultBranchSnapshotTests(unittest.TestCase):
             blocked = pilot.verify_gate("github.com/example/repo", "factory/candidate")
         self.assertTrue(blocked["blocked"])
         self.assertIn("BLOCKED: review infrastructure", blocked["note"])
+
+
+class TemporaryRepositoryOriginTest(unittest.TestCase):
+    forbidden_git_commands = {
+        "ls-remote", "fetch", "checkout", "merge", "diff", "push",
+    }
+
+    def assert_no_unsafe_git_calls(self, calls):
+        self.assertFalse(any(
+            args and args[0] in self.forbidden_git_commands for args in calls
+        ), calls)
+
+    def test_matching_origin_allows_safe_trailing_slash_form(self):
+        with mock.patch.object(
+                pilot, "_git",
+                return_value=(0, "https://github.com/acme/factory.git/\n")):
+            self.assertEqual(pilot._verify_registered_origin(
+                "/tmp/isolated", "https://github.com/acme/factory.git"), "")
+
+    def test_snapshot_blocks_substituted_origin_before_network_operations(self):
+        calls = []
+
+        def fake_git(_work, *args, **_kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 0, "https://secret@example.invalid/other.git\n"
+            return 0, ""
+
+        with mock.patch.object(pilot, "_git", side_effect=fake_git), \
+                mock.patch.object(pilot, "_default_branch") as default_branch:
+            result = pilot.fresh_branch_snapshot(
+                "https://github.com/acme/factory.git", "factory/task")
+
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("registered origin", result["reason"])
+        self.assertNotIn("secret", result["reason"])
+        default_branch.assert_not_called()
+        self.assert_no_unsafe_git_calls(calls)
+
+    def test_refresh_blocks_missing_origin_before_network_operations(self):
+        calls = []
+
+        def fake_git(_work, *args, **_kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 2, "origin missing"
+            return 0, ""
+
+        with mock.patch.object(pilot, "_git", side_effect=fake_git), \
+                mock.patch.object(pilot, "_default_branch") as default_branch:
+            result = pilot.refresh_stale_branch(
+                "https://github.com/acme/factory.git", "factory/task")
+
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("registered origin", result["reason"])
+        default_branch.assert_not_called()
+        self.assert_no_unsafe_git_calls(calls)
+
+    def test_rebuild_blocks_substituted_origin_before_network_operations(self):
+        calls = []
+
+        def fake_git(_work, *args, **_kwargs):
+            calls.append(args)
+            if args == ("remote", "get-url", "origin"):
+                return 0, "https://example.invalid/other.git\n"
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as rebuild_dir, \
+                mock.patch.object(pilot, "REBUILD_DIR", rebuild_dir), \
+                mock.patch.object(pilot, "_git", side_effect=fake_git), \
+                mock.patch.object(pilot, "_default_branch") as default_branch:
+            result = pilot.rebuild_clean_branch(
+                "https://github.com/acme/factory.git", "factory/task",
+                ["pilot/pilot.py"], "Работа")
+
+        self.assertEqual(result, "")
+        default_branch.assert_not_called()
+        self.assert_no_unsafe_git_calls(calls)
 
 
 class SpecificationBranchHandoffTests(unittest.TestCase):

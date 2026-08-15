@@ -3193,6 +3193,12 @@ def _remote_url(repo_identity):
     return f"https://github.com/{short}.git" if short and "/" in short else ""
 
 
+def _comparable_remote_url(url):
+    """Normalize only harmless URL forms before comparing Git remotes."""
+    value = str(url or "").strip()
+    return value.rstrip("/") if value not in ("", "/") else value
+
+
 def _default_branch(url):
     """Resolve the remote's symbolic HEAD; never assume that it is `main`."""
     rc, out = _git(None, "ls-remote", "--symref", url, "HEAD")
@@ -3204,12 +3210,16 @@ def _default_branch(url):
     return match.group(1), ""
 
 
-def _verify_registered_origin(work, expected_url):
-    """Reject a rewritten local origin before any network Git operation."""
-    rc, actual_url = _git(work, "remote", "get-url", "origin")
-    actual_url = actual_url.strip()
-    if rc or actual_url != expected_url:
-        return "registered origin does not match requested repository"
+def _verify_registered_origin(work, canonical_url):
+    """Reject an unsafe local origin without exposing either URL."""
+    rc, registered_url = _git(work, "remote", "get-url", "origin")
+    if rc:
+        return "cannot verify registered origin"
+    if not registered_url.strip():
+        return "registered origin is missing"
+    if (_comparable_remote_url(registered_url)
+            != _comparable_remote_url(canonical_url)):
+        return "registered origin does not match the canonical repository"
     return ""
 
 
