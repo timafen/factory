@@ -1,19 +1,25 @@
-Implementation commit: b8c016200ce3889aba127ac6ccaaa37f58898cef — добавлена регрессия GH_REPO для назначенного timafen/factory
+Implementation commit: c5efb35e1d849a0d38093b8160de3ae1803b4495 — runtime закрепляет GH_REPO за назначенным репозиторием
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
 ## HEAD
 
 Status: Implemented
-Branch: factory/e466d9d5-7e1-4d9fd24a-b5c
+Branch: factory/e6fc2025-9d8-3b172508-46a
 Specification: `knowledge/specs/worker-gh-repository-context.md`
 What changed: для `github.com/timafen/factory` runtime получает ровно
 `GH_REPO=timafen/factory`, заменяя унаследованный `owainlewis/factory`.
-Evidence: три целевых worker-теста PASS (4.519s), включая сквозной путь
-claim → supervisor → runtime; `git diff --check` PASS.
-One next action: Verify на свежем `origin/main`.
+Evidence: целевые worker-тесты PASS (2.196s), полный `go test ./...` и
+`go build ./...` PASS.
+One next action: передать на review.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлена карточка: implementation commit теперь указывает на существующий
+кодовый коммит, закрепляющий `GH_REPO=timafen/factory` для `gh repo view`.
+Целевые тесты, полный набор тестов и сборка прошли успешно.
 
 ### 2026-08-15 — Implement
 
