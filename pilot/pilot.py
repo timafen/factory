@@ -2967,6 +2967,22 @@ def pipeline_watch(conf, tasks, workflows, workers):
             mem.pop(work_key, None)          # дошли до конца конвейера
             continue
         rec = mem.get(work_key) or {}
+        current_stage = stages[far]
+        recorded_stage = rec.get("stage")
+        if recorded_stage and recorded_stage != current_stage:
+            # A successful nudge can start and finish between two long Pilot
+            # cycles.  The old record then still contained two attempts from
+            # the PREVIOUS transition and made the watchdog give up at the new
+            # stage without trying it once. Attempts belong to a transition,
+            # not to the whole five-stage work.
+            rec = {"since": now, "nudges": 0, "stage": current_stage}
+        elif not recorded_stage and rec.get("why") == "give_up":
+            # One-time recovery for records written before `stage` was stored.
+            # Let the current transition try again immediately after deploy.
+            rec = {"since": now - STALL_WAIT, "nudges": 0,
+                   "stage": current_stage}
+        else:
+            rec["stage"] = current_stage
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
         mem[work_key] = rec
@@ -4407,6 +4423,15 @@ TRANSIENT_INFRASTRUCTURE_MARKERS = (
     "http 504",
 )
 
+TRANSIENT_INFRASTRUCTURE_PATTERNS = (
+    # The orchestrator normally answers in Russian even when the underlying
+    # git/curl diagnostic was in English. Keep this deliberately narrow: a DNS
+    # outage is retryable, while authentication and repository permissions are
+    # real blockers which must not be hidden behind retries.
+    re.compile(r"\bdns(?:[-\s]+)(?:доступ|сбой|ошиб|разреш|недоступ)", re.IGNORECASE),
+    re.compile(r"(?:доступ|сбой|ошиб|разреш|недоступ)[^\n]{0,80}\bdns\b", re.IGNORECASE),
+)
+
 
 def transient_infrastructure_wait(verdict, situation, prior_result):
     """True only for failures that can recover without changing the delivery."""
@@ -4415,7 +4440,9 @@ def transient_infrastructure_wait(verdict, situation, prior_result):
         str(situation or ""),
         str(prior_result or ""),
     )).casefold()
-    return any(marker in text for marker in TRANSIENT_INFRASTRUCTURE_MARKERS)
+    return (any(marker in text for marker in TRANSIENT_INFRASTRUCTURE_MARKERS)
+            or any(pattern.search(text)
+                   for pattern in TRANSIENT_INFRASTRUCTURE_PATTERNS))
 
 
 def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
