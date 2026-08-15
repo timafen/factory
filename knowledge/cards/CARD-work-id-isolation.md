@@ -1,13 +1,13 @@
-Implementation commit: 51ef24c2dbe442574990add8e5d042a85e00ec8d — паузы и loop-stop изолированы по work_id
+Implementation commit: ca16ed9288bd66a9af8b37b2a7a7ba993a77c59c — паузы и loop-stop изолированы по work_id
 
 ## HEAD
 
 Status: Implemented — готово к повторному Review
 Branch: factory/25b0d37f-78c-0abab1b3-f08
-Implementation commit: 51ef24c2dbe442574990add8e5d042a85e00ec8d
+Implementation commit: ca16ed9288bd66a9af8b37b2a7a7ba993a77c59c
 What changed: `pause_pipeline` и все её пути сохраняют durable `work_id`; одноимённые работы имеют отдельные паузы.
 What changed: baseline loop-stop разделён по work_id, поэтому одна работа не даёт другой лишние попытки.
-Evidence: `GOCACHE=/tmp/factory-go-build-cache python3 -m unittest -v pilot.test_pilot` → 351 OK, 13 skipped; `go build ./...` → OK.
+Evidence: `GOCACHE=/tmp/factory-go-build-cache python3 -m unittest -v pilot.test_pilot` → 363 OK, 13 skipped; `go build ./...` → OK.
 One next action: повторить Review изменения и влить после CI.
 
 ## LOG
@@ -15,6 +15,10 @@ One next action: повторить Review изменения и влить по
 ### 2026-08-15 — Implement
 
 Паузы от `resolve_orchestrator_wait`, loop-stop, diagnosis и work-day guard теперь записываются как durable запись с `work_id`; loop baseline разделён тем же ключом. Добавлена регрессия для двух одноимённых работ через orchestrator wait и loop-stop. Полный `pilot.test_pilot` — 351 OK, 13 skipped; Go build — OK с доступным локальным GOCACHE.
+
+### 2026-08-15 — Implement
+
+После rebase регрессия использует актуальный контракт orchestrator wait с отдельным счётчиком попыток и именованным `work_id`. Полный `pilot.test_pilot` — 363 OK, 13 skipped; Go build — OK с доступным локальным GOCACHE.
 
 ### 2026-08-11 — Implement
 
