@@ -1381,7 +1381,8 @@ class CardNumberReservationTests(unittest.TestCase):
                                        expected_card="CARD-0070")
 
         self.assertFalse(result["back"])
-        implementation.assert_called_once_with("github.com/acme/repo", "factory/task", files)
+        implementation.assert_called_once_with(
+            "github.com/acme/repo", "factory/task", files, "Работа")
 
 
 class CodexUsageTests(unittest.TestCase):
@@ -2224,7 +2225,8 @@ elif action == "full_cycle_after_restart":
     set_succeeded(fixture, review["id"], "APPROVE\nHEAD: " + "a" * 40)
     run_full_cycle(fixture)
     verify = latest_stage(fixture, "Verify")
-    set_succeeded(fixture, verify["id"], "PASS\nTRY: none")
+    set_succeeded(fixture, verify["id"],
+                  "PASS\nDELIVERY_TITLE: Корзина исправлена и проверена\nTRY: none")
     run_full_cycle(fixture)
     fixture["restart"].update({"second_pid": os.getpid(),
                                "terminal_task_id": verify["id"]})
@@ -3278,7 +3280,8 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
             self.assertIn(f"Branch: {rebuilt}", created[1]["context"])
 
             tasks[-1]["state"] = "succeeded"
-            details["verify"]["attempts"] = [{"result": "PASS"}]
+            details["verify"]["attempts"] = [{
+                "result": "PASS\nDELIVERY_TITLE: Чистая поставка готова к выпуску"}]
             pilot.cycle(conf, state)
 
             # The immutable attempt is retained, but a content conflict is
@@ -3292,7 +3295,9 @@ class RebuiltDeliveryBranchPipelineTests(unittest.TestCase):
         gate.assert_called_once_with(
             conf, base, original, "github.com/acme/repo", mock.ANY,
             area_repo="repo-id", expected_card=card)
-        merge.assert_called_once_with("github.com/acme/repo", rebuilt, base, delivery_head)
+        merge.assert_called_once_with(
+            "github.com/acme/repo", rebuilt, "Чистая поставка готова к выпуску",
+            delivery_head)
 
 
 class ImmutableMergeTests(unittest.TestCase):
@@ -3810,6 +3815,7 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.intent = {
             "phase": "intent", "base": "Resolve once", "branch": "factory/topic",
             "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "delivery_title": "Конфликт исправляется без потери результата",
             "link": "",
         }
         self.conf = {
@@ -3893,7 +3899,8 @@ class MergeConflictRecoveryTests(unittest.TestCase):
             pilot.recover_merge_intents({}, state)
 
         merge.assert_called_once_with(
-            "github.com/acme/repo", "factory/topic", "Resolve once", "a" * 40)
+            "github.com/acme/repo", "factory/topic",
+            "Конфликт исправляется без потери результата", "a" * 40)
         deploy.assert_not_called()
 
     def test_conflict_returns_same_work_to_implement_once(self):
@@ -4012,7 +4019,8 @@ class MergeConflictRecoveryTests(unittest.TestCase):
             pilot.recover_merge_intents({}, state)
 
         merge.assert_called_once_with(
-            "github.com/acme/repo", "factory/topic", "Resolve once", "b" * 40)
+            "github.com/acme/repo", "factory/topic",
+            "Конфликт исправляется без потери результата", "b" * 40)
 
 
 class PipelineWatchMergeTests(unittest.TestCase):
@@ -4027,7 +4035,9 @@ class PipelineWatchMergeTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         journal = os.path.join(temporary.name, "merges.jsonl")
-        state = {"merge_intents": {"verify-1": dict(intent)}}
+        intent = dict(intent)
+        intent.setdefault("delivery_title", "Подтверждённый результат поставки")
+        state = {"merge_intents": {"verify-1": intent}}
         with mock.patch.object(pilot, "MERGES_PATH", journal), \
                 mock.patch.object(pilot, "STATE_PATH", os.path.join(temporary.name, "state.json")), \
                 mock.patch.object(pilot, "gh_json", return_value={"commit": {"sha": "a" * 40}}), \
@@ -4048,6 +4058,7 @@ class PipelineWatchMergeTests(unittest.TestCase):
 
         merge.assert_called_once()
         self.assertEqual(records, [{"task_id": "verify-1", "base": "Круги",
+            "delivery_title": "Подтверждённый результат поставки",
             "at": records[0]["at"], "actor": "automatic", "actor_id": None,
             "rounds": 3}])
 
@@ -7951,11 +7962,13 @@ pilot.mark_final = lambda *args: event("mark_final", *args)
 pilot.notify = lambda _conf, title, *_args, **_kw: event("owner_done", title)
 conf = {"release_broker_socket": d["socket"]}
 def wait(task, sha):
-    return {"task_id": task, "base": "Единый выпуск", "link": "",
+    return {"task_id": task, "base": "Единый выпуск",
+            "delivery_title": "Единый выпуск успешно доставлен", "link": "",
             "merge_receipt": {"task_id": task, "base": "Единый выпуск", "sha": sha}}
 state = pilot.load(pilot.STATE_PATH, {})
 if not generation(state):
-    intent = {"phase": "merged", "base": "Единый выпуск", "branch": "topic",
+    intent = {"phase": "merged", "base": "Единый выпуск",
+              "delivery_title": "Единый выпуск успешно доставлен", "branch": "topic",
               "repository": "github.com/timafen/factory", "commit_sha": d["sha"], "link": ""}
     state = {"merge_intents": {"verify-1": intent}}
     pilot.save(pilot.STATE_PATH, state)
@@ -8289,7 +8302,8 @@ pilot.save(pilot.STATE_PATH, state)
 
     def test_recovery_journals_before_wait_without_second_merge(self):
         state = {"merge_intents": {"verify-1": {
-            "phase": "merged", "base": "Единый выпуск", "branch": "topic",
+            "phase": "merged", "base": "Единый выпуск",
+            "delivery_title": "Единый выпуск успешно доставлен", "branch": "topic",
             "repository": "github.com/timafen/factory", "commit_sha": self.sha, "link": ""}}}
         journal = os.path.join(self.temporary.name, "merges.jsonl")
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
@@ -8947,6 +8961,134 @@ class MergedCommitShaTests(unittest.TestCase):
     def test_without_expected_head_takes_any_merged(self):
         with mock.patch.object(pilot, "gh_json", return_value=self.PULLS):
             self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "d" * 40)
+
+
+class DeliveryTitleTests(unittest.TestCase):
+    def test_card_gate_saves_approved_implementation_commit_in_artifact(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        works_path = os.path.join(temporary.name, "works.json")
+        implementation = "a" * 40
+        pilot.save(works_path, {"Работа": {"run_generation": "g1",
+            "implementation_artifact": {"branch": "factory/topic", "head": "b" * 40,
+                                        "generation": "g1"}}})
+        card = ("## HEAD\nStatus: Implemented\nImplementation commit: "
+                + implementation + " — готов результат.\n")
+        responses = [{"content": base64.b64encode(card.encode()).decode()},
+                     {"status": "ahead"}, {"files": [{"filename": "pilot/pilot.py"}]}]
+        with mock.patch.object(pilot, "WORKS_PATH", works_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=responses):
+            self.assertIsNone(pilot.implementation_commit_gate(
+                "github.com/acme/repo", "factory/topic",
+                ["pilot/pilot.py", "knowledge/cards/CARD-0177-result.md"], "Работа"))
+        self.assertEqual(pilot.load(works_path, {})["Работа"]
+                         ["implementation_artifact"]["approved_commit"], implementation)
+
+    def test_approved_commit_subject_and_explicit_override_are_selected(self):
+        github = {"commit": {"message":
+            "Настройки сохраняются безопасно при сбое записи\n\nПодробности"}}
+        with mock.patch.object(pilot, "gh_json", return_value=github) as api_call:
+            title, error = pilot.choose_delivery_title(
+                "PASS", "github.com/acme/repo", "a" * 40)
+        self.assertEqual((title, error),
+                         ("Настройки сохраняются безопасно при сбое записи", ""))
+        api_call.assert_called_once_with(
+            ["api", "repos/acme/repo/commits/" + "a" * 40], strict=True)
+
+        with mock.patch.object(pilot, "gh_json") as api_call:
+            title, error = pilot.choose_delivery_title(
+                "PASS\nDELIVERY_TITLE: Выпуск сохраняет настройки безопасно",
+                "github.com/acme/repo", "a" * 40)
+        self.assertEqual((title, error),
+                         ("Выпуск сохраняет настройки безопасно", ""))
+        api_call.assert_not_called()
+
+    def test_validation_accepts_72_unicode_characters_and_rejects_machine_text(self):
+        self.assertEqual(pilot.validate_delivery_title("я" * 72), ("я" * 72, ""))
+        invalid = ("", "я" * 73, "PASS", "stopped_owner", "CARD-0164",
+                   "TASK-123", "38a2bd47-8180-4c31-9db5-dc2db606ebe2",
+                   "a" * 7, "b" * 40, "[auto] [2/5 Specification] Старое",
+                   "#120", "Merge pull request #120", "строка\nвторая")
+        for value in invalid:
+            with self.subTest(value=value):
+                self.assertTrue(pilot.validate_delivery_title(value)[1])
+
+    def test_duplicate_or_invalid_override_never_falls_back(self):
+        reports = ("DELIVERY_TITLE: PASS",
+                   "DELIVERY_TITLE: Первый результат\nDELIVERY_TITLE: Второй результат")
+        for report in reports:
+            with self.subTest(report=report), mock.patch.object(pilot, "gh_json") as api_call:
+                title, error = pilot.choose_delivery_title(
+                    report, "github.com/acme/repo", "a" * 40)
+                self.assertEqual(title, "")
+                self.assertTrue(error)
+                api_call.assert_not_called()
+
+    def test_restart_recovery_uses_saved_title_and_preserves_identity(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = os.path.join(temporary.name, "state.json")
+        journal = os.path.join(temporary.name, "merges.jsonl")
+        title = "Настройки сохраняются безопасно при сбое записи"
+        state = {"merge_intents": {"verify": {
+            "phase": "intent", "base": "Старая проблема", "work_id": "work-1",
+            "branch": "factory/topic", "repository": "github.com/acme/repo",
+            "commit_sha": "a" * 40, "delivery_title": title}}}
+        pilot.save(state_path, state)
+        restored = pilot.load(state_path, {})
+        github = lambda args: ({"commit": {"sha": "a" * 40}}
+            if "/branches/" in args[-1] else [])
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "MERGES_PATH", journal), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "gh_merge", return_value=(True, "merged")) as merge, \
+                mock.patch.object(pilot, "deploy_after_merge", return_value=None):
+            pilot.recover_merge_intents({}, restored)
+        merge.assert_called_once_with(
+            "github.com/acme/repo", "factory/topic", title, "a" * 40)
+        receipt = restored["merge_intents"]["verify"]
+        self.assertEqual(receipt["delivery_title"], title)
+        with open(journal, encoding="utf-8") as stream:
+            record = json.loads(stream.readline())
+        self.assertEqual(record["base"], "Старая проблема")
+        self.assertEqual(record["delivery_title"], title)
+
+    def test_conflict_context_keeps_delivery_title(self):
+        title = "Понятный результат исправления"
+        intent = {"phase": "conflict", "base": "Старая проблема",
+                  "branch": "factory/topic", "repository": "github.com/acme/repo",
+                  "commit_sha": "a" * 40, "delivery_title": title,
+                  "merge_error": "merge conflict"}
+        conf = {"stages": [{"workflow": name} for name in
+            ("Specification", "Implement + Test", "Review", "Verify")]}
+        parent = {"id": "verify", "repository_id": "repo", "work_id": "work"}
+        with mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(pilot, "STATE_PATH", "/tmp/delivery-title-state.json"), \
+                mock.patch.object(pilot, "create_child_task",
+                                  return_value={"task": {"id": "repair"}}) as create:
+            pilot.resume_merge_conflicts(conf, {"merge_intents": {"verify": intent}},
+                [parent], {"Implement + Test": {"enabled": True, "revision_id": "rev"}},
+                {"worker": {"id": "worker-id"}})
+        self.assertIn("Delivery title: " + title, create.call_args.args[0]["context"])
+
+    def test_success_and_failure_notifications_use_delivery_title_not_base(self):
+        title = "Выпуск сохраняет настройки безопасно"
+        state = {pilot.DELIVERY_STATE_KEY: {"version": 2, "targets": {}, "audit": {},
+            "outbox": {"done": {"id": "done", "status": "pending",
+                "waits": [{"base": "Старая проблема", "delivery_title": title}]}}}}
+        with mock.patch.object(pilot, "STATE_PATH", "/tmp/delivery-title-notify.json"), \
+                mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", "/tmp/delivery-title-outbox.jsonl"), \
+                mock.patch.object(pilot, "notify") as notify:
+            pilot.dispatch_delivery_outbox({}, state)
+        self.assertEqual(notify.call_args.args[2], title)
+
+        failure_state = {}
+        generation = {"id": "release-1", "waits": {"verify": {
+            "base": "Старая проблема", "delivery_title": title}}}
+        pilot._fail_generation(failure_state, {"id": "factory"}, generation,
+                               "release_failed", 1)
+        failed = failure_state[pilot.DELIVERY_STATE_KEY]["outbox"]["release-1:failed"]
+        self.assertEqual(failed["titles"], [title])
 
 
 if __name__ == "__main__":
