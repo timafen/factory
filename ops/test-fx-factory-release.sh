@@ -764,9 +764,14 @@ EOF
   # those constants and accepts the fixture owner's files; the shipped script
   # remains unable to read PATH or environment overrides for the gate chain.
   fixture_uid=$(id -u)
+  # The managed test sandbox may present immutable system binaries through a
+  # different UID mapping than the process which builds the fixture.  Keep the
+  # production root-only check intact, while allowing that mapped owner in the
+  # generated hermetic copy alongside the fixture owner.
+  trusted_host_uid=$(/usr/bin/stat -Lc %u -- /usr/bin/stat)
   /bin/sed \
     -e "s|^TRUSTED_OWNER_UID=0$|TRUSTED_OWNER_UID=$fixture_uid|" \
-    -e 's|\[ "$owner" = "$TRUSTED_OWNER_UID" \]|[[ "$owner" = 0 \|\| "$owner" = "$TRUSTED_OWNER_UID" ]]|' \
+    -e 's@\[ "$owner" = "$TRUSTED_OWNER_UID" \]@[[ "$owner" = 0 || "$owner" = "$TRUSTED_OWNER_UID" || "$owner" = "'"$trusted_host_uid"'" ]]@' \
     -e "s|^TRUSTED_SETSID=.*$|TRUSTED_SETSID=$case_dir/trusted/setsid|" \
     -e "s|^TRUSTED_SUDO=.*$|TRUSTED_SUDO=$case_dir/trusted/sudo|" \
     -e "s|^TRUSTED_NODE=.*$|TRUSTED_NODE=$case_dir/trusted/node|" \
