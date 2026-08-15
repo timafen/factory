@@ -8886,5 +8886,41 @@ class MergedCommitShaTests(unittest.TestCase):
             self.assertEqual(pilot._merged_commit_sha("o/r", "br"), "d" * 40)
 
 
+class AnsweredWorkReservationTests(unittest.TestCase):
+    def test_answered_heavy_reservation_blocks_new_heavy_work_not_light(self):
+        question = {
+            "id": "https-answer", "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z",
+            "reservation": {"stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z"},
+        }
+        conf = {"_answer_reservations": [pilot._reservation_from_question(question)]}
+        heavy = {"title": "[auto] [3/5 Implement + Test] Новая работа"}
+        light = {"title": "[auto] [2/5 Specification] Лёгкая работа"}
+        self.assertEqual(pilot.task_admission_result(conf, heavy)["reason"],
+                         "reserved_answered_work")
+        self.assertTrue(pilot.task_admission_result(conf, light)["admitted"])
+
+    def test_dashboard_reports_reserved_answer_without_open_question_badge(self):
+        question = {
+            "id": "https-answer", "status": "answered", "answer": "Продолжай",
+            "resume_stage": "Implement + Test", "title": "HTTPS",
+            "reservation": {"stage": "Implement + Test", "answered_at": "2026-08-12T10:00:00Z"},
+        }
+        with mock.patch.object(pilot, "load_questions", return_value=[question]), \
+                mock.patch.object(pilot, "save") as save, \
+                mock.patch.object(pilot, "dashboard_slow", return_value={}), \
+                mock.patch.object(pilot, "host_block", return_value={}), \
+                mock.patch.object(pilot, "limits_view", return_value={}), \
+                mock.patch.object(pilot, "pipeline_health", return_value={}), \
+                mock.patch.object(pilot, "recent_done_block", return_value=[]), \
+                mock.patch.object(pilot, "brain_block", return_value={}), \
+                mock.patch.object(pilot, "_sh", return_value=""):
+            pilot.write_dashboard({}, [], {})
+        data = save.call_args.args[1]
+        self.assertEqual(data["now"]["questions_count"], 0)
+        self.assertEqual(data["now"]["reserved_answers_count"], 1)
+        self.assertTrue(data["now"]["questions"][0]["reserved"])
+
+
 if __name__ == "__main__":
     unittest.main()

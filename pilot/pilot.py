@@ -66,6 +66,14 @@ class ParallelWorkLimit(RuntimeError):
     """A pipeline handoff must wait until another work slot is free."""
 
 
+class AdmissionDeferred(RuntimeError):
+    """A task is waiting for a specific admission condition."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(f"{reason}: stage deferred")
+
+
 def api(path, body=None):
     req = urllib.request.Request(API + path)
     if body is not None:
@@ -524,10 +532,10 @@ def create_task(body, conf=None):
             and len(active_auto_works(active_tasks)) >= int(
                 (conf or {}).get("max_parallel_works", MAX_PARALLEL_WORKS))):
         raise ParallelWorkLimit("parallel_work_limit: stage deferred")
-    if conf and not host_load_admits(
-            conf.get("_host_load_tasks"), stage_from_title(body.get("title", "")),
-            conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
-        raise RuntimeError("host_load_admission: stage deferred")
+    if conf:
+        admission = task_admission_result(conf, body)
+        if not admission["admitted"]:
+            raise AdmissionDeferred(admission["reason"])
     if conf and str(body.get("title", "")).startswith(PREFIX):
         money_guard(conf, body["title"])
     if str(body.get("title", "")).startswith(PREFIX):
@@ -1805,12 +1813,12 @@ def final_ok(task_id, strict=False):
     return bool(rec["final_pass"])
 
 
-def supersede_stale_questions(tasks):
+def supersede_stale_questions(tasks, conf=None):
     """Вопрос, висящий на отменённой/упавшей задаче, блокирует эпик навсегда,
     хотя работа уже прошла эту стадию в другой задаче. Такие вопросы снимаем."""
     by_id = {t["id"]: t for t in tasks}
     for q in load_questions():
-        if q.get("status") != "open":
+        if q.get("status") not in ("open", "answered", "no_worker"):
             continue
         t = by_id.get(q.get("task_id"))
         if not t or t.get("state") not in ("cancelled", "failed"):
@@ -1823,6 +1831,7 @@ def supersede_stale_questions(tasks):
         if not newer or newer["id"] == t["id"]:
             continue
         q["status"] = "obsolete"
+        release_answer_reservation(conf or {}, q)
         q["escalation_reason"] = (
             f"вопрос снят автоматически: эта работа уже прошла стадию "
             f"в задаче {newer['id'][:8]} ({newer.get('state')})")
@@ -4967,10 +4976,12 @@ def record_new_works(conf, tasks, max_age_min=180):
 
 
 def handle_answers(conf, workflows, workers, tasks):
-    """An answered question resumes its pipeline from resume_stage."""
+    """Resume answered work before admitting newer heavy automatic work."""
     stages = [s["workflow"] for s in conf["stages"]]
     applied = 0
-    for q in load_questions():
+    questions = sorted(load_questions(), key=lambda q: (q.get("answered_at") or "", q.get("id") or ""))
+    refresh_answer_reservations(conf, questions)
+    for q in questions:
         if q.get("status") not in ("answered", "no_worker") or not q.get("answer"):
             continue
         # re-read right before acting: an external writer (UI, one-off script)
@@ -4980,6 +4991,7 @@ def handle_answers(conf, workflows, workers, tasks):
                 or fresh.get("resumed_task_id")):
             continue
         q = fresh
+        heavy = q.get("resume_stage") not in HOST_LOAD_LIGHT_STAGES
         src_task = next((t for t in tasks if t.get("id") == q.get("task_id")), None)
         closed_reason = work_lifecycle_block(q.get("title", ""), src_task, tasks)
         if closed_reason:
@@ -5029,6 +5041,11 @@ def handle_answers(conf, workflows, workers, tasks):
                     f"нет исполнителя сильнее {was} (кандидат={candidate})")
         worker = workers.get(selected_worker)
         if not nw or not nw.get("enabled") or not worker:
+            if heavy:
+                reserve_answered_work(conf, q, "no_compatible_worker",
+                    "ответ принят, ожидает зарезервированный слот: нет совместимого исполнителя",
+                    status="no_worker")
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer: no workflow/worker for {stage}")
             continue
         base = base_title(q.get("title", ""))
@@ -5067,6 +5084,7 @@ def handle_answers(conf, workflows, workers, tasks):
         dup = live_or_done_at(tasks, src_task or q["title"], idx + 1,
                               since=(src_task or {}).get("created_at"))
         if dup:
+            release_answer_reservation(conf, q)
             q["status"] = "resolved"
             q["resumed_task_id"] = dup["id"]
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
@@ -5106,6 +5124,7 @@ def handle_answers(conf, workflows, workers, tasks):
             q["last_resume_try"] = time.time()
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
         try:
+            conf["_answer_reservation_in_progress"] = q["id"]
             correction_kind = {
                 "Review": "review_return",
                 "Verify": "verify_return",
@@ -5114,6 +5133,7 @@ def handle_answers(conf, workflows, workers, tasks):
                 body, src_task or {"id": q.get("task_id")}, conf,
                 correction_kind)
             tid = r.get("task", {}).get("id")
+            release_answer_reservation(conf, q)
             q["status"] = "resolved"
             q["resumed_task_id"] = tid
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
@@ -5122,14 +5142,23 @@ def handle_answers(conf, workflows, workers, tasks):
             notify(conf, "Ответ принят, работа продолжена",
                    f"{q['title']}\nСтадия: {stage}", tags="arrow_forward",
                    click=f"{UI_BASE}/tasks/{tid}")
-        except ParallelWorkLimit:
-            log(f"answer resume deferred for {q['id']}: заняты все слоты работ")
+        except (ParallelWorkLimit, AdmissionDeferred) as error:
+            reason = getattr(error, "reason", "reserved_answered_work")
+            if heavy:
+                explanation = ("ответ принят, ожидает зарезервированный слот из-за загрузки сервера"
+                               if reason == "host_load" else
+                               "ответ принят, ожидает зарезервированный слот: заняты все рабочие места")
+                reserve_answered_work(conf, q, reason, explanation)
+                save(f"{QUESTION_DIR}/{q['id']}.json", q)
+            log(f"answer resume deferred for {q['id']}: {reason}")
             break
         except Exception as e:
             q["resume_tries"] = tries + 1
             q["last_error"] = repr(e)[:200]
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
             log(f"answer resume failed for {q['id']} (попытка {tries+1}/5): {e}")
+        finally:
+            conf.pop("_answer_reservation_in_progress", None)
     return applied
 
 
@@ -6728,21 +6757,85 @@ def stage_from_title(title):
     return match.group(1).strip() if match else ""
 
 
-def host_load_admits(tasks, stage, load, respect_host_load=True):
-    """Decide whether a pipeline stage may start under the current host load."""
+def host_load_admission(tasks, stage, load, respect_host_load=True):
+    """Return an explicit host-load admission decision for one stage."""
     if not respect_host_load or not load or load.get("state") != "over":
-        return True
+        return {"admitted": True, "reason": ""}
     if any((load.get(resource) or {}).get("state") == "over"
            for resource in ("memory", "disk")):
-        return False
+        return {"admitted": False, "reason": "host_load"}
     # Pipeline continuations share one CPU reservation. Counting task rows
     # would briefly consume two slots during a handoff, while using a title
     # would merge two independent, equally named works.
     active = len({task_work_id(task) for task in (tasks or [])
                   if task.get("state") in HOST_LOAD_ACTIVE_STATES})
     if active < HOST_LOAD_MINIMUM_ACTIVE:
-        return True
-    return stage in HOST_LOAD_LIGHT_STAGES
+        return {"admitted": True, "reason": ""}
+    return {"admitted": stage in HOST_LOAD_LIGHT_STAGES,
+            "reason": "" if stage in HOST_LOAD_LIGHT_STAGES else "host_load"}
+
+
+def host_load_admits(tasks, stage, load, respect_host_load=True):
+    return host_load_admission(tasks, stage, load, respect_host_load)["admitted"]
+
+
+def is_heavy_automatic_stage(body):
+    title = str((body or {}).get("title") or "")
+    stage = stage_from_title(title)
+    return bool(title.startswith(PREFIX) and stage and stage not in HOST_LOAD_LIGHT_STAGES)
+
+
+def _reservation_from_question(question):
+    if not isinstance(question, dict) or question.get("status") not in ("answered", "no_worker"):
+        return None
+    if not question.get("answer") or question.get("resumed_task_id") or not isinstance(question.get("reservation"), dict):
+        return None
+    raw = question["reservation"]
+    question_id = str(question.get("id") or "")
+    stage = str(raw.get("stage") or question.get("resume_stage") or "")
+    if not question_id or not stage:
+        return None
+    return {"question_id": question_id, "stage": stage,
+            "answered_at": str(raw.get("answered_at") or question.get("answered_at") or "")}
+
+
+def refresh_answer_reservations(conf, questions=None):
+    records = questions if questions is not None else load_questions()
+    conf["_answer_reservations"] = sorted(
+        [r for r in (_reservation_from_question(q) for q in records or []) if r],
+        key=lambda r: (r["answered_at"], r["question_id"]),
+    )
+    return conf["_answer_reservations"]
+
+
+def answer_reservations(conf):
+    return conf.get("_answer_reservations") if isinstance(conf.get("_answer_reservations"), list) else refresh_answer_reservations(conf)
+
+
+def reserve_answered_work(conf, question, reason, explanation, status="answered"):
+    reservation = dict(question.get("reservation") or {})
+    reservation.setdefault("stage", question.get("resume_stage") or "")
+    reservation.setdefault("answered_at", question.get("answered_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    question["reservation"] = reservation
+    question["status"] = status
+    question["admission_reason"] = reason
+    question["escalation_reason"] = explanation
+    refresh_answer_reservations(conf)
+
+
+def release_answer_reservation(conf, question):
+    question.pop("reservation", None)
+    refresh_answer_reservations(conf)
+
+
+def task_admission_result(conf, body):
+    host = host_load_admission(conf.get("_host_load_tasks"), stage_from_title((body or {}).get("title", "")), conf.get("_host_load_snapshot"), conf.get("respect_host_load", True))
+    if not is_heavy_automatic_stage(body):
+        return host
+    reservations = answer_reservations(conf)
+    if reservations and str(conf.get("_answer_reservation_in_progress") or "") != reservations[0]["question_id"]:
+        return {"admitted": False, "reason": "reserved_answered_work"}
+    return host
 
 
 MERGES_PATH = f"{HOME}/pilot/merges.jsonl"
@@ -6900,7 +6993,19 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
         if w.get("health") == "healthy":
             d["healthy"] += 1
 
-    questions = [q for q in load_questions() if q.get("status") in ("open", "stuck")]
+    all_questions = load_questions()
+    questions = [q for q in all_questions if q.get("status") in ("open", "stuck")]
+    reserved = [q for q in all_questions if _reservation_from_question(q)]
+    dashboard_questions = [
+        {"id": q.get("id"), "title": (q.get("title") or "")[:70],
+         "question": (q.get("question") or "")[:140], "status": q.get("status")}
+        for q in questions[:5]
+    ] + [
+        {"id": q.get("id"), "title": (q.get("title") or "")[:70],
+         "status": q.get("status"), "reserved": True,
+         "escalation_reason": q.get("escalation_reason") or ""}
+        for q in reserved[:max(0, 5 - len(questions))]
+    ]
 
     data = {
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -6909,9 +7014,9 @@ def write_dashboard(conf, tasks, workers, codex_snapshot=None, codex_windows=Non
                         for t in by_state.get("running", [])[:5]],
             "running_count": len(by_state.get("running", [])),
             "queued_count": len(by_state.get("queued", [])),
-            "questions": [{"id": q.get("id"), "title": (q.get("title") or "")[:70],
-                           "question": (q.get("question") or "")[:140]} for q in questions[:5]],
+            "questions": dashboard_questions,
             "questions_count": len(questions),
+            "reserved_answers_count": len(reserved),
         },
         "spend": {k: (round(v, 2) if isinstance(v, float) else v) for k, v in spend.items()},
         "brain": brain_block(conf),
@@ -8139,7 +8244,7 @@ def cycle(conf, state):
 
     # Снять вопросы, повисшие на отменённых задачах, иначе эпик стоит вечно.
     try:
-        supersede_stale_questions(tasks)
+        supersede_stale_questions(tasks, conf)
     except Exception as e:
         log("supersede_error", repr(e))
 
