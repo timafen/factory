@@ -101,7 +101,10 @@
 
 ## Тест-план
 
-Расширить `MergeConflictRecoveryTests` с mock GitHub и временным `STATE_PATH`:
+Расширить `MergeConflictRecoveryTests` с mock GitHub и временным `STATE_PATH`.
+Обязательная новая регрессия называется
+`test_second_conflict_closes_current_pr_when_same_work_was_merged`; именно она
+фиксирует итог, который раньше не покрывался:
 
 - второй conflict + открытый Pilot PR + другой merged PR с тем же marker и
   base: ровно один close, `superseded`, audit evidence и ноль correction tasks;
@@ -116,7 +119,7 @@
   случайного текста отчёта.
 
 Обязательная проверка для реализации:
-`python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests`
+`python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests.test_second_conflict_closes_current_pr_when_same_work_was_merged`
 
 На текущем этапе Specification выполнен существующий целевой класс; новые
 регрессии добавляются на этапе Implement + Test.
@@ -145,4 +148,4 @@ CARD-0165 и этот путь свободны.
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests
+ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests.test_second_conflict_closes_current_pr_when_same_work_was_merged
