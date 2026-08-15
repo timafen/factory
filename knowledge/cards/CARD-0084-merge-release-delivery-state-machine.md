@@ -1,18 +1,25 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 37af2af6a38d9737480bf3aa25bb8c87ef7c213f — release-driver сохраняет locked для rc=8 и безопасно повторяет выпуск с тем же operation ID.
+Implementation commit: e8da3c7abf4da5d67fc15980cf0e6aabadfad8ad — authoritative-статусы выпуска защищены root-owned каталогом 0700 и fail-closed проверками.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
-- Branch: `factory/09a97d32-b1e-2eecc051-7b1`.
+- Branch: `factory/6f0e04be-c10-83d60fdc-a06`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `37af2af6a38d9737480bf3aa25bb8c87ef7c213f` — release-driver сохраняет locked для rc=8 и безопасно повторяет выпуск с тем же operation ID.
-- What changed: EXIT-ловушка включается до durable `launching`; rc=8 сохраняет `locked`, а повтор того же ID проходит до `succeeded` без второго физического выпуска.
-- Evidence: `bash ops/test-fx-factory-release.sh` — PASS.
+- Implementation commit: `e8da3c7abf4da5d67fc15980cf0e6aabadfad8ad` — authoritative-статусы выпуска защищены root-owned каталогом 0700 и fail-closed проверками.
+- What changed: systemd создаёт каталог статусов root-owned с mode 0700; driver не создаёт его сам и отвергает symlink, неверного владельца или права.
+- Evidence: `bash ops/test-fx-factory-release.sh`, `bash ops/test-install-project-release-broker.sh`, `go test -count=1 ./internal/releasebroker` — PASS.
 - Next action: Провести повторный Review поставки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Каталог authoritative-статусов перенесён под systemd `StateDirectory` с root-owned
+mode 0700. release-driver fail-closed проверяет реальный каталог, владельца и
+права перед записью; installer-fixture подтверждает защитные проверки, shell и
+Go-проверки прошли.
 
 ### 2026-08-15 — Implement
 
