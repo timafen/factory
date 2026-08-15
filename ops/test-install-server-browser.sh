@@ -16,13 +16,17 @@ share="$temporary/share"
 libexec="$temporary/libexec"
 test_bin="$temporary/bin"
 factory_home="$temporary/factory-home"
-mkdir -p "$share/ops" "$share/web/report" "$test_bin" "$factory_home"
+mkdir -p "$share/ops" "$share/web/report" "$share/internal/controlplane/report_scripts" "$test_bin" "$factory_home"
 cp "$INSTALLER" "$share/ops/install-server-browser.sh"
 cp "$SCRIPT_DIR/factory-browser-sandbox" "$share/ops/factory-browser-sandbox"
 cp "$SCRIPT_DIR/factory-browser-isolated" "$share/ops/factory-browser-isolated"
 cp "$SCRIPT_DIR/test-browser-sandbox.sh" "$share/ops/test-browser-sandbox.sh"
 cp "$SCRIPT_DIR/../web/report/capture.mjs" "$share/web/report/capture.mjs"
 cp "$SCRIPT_DIR/../web/report/render.mjs" "$share/web/report/render.mjs"
+cp "$SCRIPT_DIR/../internal/controlplane/report_scripts/capture.mjs" \
+  "$share/internal/controlplane/report_scripts/capture.mjs"
+cp "$SCRIPT_DIR/../internal/controlplane/report_scripts/render.mjs" \
+  "$share/internal/controlplane/report_scripts/render.mjs"
 cat >"$share/ops/test-systemd-browser-firewall.sh" <<'SH'
 #!/bin/bash
 printf 'bpf-probe=pass\n' >>"$TEST_BROWSER_EVENTS"
@@ -94,6 +98,11 @@ exports.chromium = {
           async screenshot(options) {
             fs.writeFileSync(options.path, "screenshot");
           },
+          async route() {},
+          async setContent() {},
+          async pdf(options) {
+            fs.writeFileSync(options.path, "%PDF-fixture");
+          },
           async close() {
             fs.appendFileSync(process.env.TEST_BROWSER_EVENTS, `page-close=${pageId}\n`);
           },
@@ -150,6 +159,10 @@ SH
 cat >"$test_bin/npm" <<'SH'
 #!/bin/bash
 printf 'npm-cwd=%s args=%s\n' "$PWD" "$*" >>"$TEST_BROWSER_EVENTS"
+if [ -n "${TEST_BROWSER_MODULE_SOURCE:-}" ]; then
+  rm -rf node_modules
+  cp -a "$TEST_BROWSER_MODULE_SOURCE" node_modules
+fi
 SH
 cat >"$test_bin/npx" <<'SH'
 #!/bin/bash
@@ -369,8 +382,8 @@ grep -F 'url=https://example.com' "$temporary/events" >/dev/null \
   || fail "smoke не проверил блокировку внешнего интернета"
 page_count=$(grep -Fc 'page-new=' "$temporary/events")
 closed_page_count=$(grep -Fc 'page-close=' "$temporary/events")
-[ "$page_count" -eq 5 ] && [ "$closed_page_count" -eq 5 ] \
-  || fail "smoke не выделил и не закрыл отдельную page для каждой проверки URL"
+[ "$page_count" -eq 6 ] && [ "$closed_page_count" -eq 5 ] \
+  || fail "network smoke не изолировал URL или PDF smoke не создал отдельную page"
 url_page_count=$(sed -n 's/^goto-page=\([0-9][0-9]*\) url=.*/\1/p' "$temporary/events" \
   | sort -u | wc -l)
 [ "$url_page_count" -eq 5 ] \
@@ -387,6 +400,43 @@ readiness_marker="$FACTORY_DATA_HOME/pilot/browser-readiness.json"
 [ -f "$readiness_marker" ] || fail "успешный sandbox smoke не создал browser readiness marker"
 grep -E '^\{"passed_at":"[0-9TZ:-]+","browser_fingerprint":"[a-f0-9]{64}"\}$' \
   "$readiness_marker" >/dev/null || fail "browser readiness marker содержит лишние или неверные поля"
+
+# The verified checkout is only a source. A release runtime remains complete
+# after that checkout disappears and can still run the production renderer.
+durable="$temporary/durable"
+runtime="$durable/browser-generation"
+mkdir -p "$durable/libexec"
+printf 'previous browser launcher\n' >"$durable/libexec/factory-browser-sandbox"
+chmod 755 "$durable/libexec/factory-browser-sandbox"
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
+  TEST_BROWSER_MODULE_SOURCE="$share/web/node_modules" PATH="$test_bin:$PATH" FACTORY_USER="$(id -un)" \
+  FACTORY_BROWSER_SHARE="$share" FACTORY_BROWSER_RUNTIME="$runtime" \
+  FACTORY_BROWSER_BACKUP_DIR="$durable/live-backup" \
+  FACTORY_BROWSER_LIBEXEC="$durable/libexec" \
+  FACTORY_BROWSER_SUDOERS="$durable/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$durable/apparmor.d/factory-browser" \
+  FACTORY_BROWSER_SCREENSHOT="$durable/screenshot.png" \
+  bash "$linked_installer" >"$durable/output" 2>&1 \
+  || { sed -n '1,80p' "$durable/output" >&2; fail "installer не собрал отдельное browser-поколение"; }
+[ -f "$runtime/browser-readiness.json" ] && [ -d "$runtime/web/node_modules/playwright" ] \
+  || fail "browser-поколение опубликовано без readiness или Playwright"
+durable_pdf="$durable/daily.pdf"
+FACTORY_BROWSER_PAYLOAD="$runtime" FACTORY_BROWSER_LAUNCHER="$durable/libexec/factory-browser-sandbox" \
+  TEST_BROWSER_AS_USER=1 TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
+  node "$runtime/internal/controlplane/report_scripts/render.mjs" "$durable_pdf" \
+  <<<'<h1>Ежедневный отчёт</h1>' \
+  || fail "production renderer не работает из постоянного browser payload"
+[ "$(head -c 5 "$durable_pdf")" = '%PDF-' ] \
+  || fail "production renderer не создал PDF из постоянного browser payload"
+TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" PATH="$test_bin:$PATH" \
+  FACTORY_USER="$(id -un)" FACTORY_BROWSER_LIBEXEC="$durable/libexec" \
+  FACTORY_BROWSER_SUDOERS="$durable/sudoers/factory-browser" \
+  FACTORY_BROWSER_APPARMOR="$durable/apparmor.d/factory-browser" \
+  bash "$linked_installer" --restore-live-state "$durable/live-backup" \
+  >"$durable/restore-output" 2>&1 \
+  || fail "installer не восстановил browser state после позднего отката"
+grep -Fx 'previous browser launcher' "$durable/libexec/factory-browser-sandbox" >/dev/null \
+  || fail "поздний откат не вернул прежний browser launcher"
 
 # A second identical release still proves the browser works, but must not
 # download it or reinstall its system dependencies.
@@ -593,7 +643,7 @@ TEST_BROWSER_EVENTS="$temporary/events" TEST_BROWSER_HOME="$factory_home" \
   bash "$linked_installer" >"$smoke_failure-output" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "installer продолжил работу после реального сбоя Chromium smoke"
 grep -Fx 'Chromium sandbox smoke failed: No usable sandbox' "$smoke_failure-output" >/dev/null \
-  || fail "installer не нормализовал реальный Chromium sandbox failure"
+  || { sed -n '1,80p' "$smoke_failure-output" >&2; fail "installer не нормализовал реальный Chromium sandbox failure"; }
 if grep -F '[ERROR:sandbox_linux.cc' "$smoke_failure-output" >/dev/null; then
   fail "installer опубликовал произвольный Chromium stderr вместо безопасной диагностики"
 fi
