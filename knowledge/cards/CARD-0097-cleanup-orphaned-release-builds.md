@@ -5,17 +5,24 @@ Implementation commit: 747815f7a5969233791b8134e5adad6954f8f782 — выпуск
 ## HEAD
 
 - Status: PASS: изменения перенесены на свежий `main`; целевой release-fixture подтвердил безопасную очистку.
-- Branch: `factory/838067ab-2c4-2eaf967d-ece`.
+- Branch: `factory/b12338e7-245-429b5cd3-11d`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` — PASS;
-  `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh` — PASS.
+  `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh` — PASS;
+  `just check` — PASS.
   Fixture удалил реальный `build-orphaned`, сохранил обычную папку, symlink и
   его внешний target, а также подтвердил публикацию, rollback и signal-cleanup.
 - One next action: влить ветку после обычного review.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+На рабочей ветке повторно пройдены синтаксис shell, изолированный release-fixture
+и полный `just check`: очистка удалила только реальный `build-orphaned`, сохранив
+обычный каталог, symlink и внешний target; проверки проекта завершились успешно.
 
 ### 2026-08-15 — Implement
 
