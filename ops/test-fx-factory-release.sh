@@ -632,7 +632,8 @@ run_release() {
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
-    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
@@ -673,7 +674,8 @@ start_release() {
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
-    FACTORY_RELEASE_BROKER_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/50-project-release-broker.conf" \
+    FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$case_dir/install/50-project-release-broker.conf" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
