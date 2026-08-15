@@ -1,12 +1,12 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 1880b052e5c75c39b677b02b048e7851aa3d7d7b — ежедневный PDF получает browser runtime из штатного релиза
+Implementation commit: 1880b052f37ff0d729053be6ff8a735c56b6b3a4 — ежедневный PDF получает browser runtime из штатного релиза
 
 ## HEAD
 
 - Status: IMPLEMENTED / TARGETED VERIFY PASS
 - Branch: `factory/5c9a9ea0-456-55517af5-639`
-- Implementation commit: `1880b052e5c75c39b677b02b048e7851aa3d7d7b`
+- Implementation commit: `1880b052f37ff0d729053be6ff8a735c56b6b3a4`
 - What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
 - What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
 - Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
