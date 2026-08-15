@@ -1226,6 +1226,13 @@ set -e
   || fail "running preflight refusal did not publish failed"
 [ ! -s "$running_preflight_failed/events" ] \
   || fail "running preflight refusal started a physical release"
+chmod 600 "$running_preflight_failed/current.json"
+FACTORY_DELIVERY_ID=running-preflight-retry run_release "$running_preflight_failed" running-preflight-failed \
+  || { cat "$running_preflight_failed/output" >&2; fail "release after preflight refusal did not run"; }
+[ "$(tr -d '\r\n' <"$running_preflight_failed/delivery-state/running-preflight-retry.status")" = succeeded ] \
+  || fail "release after preflight refusal did not finish successfully"
+[ "$(grep -Fxc 'restart factory-server.service' "$running_preflight_failed/events")" -eq 1 ] \
+  || fail "release after preflight refusal did not perform exactly one release"
 
 metadata_mode="$temporary/metadata-mode-0644"
 make_fixture "$metadata_mode" metadata-mode-0644
@@ -1663,16 +1670,16 @@ FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked
 status=$?
 set -e
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
-[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = locked ] \
-  || fail "concurrent release did not durably record locked status"
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = failed ] \
+  || fail "concurrent release did not durably record failed status"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
 flock -u 8
-FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked \
-  || { cat "$locked/output" >&2; fail "locked delivery retry did not run"; }
-[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = succeeded ] \
-  || fail "locked delivery retry did not finish successfully"
+FACTORY_DELIVERY_ID=locked-retry-next run_release "$locked" locked \
+  || { cat "$locked/output" >&2; fail "release after lock failure did not run"; }
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry-next.status")" = succeeded ] \
+  || fail "release after lock failure did not finish successfully"
 [ "$(grep -Fxc 'restart factory-server.service' "$locked/events")" -eq 1 ] \
-  || fail "locked delivery retry did not perform exactly one release"
+  || fail "release after lock failure did not perform exactly one release"
 
 echo "PASS: ворота тестов, единая установка, регистрация и общий откат проверены"
