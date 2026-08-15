@@ -1,18 +1,25 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 42169605bf72c7274437141b20c7594555d0257a — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+Implementation commit: 41da46bd0cf7f5f2cd1eade3914a1d845814ec5b — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
 
 ## HEAD
 
 - Status: Implemented — ready for повторного Review.
-- Branch: `factory/6fd1bc3c-993-e185fb49-ba9`.
+- Branch: `factory/db058006-155-449252d4-bee`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: `42169605bf72c7274437141b20c7594555d0257a` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
+- Implementation commit: `41da46bd0cf7f5f2cd1eade3914a1d845814ec5b` — release-driver сохраняет failed при ошибках после launching до основной cleanup-ловушки.
 - What changed: минимальная EXIT-ловушка ставится сразу после durable `launching`; lock и preflight ошибки оставляют `failed`, а новый delivery ID может выполнить повторный выпуск.
 - Evidence: `bash ops/test-fx-factory-release.sh` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
-- Next action: Повторить Review на свежем `main`.
+- Next action: Провести повторный Review поставки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Реализация перенесена на свежий `origin/main`; ранние ошибки после durable
+`launching` завершают операцию статусом `failed`, а fail-closed recovery не
+запускает второй физический выпуск. Профильные Go- и shell-проверки, а также
+сборка прошли после перебазирования.
 
 ### 2026-08-15 — Implement
 
