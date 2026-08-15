@@ -4,8 +4,8 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
 
 ## HEAD
 
-- Status: BLOCKED: общий `just check` не завершился в verify-среде.
-- Branch: `factory/db86ddee-ec7-d45dcede-582`.
+- Status: PASS: целевой release-fixture подтвердил безопасную очистку.
+- Branch: `factory/f6ed9c59-55e-85f4cb35-7dc`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
 - What changed: после release lock выпуск удаляет только реальные верхнеуровневые
   `build-*`; symlink, внешний target и остальные имена сохраняются.
@@ -13,12 +13,19 @@ Implementation commit: 1d79a563c99c1d2d53eab68d4a2dd965007be2c6 — выпуск
   `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` — PASS.
   Fixture удалил реальный `build-orphaned`, сохранил обычную папку, symlink и
   его внешний target, а также подтвердил публикацию, rollback и signal-cleanup.
-- Known baseline: общий `just check` в чистой копии дошёл до `staticcheck`, но
-  среда прервала запуск после автоматической смены Go toolchain; целевой fixture
-  и синтаксис прошли полностью.
-- One next action: выполнить полный `just check` в CI, затем принять решение о вливании.
+- Known baseline: общий `just check` дошёл до `staticcheck` и завершился
+  на прежнем SA4000 в `internal/worker/attempt_lifecycle_test.go`, вне diff задачи.
+- One next action: влить ветку после обычного review.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Реализация повторно сверена со всеми критериями спецификации. `bash -n`
+и `FACTORY_RELEASE_TEST_TIMEOUT=60 bash ops/test-fx-factory-release.sh` прошли:
+штатный выпуск удалил реальный `build-orphaned`, сохранил чужую папку,
+symlink и его внешний target, а также все publish/rollback/signal-сценарии.
+Общий `just check` остановился на прежнем SA4000 вне области задачи.
 
 ### 2026-08-12 — Specification
 
