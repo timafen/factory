@@ -447,7 +447,7 @@ export function WorkView({
 
   return (
     <div className="page page-work">
-      <ViewHeader title="Работы" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
+      <ViewHeader title="Работа" fetching={fetching} updatedAt={updatedAt} onRefresh={onRefresh} />
       {error && <StaleBanner error={error} />}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 14px", flexWrap: "wrap" }}>
