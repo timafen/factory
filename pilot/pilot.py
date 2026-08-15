@@ -469,6 +469,30 @@ TRIAGE_AGENT_RULES = """
 """
 
 
+STAGE_VERDICT_RULES = {
+    "Specification": """
+БЫСТРАЯ ПЕРЕДАЧА ЭТАПА: первая непустая строка финального отчёта должна быть
+ровно `READY TO IMPLEMENT`, только если спецификация полна, опубликована в
+ветке и содержит проверяемые ГОТОВО-КОГДА. Иначе начни с `NEEDS INFORMATION`
+или `BLOCKED` и честно объясни причину.
+""",
+    "Implement + Test": """
+БЫСТРАЯ ПЕРЕДАЧА ЭТАПА: первая непустая строка финального отчёта должна быть
+ровно `READY TO REVIEW`, только если реализация закончена, целевые проверки
+прошли и ветка отправлена в origin. Иначе начни с `BLOCKED` и честно объясни
+причину.
+""",
+    "Review": """
+БЫСТРАЯ ПЕРЕДАЧА ЭТАПА: первая непустая строка финального отчёта должна быть
+ровно `APPROVE`, `REQUEST CHANGES` или `BLOCKED`; не прячь вердикт в прозе.
+""",
+    "Verify": """
+БЫСТРАЯ ПЕРЕДАЧА ЭТАПА: первая непустая строка финального отчёта должна быть
+ровно `PASS` или `BLOCKED`; не прячь вердикт в прозе.
+""",
+}
+
+
 VERIFY_AGENT_OVERRIDE = """
 ФИНАЛЬНАЯ ПРОВЕРКА — ТОЛЬКО ЧТЕНИЕ.
 Этот этап проверяет ровно тот снимок ветки, который уже прошёл Review. Поэтому
@@ -496,6 +520,12 @@ def agent_rules(conf=None, stage=""):
         rules = rules.replace(
             "=== КОНЕЦ ПРАВИЛ ===",
             VERIFY_AGENT_OVERRIDE.strip() + "\n=== КОНЕЦ ПРАВИЛ ===",
+        )
+    verdict_rule = STAGE_VERDICT_RULES.get(str(stage).strip(), "").strip()
+    if verdict_rule:
+        rules = rules.replace(
+            "=== КОНЕЦ ПРАВИЛ ===",
+            verdict_rule + "\n=== КОНЕЦ ПРАВИЛ ===",
         )
     channel = notification_channel(conf)
     if not channel:
@@ -5331,6 +5361,18 @@ def certain_positive_decision(stage, result):
         ("Triage", "READY TO SPECIFY"): (
             "advance",
             "Разбор подтвердил, что работа актуальна и готова к спецификации."),
+        ("Specification", "READY TO IMPLEMENT"): (
+            "advance",
+            "Спецификация закончена, опубликована и содержит проверяемые признаки готовности."),
+        ("Implement + Test", "READY TO REVIEW"): (
+            "advance",
+            "Реализация закончена, целевые проверки прошли, ветка опубликована для ревью."),
+        # Older in-flight Implement tasks already use this exact positive
+        # marker. Keep it fast while the stricter stage-specific contract rolls
+        # through the currently running work.
+        ("Implement + Test", "PASS"): (
+            "advance",
+            "Реализация закончена и заявленные проверки прошли."),
         ("Review", "APPROVE"): (
             "advance",
             "Проверка изменений одобрила работу без замечаний."),
