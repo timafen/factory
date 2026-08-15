@@ -408,11 +408,13 @@ validate_release_history() {
       || { preflight_fail "ссылки current/previous не указывают на проверенные поколения"; return 1; }
   done
 
+  # Only current and previous can be installed or rolled back to, and both were
+  # verified above. Older entries remain structurally constrained here, but
+  # hashing every historical SQLite snapshot made each release slower as the
+  # archive grew without adding rollback safety.
   while IFS= read -r -d '' candidate; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] \
       || { preflight_fail "в истории есть неатомарное поколение: $candidate"; return 1; }
-    verify_generation "$candidate" \
-      || { preflight_fail "в истории есть непроверенное поколение: $candidate"; return 1; }
   done < <(find "$generations_real" -mindepth 1 -maxdepth 1 -print0)
 }
 
@@ -1294,21 +1296,25 @@ rollback_armed=0
 rm -f "$JOURNAL"; sync_path "$REL"
 cleanup
 
-# Retention runs only after commit and always protects current, previous and all
-# pre-027 snapshots. Two complete generations and fourteen days are minimums.
+# Retention runs only after commit and always protects current, previous and the
+# bootstrap snapshots from ledger 27 or earlier. Every other generation is
+# unreachable by the rollback command, so retaining and re-hashing it only
+# consumes disk and lengthens every later release.
 current_real=$(readlink -f "$CURRENT"); previous_real=$(readlink -f "$PREVIOUS")
 while read -r candidate; do
   [ "$candidate" != "$current_real" ] || continue
   [ "$candidate" != "$previous_real" ] || continue
-  if [ -e "$candidate/database.sqlite3" ] \
-    && [ "$(database_ledger "$candidate/database.sqlite3" 2>/dev/null || echo 999999)" -lt 27 ]; then
+  candidate_ledger=$(python3 - "$candidate/manifest.json" <<'PY' 2>/dev/null || echo 999999
+import json, sys
+print(int(json.load(open(sys.argv[1])).get("database", {}).get("ledger", 999999)))
+PY
+)
+  if [ "$candidate_ledger" -le 27 ]; then
     continue
   fi
-  verify_generation "$candidate" || continue
-  if find "$candidate" -maxdepth 0 -mtime +14 -print -quit | grep -q .; then
-    rm -rf -- "$candidate"
-    echo "== retention: удалено проверенное поколение старше 14 дней: $(basename "$candidate")"
-  fi
+  rm -rf -- "$candidate"
+  echo "== retention: удалено старое поколение вне current/previous: $(basename "$candidate")"
 done < <(find "$GENERATIONS" -mindepth 1 -maxdepth 1 -type d -print)
+sync_path "$GENERATIONS"
 echo "== выкачено: $subject; current=$sha previous=$current_sha snapshot=$(basename "$generation_path")/database.sqlite3 manifest=$(manifest_hash "$generation_path")"
 exit 0
