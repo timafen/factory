@@ -232,6 +232,8 @@ button { color: inherit; }
   margin-bottom: 16px;
 }
 .view-toolbar p { margin: 0; color: var(--fg-3); font-size: 13px; }
+.epics-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.epics-toolbar p { min-width: min(100%, 260px); }
 .muted { color: var(--fg-3); }
 
 /* ---------- status ---------- */
@@ -294,6 +296,11 @@ button { color: inherit; }
 .workflow-identity strong, .workflow-identity small { display: block; }
 .workflow-identity strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-identity small { margin-top: 3px; overflow: hidden; color: var(--fg-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.automation-filterbar { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.automation-filterbar label { min-width: min(100%, 210px); display: grid; gap: 5px; color: var(--fg-3); font-size: 11px; }
+.automation-filterbar select { width: 100%; min-width: 0; height: 34px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--bg); color: var(--fg); }
+.automation-filter-count { margin-left: auto; padding-bottom: 8px; color: var(--fg-3); font-size: 12px; white-space: nowrap; }
 
 .automation-table-head, .automation-row {
   display: grid;
@@ -826,6 +833,7 @@ button { color: inherit; }
 .worker-detail-heading { align-items: center; }
 .worker-detail-identity { display: flex; align-items: center; gap: 12px; }
 .worker-detail-identity h1 { margin-top: 0; }
+.worker-profile-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .worker-state-line {
   display: flex;
   align-items: center;
@@ -1230,7 +1238,12 @@ button { color: inherit; }
 
 /* ---------- pilot settings ---------- */
 .settings-page { max-width: 1180px; }
+.settings-header-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.settings-nav { position: sticky; top: 52px; z-index: 5; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: color-mix(in srgb, var(--panel) 94%, transparent); }
+.settings-nav a { min-height: 36px; display: inline-flex; align-items: center; padding: 6px 10px; border-radius: var(--radius); color: var(--fg-2); text-decoration: none; font-size: 12px; }
+.settings-nav a:hover, .settings-nav a:focus-visible { background: var(--panel-2); color: var(--fg); }
 .settings-section { margin-top: 16px; padding: 20px; }
+.settings-section { scroll-margin-top: 108px; }
 .settings-section h2 { margin: 0 0 16px; font-size: 16px; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; }
 .settings-full { grid-column: 1 / -1; }
@@ -1314,6 +1327,8 @@ button { color: inherit; }
   .task-stack { min-height: 0; }
   .column-empty { display: none; }
   .detail-heading { flex-direction: column; }
+  .worker-detail-identity { align-items: flex-start; min-width: 0; width: 100%; }
+  .worker-detail-identity > div { min-width: 0; }
   .detail-actions { width: 100%; flex-wrap: wrap; }
   .detail-actions > .button { flex: 1; }
   .confirm-action { width: 100%; }
@@ -1339,6 +1354,10 @@ button { color: inherit; }
   .repository-worker-row { grid-template-columns: 26px minmax(0, 1fr); }
   .repository-worker-facts { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
   .automation-form-grid { grid-template-columns: 1fr; }
+  .automation-filterbar { align-items: stretch; }
+  .automation-filterbar > svg { display: none; }
+  .automation-filterbar label { flex: 1 1 150px; min-width: 0; }
+  .automation-filter-count { width: 100%; margin-left: 0; padding-bottom: 0; }
   .automation-form-grid .field:last-of-type { grid-column: auto; }
   .automation-metrics { grid-template-columns: 1fr 1fr; }
   .occurrence-row { grid-template-columns: 80px minmax(0, 1fr); }
@@ -1348,6 +1367,10 @@ button { color: inherit; }
 	.settings-grid { grid-template-columns: minmax(0, 1fr); }
 	.settings-full { grid-column: 1; }
 	.settings-grid > *, .settings-check > span { min-width: 0; }
+	.settings-header-actions { width: 100%; justify-content: stretch; }
+	.settings-header-actions .button { flex: 1; }
+	.settings-nav { position: static; overflow-wrap: anywhere; }
+	.settings-nav a { flex: 1 1 130px; }
 	.settings-stage-table { width: 100%; max-width: 100%; }
 	.brain-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.brain-actions { align-items: center; }
