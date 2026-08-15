@@ -6,7 +6,7 @@ Status: In progress — фильтр решений владельца и рус
 
 Branch: `factory/769ab244-93c-5d82e3e6-29d`
 
-Implementation commit: e8a24c0d2cc5e37c012ad352563dca9b5dbb0a2d — список показывает только работы, где нужно решение владельца, а detail-экран переведён на русский.
+Implementation commit: a7981373f2e907736d4ebec9f101d79f267daacd — production-сборка содержит фильтр решений владельца и русский detail-экран.
 
 What changed:
 
