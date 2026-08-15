@@ -1,18 +1,18 @@
-Implementation commit: 74ca1989b7e6ef54e04d00fae4192bec43bcae73 — Codex и Claude Code получают единый GH_REPO из origin задачи
-
 # CARD-0300: Рабочий checkout направляет GitHub CLI в origin задачи
 
 ## HEAD
 
 Status: Implemented and tested
-Branch: factory/34a15183-a8e-f81060ed-2f1
+Implementation commit: c0dbe1c2d89be440b48aa3f9b2019613b33b28d4 — Codex и Claude Code получают единый GH_REPO из origin задачи
+Branch: factory/80ab804a-2dc-a4c9d49b-962
 Specification: `knowledge/specs/working-checkout-origin-target-github-repository.md`
 What changed: общий конструктор runtime-команды применяет вычисленный из
 GitHub.com identity `GH_REPO` и к Codex, и к Claude Code; чужое унаследованное
 значение удаляется.
-Evidence: 3 целевых теста — PASS; `go test -timeout 5m ./...` — PASS;
-`FACTORY_BUILD_DIR=/tmp/card-0300-build just build` — PASS.
-One next action: Verify сверяет ветку со свежим remote default branch.
+Evidence: 3 целевых теста, `go test -count=1 ./...`, `go build ./...` и
+`npx tsc -p tsconfig.app.json --noEmit` — PASS.
+One next action: Verify сравнивает ветку со свежим remote default branch и
+проверяет опубликованный SHA.
 
 ## LOG
 
@@ -35,3 +35,10 @@ identity переменная удаляется целиком.
 unit-тест подтвердил нормализацию и отрицательную матрицу, новый тест — оба
 runtime, сквозной worker-тест — полный путь claim → supervisor → fake Codex.
 Полный Go-набор и сборка трёх исполняемых файлов завершились успешно.
+
+### 2026-08-15 — Implement
+
+Возобновлённая стадия подтвердила реализацию в свежем `origin/main`; указанный
+старый ref исполнителя отсутствует на origin, поэтому чужие коммиты не копировались.
+Целевые worker-тесты, полный Go-набор, `go build ./...` и TypeScript-проверка
+`web` завершились успешно.
