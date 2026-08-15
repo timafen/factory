@@ -1,0 +1,15 @@
+[Unit]
+Description=Безопасная уборка диска Factory
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Janitor останавливает worker units и возвращает владельца файлов после уборки.
+# Это требует root; запись ограничена только рабочими каталогами janitor.
+User=root
+Group=root
+ExecStart=/opt/factory/ops/factory-janitor.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/factory-data /var/lib/factory-janitor /var/log/factory-janitor.log /run/factory-janitor.lock
