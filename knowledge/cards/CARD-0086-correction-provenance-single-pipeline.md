@@ -2,15 +2,24 @@
 
 ## HEAD
 
-Implementation commit: faeea5d59af3d5e4ae6af947493a9d70cb08c15e — Pilot сохраняет границы поколений и delivery artifact по durable work_id.
+Implementation commit: 30df638fa4d546606dde22107427e112ec6e7d24 — Pilot сохраняет `work_id` в merge intent и вопросах блокировок Review/Verify.
 - Status: PASS — перенесено поверх свежего `origin/main`.
-- Branch: `factory/41c411be-17e-a852630a-f7e`.
-- What changed: Review/Verify corrections и одноимённые работы остаются в одном
-  устойчивом конвейере; lifecycle и выбранная поставка не теряют work_id после рестарта.
-- Evidence: target Go 5 tests, `CorrectionProvenanceStormTests` 11, полный Pilot 306 (13 skipped), `go test ./...` и `go build ./...` — PASS.
+- Branch: `factory/d0f0418b-cc6-bb55aba1-416`.
+- What changed: две одноимённые работы сохраняют отдельные merge receipts после
+  рестарта; Review и Verify блокируют только работу с переданным durable `work_id`.
+- Evidence: 2 новые регрессии и полный `pilot.test_pilot` — 308 PASS (13 skipped);
+  `npx tsc -p tsconfig.app.json --noEmit` — PASS.
 - Next action: выполнить Verify для запушенной ветки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Исправлены замечания Review: intent merge теперь сохраняет durable `work_id`, а
+обе блокировки Verify и блокировка Review передают его в `route_question`.
+Две регрессии подтверждают раздельные receipts одноимённых работ после
+сохранения/перезапуска и раздельные вопросы блокировок; полный Pilot (308, 13
+skipped) и TypeScript typecheck прошли.
 
 ### 2026-08-14 — Implement
 
