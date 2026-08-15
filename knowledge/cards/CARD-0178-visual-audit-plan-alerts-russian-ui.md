@@ -1,24 +1,30 @@
-Implementation commit: cc4b98eeeb0bdbd546ecb2488d2a57ee5bf2a703 — компактный План, сгруппированные Уведомления и единый русский интерфейс
+Implementation commit: 3cb2c48ab31acdf3df868eb4000a01c70988793c — русский язык постановки и просмотра задач, конвейера и статусов автоматизаций
 
 # CARD-0178 — Довести визуальный аудит до Плана, Уведомлений и единого языка
 
 ## HEAD
 
 - Status: Implemented
-- Branch: `factory/983946f1-777-5629fadc-f33`
-- Implementation commit: `cc4b98eeeb0bdbd546ecb2488d2a57ee5bf2a703`
+- Branch: `factory/ad25d359-9c8-61c8396c-b18`
+- Implementation commit: `3cb2c48ab31acdf3df868eb4000a01c70988793c`
 - What changed: обоснование карточки Плана скрыто до запроса, а действия и служебные данные остаются на виду.
 - What changed: Уведомления ограничены 30 свежими событиями, собраны по русским группам и раскрываются явно.
-- What changed: основные экраны Factory переведены на русский и адаптированы для desktop и phone.
+- What changed: постановка, просмотр задач и Конвейер переведены на русский; проверки закрепляют русские подписи.
+- What changed: статусы автоматизаций берутся по стабильному коду, а неизвестный текст сервера заменяется безопасным русским сообщением.
 - Evidence: `python3 -m unittest pilot.test_pilot.PlanManualTaskTest` → 4 tests, OK.
 - Evidence: `npm --prefix web test -- --run src/App.test.tsx src/Settings.test.tsx` → 78 tests passed.
-- Evidence: typecheck, lint и production build → passed; 1739 modules transformed.
+- Evidence: `npx --prefix web tsc -p web/tsconfig.app.json --noEmit` → passed.
+- Evidence: `npm --prefix web run build` → passed; 1739 modules transformed.
 - Evidence: Playwright `shows the real intake Plan and Alerts` → 1 passed; четыре снимка просмотрены вручную.
 - Evidence: Playwright `audits every Factory screen on desktop and phone` → 1 passed.
-- One next action: проверить `/intake/plan` на общем стенде после слияния ветки.
+- One next action: проверить экран «Работы» на общем стенде после слияния ветки.
 
 ## LOG
 
 ### 2026-08-15 — Implement
 
 Сделаны компактный План, сгруппированные Уведомления и русская терминология основных экранов. Реальные intake-обработчики проверены в Chromium на desktop и phone; общий визуальный аудит, компонентные и серверные тесты, типы, lint и production build прошли.
+
+### 2026-08-15 — Implement
+
+Постановка и просмотр задач, а также Конвейер переведены на русский. Сообщения автоматизаций локализуются по стабильным кодам, а неизвестные серверные диагностики заменяются безопасным русским текстом; TypeScript и production build прошли.
