@@ -1,18 +1,25 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: f45e17c1eae0c0c7aa59f52e8386b9932e930ea7 — Gate принимает только kernel status известного launcher.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
-What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
-What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
-One next action: влить ветку в main.
+Status: Implemented
+Branch: factory/25936f6d-f1f-5cc59743-45a.
+Implementation commit: f45e17c1eae0c0c7aa59f52e8386b9932e930ea7 — Gate принимает только kernel status известного launcher.
+What changed: после `wait -n` выпуск принимает результат только от одного из зарегистрированных `setsid --fork --wait` launcher.
+What changed: неизвестный или пустой PID завершения останавливает Gate и не допускает установку.
+Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS.
+One next action: проверить изменения перед слиянием.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После `wait -n` выпуск сверяет PID с обоими launcher, созданными для Gate:
+только так kernel exit status может разрешить установку. Неизвестный PID прерывает
+release и останавливает Gate. `bash -n` и полный `ops/test-fx-factory-release.sh`
+прошли, включая forked failure и forged result.
 
 ### 2026-08-12 — Verify
 
