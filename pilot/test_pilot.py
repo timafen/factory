@@ -3927,6 +3927,83 @@ class PlanCardCleanupTest(unittest.TestCase):
         verdict.assert_not_called()
 
 
+class StalePlanRevalidationTest(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.datetime(2026, 8, 14, 20, 0,
+                                     tzinfo=datetime.timezone.utc).timestamp()
+        self.idea = {
+            "id": "idea-stale", "state": "in_work", "task_id": "triage-old",
+            "title": "Проверить старую проблему", "created": "2026-08-13 10:00",
+            "updated": "2026-08-13 10:00",
+        }
+        self.tasks = [{
+            "id": "triage-old", "work_id": "triage-old",
+            "title": "[auto] [1/5 Triage] Проверить старую проблему",
+            "state": "succeeded", "created_at": "2026-08-13T15:00:00Z",
+        }]
+
+    def reconcile(self, ideas=None, questions=None):
+        saved = []
+        with mock.patch.object(pilot, "ideas_all",
+                               return_value=ideas or [self.idea]), \
+                mock.patch.object(pilot, "load_questions",
+                                  return_value=questions or []), \
+                mock.patch.object(pilot, "save",
+                                  side_effect=lambda path, value: saved.append((path, value))):
+            queued = pilot.reconcile_stale_plan_cards(self.tasks, now=self.now)
+        return queued, saved
+
+    def test_old_generation_returns_to_triage_with_new_generation(self):
+        queued, saved = self.reconcile()
+
+        self.assertEqual(queued, ["idea-stale"])
+        self.assertEqual(self.idea["state"], "planned")
+        self.assertEqual(self.idea["task_id"], "")
+        self.assertTrue(self.idea["run_generation"])
+        self.assertTrue(self.idea["revalidation"])
+        self.assertEqual(len(saved), 1)
+
+    def test_live_recent_or_question_blocked_generation_is_not_requeued(self):
+        cases = (
+            ({"state": "running"}, [], self.now),
+            ({"updated_at": "2026-08-14T19:30:00Z"}, [], self.now),
+            ({}, [{"status": "open", "task_id": "triage-old"}], self.now),
+        )
+        for task_update, questions, now in cases:
+            with self.subTest(task_update=task_update, questions=questions):
+                self.idea["state"] = "in_work"
+                self.idea["task_id"] = "triage-old"
+                self.tasks[0].pop("updated_at", None)
+                self.tasks[0].pop("completed_at", None)
+                self.tasks[0].update({"state": "succeeded"})
+                self.tasks[0].update(task_update)
+                queued, saved = self.reconcile(questions=questions)
+                self.assertEqual(queued, [])
+                self.assertEqual(saved, [])
+
+    def test_revalidation_queue_is_bounded(self):
+        ideas = []
+        tasks = []
+        for index in range(15):
+            task_id = f"old-{index}"
+            ideas.append({
+                "id": f"idea-{index}", "state": "in_work", "task_id": task_id,
+                "title": f"Старая проблема {index}",
+                "created": "2026-08-13 10:00", "updated": "2026-08-13 10:00",
+            })
+            tasks.append({
+                "id": task_id, "work_id": task_id,
+                "title": f"[auto] [1/5 Triage] Старая проблема {index}",
+                "state": "succeeded", "created_at": "2026-08-13T15:00:00Z",
+            })
+        self.tasks = tasks
+        queued, _ = self.reconcile(ideas=ideas)
+
+        self.assertEqual(len(queued), pilot.PLAN_REVALIDATION_QUEUE)
+        self.assertEqual(sum(i.get("state") == "planned" for i in ideas),
+                         pilot.PLAN_REVALIDATION_QUEUE)
+
+
 class OrphanedPausedPipelineCleanupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -5528,19 +5605,29 @@ class AdaptivePollingTests(unittest.TestCase):
             raise AssertionError(path)
 
         noops = (
-            "collect_automation_findings", "cleanup_completed_plan_cards",
+            "collect_automation_findings",
             "write_dashboard", "provider_limits_tick", "detect_limits",
             "record_new_works", "budget_guard", "handle_epics",
             "reconcile_diag_repairs", "diag_sweep", "rescue_queued",
             "supersede_stale_questions", "cleanup_orphaned_paused_pipelines",
             "handle_answers", "advance_epics", "pipeline_watch",
-            "cleanup_work_archive", "autostart_plan", "area_extend",
+            "autostart_plan", "area_extend",
             "collect_ideas",
         )
+        plan_cleanup_histories = []
+        archive_cleanup_histories = []
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(pilot, "api", side_effect=fake_api))
             stack.enter_context(mock.patch.object(
                 pilot, "all_tasks", return_value=recent + [hidden]))
+            stack.enter_context(mock.patch.object(
+                pilot, "cleanup_completed_plan_cards",
+                side_effect=lambda tasks, _stages:
+                plan_cleanup_histories.append(list(tasks))))
+            stack.enter_context(mock.patch.object(
+                pilot, "cleanup_work_archive",
+                side_effect=lambda _conf, tasks:
+                archive_cleanup_histories.append(list(tasks))))
             stack.enter_context(mock.patch.object(
                 pilot, "codex_usage_snapshot",
                 side_effect=lambda day_start, _week_start: {day_start: {}}))
@@ -5568,6 +5655,10 @@ class AdaptivePollingTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
+        self.assertEqual(len(plan_cleanup_histories), 1)
+        self.assertEqual(len(archive_cleanup_histories), 1)
+        self.assertIn(hidden, plan_cleanup_histories[0])
+        self.assertIn(hidden, archive_cleanup_histories[0])
         self.assertEqual([body["title"] for body in created], [
             "[auto] [2/2 Specification] Hidden continuation",
         ])
