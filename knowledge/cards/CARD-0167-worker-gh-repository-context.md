@@ -1,4 +1,4 @@
-Implementation commit: 2b46f2b009067488e7c743c2f1124d683f10befa — worker закрепляет GitHub CLI за репозиторием текущей задачи
+Implementation commit: 03afbb395aead09040d63be3591fb842ad47a4d3 — worker закрепляет GitHub CLI за репозиторием текущей задачи
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
