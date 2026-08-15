@@ -4891,15 +4891,21 @@ def handle_answers(conf, workflows, workers, tasks):
     return applied
 
 
-def refill_open_work_slots(conf, workflows, workers):
-    """Give unfinished continuations every newly opened slot before Plan."""
+def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
+    """Give unfinished continuations every newly opened slot before Plan.
+
+    A terminal handoff backlog means an already-started work is waiting for
+    its next stage.  Keep newly opened capacity reserved for that backlog
+    instead of admitting another root task which can starve the continuation.
+    """
     tasks = api("/tasks?limit=100").get("tasks") or []
     # All admissions in this pass share the same authoritative snapshot.
     # handle_answers/create_task appends successful continuations to it, so
     # replenish_plan can only use capacity which really remains afterwards.
     conf["_active_work_tasks"] = tasks
     answered = handle_answers(conf, workflows, workers, tasks)
-    replenish_plan(conf, tasks, workflows, workers)
+    if admit_new_plan:
+        replenish_plan(conf, tasks, workflows, workers)
     return answered
 
 
@@ -8474,7 +8480,10 @@ def cycle(conf, state):
     # answered continuations before admitting Plan so a full Plan cannot
     # starve an unfinished correction forever.
     try:
-        answered = refill_open_work_slots(conf, workflows, workers)
+        answered = refill_open_work_slots(
+            conf, workflows, workers,
+            admit_new_plan=not activity["terminal_backlog"],
+        )
         activity["answer_applied"] = (
             activity["answer_applied"]
             or answered is True
