@@ -7062,7 +7062,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          ": > \"" + started + "\"\n"
                          "while [ ! -f \"" + release_gate + "\" ]; do sleep 0.01; done\n"
                          "case \"" + outcome + "\" in\n"
-                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; exit 0 ;;\n"
+                         "  succeeded) printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + success + "\"; printf 'succeeded\\n' > \"$FACTORY_DELIVERY_STATUS_FILE\"; exit 0 ;;\n"
                          "  rollback_failed) exit 1 ;;\n"
                          "  *) exit 7 ;;\n"
                          "esac\n")
@@ -7356,6 +7356,54 @@ pilot.save(pilot.STATE_PATH, state)
         with open(paths["outbox"], encoding="utf-8") as stream:
             self.assertEqual(len(stream.readlines()), 1)
         self.assertEqual(self._events(paths["events"], "mark_final"), [])
+        self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
+
+    def test_real_unix_broker_restart_recovers_driver_terminal_receipt_and_pilot(self):
+        """A real FX child outlives its broker and its driver result completes Pilot."""
+        paths = self._process_paths(self._start_process_broker())
+        self._pilot_process("seed", paths, sha=self.sha)
+        self._pilot_process("poll_once", paths, sha=self.sha)
+        for _ in range(250):
+            if os.path.exists(paths["fx_started"]):
+                break
+            time.sleep(.02)
+        else:
+            self.fail("physical FX did not start")
+
+        old_broker = self.broker_processes[paths["socket"]]
+        self._stop_process(old_broker)
+        with open(paths["release_gate"], "w", encoding="utf-8"):
+            pass
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        driver_status = os.path.join(paths["broker_state"], target["current_generation"] + ".driver-status")
+        for _ in range(250):
+            if os.path.exists(paths["success"]) and os.path.exists(driver_status):
+                break
+            time.sleep(.02)
+        else:
+            self.fail("physical FX did not complete after broker restart")
+
+        self._restart_process_broker(paths)
+        self.assertEqual(pilot.broker_operation(paths["socket"], "GET", target["current_generation"]),
+                         {"status": "succeeded"})
+        self._pilot_process("recover", paths, sha=self.sha)
+        state = self._read_json(paths["state"])
+        target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
+        generation = target["generations"][target["current_generation"]]
+        broker_state = self._read_json(os.path.join(paths["broker_state"], generation["id"] + ".json"))
+        with open(paths["attempts"], encoding="utf-8") as stream:
+            attempts = [line.strip() for line in stream if line.strip()]
+        driver_status = os.path.join(paths["broker_state"], generation["id"] + ".driver-status")
+        with open(driver_status, encoding="utf-8") as stream:
+            driver_result = stream.read()
+        self.assertEqual(generation["phase"], "completed", "driver=%r broker=%r generation=%r" % (
+            driver_result, broker_state, generation))
+        self.assertEqual(broker_state["status"], "succeeded")
+        self.assertEqual(attempts, [generation["id"]])
+        with open(paths["receipts"], encoding="utf-8") as stream:
+            self.assertEqual(len(stream.readlines()), 1)
+        self.assertEqual(len(self._events(paths["events"], "mark_final")), 1)
         self.assertEqual(len(self._events(paths["events"], "owner_done")), 1)
 
     def test_failed_broker_terminal_never_completes_waits(self):

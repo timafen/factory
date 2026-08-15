@@ -53,9 +53,16 @@ type PIDDeliveryExecutor interface {
 	ExecuteDeliveryWithPID(context.Context, string, string, string, func(int) bool) string
 }
 
+// TerminalStatusReader exposes the release driver's durable result.  Unlike a
+// PID, this remains meaningful when the HTTP broker process is restarted.
+type TerminalStatusReader interface {
+	TerminalStatus(string) (string, bool)
+}
+
 type FXExecutor struct {
 	Executable               string
 	FactoryReleaseExecutable string
+	DriverStatusDir          string
 }
 
 func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
@@ -77,6 +84,9 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"FACTORY_DELIVERY_ID=" + operationID,
 	}
+	if e.DriverStatusDir != "" && operationIDPattern.MatchString(operationID) {
+		command.Env = append(command.Env, "FACTORY_DELIVERY_STATUS_FILE="+filepath.Join(e.DriverStatusDir, operationID+".driver-status"))
+	}
 	if err := command.Start(); err != nil {
 		return "rollback_failed"
 	}
@@ -97,6 +107,21 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 		return "release_failed_rolled_back"
 	}
 	return "rollback_failed"
+}
+
+// TerminalStatus reads the fixed driver's atomic terminal marker.  The state
+// directory is root-owned by the broker service, so a marker is authoritative
+// only for the operation-specific path supplied to that driver.
+func (e FXExecutor) TerminalStatus(operationID string) (string, bool) {
+	if e.DriverStatusDir == "" || !operationIDPattern.MatchString(operationID) {
+		return "", false
+	}
+	body, err := os.ReadFile(filepath.Join(e.DriverStatusDir, operationID+".driver-status"))
+	if err != nil {
+		return "", false
+	}
+	status := strings.TrimSpace(string(body))
+	return status, isTerminal(status)
 }
 
 func (e FXExecutor) invocation(adapter, sha string) (string, []string, bool) {
@@ -212,6 +237,10 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
+	if fx, ok := executor.(FXExecutor); ok && fx.DriverStatusDir == "" {
+		fx.DriverStatusDir = stateDir
+		executor = fx
+	}
 	b := newBroker(stateDir, executor)
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
@@ -252,8 +281,15 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			// malformed durable record as if the operation never existed.
 			return nil, fmt.Errorf("invalid operation state %q", entry.Name())
 		}
-		// A broker restart cannot prove an old in-process executor still exists.
-		// Fail closed instead of launching it again.
+		// The fixed release driver writes its terminal marker before it exits.
+		// Prefer that authoritative result to a broker-local guess after restart.
+		if (item.Status == "launching" || item.Status == "running") && b.recoverDriverTerminal(&item) {
+			// The recovered terminal state is already durably represented both by
+			// the driver and by the broker record.
+			markers[item.Request.OperationID] = "committed"
+		}
+		// Without a driver result a broker restart cannot prove an old executor
+		// still exists. Fail closed instead of launching it again.
 		if item.Status == "launching" || item.Status == "running" {
 			updated := item
 			updated.Status = "failed"
@@ -274,6 +310,30 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
+}
+
+func (b *Broker) recoverDriverTerminal(item *operation) bool {
+	reader, ok := b.executor.(TerminalStatusReader)
+	if !ok {
+		return false
+	}
+	status, ok := reader.TerminalStatus(item.Request.OperationID)
+	if !ok {
+		return false
+	}
+	updated := *item
+	updated.Status = status
+	if err := b.writeTerminalMarker(item.Request.OperationID, "pending", true); err != nil {
+		return false
+	}
+	if err := b.saveTerminal(&updated); err != nil {
+		return false
+	}
+	if err := b.writeTerminalMarker(item.Request.OperationID, "committed", false); err != nil {
+		return false
+	}
+	*item = updated
+	return true
 }
 
 func validPersistedStatus(status string) bool {
