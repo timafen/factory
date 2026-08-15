@@ -1,12 +1,12 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 9bb6d2a2f1b5b4b6f43fd96c3fb6763ad25f3800 — повторный релиз проверяет готовность browser runtime и полностью его откатывает
+Implementation commit: 9bb6d2a2dd294c43148d7a6fe3452a4f79e3571f — повторный релиз проверяет готовность browser runtime и полностью его откатывает
 
 ## HEAD
 
 - Status: IMPLEMENTED — штатный релиз проверяет и атомарно откатывает browser runtime.
 - Branch: `factory/8ef44471-f9d-5d0d0c44-401`
-- Implementation commit: `9bb6d2a2f1b5b4b6f43fd96c3fb6763ad25f3800` — Chromium, launcher и readiness marker проверяются также при повторном выпуске
+- Implementation commit: `9bb6d2a2dd294c43148d7a6fe3452a4f79e3571f` — Chromium, launcher и readiness marker проверяются также при повторном выпуске
 - What changed: перед browser installer сохраняется внешний комплект; любой поздний сбой возвращает его и прежний `current`.
 - Evidence: `bash ops/test-fx-factory-release.sh` PASS; fixture покрывает чистый выпуск, повторную готовность и rollback после сбоев.
 - One next action: Verify запускает полный набор критериев 3–5 на чистом штатном хосте.
