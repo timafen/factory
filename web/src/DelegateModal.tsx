@@ -112,11 +112,11 @@ export function DelegateModal({
     const title = mode === "auto" ? `[auto] ${stageTag}${cleanedTitle}` : cleanedTitle;
     const context = String(form.get("description") ?? "");
     const nextErrors: Record<string, string> = {};
-    if (!cleanedTitle) nextErrors.title = "Enter a task title.";
-    else if (Array.from(title).length > 200) nextErrors.title = "Keep the title to 200 characters.";
-    if (!context.trim()) nextErrors.description = "Enter task context.";
-    if (!workerID) nextErrors.worker = "Choose a worker.";
-    if (!repositoryID) nextErrors.repository = "Choose a repository.";
+    if (!cleanedTitle) nextErrors.title = "Введите название задачи.";
+    else if (Array.from(title).length > 200) nextErrors.title = "Название не должно быть длиннее 200 символов.";
+    if (!context.trim()) nextErrors.description = "Введите контекст задачи.";
+    if (!workerID) nextErrors.worker = "Выберите исполнителя.";
+    if (!repositoryID) nextErrors.repository = "Выберите репозиторий.";
 	const visualURL = String(form.get("visual_url") ?? "").trim();
 	const visualState = String(form.get("visual_state") ?? "").trim();
 	const viewportWidth = Number(form.get("viewport_width"));
@@ -124,7 +124,7 @@ export function DelegateModal({
 	if (visual && (!visualURL || !visualState || viewportWidth < 320 || viewportWidth > 2560 || viewportHeight < 320 || viewportHeight > 2560)) nextErrors.visual = "Укажите URL, точный текст и viewport от 320 до 2560 px.";
     const timeoutSeconds = Number(timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 28_800) {
-      nextErrors.timeout = "Choose a timeout from one minute to eight hours.";
+      nextErrors.timeout = "Выберите время от одной минуты до восьми часов.";
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
@@ -174,29 +174,29 @@ export function DelegateModal({
 
   return (
     <div className="modal-layer">
-      <button className="modal-scrim" aria-label="Close delegate task" onClick={onClose} />
+      <button className="modal-scrim" aria-label="Закрыть постановку задачи" onClick={onClose} />
       <div ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="delegate-heading">
         <div className="modal-header">
           <div>
-            <h2 id="delegate-heading">Delegate task</h2>
+            <h2 id="delegate-heading">Поставить задачу</h2>
           </div>
-          <button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button>
+          <button className="icon-button" aria-label="Закрыть" onClick={onClose}><X size={19} /></button>
         </div>
         <form onSubmit={submit} noValidate>
           <div className="modal-body">
-            <Field label="Title" htmlFor={titleID} error={errors.title}>
-              <input ref={titleRef} id={titleID} name="title" aria-invalid={Boolean(errors.title)} placeholder="Fix stale worker status" />
+            <Field label="Название" htmlFor={titleID} error={errors.title}>
+              <input ref={titleRef} id={titleID} name="title" aria-invalid={Boolean(errors.title)} placeholder="Исправить устаревший статус исполнителя" />
             </Field>
             <Field
-              label="Mode"
+              label="Режим"
               htmlFor="delegate-mode"
               hint={mode === "auto"
-                ? "Automatic: the pilot advances this task through the pipeline stages and picks a model per stage. Title is tagged [auto]."
-                : "Manual: only this one stage runs on the chosen worker. You control the next steps."}
+                ? "Автоматический: пилот проведёт задачу по шагам конвейера и выберет модель для каждого шага. К названию добавится [auto]."
+                : "Ручной: на выбранном исполнителе выполнится только этот шаг. Следующие шаги задаёте вы."}
             >
               <select id="delegate-mode" value={mode} onChange={(event) => setMode(event.target.value as "manual" | "auto")}>
-                <option value="manual">Manual — run only this stage</option>
-                <option value="auto">Automatic — pilot runs the full pipeline</option>
+                <option value="manual">Ручной — выполнить только этот шаг</option>
+                <option value="auto">Автоматический — пилот пройдёт весь конвейер</option>
               </select>
             </Field>
             {mode === "auto" && (
@@ -228,9 +228,9 @@ export function DelegateModal({
               </Field>
             )}
             <Field
-              label="Workflow"
+              label="Сценарий"
               htmlFor={workflowID}
-              hint="Blank task uses the context as the complete prompt."
+              hint="Без сценария контекст станет полной инструкцией."
             >
               <select
                 id={workflowID}
@@ -238,7 +238,7 @@ export function DelegateModal({
                 onChange={(event) => setWorkflowRevisionID(event.target.value)}
                 disabled={workflows.isPending}
               >
-                <option value="">Blank task</option>
+                <option value="">Без сценария</option>
                 {(workflows.data ?? []).map((workflow) => (
                   <option key={workflow.id} value={workflow.current_revision.id}>
                     {workflow.current_revision.title} · revision {workflow.current_revision.revision_number}
@@ -248,20 +248,20 @@ export function DelegateModal({
             </Field>
             {workflows.error && <InlineError error={workflows.error} />}
             <Field
-              label="Context"
+              label="Контекст"
               htmlFor={descriptionID}
               error={errors.description}
               hint={selectedWorker
                 ? workflowRevisionID
-                  ? `Factory combines this with the selected Workflow for ${runtimeLabel(selectedWorker.runtime)}.`
-                  : `This becomes the ${runtimeLabel(selectedWorker.runtime)} prompt.`
+                  ? `Factory объединит это с выбранным сценарием для ${runtimeLabel(selectedWorker.runtime)}.`
+                  : `Это станет инструкцией для ${runtimeLabel(selectedWorker.runtime)}.`
                 : workflowRevisionID
-                  ? "Factory combines this with the selected Workflow."
-                  : "This becomes the selected worker runtime prompt."}
+                  ? "Factory объединит это с выбранным сценарием."
+                  : "Это станет инструкцией для выбранного исполнителя."}
             >
-              <textarea id={descriptionID} name="description" rows={6} aria-invalid={Boolean(errors.description)} placeholder="Describe the outcome, constraints, and checks…" />
+              <textarea id={descriptionID} name="description" rows={6} aria-invalid={Boolean(errors.description)} placeholder="Опишите результат, ограничения и проверки…" />
             </Field>
-            <Field label="Files" htmlFor="task-files">
+            <Field label="Файлы" htmlFor="task-files">
               <TaskFilePicker files={attachmentFiles} onChange={setAttachmentFiles} error={errors.attachments} />
             </Field>
 			<label className="checkbox-row"><input type="checkbox" checked={visual} onChange={event => setVisual(event.target.checked)} /> Меняется видимый экран</label>
@@ -271,7 +271,7 @@ export function DelegateModal({
 			  <Field label="Ширина" htmlFor="viewport-width"><input id="viewport-width" name="viewport_width" type="number" min="320" max="2560" defaultValue="1280" /></Field>
 			  <Field label="Высота" htmlFor="viewport-height"><input id="viewport-height" name="viewport_height" type="number" min="320" max="2560" defaultValue="720" /></Field>
 			</div>}
-            <Field label="Worker" htmlFor="delegate-worker" error={errors.worker}>
+            <Field label="Исполнитель" htmlFor="delegate-worker" error={errors.worker}>
               <select
                 id="delegate-worker"
                 value={workerID}
@@ -281,42 +281,42 @@ export function DelegateModal({
                 }}
                 disabled={workersPending || workers.length === 0}
               >
-                <option value="">{workersPending ? "Loading workers…" : workers.length ? "Choose a worker" : "No workers registered"}</option>
+                <option value="">{workersPending ? "Загружаем исполнителей…" : workers.length ? "Выберите исполнителя" : "Исполнители не зарегистрированы"}</option>
                 {workers.map((worker) => (
                   <option key={worker.id} value={worker.id}>
-                    {worker.name} · {runtimeLabel(worker.runtime)} · {worker.online ? "online" : "offline"}
+                    {worker.name} · {runtimeLabel(worker.runtime)} · {worker.online ? "в сети" : "не в сети"}
                   </option>
                 ))}
               </select>
             </Field>
             {selectedWorker && !selectedWorker.online && (
-              <div className="warning-banner compact"><AlertCircle size={16} /> This worker is offline. The task will queue until it returns.</div>
+              <div className="warning-banner compact"><AlertCircle size={16} /> Исполнитель не в сети. Задача будет ждать в очереди.</div>
             )}
             {selectedWorker?.health === "unhealthy" && (
-              <div className="warning-banner compact"><AlertCircle size={16} /> This worker is unhealthy and will not claim work until it recovers.</div>
+              <div className="warning-banner compact"><AlertCircle size={16} /> Исполнитель недоступен и не возьмёт задачу, пока не восстановится.</div>
             )}
-            <Field label="Repository" htmlFor="delegate-repository" error={errors.repository}>
+            <Field label="Репозиторий" htmlFor="delegate-repository" error={errors.repository}>
               <select id="delegate-repository" value={repositoryID} onChange={(event) => setRepositoryID(event.target.value)} disabled={!workerID || repositoryOptions.isPending}>
-                <option value="">{!workerID ? "Choose a worker first" : repositoryOptions.isPending ? "Loading repositories…" : repositories.length ? "Choose a repository" : "No repositories available"}</option>
+                <option value="">{!workerID ? "Сначала выберите исполнителя" : repositoryOptions.isPending ? "Загружаем репозитории…" : repositories.length ? "Выберите репозиторий" : "Нет доступных репозиториев"}</option>
                 {repositories.map((repo) => <option key={repo.id} value={repo.id} disabled={!repo.ready && !repo.advertised}>{repo.key ? `${repo.key} · ` : ""}{repo.remote_identity}{repo.ready && !repo.advertised ? " · acquired on demand" : ""}{!repo.ready ? ` · ${repo.reason}` : ""}</option>)}
               </select>
             </Field>
             {repositoryOptions.error && <InlineError error={repositoryOptions.error} />}
-            <Field label="Timeout" htmlFor="delegate-timeout" error={errors.timeout}>
+            <Field label="Время выполнения" htmlFor="delegate-timeout" error={errors.timeout}>
               <select id="delegate-timeout" value={timeout} onChange={(event) => setTimeout(event.target.value)}>
-                <option value="1800">30 minutes</option>
-                <option value="3600">1 hour</option>
-                <option value="7200">2 hours</option>
-                <option value="14400">4 hours</option>
-                <option value="28800">8 hours</option>
+                <option value="1800">30 минут</option>
+                <option value="3600">1 час</option>
+                <option value="7200">2 часа</option>
+                <option value="14400">4 часа</option>
+                <option value="28800">8 часов</option>
               </select>
             </Field>
             {create.error && <InlineError error={create.error} />}
           </div>
           <div className="modal-footer">
-            <button type="button" className="button button-secondary" onClick={onClose}>Cancel</button>
+            <button type="button" className="button button-secondary" onClick={onClose}>Отмена</button>
             <button type="submit" className="button button-primary" disabled={isSubmitting || workers.length === 0}>
-              {isSubmitting ? <><LoaderCircle size={16} className="spin" /> Delegating…</> : <><Plus size={16} /> Delegate task</>}
+              {isSubmitting ? <><LoaderCircle size={16} className="spin" /> Ставим задачу…</> : <><Plus size={16} /> Поставить задачу</>}
             </button>
           </div>
         </form>

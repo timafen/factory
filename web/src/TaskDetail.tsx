@@ -155,7 +155,7 @@ export function TaskDetail({
     },
   });
 
-  if (detail.isPending) return <LoadingState label="Loading task" />;
+  if (detail.isPending) return <LoadingState label="Загружаем задачу" />;
   if (!detail.data) return <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />;
 
   const data = detail.data;
@@ -169,51 +169,51 @@ export function TaskDetail({
 
   return (
     <div className="page detail-page">
-      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> All work</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft size={16} /> Все задачи</button>
       <div className="detail-heading">
         <div>
           <StatusBadge state={data.task.state} />
           <h1>{data.task.title}</h1>
-          <p>Created {new Date(data.task.created_at).toLocaleString()}</p>
+          <p>Создана {new Date(data.task.created_at).toLocaleString()}</p>
         </div>
         <div className="detail-actions">
           {active && !confirmCancel && (
             <button className="button button-danger-secondary" onClick={() => setConfirmCancel(true)}>
-              <Square size={14} /> Cancel
+              <Square size={14} /> Отменить
             </button>
           )}
           {confirmCancel && (
             <div className="confirm-action" role="alert">
-              <span>Cancel this task?</span>
+              <span>Отменить эту задачу?</span>
               <button className="button button-danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-                {cancel.isPending ? "Cancelling…" : "Confirm cancel"}
+                {cancel.isPending ? "Отменяем…" : "Подтвердить отмену"}
               </button>
-              <button className="button button-secondary" onClick={() => setConfirmCancel(false)}>Keep running</button>
+              <button className="button button-secondary" onClick={() => setConfirmCancel(false)}>Продолжить выполнение</button>
             </div>
           )}
           {retryable && (
             <button className="button button-primary" onClick={() => retry.mutate()} disabled={retry.isPending}>
               <RefreshCw size={15} className={retry.isPending ? "spin" : ""} />
-              {retry.isPending ? "Retrying…" : "Retry task"}
+              {retry.isPending ? "Перезапускаем…" : "Перезапустить задачу"}
             </button>
           )}
           {!active && !confirmDelete && (
             <button className="button button-danger-secondary" onClick={() => setConfirmDelete(true)}>
-              <Trash2 size={14} /> Delete history
+              <Trash2 size={14} /> Удалить историю
             </button>
           )}
           {confirmDelete && (
             <div className="confirm-action" role="alert">
-              <span>Permanently delete this task, prompt, attempts, and events?</span>
+              <span>Навсегда удалить задачу, инструкцию, попытки и события?</span>
               <button
                 className="button button-danger"
                 onClick={() => deleteTask.mutate()}
                 disabled={deleteTask.isPending}
               >
-                {deleteTask.isPending ? "Deleting…" : "Confirm delete"}
+                {deleteTask.isPending ? "Удаляем…" : "Подтвердить удаление"}
               </button>
               <button className="button button-secondary" onClick={() => setConfirmDelete(false)}>
-                Keep history
+                Сохранить историю
               </button>
             </div>
           )}
@@ -224,10 +224,10 @@ export function TaskDetail({
         <InlineError error={cancel.error ?? retry.error ?? deleteTask.error} />
       )}
       {!data.repository_available && (
-        <div className="warning-banner"><AlertCircle size={17} /> Repository unavailable on the assigned worker. Queued work will wait.</div>
+        <div className="warning-banner"><AlertCircle size={17} /> Репозиторий недоступен назначенному исполнителю. Задача останется в очереди.</div>
       )}
       {data.execution.cancellation_requested && data.task.state === "running" && (
-        <div className="warning-banner"><Clock3 size={17} /> Cancellation requested. The worker will stop this task on its next heartbeat.</div>
+        <div className="warning-banner"><Clock3 size={17} /> Запрошена отмена. Исполнитель остановит задачу при следующем сигнале.</div>
       )}
 
       <TaskSummary
@@ -249,15 +249,15 @@ export function TaskDetail({
           </details>
         </section>
         <section className="panel">
-          <PanelHeading title="Assignment" />
+          <PanelHeading title="Назначение" />
           <dl className="metadata">
-            <div><dt>Worker</dt><dd>{worker?.name ?? data.execution.assigned_worker_id}</dd></div>
-            <div><dt>Runtime</dt><dd>{runtimeLabel(data.execution.required_runtime)}</dd></div>
-            <div><dt>Repository</dt><dd>{data.repository.key}</dd></div>
-            <div><dt>Remote</dt><dd className="break-anywhere">{data.repository.remote_identity}</dd></div>
-            <div><dt>Timeout</dt><dd>{formatTimeout(data.task.timeout_seconds)}</dd></div>
-            <div><dt>Elapsed</dt><dd>{taskElapsed(data)}</dd></div>
-            <div><dt>Runbook</dt><dd>{data.workflow ? `${data.workflow.title} · revision ${data.workflow.revision_number}` : "Blank task"}</dd></div>
+            <div><dt>Исполнитель</dt><dd>{worker?.name ?? data.execution.assigned_worker_id}</dd></div>
+            <div><dt>Среда</dt><dd>{runtimeLabel(data.execution.required_runtime)}</dd></div>
+            <div><dt>Репозиторий</dt><dd>{data.repository.key}</dd></div>
+            <div><dt>Удалённый адрес</dt><dd className="break-anywhere">{data.repository.remote_identity}</dd></div>
+            <div><dt>Лимит времени</dt><dd>{formatTimeout(data.task.timeout_seconds)}</dd></div>
+            <div><dt>Прошло</dt><dd>{taskElapsed(data)}</dd></div>
+            <div><dt>Сценарий</dt><dd>{data.workflow ? `${data.workflow.title} · редакция ${data.workflow.revision_number}` : "Без сценария"}</dd></div>
           </dl>
         </section>
       </div>
@@ -272,14 +272,14 @@ export function TaskDetail({
       </section>
 
       <section className="panel progress-panel">
-        <PanelHeading title="Progress" aside={`${progress.length} updates`} />
+        <PanelHeading title="Ход работы" aside={`${progress.length} обновлений`} />
         {events.error && <InlineError error={events.error} />}
         {!latestAttempt ? (
-          <div className="quiet-empty">Progress will appear when the worker starts this task.</div>
+          <div className="quiet-empty">Ход работы появится, когда исполнитель начнёт задачу.</div>
         ) : events.isPending && events.data === undefined ? (
-          <LoadingLine label="Loading progress" />
+          <LoadingLine label="Загружаем ход работы" />
         ) : events.data === undefined ? null : progress.length === 0 ? (
-          <div className="quiet-empty">Progress will appear when the worker starts this task.</div>
+          <div className="quiet-empty">Ход работы появится, когда исполнитель начнёт задачу.</div>
         ) : (
           <ol className="event-list">
             {progress.map(({ event, summary }) => (
@@ -291,7 +291,7 @@ export function TaskDetail({
 
       {(data.attempts ?? []).length > 0 && (
         <section className="panel attempts-panel">
-          <PanelHeading title="Attempts" aside={`${data.attempts?.length ?? 0} total`} />
+          <PanelHeading title="Попытки" aside={`${data.attempts?.length ?? 0} всего`} />
           {[...(data.attempts ?? [])].reverse().map((attempt, index) => (
         <AttemptRow key={attempt.id} attempt={attempt} current={index === 0} />
           ))}
@@ -315,7 +315,7 @@ async function loadLaterEvents(attemptID: string, initialAfter: number): Promise
     }
     if (!page.has_more) return events;
     if (page.next_after <= requestAfter) {
-      throw new Error("Event pagination did not advance.");
+      throw new Error("Пагинация событий не продвинулась.");
     }
     after = page.next_after;
   }
@@ -339,18 +339,18 @@ function AttemptRow({ attempt, current }: { attempt: Attempt; current: boolean }
   return (
     <div className="attempt-row">
       <button onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span><strong>Attempt {attempt.attempt_number}</strong><small>{attempt.id}</small></span>
+        <span><strong>Попытка {attempt.attempt_number}</strong><small>{attempt.id}</small></span>
         <span className="attempt-state"><StatusBadge state={attempt.state} /><ChevronRight size={16} className={open ? "rotate" : ""} /></span>
       </button>
       {open && (
         <div className="attempt-content">
           <dl className="metadata compact-metadata">
-            <div><dt>Started</dt><dd>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "Not started"}</dd></div>
-            <div><dt>Duration</dt><dd>{duration(attempt.started_at ?? attempt.created_at, attempt.completed_at)}</dd></div>
+            <div><dt>Начата</dt><dd>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "Не начата"}</dd></div>
+            <div><dt>Длительность</dt><dd>{duration(attempt.started_at ?? attempt.created_at, attempt.completed_at)}</dd></div>
           </dl>
                     {attempt.result && <div className="attempt-output success-output"><strong>Технический отчёт</strong><SpeakButton text={attempt.result} /><pre>{attempt.result}</pre></div>}
                     {attempt.error && <div className="attempt-output error-output"><strong>Техническая ошибка</strong><SpeakButton text={attempt.error} /><pre>{attempt.error}</pre></div>}
-          {!attempt.result && !attempt.error && <div className="quiet-empty">No result or error recorded yet.</div>}
+          {!attempt.result && !attempt.error && <div className="quiet-empty">Результат или ошибка пока не записаны.</div>}
         </div>
       )}
     </div>

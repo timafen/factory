@@ -180,7 +180,7 @@ export function AutomationsView({ onAutomation }: { onAutomation: (id: string) =
                   <strong>{automation.title}</strong>
                   <small>{automation.repository_identity} · {triggerSummary(automation)}</small>
                 </span>
-                <span className="automation-list-health"><HealthBadge automation={automation} /><small>{automationHealthMessage(automation.health.message)}</small></span>
+                <span className="automation-list-health"><HealthBadge automation={automation} /><small>{automationHealthMessage(automation.health.code, automation.health.message)}</small></span>
                 <span className="automation-list-copy">
                   <strong>{latestRun ? occurrenceIdentity(latestRun) : automation.latest_task?.title || "Запусков ещё нет"}</strong>
                   <small>{latestRun && latestRunState
@@ -410,7 +410,7 @@ export function AutomationDetail({
       <div className="automation-health-card panel">
         <PanelHeading title="Состояние автоматизации" aside={automation.health.status} />
         <p className={automation.health.status === "error" || automation.health.status === "blocked" ? "health-error" : ""}>
-          {automationHealthMessage(automation.health.message)}
+          {automationHealthMessage(automation.health.code, automation.health.message)}
           {automation.health.code && <span className="mono"> · {automation.health.code}</span>}
         </p>
         <div className="automation-metrics">
@@ -1091,14 +1091,37 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function automationHealthMessage(message?: string): string {
-  const translated: Record<string, string> = {
+export function automationHealthMessage(code?: string, message?: string): string {
+  const translatedByCode: Record<string, string> = {
+    workflow_disabled: "Сценарий выключен.",
+    repository_disabled: "Репозиторий выключен.",
+    pipeline_patrol_dependencies_disabled: "Патруль конвейера ждёт включения зависимых сценариев.",
+    stored_schedule_invalid: "Сохранённое расписание содержит ошибку.",
+    occurrence_limit_reached: "Достигнут лимит запусков по расписанию.",
+    check_recovered: "Проверка GitHub снова работает.",
+    gh_output_too_large: "GitHub вернул слишком большой ответ; сузьте условия отбора.",
+    gh_error_output_too_large: "GitHub вернул слишком большое сообщение об ошибке; проверьте доступ.",
+    gh_timed_out: "Проверка GitHub не завершилась вовремя.",
+    gh_cancelled: "Проверка GitHub была отменена.",
+    gh_unauthenticated: "GitHub CLI не авторизован для github.com.",
+    gh_permission_denied: "Нет доступа к репозиторию или запросам GitHub.",
+    gh_failed: "Проверка GitHub завершилась с ошибкой.",
+    gh_malformed_output: "GitHub вернул некорректный ответ.",
+    gh_match_limit: "GitHub вернул слишком много подходящих задач; сузьте условия.",
+    gh_invalid_output: "GitHub вернул недопустимые данные.",
+    gh_conflicting_duplicate: "GitHub вернул противоречивые повторяющиеся данные.",
+  };
+  if (code) return translatedByCode[code] ?? "Состояние автоматизации требует внимания.";
+
+  const translatedByLegacyMessage: Record<string, string> = {
     "Automation is disabled.": "Автоматизация выключена.",
     "Waiting for the next GitHub check.": "Ожидается следующая проверка GitHub.",
+    "Waiting for the next scheduled occurrence.": "Ожидается следующий запуск по расписанию.",
     "Pipeline patrol provisioned from the existing schedule.": "Патруль конвейера настроен по существующему расписанию.",
     "Checking GitHub now.": "GitHub проверяется сейчас.",
+    "Run now occurrence admitted.": "Ручной запуск принят.",
   };
-  return message ? translated[message] ?? message : "Сведений о состоянии пока нет.";
+  return message ? translatedByLegacyMessage[message] ?? "Состояние автоматизации требует внимания." : "Сведений о состоянии пока нет.";
 }
 
 type SchedulePreset = "weekdays" | "daily" | "weekly" | "custom";

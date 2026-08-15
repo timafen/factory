@@ -47,9 +47,9 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
     return map;
   }, [workflows.data]);
 
-  if (pipeline.isPending) return <LoadingState label="Loading pipeline" />;
+  if (pipeline.isPending) return <LoadingState label="Загружаем конвейер" />;
   if (!pipeline.data) return <ErrorState error={pipeline.error} onRetry={() => void pipeline.refetch()} />;
-  if (!draft) return <LoadingState label="Loading pipeline" />;
+  if (!draft) return <LoadingState label="Загружаем конвейер" />;
 
   const workerNames = (workers.data ?? []).map((w: Worker) => w.name).sort();
   const dirty = JSON.stringify(draft) !== JSON.stringify(pipeline.data);
@@ -76,7 +76,7 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
   return (
     <div className="page">
       <ViewHeader
-        title="Pipeline"
+        title="Конвейер"
         fetching={pipeline.isFetching}
         updatedAt={pipeline.dataUpdatedAt}
         onRefresh={() => {
@@ -85,7 +85,7 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
         }}
       />
       <div className="view-toolbar">
-        <p>Порядок шагов конвейера и модель для каждого шага по сложности. Инструкции шагов правятся в Workflows.</p>
+        <p>Порядок шагов конвейера и модель для каждого шага по сложности. Инструкции шагов правятся в сценариях.</p>
         <button
           className="button button-primary"
           disabled={!dirty || save.isPending}
@@ -140,7 +140,7 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
                       <ExternalLink size={13} /> Инструкция
                     </button>
                   ) : (
-                    <span className="field-hint">нет workflow с таким названием</span>
+                    <span className="field-hint">нет сценария с таким названием</span>
                   )}
                 </div>
                 <div className="pipeline-tiers">
@@ -176,7 +176,7 @@ export function PipelineView({ onWorkflow }: { onWorkflow: (id: string) => void 
         <div className="long-copy">
           Оркестратор оценивает результат каждого шага и выбирает сложность следующего (простая / средняя / сложная),
           затем берёт для него соответствующий воркер отсюда. Так простые шаги идут на дешёвых моделях, а тяжёлые — на сильных.
-          Тексты инструкций каждого шага — в разделе Workflows; изменения применяются со следующей задачи.
+          Тексты инструкций каждого шага — в разделе «Сценарии»; изменения применяются со следующей задачи.
         </div>
       </section>
     </div>
