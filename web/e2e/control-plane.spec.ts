@@ -1112,7 +1112,7 @@ test("@critical shows parallel worker capacity and current work", async ({ page,
   await expect(page.getByText("Implement the modern control-plane UI")).toBeVisible();
   const offlineRow = page.getByRole("button", { name: /Archive Mac/ });
   await expect(offlineRow).toBeVisible();
-  await expect(offlineRow).toContainText("Offline");
+  await expect(offlineRow).toContainText("Не в сети");
   await expect(offlineRow).toContainText("Claude Code");
   await page.screenshot({ path: "test-results/screenshots/workers-desktop.png", fullPage: true });
 
