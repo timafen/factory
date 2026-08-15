@@ -2,15 +2,23 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented — ready for Verify.
+- Branch: `factory/992b41c4-f7a-d03b0971-6b0`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+Implementation commit: bcf78dd90d7285625824aa1a266748dace229753 — release-driver сохраняет каждый статус через durable broker-запись и fail-closed восстановление.
+- What changed: запись статуса использует fsync файла, atomic rename и fsync каталога; сбой terminal-синхронизации восстанавливает последний durable `running`.
+- Evidence: `go test -race -count=1 ./internal/releasebroker` — PASS; `bash ops/test-fx-factory-release.sh` — PASS; Pilot — 10 PASS; `just build` — PASS.
+- Next action: Передать ветку на Verify и проверить полный diff относительно свежего `main`.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Перебазирована остановленная реализация на свежий `origin/main`, сохранена
+durable-запись каждого статуса release-driver и исправлено ожидание проверки
+сбоя directory fsync: после неопределённого terminal остаётся `running`, а
+перезапуск fail-closed переводит операцию в `failed` без второго executor.
+Профильные Go race, Pilot, shell fixture и build прошли.
 
 ### 2026-08-12 — Verify
 
