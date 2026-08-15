@@ -3347,6 +3347,67 @@ def _git(cwd, *args, timeout=180, input_text=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def refresh_stale_branch(repo_identity, branch):
+    """Bring a published candidate onto the current default branch before Review.
+
+    A candidate can wait behind an overlapping work for hours.  Letting that
+    stale head pass Review and Verify only discovers a predictable merge
+    conflict after all expensive checks have run.  Merge the freshly fetched
+    default branch into the same candidate instead: this preserves the
+    implementation commit recorded by the card and makes a concurrent remote
+    update fail safely at push time.
+    """
+    url = _remote_url(repo_identity)
+    if not url or not branch:
+        return {"state": "blocked", "reason": "missing repository or candidate branch"}
+    default, error = _default_branch(url)
+    if error:
+        return {"state": "blocked", "reason": error}
+    try:
+        with tempfile.TemporaryDirectory(prefix="factory-refresh-") as work:
+            for args in (("init", "-q"),
+                         ("remote", "add", "origin", url),
+                         ("fetch", "--prune", "origin",
+                          "+refs/heads/" + default + ":refs/remotes/origin/" + default,
+                          "+refs/heads/" + branch + ":refs/remotes/origin/" + branch),
+                         ("checkout", "-q", "-B", "candidate", "origin/" + branch)):
+                rc, out = _git(work, *args)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "cannot prepare stale candidate refresh: " + out.strip()[:240])}
+            rc, old_head = _git(work, "rev-parse", "HEAD")
+            if rc or not GIT_SHA.fullmatch(old_head.strip()):
+                return {"state": "blocked", "reason": "cannot pin stale candidate head"}
+            old_head = old_head.strip()
+            rc, out = _git(work, "-c", "user.name=Factory Pilot",
+                           "-c", "user.email=pilot@factory", "merge", "--no-edit",
+                           "refs/remotes/origin/" + default)
+            if rc:
+                _git(work, "merge", "--abort")
+                return {"state": "conflict", "reason": out.strip()[:400]}
+            rc, new_head = _git(work, "rev-parse", "HEAD")
+            if rc or not GIT_SHA.fullmatch(new_head.strip()):
+                return {"state": "blocked", "reason": "cannot pin refreshed candidate head"}
+            new_head = new_head.strip()
+            if new_head != old_head:
+                rc, out = _git(work, "push", "origin",
+                               "HEAD:refs/heads/" + branch)
+                if rc:
+                    return {"state": "blocked", "reason": (
+                        "candidate changed while it was being refreshed: "
+                        + out.strip()[:240])}
+            snapshot = fresh_branch_snapshot(repo_identity, branch)
+            if snapshot.get("state") != "ok":
+                return {"state": "blocked", "reason": snapshot.get("reason")
+                        or "refreshed candidate is not published"}
+            if snapshot.get("base_advanced"):
+                return {"state": "blocked", "reason": (
+                    "default branch advanced again while candidate was being refreshed")}
+            return {"state": "ok", "branch": branch, "snapshot": snapshot}
+    except Exception as e:
+        return {"state": "blocked", "reason": "candidate refresh failed: " + str(e)[:240]}
+
+
 def rebuild_clean_branch(repo_identity, dirty_branch, keep_files, base, area_repo=""):
     """Собрать ветку от свежей главной, сохранив весь diff задачи.
 
@@ -3617,7 +3678,36 @@ def review_gate(conf, base, branch, repo_identity, active_tasks=None, area_repo=
                              + "\n".join("  - " + f for f in sorted(mine))
                              + "\nУбери чужое из ветки: git checkout origin/main -- <файл>; "
                              "запушь и сдай снова. Если область расширилась осознанно — "
-                             "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
+                              "напиши в отчёте новую строку ОБЛАСТЬ: с полным списком и почему.")}
+
+        # An area lock can keep a finished implementation waiting while main
+        # moves underneath it.  Refresh only after the overlap has cleared;
+        # otherwise two works could mutate the shared area concurrently.
+        if snapshot.get("base_advanced"):
+            refreshed = refresh_stale_branch(repo_identity, branch)
+            if refreshed.get("state") == "conflict":
+                return {"back": True,
+                        "alert": "Вернул сам: ветка конфликтует со свежей основной",
+                        "alert_msg": ("Пока работа ждала, основная ветка изменилась в тех же "
+                                      "местах. Конфликт нужно устранить до Ревью."),
+                        "note": ("Машинная проверка перед Ревью: ветка отстала от основной "
+                                 "и не объединяется автоматически. Подтяни свежую основную "
+                                 "ветку в эту же ветку, разреши конфликт, прогони целевые "
+                                 "тесты, запушь и сдай снова.")}
+            if refreshed.get("state") != "ok":
+                return {"blocked": True, "note": (
+                    "BLOCKED: review infrastructure. Отставшую ветку нельзя безопасно "
+                    "обновить перед Review. Причина: "
+                    + refreshed.get("reason", "unknown refresh failure"))}
+            snapshot = refreshed["snapshot"]
+            files = snapshot.get("files") or []
+            listing = "\n".join("  - " + f for f in files)
+            missing_after_refresh = sorted(set(promised_files) - set(files))
+            if missing_after_refresh:
+                return {"blocked": True, "note": (
+                    "BLOCKED: review infrastructure. После обновления ветки исчезли "
+                    "обещанные файлы:\n"
+                    + "\n".join("  - " + f for f in missing_after_refresh))}
 
         # Обещания: что Спецификация записала как «готово, когда».
         missing = [f for f in (prom.get("files") or []) if f not in files]
