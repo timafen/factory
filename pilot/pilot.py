@@ -2866,7 +2866,7 @@ def stage_names(conf):
 def work_status_write(mem):
     """Пишем словами, почему работа стоит: экран не должен врать."""
     out = load(f"{HOME}/pilot/work_status.json", {}) or {}
-    transient = {"stopped_owner", "stuck", "nudged", "idle"}
+    transient = {"stopped_owner", "stuck", "nudged", "queued", "idle"}
     out = {base: rec for base, rec in out.items()
            if rec.get("state") not in transient or base in (mem or {})}
     for base, rec in (mem or {}).items():
@@ -2888,6 +2888,9 @@ def work_status_write(mem):
         elif why == "nudged":
             out[base] = {"state": "nudged",
                          "text": "конвейер встал, я запустил следующий этап сам"}
+        elif why == "handoff_pending":
+            out[base] = {"state": "queued",
+                         "text": "этап завершён; Factory ещё обрабатывает результат"}
         elif why == "closed":
             out[base] = {"state": "archived",
                          "text": rec.get("reason") or "работа закрыта"}
@@ -2897,10 +2900,11 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
-def pipeline_watch(conf, tasks, workflows, workers):
+def pipeline_watch(conf, tasks, workflows, workers, processed=None):
     stages = stage_names(conf)
     if not stages:
         return
+    processed_ids = None if processed is None else set(processed)
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     active_tasks = conf.get("_active_work_tasks")
@@ -2987,6 +2991,24 @@ def pipeline_watch(conf, tasks, workflows, workers):
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
         mem[work_key] = rec
+        stage_sources = [t for st, t in lst
+                         if st == stages[far] and t.get("state") == "succeeded"]
+        src = max(stage_sources,
+                  key=lambda task: (task.get("created_at") or "",
+                                    task.get("id") or ""),
+                  default=None)
+        # The normal terminal handoff owns a fresh successful result.  It can
+        # legitimately wait behind other results because those decisions are
+        # processed in bounded batches.  The watchdog must not mistake that
+        # queue for a lost transition, create duplicate stages twice, and then
+        # tell the owner that Factory gave up.  Once the result is recorded as
+        # processed, the ordinary stall timer protects the real crash gap.
+        if (processed_ids is not None
+                and any(task.get("id") not in processed_ids
+                        for task in stage_sources if task.get("id"))):
+            rec.update({"since": now, "nudges": 0,
+                        "why": "handoff_pending", "stage": current_stage})
+            continue
         if now - int(rec["since"]) < STALL_WAIT:
             continue
         if int(rec["nudges"]) >= STALL_NUDGES:
@@ -3007,7 +3029,6 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
-        src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         wname = stage_worker(
             conf, nxt, "medium", workers, repository_id=rid)
@@ -8487,7 +8508,8 @@ def cycle(conf, state):
     # Сторож использует тот же снимок цикла после ответов владельца: так
     # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
     try:
-        pipeline_watch(conf, lifecycle_tasks, workflows, workers)
+        pipeline_watch(conf, lifecycle_tasks, workflows, workers,
+                       state.get("processed"))
     except Exception as e:
         log("pipeline_watch_error", repr(e))
 
