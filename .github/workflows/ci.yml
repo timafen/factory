@@ -113,16 +113,27 @@ jobs:
       - name: Test launcher process cleanup
         run: just test-launcher
 
+  pilot:
+    name: Pilot Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run Pilot tests
+        run: python3 -m unittest pilot.test_pilot
+
   check:
     name: check
     if: always()
-    needs: [linux, macos]
+    needs: [linux, macos, pilot]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform check
         env:
           LINUX_RESULT: ${{ needs.linux.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
+          PILOT_RESULT: ${{ needs.pilot.result }}
         run: |
           test "$LINUX_RESULT" = success
           test "$MACOS_RESULT" = success
+          test "$PILOT_RESULT" = success
