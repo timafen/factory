@@ -1,15 +1,15 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Implementation commit: 0fac3654df200cda214faffac18bbd681e2b8661 — gate запускается через доверенный `setsid --fork --wait` и возвращает настоящий статус через kernel wait.
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge.
-Branch: factory/80c250e3-e3d-30a97909-840.
-Implementation commit: d320c99f3948000fb7c11d21e749337a279d3e1d — проверка закрепляет ожидание статуса Gate за форкающим launcher.
+Status: PASS — полный набор проверок завершён на свободном рабочем узле.
+Branch: factory/f44347b7-6ee-d7f6d034-ca3.
+Implementation commit: 0fac3654df200cda214faffac18bbd681e2b8661 — gate запускается через доверенный `setsid --fork --wait` и возвращает настоящий статус через kernel wait.
 What changed: fixture подтверждает передачу `--fork --wait` каждому launcher и проверяет, что отказ Gate за форком возвращает release code 5.
 What changed: сценарий сохраняет запрет установки и сборки после такого отказа.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS; `just check` дошёл до известного `SA4000` вне области.
+Evidence: `env -u FACTORY_BUILD_DIR just check` → PASS; 158/158 UI-тестов, Go, анализаторы, tooling, launcher и ops-тесты прошли.
 One next action: влить ветку в main.
 
 ## LOG
@@ -137,3 +137,10 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 | Смежное release-поведение | `bash -n` для обоих скриптов; pinned `git diff --check` | PASS: синтаксис и пробелы корректны. |
 | Полный набор проекта | `timeout 1200s just check` | НАХОДКА вне области: format, vet и govulncheck PASS; staticcheck остановился на существующем `internal/worker/attempt_lifecycle_test.go:31` (`SA4000`). |
 | Закреплённая область поставки | isolated bare fetch; `git diff --name-only c28b5bfc0c5bbb22c7d69d0749c316a2b340841e...2be97a66737caee20ee1a7390d1ba68f38a9f606` | PASS: изменены только карточка и `ops/test-fx-factory-release.sh`; implementation commit `13c8e8e0a04854c17c352eb8128eb85bb16fd04d` — предок кандидата и меняет код. |
+
+### 2026-08-14 — Implement
+
+Повторный полный `just check` запущен без конкурирующих процессов и завершён
+успешно после установки lock-файлом UI-зависимостей и очистки унаследованной
+`FACTORY_BUILD_DIR` для изолированного tooling-теста. Успешный журнал сохранён в
+`/tmp/card-0083-just-check-final.log`; Gate возвращает настоящий статус через kernel wait.
