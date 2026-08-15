@@ -5,7 +5,7 @@ Implementation commit: будет указан этапом Implement после
 ## HEAD
 
 Status: Specified
-Branch: `factory/35a9f91c-345-c3a88ad3-80f`
+Branch: `factory/3f933e27-656-610e1dce-c4b`
 Specification: `knowledge/specs/stage-processed-after-successful-continuation.md`
 Implementation commit: ожидается в реализации; эта поставка содержит только
 спецификацию и карточку по правилам этапа Specification.
@@ -26,3 +26,7 @@ Implementation commit: ожидается в реализации; эта пос
 явно подтвердить тестами, а не наследовать от прежней ранней отметки.
 
 Карточка создана по пути из handoff текущей работы; чужие карточки не менялись.
+
+Обязательная проверка уточнена до отдельного регрессионного теста: реализация
+должна доказать, что исходный этап попадает в `processed` только после ответа
+с валидным ID созданного продолжения.

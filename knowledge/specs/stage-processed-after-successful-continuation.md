@@ -86,7 +86,7 @@
 - Сохранить и при необходимости уточнить тесты restart recovery и двух Pilot
   со stale snapshot: один request key создаёт один continuation.
 - Обязательная целевая команда:
-  `python3 -m unittest -v pilot.test_pilot.AdaptivePollingTests`
+  `python3 -m unittest -v pilot.test_pilot.AdaptivePollingTests.test_terminal_task_is_processed_only_after_valid_continuation`
 - Регрессия перед Verify:
   `python3 -m unittest -v pilot.test_pilot`
 - Проверка поставки:
@@ -115,4 +115,4 @@
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.AdaptivePollingTests
+ГОТОВО-КОГДА: команда python3 -m unittest -v pilot.test_pilot.AdaptivePollingTests.test_terminal_task_is_processed_only_after_valid_continuation
