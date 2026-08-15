@@ -1,16 +1,16 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart сохраняет надёжно записанный `failed` без второго выпуска.
+Implementation commit: 37e7893cd340be90add2b7a971ad7925f511ed6e — release-driver сохраняет каждый статус через durable broker-запись и fail-closed восстановление.
 
 ## HEAD
 
-- Status: Implemented — защита подтверждена после перебазирования на свежий `main`.
-- Branch: `factory/37b04a6d-26d-1b1a76b3-9eb`.
+- Status: Implemented — ready for Verify after rebase on fresh `main`.
+- Branch: `factory/c955c55a-fff-8bd5811f-36c`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 084cedcb340bb4a3c3114517de30644a796a9552 — повторный restart подтверждает durable failure без второго выпуска.
-- What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -timeout 5m ./...` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; Pilot — 10 PASS; UI lint/typecheck — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA и принять выпуск только по durable status.
+- Implementation commit: `37e7893cd340be90add2b7a971ad7925f511ed6e` — release-driver сохраняет каждый статус через durable broker-запись и fail-closed восстановление.
+- What changed: запись статуса использует fsync файла, atomic rename и fsync каталога; сбой terminal-синхронизации восстанавливает последний durable `running`.
+- Evidence: `go test -race -count=1 ./internal/releasebroker` — PASS; `bash ops/test-fx-factory-release.sh` — PASS; Pilot — 10 PASS; `just build` — PASS.
+- Next action: Передать ветку на Verify и проверить полный diff относительно свежего `main`.
 
 ## LOG
 
@@ -28,6 +28,14 @@ high-severity зависимости, не затрагивающие эту п�
 присутствует. Regression усилен вторым свежим запуском broker: durable `failed`
 сохраняется, а executor остаётся вызван ровно один раз. Целевые Go-тесты прошли;
 10 реальных Pilot→broker сценариев также прошли.
+
+### 2026-08-15 — Implement
+
+Перебазирована остановленная реализация на свежий `origin/main`, сохранена
+durable-запись каждого статуса release-driver и исправлено ожидание проверки
+сбоя directory fsync: после неопределённого terminal остаётся `running`, а
+перезапуск fail-closed переводит операцию в `failed` без второго executor.
+Профильные Go race, Pilot, shell fixture и build прошли.
 
 ### 2026-08-12 — Verify
 
