@@ -721,6 +721,13 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	if got := postStatus(t, restartedServer, body); got != http.StatusOK {
 		t.Fatalf("duplicate POST status=%d", got)
 	}
+	secondRestart, err := NewAt(dir, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, ok := operationSnapshot(secondRestart, "delivery-write-failure"); !ok || item.Status != "failed" {
+		t.Fatalf("second restart lost durable failure: %+v", item)
+	}
 	if executor.callCount() != 1 {
 		t.Fatalf("executor repeated after ambiguous durability: calls=%d", executor.callCount())
 	}
