@@ -1,6 +1,23 @@
 # CARD-0090 — Приёмка десяти полных работ без ручного ремонта
 
-Implementation commit: 0ec9dd9e3f27a4ef0c5ce8a4503f1ba4d9ef0622 — текущая кодовая база Factory с группировкой работ, русскими статусами и безопасной историей этапов.
+## HEAD
+
+Status: In progress — реализован общий русский слой статусов, времени и ошибок.
+
+Branch: `factory/487b9529-eb7-49361f09-b58`
+
+Implementation commit: c69ba972aa25efb46fbd33de58c9f5e43366b93e — статусы, длительности и ошибки Factory переведены на русский.
+
+What changed:
+
+- Общие подписи статусов безопасны к неизвестным backend-значениям.
+- Время, длительности и state loading/error русские; API error не раскрывает сырой текст.
+
+Evidence: `npm --prefix web test`, `npx tsc -p tsconfig.app.json --noEmit`, lint и build → успешно.
+
+Next action: подключить единый итог и действие владельца к списку и detail работы.
+
+## LOG
 
 Status: Specification — реализация и десять прогонов ещё не начинались.
 
@@ -27,3 +44,10 @@ Evidence required: target tests, browser-visible result, release result and proo
 that no manual state/data repair was used. Previous triage branch
 `factory/a274d10c-2bd-00edbfab-4fb` was not available on origin, so nothing was
 copied from it.
+
+### 2026-08-15 — Implement
+
+Общий форматтер теперь выдаёт русские названия известных состояний и «Неизвестно»
+для новых значений backend. Экранные загрузка и ошибки переведены на русский,
+а текст ошибки API не выводится пользователю. Полный `web` test suite, TypeScript,
+lint и production build завершились успешно.
