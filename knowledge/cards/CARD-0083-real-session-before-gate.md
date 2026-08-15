@@ -1,16 +1,16 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: 92ac616c8c67345b027cf3fabe6bfa4eb78ceba4 — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
+Implementation commit: d5c5c1c06c1b52db5b7006d4b186e0fd2ae1bffc — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
 
 ## HEAD
 
-Status: IMPLEMENTED — целевой и полный наборы завершены успешно.
-Branch: factory/db338894-851-59cc6dbf-cf2.
-Implementation commit: 92ac616c8c67345b027cf3fabe6bfa4eb78ceba4 — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
-What changed: актуальный forked launcher из `main` сохраняет `--wait` и реальный status; фикстура больше не тратит 5 секунд после каждого успешного gate.
-What changed: production health-delay остаётся равным 5 секундам и проверяется как целое неотрицательное значение.
-Evidence: `timeout --kill-after=5s 300s bash ops/test-fx-factory-release.sh` → PASS; `env -u FACTORY_BUILD_DIR just check` → PASS (180 UI tests).
-One next action: проверить поставку ветки относительно свежего remote `main`.
+Status: IMPLEMENTED — целевой release-suite завершён успешно на свежем `main`.
+Branch: factory/03bd0a4f-f21-a04d45f5-379.
+Implementation commit: d5c5c1c06c1b52db5b7006d4b186e0fd2ae1bffc — release-сценарий отключает только тестовую health-паузу, сохраняя production default.
+What changed: production health-delay остаётся равным 5 секундам; тестовая фикстура явно устанавливает нулевую задержку.
+What changed: значение задержки проверяется как неотрицательное целое до запуска релиза.
+Evidence: `timeout --kill-after=5s 300s bash ops/test-fx-factory-release.sh` → PASS.
+One next action: выполнить независимый Review опубликованной ветки.
 
 ## LOG
 
@@ -144,3 +144,10 @@ UI gate теперь передаёт проверенные `npm` и `npx` за
 от накопительной пятисекундной health-паузы. На свежем `main` уже действует
 waitable `setsid --fork --wait`; тестовая фикстура теперь отключает только паузу.
 Целевой release-сценарий и полный `just check` завершились успешно.
+
+### 2026-08-14 — Implement
+
+Реализация перенесена поверх свежего `origin/main`: production сохраняет пятисекундную
+health-паузу, а только тестовые запуски устанавливают нулевую задержку. Полный целевой
+release-suite завершился с кодом 0; область поставки ограничена двумя release-скриптами
+и этой карточкой.
