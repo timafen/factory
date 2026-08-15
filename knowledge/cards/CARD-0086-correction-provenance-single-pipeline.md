@@ -2,18 +2,23 @@
 
 ## HEAD
 
-Implementation commit: afd3d9b7acce926389aa79f5eed1b85e4e8a39a9 — устойчивое provenance и реальный перезапуск Review/Verify-конвейера Pilot.
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ed7ee7b4-87a-19b13995-d52`.
-- What changed: проверка полного цикла теперь запускает первый и второй Pilot
-  в разных Python-процессах; второй получает только устойчивые JSON-фикстуры и state.
-- What changed: корректировка с изменённым заголовком продолжает тот же work_id
-  через Review и Verify до финального merge/terminal verdict, без нового root.
-- Evidence: `go test ./...` — PASS; `python3 -m unittest -v pilot.test_pilot` —
-  230 OK (13 skipped); реальный subprocess-рестарт Review/Verify — 7 OK.
-- Next action: Человеку проверить evidence и принять решение о merge.
+Implementation commit: cc1529ee976ab0cafe4720f1e04455966ee37b32 — durable merge-intent принимает только сериализуемый ID поколения, а receipts разделяются по work_id.
+- Status: PASS — перенесено поверх свежего main.
+- Branch: `factory/3917a24c-b6d-31bdcadc-621`.
+- What changed: повторные корректировки с совпадающим заголовком остаются в одном
+  устойчивом конвейере; migration 027 не применяется без схемы 026.
+- Evidence: `go test ./...`, `go build ./...`, полный Pilot и 7 restart-storm
+  проверок — PASS.
+- Next action: повторно выполнить Verify для запушенного candidate.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Работа CARD-0086 перенесена на актуальный `origin/main`; уже вошедшие изменения
+Git исключил, а оставшиеся migration/provenance/merge-intent изменения сохранены.
+Целевые Go provenance-проверки и семь restart-storm тестов Pilot прошли; также
+прошли `go test ./...`, `go build ./...` и полный `pilot.test_pilot`.
 
 ### 2026-08-12 — Verify
 
