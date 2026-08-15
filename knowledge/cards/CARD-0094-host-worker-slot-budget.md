@@ -1,17 +1,18 @@
 # CARD-0094 — Общий бюджет слотов worker-служб
 
-Implementation commit: 7337148e1b623de01eb4fc9dab17813ce7fb9dee — определён проверяемый контракт общего бюджета слотов узла
+Implementation commit: 11c7234abe150302571946247e5da4813c2cad54 — сервер настраивает и атомарно применяет общий бюджет worker-слотов
 
 ## HEAD
 
-- Status: Specification complete — ready for Implement + Test.
-- Specification: `knowledge/specs/host-worker-slot-budget.md`.
-- Owner decision: не более 8 одновременно выполняемых задач суммарно на
-  восьмиядерном узле; `max_concurrent` остаётся локальным пределом службы.
-- Delivery: общий настраиваемый server-side бюджет по умолчанию равен числу
-  логических CPU и атомарно проверяется при выдаче lease всем worker-службам.
-- One next action: реализовать server config и общий admission в транзакции
-  `Store.Claim`, затем выполнить указанную в спецификации целевую команду.
+- Status: Implemented and verified.
+- Branch: `factory/f05c4df4-156-406ce6e0-066`.
+- What changed: `host_max_concurrent` по умолчанию равен числу логических CPU,
+  принимает положительный override и передаётся в Store при старте сервера.
+  `Claim` атомарно ограничивает все непросроченные preparing/running lease;
+  локальная ёмкость worker остаётся независимой.
+- Evidence: `go test ./... -count=1` — PASS; `go build ./...` — PASS;
+  `git diff --check` — PASS.
+- One next action: провести review и влить ветку в `main`.
 
 ## LOG
 
@@ -31,3 +32,12 @@ drain. UI, БД, registration и локальный диапазон `max_concur
 
 Номер `CARD-0094` проверен по свежему `origin/main` и 769 опубликованным remote
 refs; путей с этим номером не было.
+
+### 2026-08-15 — Implement
+
+Сервер читает `host_max_concurrent`, использует число видимых CPU при отсутствии
+поля и не стартует при нуле или отрицательном значении. Общая проверка в одной
+SQLite-транзакции теперь использует этот бюджет, поэтому две службы не могут
+суммарно превысить лимит машины; terminal и истёкший lease освобождают слот.
+Проверены config default/override/reject, общий предел, освобождение и локальная
+ёмкость worker; `go test ./... -count=1`, `go build ./...` и `git diff --check` прошли.
