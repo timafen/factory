@@ -3801,10 +3801,10 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         intent.update({"phase": "conflict", "merge_error": "merge conflict details"})
         return {"merge_intents": {"verify-1": intent}}
 
-    def duplicate_conflict_state(self):
+    def duplicate_conflict_state(self, rounds=2):
         state = self.conflict_state()
         state["merge_intents"]["verify-1"].update({
-            "rounds": 2, "work_id": "work-1", "target_branch": "main",
+            "rounds": rounds, "work_id": "work-1", "target_branch": "main",
         })
         return state
 
@@ -3850,8 +3850,8 @@ class MergeConflictRecoveryTests(unittest.TestCase):
 
         return github, calls
 
-    def test_second_conflict_closes_stale_pr_when_matching_work_was_merged(self):
-        state = self.duplicate_conflict_state()
+    def test_first_conflict_closes_stale_pr_when_matching_work_was_merged(self):
+        state = self.duplicate_conflict_state(rounds=1)
         current, merged = self.duplicate_pulls()
         github, calls = self.duplicate_github(current, merged)
         with mock.patch.object(pilot, "STATE_PATH", self.state_path), \

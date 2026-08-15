@@ -7900,12 +7900,7 @@ def _supersede_merged_duplicate(state, task_id, intent):
     if intent.get("phase") == "superseding":
         return _resume_superseding_pull_request(state, task_id, intent)
     work_id = intent.get("work_id")
-    try:
-        rounds = int(intent.get("rounds") or 0)
-    except (TypeError, ValueError):
-        return False
     if (intent.get("phase") != "conflict"
-            or rounds < 2
             or not factory_work_marker(work_id)):
         return False
     repo = intent.get("repository", "").split("github.com/")[-1]
