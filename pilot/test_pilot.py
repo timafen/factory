@@ -6769,6 +6769,7 @@ class AdaptivePollingTests(unittest.TestCase):
         state = {"processed": []}
         refills = []
         history_calls = []
+        startup_events = []
 
         def fake_api(path, body=None):
             self.assertIsNone(body)
@@ -6784,7 +6785,12 @@ class AdaptivePollingTests(unittest.TestCase):
 
         def refill(*_args, **_kwargs):
             refills.append(True)
+            startup_events.append("refill")
             return 0
+
+        def recovery(*_args, **_kwargs):
+            startup_events.append("recovery")
+            return {}
 
         def history():
             history_calls.append(True)
@@ -6807,6 +6813,8 @@ class AdaptivePollingTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(
                 pilot, "refill_open_work_slots", side_effect=refill))
             stack.enter_context(mock.patch.object(
+                pilot, "load_restart_recovery_tasks", side_effect=recovery))
+            stack.enter_context(mock.patch.object(
                 pilot, "codex_usage_snapshot",
                 side_effect=lambda day_start, _week_start: {day_start: {}}))
             stack.enter_context(mock.patch.object(
@@ -6819,6 +6827,7 @@ class AdaptivePollingTests(unittest.TestCase):
             pilot.cycle(conf, state)
 
             self.assertTrue(refills)
+            self.assertEqual(startup_events[:2], ["refill", "recovery"])
             self.assertEqual(history_calls, [])
 
             state["full_history_maintenance_at"] = (
@@ -6828,8 +6837,40 @@ class AdaptivePollingTests(unittest.TestCase):
 
         self.assertEqual(history_calls, [True])
 
+    def test_restart_recovery_matches_one_terminal_per_cycle(self):
+        conf = {
+            "enabled": True,
+            "poll_seconds": 30,
+            "max_terminal_tasks_per_cycle": 1,
+        }
+        state = {
+            "processed": ["older", "newest"],
+            "terminal_handoff_watermark": "2026-08-10T10:00:00Z",
+        }
+        recovery_seen = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(cycle_conf, _state):
+            recovery_seen.append(cycle_conf.get("_restart_recovery_ids"))
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertEqual(recovery_seen, [frozenset(("newest",))])
+
     def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
-        conf = {"enabled": True, "poll_seconds": 30}
+        conf = {
+            "enabled": True,
+            "poll_seconds": 30,
+            "max_terminal_tasks_per_cycle": pilot.RESTART_RECOVERY_RETENTION,
+        }
         ids = [
             f"terminal-{number}"
             for number in range(pilot.RESTART_RECOVERY_RETENTION + 1)
