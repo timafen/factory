@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -56,7 +57,38 @@ func processGroupID(pid int) (int, error) {
 	return unix.Getpgid(pid)
 }
 
+const linuxProcessIdentityPrefix = "linux-start-time:"
+
 func processIdentity(pid int) (string, error) {
+	if runtime.GOOS == "linux" {
+		return linuxProcessIdentity(pid)
+	}
+	return legacyProcessIdentity(pid)
+}
+
+func linuxProcessIdentity(pid int) (string, error) {
+	body, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", fmt.Errorf("inspect process %d: %w", pid, err)
+	}
+	value := string(body)
+	closingParenthesis := strings.LastIndexByte(value, ')')
+	if closingParenthesis < 0 {
+		return "", fmt.Errorf("process %d has malformed stat data", pid)
+	}
+	fields := strings.Fields(value[closingParenthesis+1:])
+	const startTimeFieldAfterCommand = 19
+	if len(fields) <= startTimeFieldAfterCommand {
+		return "", fmt.Errorf("process %d has incomplete stat data", pid)
+	}
+	startTime := fields[startTimeFieldAfterCommand]
+	if _, err := strconv.ParseUint(startTime, 10, 64); err != nil {
+		return "", fmt.Errorf("process %d has invalid start time: %w", pid, err)
+	}
+	return linuxProcessIdentityPrefix + startTime, nil
+}
+
+func legacyProcessIdentity(pid int) (string, error) {
 	command := exec.Command("ps", "-o", "lstart=", "-o", "command=", "-p", strconv.Itoa(pid))
 	output, err := command.Output()
 	if err != nil {
@@ -74,10 +106,20 @@ func verifyProcessIdentity(pid int, expected string) error {
 	if err != nil {
 		return err
 	}
-	if actual != expected {
-		return fmt.Errorf("process %d identity changed", pid)
+	if actual == expected {
+		return nil
 	}
-	return nil
+	// Workers upgraded from the legacy ps-based identity can still reconcile
+	// processes that were already running before the upgrade. New Linux
+	// processes use /proc start-time ticks, which do not move when WSL adjusts
+	// its wall clock and remain stable across exec.
+	if runtime.GOOS == "linux" && !strings.HasPrefix(expected, linuxProcessIdentityPrefix) {
+		legacy, legacyErr := legacyProcessIdentity(pid)
+		if legacyErr == nil && legacy == expected {
+			return nil
+		}
+	}
+	return fmt.Errorf("process %d identity changed", pid)
 }
 
 func signalProcessGroup(processGroupID int, signal unix.Signal) error {
