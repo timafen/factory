@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,4 +44,35 @@ test("production renderer refuses to run without the isolated launcher", async (
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /absolute FACTORY_BROWSER_LAUNCHER is required/);
+});
+
+test("production renderer loads Playwright only from the durable browser payload", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "factory-browser-payload-"));
+  const payload = path.join(dir, "payload");
+  const unrelatedCwd = path.join(dir, "checkout-was-removed");
+  const output = path.join(dir, "daily.pdf");
+  const launcher = path.join(dir, "factory-browser-sandbox");
+  await mkdir(path.join(payload, "web", "node_modules", "playwright"), { recursive: true });
+  await mkdir(unrelatedCwd);
+  await writeFile(path.join(payload, "web", "package.json"), '{"type":"module"}\n');
+  await writeFile(path.join(payload, "web", "node_modules", "playwright", "package.json"),
+    '{"name":"playwright","main":"index.cjs"}\n');
+  await writeFile(path.join(payload, "web", "node_modules", "playwright", "index.cjs"), `
+const fs = require("node:fs");
+exports.chromium = { launch: async options => {
+  if (!options.chromiumSandbox || options.executablePath !== process.env.FACTORY_BROWSER_LAUNCHER) throw new Error("unsafe launch");
+  return { newPage: async () => ({ route: async () => {}, setContent: async () => {}, pdf: async ({path}) => fs.writeFileSync(path, "%PDF-fixture") }), close: async () => {} };
+} };
+`);
+  await writeFile(launcher, "#!/bin/sh\nexit 0\n");
+  await chmod(launcher, 0o755);
+  const script = fileURLToPath(new URL("../../internal/controlplane/report_scripts/render.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [script, output], {
+    cwd: unrelatedCwd,
+    input: "<h1>Ежедневный отчёт</h1>",
+    encoding: "utf8",
+    env: { ...process.env, FACTORY_BROWSER_PAYLOAD: payload, FACTORY_BROWSER_LAUNCHER: launcher },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await readFile(output)).subarray(0, 5).toString(), "%PDF-");
 });
