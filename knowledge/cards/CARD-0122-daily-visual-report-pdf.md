@@ -1,15 +1,15 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 65ade7b6888f214ca6dc3ebf3b9d281ed4f8642b — сервер передаёт постоянный browser runtime, а релиз проверяет PDF без checkout
+Implementation commit: 435cf489885e075ebb5ed10c70af43afc46b6961 — релиз проверяет Chromium в том же factory-кэше, куда его ставит штатный installer
 
 ## HEAD
 
-- Status: IMPLEMENTED — штатный релиз передаёт renderer-у постоянные launcher и payload и проверяет PDF после удаления checkout.
-- Branch: `factory/aecdb361-5a3-0b0a69fb-e45`
-- Implementation commit: `65ade7b6888f214ca6dc3ebf3b9d281ed4f8642b` — сервер устанавливает обязательные browser variables, а fixture запускает поставленный renderer.
-- What changed: `render.mjs` получает `/usr/local/libexec/factory/factory-browser-sandbox` и постоянный browser payload без наследования окружения; stdin совместим с Node 20.
-- Evidence: `go test ./internal/controlplane -run 'TestCommandDailyReportRendererUsesReleaseBrowserRuntime|TestDailyReportServiceAutomaticallyRetriesWithoutDuplicates' -count=1` PASS; `bash ops/test-fx-factory-release.sh` PASS.
-- One next action: Review повторно проверяет штатный релиз и сценарий удаления checkout.
+- Status: VERIFIED — чистый штатный релиз сам готовит постоянный browser runtime и проверяет его из HOME пользователя Factory.
+- Branch: `factory/a93d07ac-915-512ac744-9e5`
+- Implementation commit: `435cf489885e075ebb5ed10c70af43afc46b6961` — Chromium проверяется через тот же `sudo -H -u factory`, что использует installer.
+- What changed: fixture создаёт разные root/factory Playwright-кэши и требует выбора factory-кэша; постоянный payload продолжает рендерить PDF после удаления checkout.
+- Evidence: `env -u FACTORY_BUILD_DIR just check`, `just ui-build 0`, `just build` PASS; после rebase целевые Go/Node/Pilot и `bash ops/test-fx-factory-release.sh` PASS.
+- One next action: влить доставленную ветку в `main`.
 
 ## LOG
 
@@ -99,3 +99,11 @@ Node PDF, browser shell, lint, typecheck и production build завершили�
 ### 2026-08-13 — Implement
 
 Добавлены схема хранения visual target/capture/report, блокировка claim до terminal `before`, защищённые report API, локальные capture/PDF scripts и русскоязычный экран отчётов. Обязательный тест `TestDailyVisualReportKeepsMissingBeforeHonest` сначала зафиксирован красным из-за отсутствующей реализации, затем прошёл. Полные Go- и web-наборы, typecheck, production build и отдельный Node-тест `%PDF-` зелёные.
+
+### 2026-08-15 — Implement
+
+Release-проверка Chromium теперь выполняется от пользователя Factory с `HOME`,
+который задаёт `sudo -H`, как в штатном installer. Регрессионная fixture создаёт
+разные исполняемые Chromium в root/factory-кэшах и подтверждает, что выбран только
+factory-кэш. Полный `just check`, UI/Go build, а после свежего rebase целевые
+Go/Node/Pilot и release-fixture завершились PASS.
