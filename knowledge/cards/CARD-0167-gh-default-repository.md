@@ -1,4 +1,4 @@
-Implementation commit: 33bd5a6fd41210cd71000629d4c3ed2424816b1a — закреплено решение владельца: timafen/factory является основным репозиторием, а owainlewis/factory остаётся upstream.
+Implementation commit: 5eccdaa3d565ff15be29a99c5a4c9abfd0792ea6 — кэш назначает origin основным репозиторием GitHub CLI, сохраняя upstream.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
@@ -6,7 +6,7 @@ Implementation commit: 33bd5a6fd41210cd71000629d4c3ed2424816b1a — закреп
 
 - Status: Implemented
 - Ветка: `factory/80c66ee4-e6e-5f29b750-ad5`.
-- Implementation commit: `33bd5a6fd41210cd71000629d4c3ed2424816b1a`.
+- Implementation commit: `5eccdaa3d565ff15be29a99c5a4c9abfd0792ea6`.
 - Что изменилось: кэш удаляет `remote.upstream.gh-resolved`, назначает
   `remote.origin.gh-resolved=base` для новых и существующих кэшей и закрывает
   выдачу репозитория при ошибке Git-конфигурации.
