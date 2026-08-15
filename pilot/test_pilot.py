@@ -2660,9 +2660,10 @@ class PipelineWatchTests(unittest.TestCase):
             "repository_id": repository_id,
         }
 
-    def watch(self, tasks=None):
+    def watch(self, tasks=None, processed=None):
         pilot.pipeline_watch(
-            self.conf, tasks or [self.task()], self.workflows, self.workers
+            self.conf, tasks or [self.task()], self.workflows, self.workers,
+            processed,
         )
 
     def test_waits_before_resuming_lost_transition(self):
@@ -2674,6 +2675,50 @@ class PipelineWatchTests(unittest.TestCase):
         self.now += pilot.STALL_WAIT - 1
         self.watch()
         self.assertEqual(self.created, [])
+
+    def test_fresh_terminal_handoff_waits_for_normal_processor(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch(processed=[])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
+        self.assertEqual(
+            self.work_status["Встроенный патруль"]["state"], "queued")
+
+        self.now += pilot.STALL_WAIT
+        self.watch(processed=["source-task"])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+
+    def test_new_unprocessed_attempt_prevents_watchdog_duplicate(self):
+        old = self.task()
+        old.update({"id": "old-attempt", "created_at": "2026-08-15T10:00:00Z"})
+        new = self.task()
+        new.update({"id": "new-attempt", "created_at": "2026-08-15T10:05:00Z"})
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch([old, new], processed=["old-attempt"])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
 
     def test_resumes_once_after_wait_with_same_repository_and_revision(self):
         self.memory = {
@@ -5484,6 +5529,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(watch.call_args.args[1], tasks)
         self.assertEqual(watch.call_args.args[2]["Triage"]["revision_id"], "wf-triage")
         self.assertIs(watch.call_args.args[3], self.workers)
+        self.assertIs(watch.call_args.args[4], state["processed"])
         self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
@@ -6689,6 +6735,27 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(recovery_seen,
                          [frozenset(("done",)), None])
 
+    def test_loop_requests_fast_refill_only_until_first_successful_cycle(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"processed": []}
+        startup_seen = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(cycle_conf, _state):
+            startup_seen.append(cycle_conf.get("_startup_refill"))
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=2, sleep_fn=lambda _seconds: None,
+                           clock_fn=iter((100.0, 200.0)).__next__)
+
+        self.assertEqual(startup_seen, [True, False])
+
     def test_restart_recovery_is_bounded_to_recent_terminal_tasks(self):
         conf = {"enabled": True, "poll_seconds": 30}
         ids = [
@@ -7369,7 +7436,7 @@ class AdaptivePollingTests(unittest.TestCase):
         self.assertEqual(len(created), 4)
         self.assertEqual(len(state["processed"]), 4)
         refill.assert_called_once()
-        self.assertFalse(refill.call_args.kwargs["admit_new_plan"])
+        self.assertTrue(refill.call_args.kwargs.get("admit_new_plan", True))
 
     def test_deferred_terminal_handoff_does_not_starve_next_terminal(self):
         conf = {
@@ -7703,7 +7770,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_called_once_with(conf, [], {}, {})
+        watch.assert_called_once_with(conf, [], {}, {}, state["processed"])
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)
@@ -8600,10 +8667,42 @@ pilot.save(pilot.STATE_PATH, state)
 
 
 class RecentDoneTest(unittest.TestCase):
+    def test_separates_merged_and_failed_with_independent_limits(self):
+        tasks = []
+        for i in range(4):
+            tasks.append({"id": f"merged-{i}", "title": f"[auto] [5/5 Verify] Влитая {i}",
+                          "work_class": "product", "state": "succeeded",
+                          "updated_at": f"2026-08-10T09:0{i}:00Z"})
+        for i in range(6):
+            tasks.append({"id": f"failed-{i}", "title": f"[auto] [4/5 Review] Провал {i}",
+                          "work_class": "product", "state": "failed",
+                          "updated_at": f"2026-08-10T10:0{i}:00Z"})
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        receipts = os.path.join(temporary.name, "receipts.jsonl")
+        with open(receipts, "w", encoding="utf-8") as stream:
+            for i in range(4):
+                stream.write(json.dumps({"task_id": f"merged-{i}"}) + "\n")
+        with mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", receipts), \
+                mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+        self.assertEqual(len(recent["merged"]), 4)
+        self.assertEqual(len(recent["failed"]), 5)
+
+    def test_server_class_is_required_and_title_does_not_filter_product_work(self):
+        tasks = [{"id": "patrol-title", "title": "[auto] [5/5 Verify] Патруль пользователя",
+                  "work_class": "product", "state": "failed", "updated_at": "2026-08-10T10:00:00Z"},
+                 {"id": "patrol-auto", "title": "[auto] [5/5 Verify] Патруль Factory",
+                  "work_class": "patrol", "state": "failed", "updated_at": "2026-08-10T11:00:00Z"}]
+        with mock.patch.object(pilot, "api", return_value={"attempts": []}):
+            recent = pilot.recent_done_block(tasks)
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Патруль пользователя"])
+
     def test_ignores_succeeded_intermediate_triage(self):
         task = {
             "id": "triage",
             "title": "[auto] [1/5 Triage] Оплата картой",
+            "work_class": "product",
             "state": "succeeded",
             "updated_at": "2026-08-10T14:00:00Z",
         }
@@ -8617,18 +8716,22 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api") as api:
             recent = pilot.recent_done_block([task])
 
-        self.assertEqual(recent, [])
+        self.assertEqual(recent, {"merged": [], "failed": []})
         api.assert_not_called()
 
     def test_excludes_successful_progress_and_unmerged_verify(self):
         tasks = [
             {"id": "triage", "title": "[auto] [1/5 Triage] Оплата картой",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T14:00:00Z"},
             {"id": "unmerged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T13:00:00Z"},
             {"id": "merged", "title": "[auto] [5/5 Verify] Поиск товаров",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T12:00:00Z"},
             {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "work_class": "product",
              "state": "failed", "updated_at": "2026-08-10T11:00:00Z"},
         ]
         temporary = tempfile.TemporaryDirectory()
@@ -8641,20 +8744,22 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent],
-                         ["Поиск товаров", "Оплата картой"])
-        self.assertEqual([item["status"] for item in recent], ["delivered", "failed"])
+        self.assertEqual([item["title"] for item in recent["merged"]], ["Поиск товаров"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
 
     def test_keeps_real_pipeline_results_and_excludes_five_service_finals(self):
         tasks = [
             {"id": f"service-{i}", "title": f"[auto] [5/5 Verify] {name}",
+             "work_class": "service",
              "state": "succeeded", "updated_at": f"2026-08-10T10:0{i}:00Z"}
             for i, name in enumerate(("Smoke check", "Helper cleanup", "Debug probe",
                                        "Idempotency final", "Идемпотентный финал"))
         ] + [
             {"id": "merged", "title": "[auto] [5/5 Verify] Новая витрина",
+             "work_class": "product",
              "state": "succeeded", "updated_at": "2026-08-10T11:00:00Z"},
             {"id": "failed", "title": "[auto] [4/5 Review] Оплата картой",
+             "work_class": "product",
              "state": "failed", "updated_at": "2026-08-10T12:00:00Z"},
         ]
         temporary = tempfile.TemporaryDirectory()
@@ -8670,11 +8775,11 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", side_effect=detail):
             recent = pilot.recent_done_block(tasks)
 
-        self.assertEqual([item["title"] for item in recent], ["Оплата картой", "Новая витрина"])
-        self.assertEqual(recent[0]["status"], "failed")
-        self.assertIn("в main не влито", recent[0]["detail"])
-        self.assertEqual(recent[1]["status"], "delivered")
-        self.assertIn("Выпуск принят", recent[1]["detail"])
+        self.assertEqual([item["title"] for item in recent["failed"]], ["Оплата картой"])
+        self.assertEqual(recent["failed"][0]["status"], "failed")
+        self.assertIn("Этап", recent["failed"][0]["detail"])
+        self.assertEqual(recent["merged"][0]["status"], "merged")
+        self.assertIn("Выпуск принят", recent["merged"][0]["detail"])
 
     def test_old_notification_is_filtered_and_success_without_merge_is_honest(self):
         temporary = tempfile.TemporaryDirectory()
@@ -8688,8 +8793,7 @@ class RecentDoneTest(unittest.TestCase):
                 mock.patch.object(pilot, "api", return_value={"attempts": []}):
             recent = pilot.recent_done_block([], n=3)
 
-        self.assertEqual([item["title"] for item in recent], ["Старый настоящий результат"])
-        self.assertEqual(recent[0]["status"], "legacy")
+        self.assertEqual(recent, {"merged": [], "failed": []})
 
     def test_reads_every_task_page(self):
         pages = [
