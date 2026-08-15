@@ -956,7 +956,8 @@ def close_triage_without_work(task, result):
     return True
 
 
-def reopen_work(base, generation, reason="Владелец явно запустил новое поколение работы."):
+def reopen_work(base, generation, reason="Владелец явно запустил новое поколение работы.",
+                work_id=""):
     """Open a new generation while retaining the previous close receipt."""
     works = load(WORKS_PATH, {}) or {}
     key = work_storage_key(base, work_id)
@@ -966,9 +967,9 @@ def reopen_work(base, generation, reason="Владелец явно запуст
     if meta:
         if meta.get("closed"):
             history = list(meta.get("closed_generations") or [])
-            history.append({key: meta[key] for key in (
+            history.append({field: meta[field] for field in (
                 "closed", "closed_reason", "retention_until"
-            ) if meta.get(key)})
+            ) if meta.get(field)})
             meta["closed_generations"] = history
         for field in ("closed", "closed_reason", "retention_until",
                       "implementation_artifact", "delivery_artifact"):
@@ -8023,6 +8024,7 @@ def cycle(conf, state):
 
         detail = recovery_detail or api(f"/tasks/{tid}")
         wf = (detail.get("workflow") or {}).get("title")
+        work_id = task_durable_work_id(detail.get("task") or t, handoff_tasks)
         if tid not in state["processed"]:
             state["processed"].append(tid)
 
