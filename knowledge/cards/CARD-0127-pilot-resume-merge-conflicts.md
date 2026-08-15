@@ -1,4 +1,4 @@
-Implementation commit: 12997fa9d6697f24825a7f8b73dad8482e027ebd — Pilot безопасно возвращает конфликт слияния той же работе в Implement + Test
+Implementation commit: 0af2d8903a0ad1a194b77942fa219278c418cf27 — AUTO-MERGE получает новый возврат после каждого конфликта
 
 # CARD-0127 — Pilot возвращает конфликт слияния в Implement + Test
 
@@ -6,15 +6,16 @@ Implementation commit: 12997fa9d6697f24825a7f8b73dad8482e027ebd — Pilot без
 
 Status: Implemented — awaiting Review
 
-Branch: `factory/1757d892-437-271a7c4a-b84`
+Branch: `factory/a4e8042b-cfa-7c84371a-e3b`
 
-What changed: конфликт GitHub остаётся durable intent и создаёт ровно одну
-correction-задачу на исходной ветке. Пустая ветка, недоступный маршрут или
-ошибка Control Plane теперь безопасно ждут следующего цикла.
+Implementation commit: `0af2d8903a0ad1a194b77942fa219278c418cf27` — каждый
+AUTO-MERGE-конфликт получает отдельное поколение и новый `merge_conflict_return`.
 
-Evidence: `MergeConflictRecoveryTests` → 8 PASS; полный Go-набор, vet,
-vulnerability scan и staticcheck → PASS; UI → 180 PASS, lint/typecheck → PASS;
-tooling, launcher и сборка трёх бинарников → PASS.
+What changed: Pilot сохраняет счётчик конфликтов и меняет request key после
+повторного конфликта, но повторный запуск того же поколения остаётся без дубля.
+
+Evidence: целевые merge-тесты → 11 PASS; полный `pilot.test_pilot` → 310 PASS
+(13 skipped); `go test -timeout 5m ./...` и `just build` → PASS.
 
 One next action: Review проверяет повторный проход Implement → Review → Verify.
 
@@ -36,3 +37,10 @@ Verify.
 vet, vulnerability scan, staticcheck, 180 UI-тестов, lint, typecheck, tooling,
 launcher и сборка трёх бинарников прошли. Первичный UI-запуск потребовал
 штатного `npm ci`; tooling повторён с внешней `FACTORY_BUILD_DIR` снятой.
+
+### 2026-08-14 — Implement
+
+Коммит `0af2d8903a0ad1a194b77942fa219278c418cf27` добавил durable-счётчик
+поколения AUTO-MERGE-конфликта: новый конфликт создаёт новый `merge_conflict_return`,
+а рестарт того же конфликта сохраняет exactly-once. Целевой набор дал 11 PASS;
+полный Pilot — 310 PASS (13 skipped), Go-тесты и изолированная сборка — PASS.
