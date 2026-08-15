@@ -4,19 +4,27 @@ Implementation commit: df6aceb59d0f990e1fd7316bfac99e3047c905f2 — broker пу�
 
 ## HEAD
 
-- Status: Blocked — штатный выпуск остановлен до мутаций инфраструктурой.
-- Branch: `factory/fa145a84-05f-669c58d2-270`.
+- Status: Blocked — worker не может штатно вызвать `sudo` для перезапуска broker.
+- Branch: `factory/0f12da99-439-72bd6b1b-800`.
 - Implementation commit: `df6aceb59d0f990e1fd7316bfac99e3047c905f2`.
 - What changed: POST живой приёмки durable сохраняет `running`, запускает
   checker в фоне и сразу открывает single-flight наблюдение; terminal результат
   публикуется только после записи. Успешный тестовый выпуск моделирует PASS
   приёмки и проверяет `finished_at` в dashboard-проекции.
-- Evidence: `just build`, `just format-check`, `just vet`, `just boundary`,
-  `just test`, `npx tsc -p tsconfig.app.json --noEmit` → PASS; штатный
-  `fx factory release` → остановлен до мутаций: broker использует deleted-inode.
-- Next action: безопасно перезапустить `factory-release-broker.service`, повторить release и живую приёмку.
+- Evidence: `GOCACHE=/tmp/... go test ./internal/releasebroker` → PASS;
+  разрешённый `sudo -n systemctl restart factory-release-broker.service` → не
+  запущен из-за `no_new_privileges`.
+- Next action: повторить перезапуск, выпуск и живую приёмку из privileged worker.
 
 ## LOG
+
+### 2026-08-15 — Release retry blocked
+
+Владелец разрешил штатный перезапуск broker, но текущий Factory worker не может
+вызвать `sudo`: включён `no_new_privileges`, а `/etc/sudo.conf` имеет неверного
+владельца. Поэтому `fx factory release` не запускался, production не менялся и
+автоматический откат не требовался; непривилегированная диагностика не видит
+unit и journal хоста. До блокировки подтверждены прежние полный набор checks.
 
 ### 2026-08-15 — Release blocked
 
