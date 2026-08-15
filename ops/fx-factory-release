@@ -491,9 +491,17 @@ gate_logs=()
 gate_names=()
 trusted_gate_dir=
 stage=
+browser_restore_armed=0
 test_gates_stopped=1
 test_gates_reaped=1
 cleanup() {
+  if [ "$browser_restore_armed" = 1 ] && [ -n "$stage" ] \
+    && [ -f "$stage/browser-rollback/backup.ready" ]; then
+    /bin/bash "$stage/browser/ops/install-server-browser.sh" \
+      --restore-live-state "$stage/browser-rollback" \
+      || fail "привилегированная browser-среда не восстановлена"
+    browser_restore_armed=0
+  fi
   stop_test_gates
   wait_for_test_gates
   [ -z "$trusted_gate_dir" ] || "$TRUSTED_RM" -rf -- "$trusted_gate_dir"
@@ -1023,6 +1031,14 @@ release_id="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}-$$"
 stage="$REL/.generation-$release_id.$$"
 generation_path="$GENERATIONS/$release_id"
 mkdir -m 700 "$stage" "$stage/payload" || { cleanup; exit 4; }
+browser_user=${FACTORY_BROWSER_USER:-${BRAIN_OWNER%%:*}}
+[ -n "$browser_user" ] || browser_user=factory
+browser_group=$(id -gn "$browser_user") || { fail "не найдена группа browser-пользователя $browser_user"; cleanup; exit 4; }
+# The permanent renderer runs as factory, not as the release broker.  It needs
+# traversal through every generation parent, while root remains the only writer.
+chgrp "$browser_group" "$REL" "$GENERATIONS" "$stage" \
+  && chmod 750 "$REL" "$GENERATIONS" "$stage" \
+  || { fail "не удалось открыть Factory доступ к browser runtime"; cleanup; exit 4; }
 inventory="$stage/inventory.tsv"
 : >"$inventory"
 printf '[Service]\nSupplementaryGroups=%s\n' "$BROKER_GROUP" >"$work/factory-release-broker-dropin.conf"
@@ -1080,12 +1096,15 @@ PY
 )
 
 step "готовлю постоянную среду Chromium до остановки служб"
-FACTORY_BROWSER_SHARE="$work/src" FACTORY_BROWSER_RUNTIME="$stage/browser" \
+FACTORY_USER="$browser_user" FACTORY_BROWSER_SHARE="$work/src" FACTORY_BROWSER_RUNTIME="$stage/browser" \
   FACTORY_BROWSER_BACKUP_DIR="$stage/browser-rollback" \
   /bin/bash "$work/src/ops/install-server-browser.sh" \
   || { fail "browser runtime не готов — работающий выпуск не изменён"; cleanup; exit 4; }
+browser_restore_armed=1
 verify_browser_payload "$stage/browser" \
   || { fail "browser runtime не прошёл проверку — работающий выпуск не изменён"; cleanup; exit 4; }
+[ "${FACTORY_RELEASE_TEST_FAIL_AFTER_BROWSER_SMOKE:-0}" != 1 ] \
+  || { fail "тестовый сбой после browser smoke"; cleanup; exit 4; }
 
 python3 - "$stage/release-info.json" "$sha" "$subject" "$ref" "$release_id" <<'PY'
 import datetime,json,sys
@@ -1167,6 +1186,7 @@ fi
 mv "$stage" "$generation_path" && sync_path "$GENERATIONS" || { cleanup; exit 4; }
 verify_generation "$generation_path" || { cleanup; exit 4; }
 write_journal prepared "$generation_path" "$old_generation" || { cleanup; exit 4; }
+browser_restore_armed=0
 previous=$old_generation
 rollback_armed=1
 rollback() { local why=$1 status=$2; trap - EXIT HUP INT TERM; rollback_armed=0; rollback_to_generation "$old_generation" "$why" "$generation_path"; result=$?; cleanup; [ "$result" -eq 0 ] || status=$result; exit "$status"; }
