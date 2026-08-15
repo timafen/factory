@@ -1692,6 +1692,7 @@ run_driver "$rollback_case" --rollback >"$rollback_case/second-rollback-output" 
   || { cat "$rollback_case/second-rollback-output" >&2; fail "second rollback with release owner failed"; }
 [ "$(stat -c %U:%G "$rollback_case/current.json")" = factory:factory ] \
   || fail "rollback did not restore the configured owner on release metadata"
+: >"$rollback_case/events"
 run_release "$rollback_case" owner-release \
   || { cat "$rollback_case/output" >&2; fail "release after rollback with owner failed"; }
 
