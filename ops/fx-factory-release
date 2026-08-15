@@ -180,6 +180,20 @@ if [ -n "$DELIVERY_ID" ]; then
   delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
 fi
 
+# Once `launching` is durable, even failures before the release lock or the
+# full cleanup handler is ready need a terminal outcome.  The later cleanup
+# trap replaces this minimal handler after its resources have been created.
+delivery_terminal_status=failed
+on_delivery_exit() {
+  local status=${1:-$?}
+  trap - EXIT
+  if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
+  delivery_status "$delivery_terminal_status" \
+    || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
+  exit "$status"
+}
+trap on_delivery_exit EXIT
+
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
 as_user() { if [ -n "$AS" ]; then $AS "$@"; else "$@"; fi; }
@@ -668,19 +682,6 @@ flock -n 9 || {
   exit 8
 }
 delivery_status running || { fail "cannot start physical release without durable running status"; exit 4; }
-
-# From this point the broker has proof that the physical delivery may have
-# started. Every ordinary exit needs a durable terminal outcome. The cleanup
-# trap below invokes this handler until rollback() can report a precise result.
-delivery_terminal_status=failed
-on_delivery_exit() {
-  local status=${1:-$?}
-  trap - EXIT
-  if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
-  delivery_status "$delivery_terminal_status" \
-    || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
-  exit "$status"
-}
 
 umask 077
 
