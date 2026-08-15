@@ -1,14 +1,14 @@
 # CARD-0106 — Безопасная ежедневная уборка диска Factory
 
-Implementation commit: eec4fafe35dc2050e713792f71cea76a8409e58a — активные прогоны защищены путём из worker TOML, а janitor получил необходимые ограниченные права.
+Implementation commit: 6d8de5d601480ff8f6d9124cef993d4faecabe51 — ежедневная двухфазная уборка защищает активные прогоны и сохраняет эскалации удержанных результатов.
 
 ## HEAD
 
 - Status: Implemented and tested
-- Branch: `factory/cdf7dad9-562-a3089326-7c9`
-- Implementation commit: `eec4fafe35dc2050e713792f71cea76a8409e58a`
+- Branch: `factory/d3b84ff1-8d3-b4ab669c-1cf`
+- Implementation commit: `6d8de5d601480ff8f6d9124cef993d4faecabe51`
 - What changed: активная рабочая область определяется по `data_directory` из worker TOML; при неизвестном пути ежедневная очистка безопасно останавливается. Service запускает janitor с root и ограниченной записью в нужные каталоги.
-- Evidence: `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh && bash ops/test-factory-janitor.sh` → 8 сценариев PASS; `git diff --check` → PASS.
+- Evidence: целевой janitor-тест → 12 PASS; `just build` → 3 бинарника собраны; `just check` → Go-часть PASS, UI остановлен на отсутствующем локальном `eslint`.
 - Next action: установить и включить `factory-janitor.timer` на целевом хосте после проверки оператором.
 
 ## LOG
@@ -31,3 +31,11 @@ Implementation commit: eec4fafe35dc2050e713792f71cea76a8409e58a — активн
 статуса занятости, а путь берётся из сопоставленного worker TOML; неизвестный
 активный worker прекращает очистку до отбора кандидатов. Service теперь имеет
 необходимые root-права при ограниченной записи. Целевой тест подтвердил 8 PASS.
+
+### 2026-08-15 — Implement
+
+Реализация перенесена на свежий `main` с сохранением эскалаций healthy retained
+и уборки retained-результатов нездоровых worker. Объединённый целевой тест
+подтвердил 12 сценариев, включая двухфазное удаление и fail-closed защиту.
+Полный `just check` подтвердил Go-проверки, но UI-часть не стартовала без
+установленного `eslint`; отдельный `just build` успешно собрал три бинарника.
