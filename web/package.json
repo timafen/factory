@@ -10,7 +10,8 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "test:browser": "npm run build && git diff --exit-code -- dist && playwright test"
+    "test:browser": "npm run build && git diff --exit-code -- dist && playwright test",
+    "test:browser:critical": "playwright test --grep @critical"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.83.0",

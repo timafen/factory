@@ -38,6 +38,10 @@ ui-check:
 test-browser:
     cd web && npm run test:browser
 
+# Run only the release-blocking browser paths against the real Go server.
+test-browser-critical:
+    cd web && npm run test:browser:critical
+
 # Report Go files that need formatting.
 format-check:
     @test -z "$(find cmd internal migrations web -path web/node_modules -prune -o -name '*.go' -exec gofmt -l {} +)"

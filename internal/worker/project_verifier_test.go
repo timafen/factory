@@ -31,6 +31,10 @@ func TestVerifyProjectBindsReportToRemoteMainHeadAndPublishesExactPolicy(t *test
 	runVerifierGit(t, "-C", repository, "remote", "add", "origin", remote)
 	runVerifierGit(t, "-C", repository, "push", "-u", "origin", "main")
 	sha := strings.TrimSpace(runVerifierGit(t, "-C", repository, "rev-parse", "HEAD"))
+	remoteIdentity, err := normalizeRemoteIdentity(remote, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var published protocol.ProjectVerificationRequest
 	var publishedCredential string
@@ -38,7 +42,7 @@ func TestVerifyProjectBindsReportToRemoteMainHeadAndPublishesExactPolicy(t *test
 		switch request.Method + " " + request.URL.Path {
 		case "GET /api/v1/projects/project-1":
 			_ = json.NewEncoder(response).Encode(protocol.Project{
-				ID: "project-1", RemoteIdentity: "file://" + filepath.ToSlash(remote), MainBranch: "main",
+				ID: "project-1", RemoteIdentity: remoteIdentity, MainBranch: "main",
 			})
 		default:
 			if request.Method != http.MethodPost || !strings.Contains(request.URL.Path, "/verification") {

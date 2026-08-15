@@ -2,17 +2,15 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/ccbb2a81-22b-64bd6684-c13`.
-- Implementation commit: 7b0e963d2f8ae6c6d80570ed9af890b3b24501d7 — server-derived capacity,
-  migration 026 и гарантированная очистка reconciliation journal.
-- What changed: registration сохраняет старый `active_count` до server-time audit;
-  registration и пустой `SweepExpired` однократно удаляют журнал старше восьми суток.
-- What changed: integration покрывает потерянный `/complete`, restart/reconnect и
-  две live barrier-задачи при `MaxConcurrent=2`; migration проверяет 025→026 и rollback-read.
-- Evidence: focused `go test -race -timeout 10m ... -count=1` → PASS (6 tests);
-  `go build ./...` and `cd web && npx tsc -p tsconfig.app.json --noEmit` → PASS.
-- One next action: наблюдать reconciliation-метрики после следующего restart воркера.
+- Status: PASS: worker-интеграции больше не зависают на SQLite write lock.
+- Branch: `factory/ea12ef6f-877-2fd7b546-74b`.
+- Implementation commit: 48d4b55881d5676f3c42f96ab0d5ed98c30bbad7 — SQLite-соединения
+  controlplane сериализованы, чтобы heartbeat не истекали на write lock.
+- What changed: reconciliation capacity из lease и журнал migration 026 сохраняются;
+  SQLite pool ограничен одним соединением и защищён регрессионным тестом.
+- Evidence: reconciliation controlplane-тесты → PASS за 1.491s; `go test ./...`
+  → PASS, включая `internal/worker` за 150.834s; `git diff --check` → PASS.
+- One next action: передать ветку на review и слияние.
 
 ## LOG
 
@@ -74,3 +72,11 @@ maintenance paths регистрации и `SweepExpired`; idle regression по
 что старое окно удаляется без lease, а актуальная метрика остаётся точной.
 Проверки: focused idle-retention, integration с `-timeout=90s`, `go test ./...`
 и `git diff --check` — PASS.
+
+### 2026-08-14 — Implement
+
+Устранена причина зависания worker-интеграций: пул controlplane SQLite теперь
+использует одно соединение, поэтому конкурентные heartbeat ожидают в `database/sql`,
+а не борются за write lock до HTTP-тайм-аута. Добавлен регрессионный тест лимита
+пула. Проверки: целевые reconciliation-тесты — PASS за 1.491s; чистый
+`go clean -testcache && go test ./...` — PASS, включая `internal/worker` за 150.834s.

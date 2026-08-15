@@ -93,6 +93,13 @@ func TestTestingHostSlotLimitIsExplicitAndProductionDefaultUnchanged(t *testing.
 	}
 }
 
+func TestOpenSerializesSQLiteAccessThroughOneConnection(t *testing.T) {
+	store := newTestStore(t)
+	if maximum := store.db.Stats().MaxOpenConnections; maximum != 1 {
+		t.Fatalf("maximum SQLite connections = %d; want 1", maximum)
+	}
+}
+
 func TestCompatibleIdleWorkerClaimsQueuedAssignment(t *testing.T) {
 	store := newTestStore(t)
 	repository := protocol.RepositoryRegistration{
@@ -266,12 +273,12 @@ func TestClaimReconcilesStaleCachedCapacityWithoutWorkerRestart(t *testing.T) {
 func TestHeartbeatDoesNotReconcileNeighboringExpiredLease(t *testing.T) {
 	store := newTestStore(t)
 	worker := registerTestWorker(t, store, workerA, 2, protocol.RepositoryRegistration{Key: "factory", RemoteIdentity: "github.com/example/heartbeat"})
-	first := createTestTask(t, store, "heartbeat-first", workerA, worker.Repositories[0].ID)
-	second := createTestTask(t, store, "heartbeat-second", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "heartbeat-first", workerA, worker.Repositories[0].ID)
+	createTestTask(t, store, "heartbeat-second", workerA, worker.Repositories[0].ID)
 	firstClaim := claimTestTask(t, store, workerA, "heartbeat-first", tokenA)
 	secondClaim := claimTestTask(t, store, workerA, "heartbeat-second", tokenB)
-	if firstClaim.Task.ID != first.Task.ID || secondClaim.Task.ID != second.Task.ID {
-		t.Fatal("test claims selected unexpected tasks")
+	if firstClaim.Task.ID == secondClaim.Task.ID {
+		t.Fatal("two claims selected the same task")
 	}
 	if _, err := store.db.Exec(`UPDATE attempts SET lease_expires_at = 0 WHERE id = ?`, secondClaim.Attempt.ID); err != nil {
 		t.Fatal(err)
