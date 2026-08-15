@@ -754,7 +754,7 @@ configure_release_mode() {
 }
 
 run_release() {
-  case_dir=$1 mode=$2
+  case_dir=$1 mode=$2 deep_gate=${3:-1}
   configure_release_mode "$case_dir" "$mode"
     TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
@@ -787,6 +787,7 @@ run_release() {
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
     FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE="$deep_gate" \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
@@ -887,6 +888,31 @@ run_crash_cleanup() {
   done
 }
 
+run_fast_release() {
+  local fast="$temporary/fast"
+  make_fixture "$fast" parallel-success
+  run_release "$fast" parallel-success 0 \
+    || { cat "$fast/output" >&2; fail "fast release failed"; }
+  for skipped in 'npx tsc -p tsconfig.app.json --noEmit' 'npm test' \
+    'go test ./...' 'python3 -m unittest pilot.test_pilot' \
+    'bash ops/test-fx-factory-release.sh'; do
+    ! grep -Fx "$skipped" "$fast/gates" >/dev/null \
+      || fail "fast release unexpectedly ran: $skipped"
+  done
+  grep -Fx 'npx vite build' "$fast/gates" >/dev/null \
+    || fail "fast release did not build the UI"
+  grep -F 'go build -ldflags ' "$fast/gates" >/dev/null \
+    || fail "fast release did not build Linux binaries"
+  grep -F 'быстрый выпуск: код уже проверен обязательным Linux-воротом GitHub' "$fast/output" >/dev/null \
+    || fail "fast release did not explain why duplicate tests were skipped"
+}
+
+if [ "${FACTORY_TEST_ONLY:-}" = fast-release ]; then
+  run_fast_release
+  echo "PASS: fast release builds, installs and verifies without duplicate test suites"
+  exit 0
+fi
+
 if [ "${FACTORY_TEST_ONLY:-}" = crash-cleanup ]; then
   run_crash_cleanup
   echo "PASS: crash-cleanup scenarios recovered every journal phase"
@@ -947,6 +973,8 @@ grep -F 'полный вывод: UI-проверки' "$success/output" >/dev/n
   || fail "UI output was not kept separate"
 grep -F 'полный вывод: Go-проверки, тесты пилота и сценарий выката' "$success/output" >/dev/null \
   || fail "Go and Pilot output was not kept separate"
+
+run_fast_release
 assert_file "$success/install/factory-server" '#!/bin/bash'
 assert_file "$success/install/factory-worker" '#!/bin/bash'
 ! grep -Fx 'untrusted-git-invoked' "$success/spoof-events" >/dev/null 2>&1 \
