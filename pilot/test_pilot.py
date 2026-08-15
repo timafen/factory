@@ -9055,6 +9055,21 @@ class MergedCommitShaTests(unittest.TestCase):
 
 
 class DeliveryTitleTests(unittest.TestCase):
+    def test_same_base_title_keeps_results_isolated_by_work_id(self):
+        intents = {
+            "verify-1": {"base": "Одинаковая исходная проблема", "work_id": "work-1",
+                         "delivery_title": "Первый независимый результат"},
+            "verify-2": {"base": "Одинаковая исходная проблема", "work_id": "work-2",
+                         "delivery_title": "Второй независимый результат"},
+        }
+
+        self.assertEqual(pilot.delivery_title_for_work(intents, "work-1"),
+                         "Первый независимый результат")
+        self.assertEqual(pilot.delivery_title_for_work(intents, "work-2"),
+                         "Второй независимый результат")
+        self.assertEqual(pilot.delivery_title_for_work(intents, "work-3"), "")
+        self.assertEqual(pilot.delivery_title_for_work(intents, ""), "")
+
     def test_card_gate_saves_approved_implementation_commit_in_artifact(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
