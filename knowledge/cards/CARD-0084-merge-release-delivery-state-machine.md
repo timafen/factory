@@ -2,13 +2,13 @@
 
 ## HEAD
 
-- Status: Implemented — восстановленная защита подтверждена на свежем `main`.
-- Branch: `factory/d60e1ac5-6ed-eeac3ef8-fdd`.
+- Status: Implemented — защита подтверждена после rebase на свежий `main`.
+- Branch: `factory/9ce01f54-a06-428eddd7-6c6`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: d780a62dbbca8c3b87926c8bdd678aa82873c766 — повторный restart подтверждает durable failure без второго выпуска.
+Implementation commit: 428b5bed9c99857cc50f327bd7e3977a47e9d631 — повторный restart подтверждает durable failure без второго выпуска.
 - What changed: regression после отказа terminal write запускает broker второй раз и проверяет сохранённый `failed` при единственном вызове executor.
-- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS; `git diff --check` — PASS.
-- Next action: Verify проверить ветку по закреплённому implementation SHA.
+- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `just build` — PASS.
+- Next action: Опубликовать ветку и передать её на Review.
 
 ## LOG
 
@@ -18,6 +18,12 @@ Implementation commit: d780a62dbbca8c3b87926c8bdd678aa82873c766 — повтор
 присутствует. Regression усилен вторым свежим запуском broker: durable `failed`
 сохраняется, а executor остаётся вызван ровно один раз. Целевые Go-тесты прошли;
 10 реальных Pilot→broker сценариев также прошли.
+
+### 2026-08-14 — Verify
+
+После rebase на `origin/main` полный `just test` прошёл; целевые Go/Python-тесты,
+`just build` и `git diff --check` также успешны. Ветка содержит только изменения
+этой задачи и карточки знаний.
 
 ### 2026-08-12 — Verify
 
