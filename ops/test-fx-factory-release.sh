@@ -15,7 +15,7 @@ trap 'rm -rf "$temporary"' EXIT
 # It proves that the copied file is this real Gate and that every relative
 # resource its fixture needs travelled with it.
 if [ "${TEST_MODE:-}" = trusted-gate-real-race ]; then
-  for dependency in fx-factory-release install-project-release-broker.sh fx \
+  for dependency in fx-factory-release install-project-release-broker.sh factory-live-acceptance fx \
     systemd/factory-release-broker.service ../pilot/pilot.py ../pilot/context.md \
     ../intake/app.py ../intake/plan.py; do
     [ -r "$SCRIPT_DIR/$dependency" ] || { echo "missing trusted dependency: $dependency" >&2; exit 41; }
@@ -142,6 +142,7 @@ EOF
 [ "${1:-}" = version ] && echo 'factory-worker test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
+  /bin/cp "$SCRIPT_DIR/factory-live-acceptance" "$case_dir/install/factory-live-acceptance"
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
   printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/fx"
@@ -182,7 +183,8 @@ GATE
   # modes explicitly so the rollback preflight verifies production-like
   # artifacts instead of inheriting the caller's umask.
   chmod 755 "$case_dir/install/factory-server" "$case_dir/install/factory-worker" \
-    "$case_dir/install/factory-release-broker" "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
+    "$case_dir/install/factory-release-broker" "$case_dir/install/factory-live-acceptance" \
+    "$case_dir/install/fx" "$case_dir/install/fx-factory-release"
   chmod 644 "$case_dir/install/factory-release-broker.service" \
     "$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
     "$case_dir/live/pilot/pilot.py" "$case_dir/live/pilot/context.md" \
@@ -204,6 +206,8 @@ case "$*" in
     mkdir -p "$destination/web" "$destination/ops/systemd"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/install-project-release-broker.sh" \
       "$destination/ops/install-project-release-broker.sh"
+    /bin/cp "$TEST_RELEASE_SOURCE/ops/factory-live-acceptance" \
+      "$destination/ops/factory-live-acceptance"
     /bin/cp "$TEST_RELEASE_SOURCE/ops/systemd/factory-release-broker.service" \
       "$destination/ops/systemd/factory-release-broker.service"
     mkdir -p "$destination/pilot" "$destination/intake"
@@ -837,6 +841,7 @@ run_release() {
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
@@ -861,6 +866,7 @@ run_driver() {
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
     FACTORY_WORKER_SERVICES="factory-worker.service factory-worker-2.service" FACTORY_API_URL=http://test \
     /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
     /bin/bash "$case_dir/fx-factory-release-under-test" "$@"
@@ -901,6 +907,7 @@ start_release() {
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
+    FACTORY_LIVE_ACCEPTANCE_BIN="$case_dir/install/factory-live-acceptance" \
     FACTORY_RELEASE_BROKER_OWNER='' \
     FACTORY_RELEASE_BROKER_SYSTEMCTL="$case_dir/bin/broker-systemctl" \
     FACTORY_RELEASE_BROKER_GETENT="$case_dir/bin/getent" \
@@ -1028,6 +1035,7 @@ assert_file "$success/install/factory-worker" '#!/bin/bash'
   || fail "release source chain invoked PATH-provided git"
 assert_file "$success/install/factory-release-broker" '#!/bin/bash'
 assert_file "$success/install/factory-release-broker" '# candidate-broker'
+assert_file "$success/install/factory-live-acceptance" 'FACTORY_CURRENT_RELEASE'
 current_generation=$(readlink -f "$success/releases/current")
 previous_generation=$(readlink -f "$success/releases/previous")
 [ -f "$current_generation/manifest.json" ] && [ -f "$current_generation/manifest.sha256" ] \
@@ -1045,6 +1053,7 @@ current,previous,source_info=sys.argv[1:]
 expected={
  "payload/factory-server","payload/factory-worker","payload/factory-release-broker",
  "payload/factory-release-broker.service","payload/factory-release-broker-dropin.conf",
+ "payload/factory-live-acceptance",
  "payload/fx","payload/fx-factory-release","payload/pilot.py","payload/context.md",
  "payload/intake-app.py","payload/intake-plan.py","release-info.json","services.tsv",
 }
