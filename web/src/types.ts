@@ -69,6 +69,7 @@ export interface PilotSettings {
   allowed_workers: string[];
   max_parallel_subtasks: number;
   max_parallel_works: number;
+  max_terminal_tasks_per_cycle: number;
   day_cap_usd: number;
   deploy_staging_cmd: string;
   deploy_factory_cmd: string;
