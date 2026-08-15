@@ -1871,7 +1871,7 @@ class DiagnosisRepairTests(unittest.TestCase):
                 mock.patch.object(pilot, "save") as save:
             pilot.diag_sweep(conf, [running])
 
-        pause.assert_called_once_with(conf, "Починить отчёт")
+        pause.assert_called_once_with(conf, "Починить отчёт", "")
         self.assertEqual(write.call_args.args[0], "looping-task")
         self.assertEqual(write.call_args.args[2], "Implement + Test")
         save.assert_called_once()
@@ -1968,10 +1968,10 @@ class DiagnosisRepairTests(unittest.TestCase):
 
         self.assertFalse(first)
         self.assertTrue(second)
-        pause.assert_called_once_with(conf, "Починить отчёт")
+        pause.assert_called_once_with(conf, "Починить отчёт", "")
         # Отсчёт обновляется только при настоящей остановке. Автоматическое
         # решение не должно незаметно выдавать ещё восемь кругов.
-        set_baseline.assert_called_once_with("Починить отчёт", 9)
+        set_baseline.assert_called_once_with("Починить отчёт", 9, "")
 
     def test_cycle_starts_repair_after_repeated_terminal_failure_and_spent_diag(self):
         answer = '{"причина":"повторный технический сбой","решение":"исправить",' \
@@ -9544,6 +9544,40 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
 
         self.assertIsNotNone(pilot.merge_receipt(title, work_id="work-a"))
         self.assertIsNone(pilot.merge_receipt(title, work_id="work-b"))
+
+    def test_orchestrator_wait_and_loop_stop_pause_only_their_same_title_work(self):
+        title = "Одинаковая пауза"
+        conf = {"stopped_pipelines": [], "deep_diag_rounds": 99,
+                "max_work_rounds": 8, "max_stage_attempts": 3}
+        wait = {"decision": "wait", "reason": "ждать владельца"}
+        with mock.patch.object(pilot, "notify"):
+            self.assertTrue(pilot.resolve_orchestrator_wait(
+                conf, wait, "wait-a", "Review", "Verify", title, "repo",
+                "нужна пауза", "Продолжить?", [], "", "factory/a", "work-a"))
+            self.assertTrue(pilot.resolve_orchestrator_wait(
+                conf, wait, "wait-b", "Review", "Verify", title, "repo",
+                "нужна пауза", "Продолжить?", [], "", "factory/b", "work-b"))
+
+        self.assertEqual(conf["stopped_pipelines"], [
+            {"work_id": "work-a", "title": title},
+            {"work_id": "work-b", "title": title},
+        ])
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-b"))
+
+        conf["stopped_pipelines"] = []
+        pilot.save(self.paths["config"], dict(conf))
+        owner = {"decision": "owner", "reason": "нужен выбор владельца"}
+        with mock.patch.object(pilot, "orchestrator_answer", return_value=owner), \
+                mock.patch.object(pilot, "notify"):
+            for suffix in ("a", "b"):
+                self.assertTrue(pilot.route_question(
+                    conf, "loop-" + suffix, "Review", "Verify", title, "repo",
+                    "зациклилась проверка", "Что делать?", [], "", attempts_so_far=8,
+                    work_id="work-" + suffix))
+
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-b"))
 
 
 if __name__ == "__main__":

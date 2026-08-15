@@ -438,7 +438,7 @@ def _recent_tasks():
     return out
 
 
-def money_guard(conf, title):
+def money_guard(conf, title, work_id=""):
     """Бросает исключение, если создание задачи прожжёт лимиты подписок.
     Работает по числу задач, а не по долларам: доллары кодекса мы пока
     не видим, а число задач видим всегда и для всех провайдеров."""
@@ -456,8 +456,8 @@ def money_guard(conf, title):
         pass
     mine = sum(1 for t in rec if base_title(t.get("title", "")) == base)
     if mine >= wcap:
-        if not is_stopped(conf, base):
-            pause_pipeline(conf, base)
+        if not is_stopped(conf, base, work_id):
+            pause_pipeline(conf, base, work_id)
             notify(conf, "Остановил работу: сожгла дневной запас",
                    base + "\n" + str(mine) + " задач за сутки при потолке "
                    + str(wcap) + ". Это горящие деньги, а не прогресс. "
@@ -626,7 +626,7 @@ def create_task(body, conf=None):
             conf.get("_host_load_snapshot"), conf.get("respect_host_load", True)):
         raise RuntimeError("host_load_admission: stage deferred")
     if conf and str(body.get("title", "")).startswith(PREFIX):
-        money_guard(conf, body["title"])
+        money_guard(conf, body["title"], body.get("work_id") or "")
     if str(body.get("title", "")).startswith(PREFIX):
         body["context"] = context_with_agent_rules(
             body.get("context"), conf, stage_from_title(body.get("title", "")))
@@ -2154,33 +2154,35 @@ def looks_like_retry(answer):
 LOOP_BASE_PATH = f"{HOME}/pilot/loop_baseline.json"
 
 
-def loop_baseline(base):
+def loop_baseline(base, work_id=""):
     """С какого круга считать заново. Ставится в момент остановки: после того
     как владелец разобрался и открыл работу снова, ей даётся полный запас
     кругов, а не мгновенный повторный стоп на старом счётчике."""
     try:
-        return int((load(LOOP_BASE_PATH, {}) or {}).get(base, 0))
+        return int((load(LOOP_BASE_PATH, {}) or {}).get(
+            work_storage_key(base, work_id), 0))
     except Exception:
         return 0
 
 
-def set_loop_baseline(base, n):
+def set_loop_baseline(base, n, work_id=""):
     try:
         d = load(LOOP_BASE_PATH, {}) or {}
-        d[base] = int(n)
+        d[work_storage_key(base, work_id)] = int(n)
         save(LOOP_BASE_PATH, d)
     except Exception as e:
         log("loop_baseline_error", repr(e))
 
 
-def pause_pipeline(conf, base):
+def pause_pipeline(conf, base, work_id=""):
     """Остановить конвейер по этой работе. Пилот её больше не двигает, что бы
     ни отвечал оркестратор, пока владелец не уберёт её из списка."""
     try:
         c = load(CONF_PATH, {}) or {}
         lst = list(c.get("stopped_pipelines") or [])
-        if base not in lst:
-            lst.append(base)
+        entry = stopped_pipeline_entry(base, work_id)
+        if not any(stopped_pipeline_matches(item, base, work_id) for item in lst):
+            lst.append(entry)
             c["stopped_pipelines"] = lst
             save(CONF_PATH, c)
         conf["stopped_pipelines"] = lst
@@ -4533,7 +4535,7 @@ def diag_sweep(conf, tasks):
             verdict = deep_diagnose(conf, base, stage, rounds, tasks,
                                     repair_task=t)
             if verdict and verdict.get("нужен_владелец"):
-                pause_pipeline(conf, base)
+                pause_pipeline(conf, base, work_id)
                 stages = [s.get("workflow") for s in conf.get("stages", [])]
                 resume = resume_stage_for(stages, stage, stage)
                 reason = str(verdict.get("причина") or "").strip()
@@ -4627,7 +4629,7 @@ def resolve_orchestrator_wait(conf, verdict, task_id, stage, resume_stage, base,
     rec["machine_action"] = "wait"
     rec["escalation_reason"] = reason
     save(f"{QUESTION_DIR}/{task_id}.json", rec)
-    pause_pipeline(conf, base)
+    pause_pipeline(conf, base, work_id)
     log(f"AUTO-WAIT task={task_id} stage={stage}: {reason[:100]}")
     notify(conf, f"Поставил на паузу · {stage}",
            f"{base}\n\n{reason}\n\nСледующий этап не запущен.",
@@ -4662,7 +4664,7 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
     # сервер, требование, которое агент не в силах выполнить. Дальше он просто
     # жжёт процессор. Останавливаем работу целиком и зовём владельца.
     hard = int(conf.get("max_work_rounds", 8))
-    if attempts_so_far - loop_baseline(base) >= hard:
+    if attempts_so_far - loop_baseline(base, work_id) >= hard:
         # Круг разорван — но это НЕ значит, что решение стало владельческим.
         # Сначала даём оркестратору один заход с прямым запретом отвечать
         # «перезапусти»: почти всегда петля техническая, и владельцу тут
@@ -4697,8 +4699,8 @@ def route_question(conf, task_id, stage, resume_stage, base, repo_id, situation,
                    "Если не согласен — открой и поправь.",
                    priority="low", tags="robot", click=f"{UI_BASE}/answer")
             return False
-        pause_pipeline(conf, base)
-        set_loop_baseline(base, attempts_so_far)
+        pause_pipeline(conf, base, work_id)
+        set_loop_baseline(base, attempts_so_far, work_id)
         rec = write_question(task_id, stage, resume_stage, base, repo_id, situation,
                              question, options, prior_result, branch, work_id=work_id)
         rec["owner_only"] = True
