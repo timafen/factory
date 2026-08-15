@@ -7178,64 +7178,49 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
+        # The server is the only authority for automation classification. An
+        # old response without this field is deliberately not owner work.
+        if task.get("work_class") != "product":
+            continue
         if task.get("state") == "succeeded" and task.get("id") not in delivered:
             continue
         title, stage = parsed
-        if not title or is_service_work(title):
+        if not title:
             continue
         at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
         old = latest.get(title)
         if old is None or at >= old[0]:
             latest[title] = (at, task, stage)
 
-    out = []
+    merged, failed = [], []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
         if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
-        elif state == "succeeded":
-            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
+            status, detail = "merged", "Выпуск принят и проверен."
         else:
-            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
-        try:
-            attempts = api(f"/tasks/{task['id']}").get("attempts") or []
-            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
-            if proof:
-                detail += " Проверено: " + proof
-        except Exception:
-            pass
-        out.append({"title": title[:120], "detail": detail[:180], "at": at,
-                    "status": status})
-        if len(out) >= n:
-            return out
-
-    if out:
-        return out
-
-    # Before structured task history exists, show old real notifications but
-    # never revive the service noise that prompted this view's redesign.
-    try:
-        with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
-            lines = stream.readlines()[-400:]
-        for line in reversed(lines):
+            status = "failed"
+            detail = f"Этап: {stage}"
+        item = {"title": title[:120], "detail": detail, "at": at,
+                "status": status, "_task_id": task.get("id")}
+        (merged if status == "merged" else failed).append(item)
+    for group in (merged, failed):
+        for item in group[:n]:
             try:
-                r = json.loads(line)
+                attempts = api(f"/tasks/{item['_task_id']}").get("attempts") or []
+                last = attempts[-1] if attempts else {}
+                if item["status"] == "failed":
+                    reason = (last.get("error") or proof_of(last.get("result") or "") or "").strip()
+                    item["detail"] += " · Причина: " + (reason[:140] if reason else "причина не указана")
+                else:
+                    proof = proof_of(last.get("result") or "")
+                    if proof:
+                        item["detail"] += " Проверено: " + proof
             except Exception:
-                continue
-            if r.get("title") != "Задача выполнена":
-                continue
-            body = (r.get("message") or "").split(chr(10))
-            title = body[0].strip()
-            if not title or is_service_work(title) or title in latest:
-                continue
-            out.append({"title": title[:120],
-                        "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or "", "status": "legacy"})
-            if len(out) >= n:
-                break
-    except Exception:
-        pass
-    return out
+                if item["status"] == "failed":
+                    item["detail"] += " · Причина: причина не указана"
+            item["detail"] = item["detail"][:180]
+            item.pop("_task_id", None)
+    return {"merged": merged[:n], "failed": failed[:n]}
 
 
 def limits_view():
