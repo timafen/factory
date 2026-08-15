@@ -1,13 +1,14 @@
-Implementation commit: 243d6502fc4fb27493600340608ac10e090c0521 — Plan, epic, бюджеты и ветки истории изолированы по work_id
+Implementation commit: 1492770e7f007489918550950a8b4d5d18b6a038 — lifecycle Plan, hard-stop, артефакты и merge receipt изолированы по work_id
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/d6262485-d88-f2b729ce-4fa
-Implementation commit: 243d6502fc4fb27493600340608ac10e090c0521
-What changed: одноимённые работы больше не делят состояние Plan, epic, бюджетов и history branch; fallback по title оставлен только для legacy-записей без provenance.
-Evidence summary: `python3 -m unittest -v pilot.test_pilot` → 224 OK, 13 skipped; четыре целевые проверки изоляции → OK; `go build ./...` → OK. `just check` остановился на таймаутах неизменённых `internal/controlplane` и `internal/worker`; browser-контур недоступен из-за запрета `sudo` в sandbox.
-One next action: подтвердить human merge с учётом двух независимых ограничений CI-окружения.
+Status: Implemented — awaiting repeated Review
+Branch: factory/8e18c2fd-00f-ede6495e-506
+Implementation commit: 1492770e7f007489918550950a8b4d5d18b6a038
+What changed: lifecycle Plan и архив ищут provenance `work_id`, hard-stop проверяется по durable key, а основной цикл передаёт ID через implementation/delivery artifacts и merge intent.
+What changed: writer merge-journal записывает `work_id`; title остаётся fallback только для legacy без provenance.
+Evidence: `python3 -m unittest -v pilot.test_pilot` → 226 OK, 13 skipped; `go build ./...` → OK.
+One next action: повторить Review исправленных сквозных путей.
 
 ## LOG
 
@@ -25,3 +26,7 @@ One next action: подтвердить human merge с учётом двух н�
 | Бюджет, расход и history branch разделены | `SameTitlePlanEpicBudgetIsolationTests.test_budget_spend_limit_and_history_branch_are_partitioned` | Расходы, branch и downgrade относятся только к своему `work_id`. |
 | Регрессия Pilot | `python3 -m unittest -v pilot.test_pilot` | 224 OK, 13 skipped. |
 | Сборка и общий контур | `go build ./...`; `just check`; `just test-browser` | Сборка OK. Общий Go-контур упёрся в 5-минутные timeout в неизменённых `internal/controlplane` и `internal/worker`; browser sandbox не может вызвать `sudo` из-за no-new-privileges. |
+
+### 2026-08-14 — Implement
+
+Исправлены четыре замечания повторного Review: Plan lifecycle и архив разделены по `work_id`, budget hard-stop больше не теряет аргумент durable key, цикл передаёт ID в artifacts и merge intent, а writer merge-journal сохраняет ID для восстановления epic. Добавлены сквозные проверки lifecycle/hard-stop и настоящей записи/чтения merge receipt. `python3 -m unittest -v pilot.test_pilot` — 226 OK, 13 skipped; `go build ./...` — OK.
