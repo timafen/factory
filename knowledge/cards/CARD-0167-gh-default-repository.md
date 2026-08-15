@@ -5,14 +5,21 @@ Implementation commit: 9e08beee281bbcfc6547ab7bac58e396f2b6bda0 — кэш на�
 ## HEAD
 
 - Status: Implemented
-- Branch: `factory/301b8b3a-e68-31829ae9-9d8`.
-- Implementation commit: `9e08beee281bbcfc6547ab7bac58e396f2b6bda0`.
+- Branch: `factory/40f83ed4-3f8-97c84c44-b66`.
+- Implementation commit: `ba8ecb38f1bda3467495b62a670d20d21874ccb1` — кэш назначает upstream GitHub CLI default, сохраняя origin.
 - What changed: новые и существующие кэши снимают `gh-resolved` с `origin` и
   назначают `remote.upstream.gh-resolved=base`, не меняя URL и tracking.
-- Evidence: `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS; bare `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
-- Next action: Verify проверяет diff и выпуск после rebase на свежий `main`.
+- Evidence: целевой тест, `go test ./...`, `go build ./...` и `npx tsc -p tsconfig.app.json --noEmit` — PASS; bare `gh repo view --json nameWithOwner` возвращает `owainlewis/factory`.
+- Next action: передать проверенный коммит в ветку владельца.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+- После повторного запуска и rebase на свежий `origin/main` подтверждены код и тест
+  для выбора `owainlewis/factory` bare-командой GitHub CLI.
+- `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1`,
+  `go test ./...`, `go build ./...` и `npx tsc -p tsconfig.app.json --noEmit` — PASS.
 
 ### 2026-08-15 — Implement
 
