@@ -8167,7 +8167,8 @@ def cycle(conf, state):
                             "Проверка не завершена: инфраструктура свежего сравнения веток недоступна.",
                             "Повторить Verify после восстановления доступа к репозиторию?",
                             ["Повтори проверку", "Покажи причину", "Останови работу"],
-                            verify_snapshot["note"], attempts_so_far=0, branch=branch)
+                            verify_snapshot["note"], attempts_so_far=0, branch=branch,
+                            work_id=work_id)
                         continue
                     link = try_url(result, rid)
                     verified_head = verify_snapshot.get("snapshot", {}).get("candidate_sha", "")
@@ -8178,11 +8179,12 @@ def cycle(conf, state):
                             "Повторить Review для нового снимка ветки?",
                             ["Повтори Review", "Останови работу"],
                             "Проверенный снимок больше не совпадает с текущей поставкой.",
-                            attempts_so_far=0, branch=branch)
+                            attempts_so_far=0, branch=branch, work_id=work_id)
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head,
+                        "link": link or "", "work_id": work_id}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -8460,7 +8462,7 @@ def cycle(conf, state):
                     "Ревью не началось: недоступна инфраструктура свежего сравнения веток.",
                     "Повторить проверку после восстановления доступа к репозиторию?",
                     ["Повтори проверку", "Покажи причину", "Останови работу"],
-                    g["note"], attempts_so_far=0, branch=branch)
+                    g["note"], attempts_so_far=0, branch=branch, work_id=work_id)
                 continue
             if g and g["back"]:
                 back_title = f"[auto] [{idx + 1}/{len(stages)} {wf}] {base}"[:200]
