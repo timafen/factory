@@ -4,16 +4,16 @@
 
 Status: In progress — реализован общий русский слой статусов, времени и ошибок.
 
-Branch: `factory/94e03ee1-79f-9e8fe697-202`
+Branch: `factory/68208213-739-5410dfc5-4bd`
 
-Implementation commit: fea7f929293cc622c701b9a7273ec47a4ec7aef0 — собран поставляемый интерфейс с русскими статусами, временем и безопасными ошибками.
+Implementation commit: b44fefce5156b50b3034053e5c373462520408e1 — русские статусы, время и безопасные ошибки подключены к интерфейсу и тестам.
 
 What changed:
 
 - Общие подписи статусов безопасны к неизвестным backend-значениям.
 - Время, длительности и state loading/error русские; API error не раскрывает сырой текст.
 
-Evidence: web tests 183/183; TypeScript, lint, web build и `go build ./...` → успешно.
+Evidence: `format.test.ts` 13/13, `App.test.tsx` 69/69; TypeScript, lint, web build и `go build ./...` → успешно.
 
 Next action: подключить единый итог и действие владельца к списку и detail работы.
 
@@ -57,3 +57,9 @@ lint и production build завершились успешно.
 Работа перенесена на свежий `origin/main`, а полный UI-набор приведён к безопасным
 русским ошибкам без сырого текста API. Проверено: 183/183 web-теста, TypeScript,
 lint, production web build и Go build завершились успешно.
+
+### 2026-08-15 — Implement
+
+Сохранённая реализация перенесена на текущую ветку и перебазирована на свежий
+`origin/main`. Повторно пройдены `format.test.ts` (13/13), `App.test.tsx` (69/69),
+TypeScript, lint, production web build и `go build ./...` — все проверки успешны.
