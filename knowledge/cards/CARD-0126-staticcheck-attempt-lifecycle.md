@@ -2,20 +2,41 @@
 
 ## HEAD
 
-Status: Implemented — awaiting Review
-Branch: factory/6df906ce-7fd-7be1f1d2-5c4
-Implementation commit: 52ddd4e509ff1fdbd94068344995f9bbd2481fa1 — устранено самосравнение в lifecycle-тесте worker
-What changed: самосравнение заменено на сравнение двух вычисленных значений `want` и `got`; поведение worker не менялось.
-Evidence: целевой lifecycle-тест, `just staticcheck`, полный `just test` и `just build` завершились успешно; browser suite не запускался, поскольку текущая контейнерная политика его блокирует.
-One next action: выполнить независимый Review опубликованного кандидата.
+Status: Implemented — доказательства актуализированы
+Branch: factory/5db53679-395-298de56e-25c
+Implementation commit: c6d8644aaf9700f10365891a30a0679fff45c73b — lifecycle-тест сравнивает результаты двух независимых вычислений задержки и больше не вызывает SA4000
+What changed: исправлен lifecycle-тест worker; доказательства фиксируют успешный запуск целевого теста и `staticcheck`. Поведение worker и UI не менялись.
+Evidence: `go test ./internal/worker -run '^TestLeaseRenewal'` → код 0; `just staticcheck` → код 0.
+One next action: выполнить Review опубликованной поставки.
 
 ## LOG
 
+### 2026-08-14 — Implement
+
+Исправлены ссылки на реализацию: указан существующий commit, в котором
+lifecycle-тест сопоставляет два независимых вычисления задержки, устраняя
+SA4000. Недостоверные ссылки на документационный и отсутствующий commits
+удалены; `go test ./internal/worker -run '^TestLeaseRenewal'` и
+`just staticcheck` ранее завершились с кодом 0.
+
+### 2026-08-14 — Implement
+
+Заново выполнены целевой lifecycle-тест worker и полный `just staticcheck`:
+обе команды завершились с кодом 0. Результат закреплён отдельным commit
+реализации lifecycle-теста; product code и UI не менялись.
+
+### 2026-08-14 — Specification
+
+Актуализированы доказательства для уже существующей реализации lifecycle-теста:
+на текущей базе целевой lifecycle-тест и полный `just staticcheck` завершились
+успешно. Спецификация фиксирует
+границы: меняются только документы, а обязательная повторяемая проверка —
+`just staticcheck`; browser suite не относится к этой правке.
+
 ### 2026-08-13 — Implement
 
-Реализация восстановлена на свежей базе `origin/main` отдельным коммитом
-`52ddd4e509ff1fdbd94068344995f9bbd2481fa1`. Изменён lifecycle-тест и добавлена
-спецификация; целевой тест, проектный `staticcheck`, полный Go-набор и сборка
+Изменён lifecycle-тест и добавлена спецификация; целевой тест, проектный
+`staticcheck`, полный Go-набор и сборка
 проходят. Browser suite не объявлялся успешным: запуск блокируется политикой
 контейнера.
 
