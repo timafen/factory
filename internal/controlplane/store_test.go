@@ -3593,9 +3593,22 @@ func TestClaimOrderingRepositoryFilteringAndReplay(t *testing.T) {
 	if claim.Task.State != "running" || claim.Execution.State != "preparing" {
 		t.Fatalf("task-level preparing mapping is wrong: task=%s execution=%s", claim.Task.State, claim.Execution.State)
 	}
+	originalExpiry := claim.Attempt.LeaseExpiresAt
+	fixed = fixed.Add(20 * time.Second)
 	replay := claimTestTask(t, store, workerA, "claim-replay", tokenA)
 	if replay.Attempt.ID != claim.Attempt.ID {
 		t.Fatalf("claim replay created a different attempt: %s != %s", replay.Attempt.ID, claim.Attempt.ID)
+	}
+	if !replay.Attempt.LeaseExpiresAt.After(originalExpiry) {
+		t.Fatalf("claim replay lease = %s, want later than %s",
+			replay.Attempt.LeaseExpiresAt, originalExpiry)
+	}
+	// The original lease has now expired, but the idempotent replay kept the
+	// same handoff alive long enough for the worker to receive and start it.
+	fixed = originalExpiry.Add(time.Millisecond)
+	if _, err := store.StartAttempt(context.Background(), claim.Attempt.ID,
+		protocol.StartAttemptRequest{LeaseToken: tokenA}); err != nil {
+		t.Fatalf("start after original claim expiry: %v", err)
 	}
 	if _, err := store.Claim(context.Background(), workerA, protocol.ClaimRequest{
 		RequestID: "claim-replay", LeaseToken: tokenB,
