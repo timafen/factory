@@ -2,13 +2,14 @@
 
 ## HEAD
 
-- Status: Implemented + tested — stale delivery branch reconciled with current main.
-- Branch: `factory/0bf1726d-b91-fa2a3dc6-dd3`.
+- Status: Implemented + tested — ready for Review.
+- Branch: `factory/2a183592-0f3-6d0b097e-59f`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2414eb3a6e7802eaa3f66660d5ba7583cc2c2892 — реальный Pilot→broker цикл и восстановление выпуска проверяются через собранный Go broker и физический executor-fixture.
-- What changed: пять устаревших коммитов ветки отброшены при rebase, поскольку их реализация уже присутствует и дополнительно усилена в `main`; актуальная проверка восстановления сохранена без регрессии.
-- Evidence: целевые 10 Pilot→broker сценариев — PASS; `just check` в чистом build-окружении — PASS; `just build` — три бинарника собраны.
-- Next action: Review and merge the conflict-free card update.
+Implementation commit: cf7c0eaa3e7103d3e7050fee5bcfe68010493070 — broker восстанавливает terminal status из durable marker реального release driver после restart.
+- What changed: FX driver атомарно сохраняет terminal marker; broker читает его при старте и публикует terminal receipt без повторного executor.
+- What changed: добавлен процессный Unix broker→FX→Pilot тест: restart во время FX, затем receipt и Verify completion.
+- Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; shell fixtures — PASS.
+- Next action: Review real broker recovery evidence.
 
 ## LOG
 
@@ -145,3 +146,11 @@ installer и сборка подтвердили fail-closed recovery; systemd f
 не перенесены повторно, потому что реальный Pilot→broker цикл и последующие
 исправления уже являются частью `main`. Десять целевых recovery-сценариев,
 полный `just check` в чистом build-окружении и сборка трёх бинарников прошли.
+
+### 2026-08-14 — Implement
+
+После restart broker больше не превращает `launching`/`running` в `failed`,
+если фиксированный release driver уже атомарно сохранил свой terminal result.
+Процессный Unix fixture останавливает broker во время настоящего FX, ждёт
+driver marker, запускает broker заново и подтверждает один physical launch,
+receipt и завершение Verify; Go, Pilot и shell fixtures прошли.
