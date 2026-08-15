@@ -1,18 +1,18 @@
-Implementation commit: d5c1b0419c8540b07a8be071d0b9e035d336b88d — переназначения считаются по времени событий, а `NOT READY` повторно ставит Review в очередь.
+Implementation commit: 09dcb88bdaeda50918189ca7a79a027d1985597a — пачка завершённых переходов следует числу рабочих слотов.
 
 # CARD-0076 — Очередь использует свободных совместимых исполнителей
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/07ad4173-33f-c7c279e1-e50`.
-- Implementation commit: `d5c1b0419c8540b07a8be071d0b9e035d336b88d` — события
-  переназначения считаются по времени, а `NOT READY` повторно ставит Review в очередь.
-- What changed: `025` хранит фактические события переназначения; worker передаёт
-  read-only `NOT READY` структурированно, а control plane атомарно возвращает execution в `queued`.
-- Evidence: `just check` (после `npm ci` продолжены только не выполненные UI/tooling/launcher
-  части) → PASS: Go, анализаторы, 155 UI-тестов, три бинарника и launcher; production UI build → PASS.
-- One next action: выполнить human merge ветки в `main`.
+- Status: Implemented and targeted tests pass — awaiting Verify.
+- Branch: `factory/7b896d6e-94c-fcc12d96-478`.
+- Implementation commit: `09dcb88bdaeda50918189ca7a79a027d1985597a` — размер пачки
+  завершённых handoff связан с общим лимитом параллельных работ.
+- What changed: Pilot за один цикл может заполнить все четыре поддерживаемых слота;
+  тест не даст лимитам разойтись при следующем изменении capacity.
+- Evidence: `AdaptivePollingTests` → PASS (30 тестов); `just build` → PASS;
+  `just check` → анализаторы PASS, общий Go-тест остановлен средой по SIGTERM.
+- One next action: на Verify повторить полный `just check` без минутного ограничения среды.
 
 ## LOG
 
@@ -57,3 +57,10 @@ typecheck, UI build и сборка трёх бинарников заверши
 Трёхточечный `git diff origin/main...HEAD` непустой и проходит `git diff --check`.
 Implementation commit `d5c1b0419c8540b07a8be071d0b9e035d336b88d` существует, является предком
 ветки, не совпадает с карточным tip и меняет код и миграцию вне `knowledge/cards/`.
+
+### 2026-08-15 — Implement
+
+Размер пачки завершённых переходов привязан к `MAX_PARALLEL_WORKS`, чтобы Pilot
+не оставлял свободные слоты при изменении поддерживаемой параллельности. Все 30
+`AdaptivePollingTests` и сборка прошли. Единственный `just check` прошёл vet,
+govulncheck и staticcheck, затем был остановлен средой по SIGTERM на `go test ./...`.
