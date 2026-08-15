@@ -1,20 +1,26 @@
 # CARD-0170 — Безопасное удержание каталогов release-сборки
 
-Implementation commit: 12101a9be417202282b8ffab7c981b401322ebf2 — cleanup-fixture отделён от проверки поколений и доступен изолированно.
+Implementation commit: 291bf51b5cce52a5884bc8536b829d1f4893822e — полный release-fixture стабильно доказывает очистку и обработку сигналов.
 
 ## HEAD
 
-Status: BLOCKED — полный release-fixture не прошёл старое HUP-ожидание до cleanup.
-Branch: factory/e7eed68e-5ce-7d59dc30-a07
-Implementation commit: 12101a9be417202282b8ffab7c981b401322ebf2 — cleanup-fixture отделён от проверки поколений и доступен изолированно.
-What changed: fixture сохраняет пустой `generations/`, не создавая ложное
-непроверенное поколение; cleanup можно проверить режимом `build-cleanup`.
-Evidence: `FACTORY_TEST_ONLY=build-cleanup bash ops/test-fx-factory-release.sh` → PASS;
-`go test -timeout 5m ./...` и `just build` → PASS; полный release-fixture → FAIL
-на прежнем `signal-HUP-1/ui-running` до выполнения cleanup.
-Next action: повторить полный release-fixture при свободном хосте и только после PASS сливать.
+Status: READY — очистка старых build-каталогов и полный release-fixture подтверждены.
+Branch: factory/1e2cd568-767-c79d54d1-2c1
+Implementation commit: 291bf51b5cce52a5884bc8536b829d1f4893822e — полный release-fixture стабильно доказывает очистку и обработку сигналов.
+What changed: release удаляет только старые штатные `build-*`, сохраняя свежие,
+symlink и защищённые префиксы; signal-fixture всегда запускает реальный deep gate.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS;
+`go test -timeout 5m ./...` → PASS; `just build` → PASS.
+Next action: слить ветку в `main`.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Устранено наследование fast-release в фоновых signal-сценариях, добавлены
+ожидание живого gate с диагностикой и корректная смена heartbeat при повторном
+rollback-выпуске. Полный release-fixture, Go-свита и сборка завершились PASS;
+cleanup удалил старый `build-*` и сохранил все защищённые объекты.
 
 ### 2026-08-15 — Implement
 
