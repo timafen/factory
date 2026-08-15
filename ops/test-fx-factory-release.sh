@@ -142,11 +142,19 @@ EOF
 [ "${1:-}" = version ] && echo 'factory-worker test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 EOF
   printf '#!/bin/bash\nexit 0\n' >"$case_dir/install/factory-release-broker"
-  cat >"$case_dir/bin/browser-installer" <<'EOF'
+cat >"$case_dir/bin/browser-installer" <<'EOF'
 #!/bin/bash
 echo "browser-install payload=$FACTORY_BROWSER_SHARE" >>"$TEST_GATES"
 [ "$TEST_MODE" != browser-install-fail ] || exit 7
-mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules"
+mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_SHARE/chromium" "$FACTORY_BROWSER_LIBEXEC"
+printf 'exports.chromium={executablePath:()=>require("path").resolve(__dirname,"../../../chromium/chrome")};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
+printf '#!/bin/bash\nexit 0\n' >"$FACTORY_BROWSER_SHARE/chromium/chrome"
+chmod 755 "$FACTORY_BROWSER_SHARE/chromium/chrome"
+cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
+cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-isolated"
+printf 'browser_sha=%s\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_LIBEXEC/factory-browser-install.state"
+: >"$FACTORY_BROWSER_LIBEXEC/factory-browser.conf"
+printf '{"browser_fingerprint":"%s"}\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_READINESS_MARKER"
 EOF
   /bin/cp "$SCRIPT_DIR/systemd/factory-release-broker.service" "$case_dir/install/factory-release-broker.service"
   printf '[Service]\nSupplementaryGroups=factory-release\n' >"$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf"
@@ -512,6 +520,15 @@ fi
 if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
   echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
   [ "$TEST_MODE" != browser-install-fail ]
+  mkdir -p "$FACTORY_BROWSER_SHARE/web/node_modules/playwright" "$FACTORY_BROWSER_SHARE/chromium" "$FACTORY_BROWSER_LIBEXEC"
+  printf 'exports.chromium={executablePath:()=>require("path").resolve(__dirname,"../../../chromium/chrome")};\n' >"$FACTORY_BROWSER_SHARE/web/node_modules/playwright/index.js"
+  printf '#!/bin/bash\nexit 0\n' >"$FACTORY_BROWSER_SHARE/chromium/chrome"
+  chmod 755 "$FACTORY_BROWSER_SHARE/chromium/chrome"
+  cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-sandbox"
+  cp "$FACTORY_BROWSER_SHARE/chromium/chrome" "$FACTORY_BROWSER_LIBEXEC/factory-browser-isolated"
+  printf 'browser_sha=%s\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_LIBEXEC/factory-browser-install.state"
+  : >"$FACTORY_BROWSER_LIBEXEC/factory-browser.conf"
+  printf '{"browser_fingerprint":"%s"}\n' "$(sha256sum "$FACTORY_BROWSER_SHARE/chromium/chrome" | awk '{print $1}')" >"$FACTORY_BROWSER_READINESS_MARKER"
   exit
 fi
 if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
@@ -835,6 +852,13 @@ run_release() {
     TEST_RELEASE_DIR="$case_dir/releases" TEST_SETSID_STARTED="$case_dir/setsid-started" \
     TEST_STUCK_CWD="$case_dir" \
     FACTORY_RELEASE_REPO="$case_dir/repo" FACTORY_BROWSER_INSTALLER="$case_dir/bin/browser-installer" \
+    FACTORY_BROWSER_LAUNCHER="$case_dir/browser-live/factory-browser-sandbox" \
+    FACTORY_BROWSER_HELPER="$case_dir/browser-live/factory-browser-isolated" \
+    FACTORY_BROWSER_CONFIG="$case_dir/browser-live/factory-browser.conf" \
+    FACTORY_BROWSER_INSTALL_STATE="$case_dir/browser-live/factory-browser-install.state" \
+    FACTORY_BROWSER_SUDOERS="$case_dir/browser-live/sudoers" \
+    FACTORY_BROWSER_APPARMOR="$case_dir/browser-live/apparmor" \
+    FACTORY_BROWSER_READINESS_MARKER="$case_dir/browser-live/readiness.json" \
     FACTORY_SERVER_BIN="$case_dir/install/factory-server" \
     FACTORY_WORKER_BIN="$case_dir/install/factory-worker" \
     FACTORY_FX_BIN="$case_dir/install/fx" \
