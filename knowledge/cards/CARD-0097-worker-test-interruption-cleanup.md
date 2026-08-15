@@ -1,15 +1,15 @@
 # CARD-0097 — Прерванные worker-тесты очищают fake `gh` и `/tmp`
 
-Implementation commit: 5863c3f639cc3a5c2be2bcdb2e7d9267e633bff5 — реальный blocking fake gh очищается вместе с process group и временным корнем после TERM, INT и HUP.
+Implementation commit: 72535a3316c9d65561432d2444b65b7f6b66d7d3 — штатный lifecycle worker-тестов очищает blocking fake gh, его process group и временный корень после TERM, INT и HUP.
 
 ## HEAD
 
 - Status: IMPLEMENTED, готово к повторной проверке.
-- Branch: factory/60e483c9-a17-bf5ad3aa-6b3
-- Implementation commit: 5863c3f639cc3a5c2be2bcdb2e7d9267e633bff5
-- What changed: обработчик ставится до `main.Run`; реальный `block-all` fake `gh`
-  регистрирует process group, которая очищается с ожиданием production `Wait`.
-- Evidence: целевой worker-набор → PASS; `go test -timeout 5m ./...` → PASS (2026-08-15).
+- Branch: factory/cb67c06a-971-0b18f6dd-62d
+- Implementation commit: 72535a3316c9d65561432d2444b65b7f6b66d7d3
+- What changed: обработчик включён для каждого `TestMain` worker-пакета, а не
+  только helper-режима; все managed-clone sync-каталоги регистрируются штатно.
+- Evidence: целевой worker-набор с реальным вложенным `go test` → PASS (2026-08-15).
 - One next action: повторно проверить реализацию перед слиянием.
 - Specification: `knowledge/specs/worker-test-interruption-cleanup.md`.
 - Owner impact: остановка worker-теста не оставляет блокирующие fake `gh`, их
@@ -20,6 +20,12 @@ Implementation commit: 5863c3f639cc3a5c2be2bcdb2e7d9267e633bff5 — реальн
   гарантия после `SIGKILL` без внешнего supervisor.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Уборка TERM/INT/HUP перенесена в обычный lifecycle `TestMain` worker-тестов.
+Регрессия запускает настоящий вложенный `go test`, прерывает его process group
+и подтверждает отсутствие blocking fake `gh` group и выделенного `/tmp`-корня.
 
 ### 2026-08-15 — Implement
 
