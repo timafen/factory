@@ -2,16 +2,23 @@
 
 ## HEAD
 
-Status: IMPLEMENTED — обе находки review исправлены, выпуск не выполнялся.
-Branch: factory/0044f851-d6c-1fe77d92-f72.
-Implementation commit: b283b55c125fb9eda2a414de693cf43bc931f0a9 — cgroup-helper доставляется атомарно, а Pilot suite снова блокирует установку через Gate.
-What changed: штатный installer обновляет `fx`, release-driver и cgroup-helper одной транзакцией с общим откатом.
-What changed: Pilot suite возвращён в обязательную Go-группу; отрицательный сценарий доказывает, что после его падения установка не начинается.
-Evidence: `bash ops/test-install-factory-control.sh` и `bash ops/test-fx-factory-release.sh` → PASS.
-Evidence: Go-фазы `just check`; затем `just ui-check test-tooling test-launcher`, Pilot (306 tests) и Go/UI builds → PASS.
+Status: IMPLEMENTED — bootstrap и полный транзакционный откат исправлены, выпуск не выполнялся.
+Branch: factory/d1792cde-666-d3a4f218-4fa.
+Implementation commit: 16c949813a0792628d23402d69c1470946dc92ec — первый выпуск ставит cgroup-helper до Gate, а откат возвращает broker и control-команды.
+What changed: helper берётся только из root-owned checkout и проверяется до первой Gate-сессии.
+What changed: снимок охватывает broker, unit/drop-in, `fx`, release-driver и helper; поздний отказ возвращает весь набор.
+Evidence: `bash ops/test-fx-factory-release.sh` → PASS; сценарии чистого host и позднего отказа включены.
+Evidence: `bash ops/test-install-factory-control.sh` → PASS.
 One next action: повторно провести независимый Review; выпуск до PASS не выполнять.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+После review bootstrap перенесён за проверку root-owned checkout, но до первого
+Gate: чистый host получает helper атомарно и только затем запускает проверки.
+Снимок выпуска теперь возвращает broker, systemd drop-in и control-команды при
+отказе control/browser; целевой release-suite и installer-suite прошли.
 
 ### 2026-08-14 — Implement
 
