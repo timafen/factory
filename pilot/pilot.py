@@ -5379,12 +5379,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
         }
         previous = meta.get("implementation_artifact") or {}
         meta["implementation_artifact"] = artifact
-        # Re-reading the same completed Implement task happens after a
-        # watcher restart.  It must keep review_gate's rebuilt delivery
-        # branch.  Only a genuinely different implementation can invalidate
-        # that selected branch for this generation.
-        identity = ("branch", "head", "task_id", "generation")
-        if any(previous.get(key) != artifact[key] for key in identity):
+        # Re-reading the same completed Implement task happens after
+        # review_gate has refreshed its branch onto a newer main.  The remote
+        # head then legitimately differs from the original Implement report,
+        # but the gate-selected delivery head is still the authority for
+        # Review, Verify, and merge.  Only a genuinely different Implement
+        # task/branch/generation may invalidate that selection.
+        implementation_identity = ("branch", "task_id", "generation")
+        if any(previous.get(key) != artifact[key]
+               for key in implementation_identity):
             meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
@@ -5430,6 +5433,22 @@ def record_delivery_artifact(base, branch, head):
     meta["delivery_artifact"] = artifact
     save(WORKS_PATH, works)
     return artifact
+
+
+def pin_reviewed_delivery(base, repo_identity, branch, result):
+    """Restore the immutable delivery pin from a completed, still-current Review."""
+    match = SPECIFICATION_HEAD_LINE.search(result or "")
+    reviewed_head = (match.group(1).lower() if match else "")
+    repo = (repo_identity or "").split("github.com/")[-1]
+    if not repo or not branch or not FULL_GIT_SHA.fullmatch(reviewed_head):
+        return {}, "Review не указал точный HEAD проверенной ветки."
+    info = gh_json(["api", f"repos/{repo}/branches/{branch}"], strict=True)
+    current_head = (((info or {}).get("commit") or {}).get("sha") or "").lower()
+    if not FULL_GIT_SHA.fullmatch(current_head):
+        return {}, "Не удалось подтвердить текущий HEAD проверенной ветки."
+    if current_head != reviewed_head:
+        return {}, "Ветка изменилась после Review; нужен Review нового снимка."
+    return record_delivery_artifact(base, branch, current_head), ""
 
 
 def selected_delivery(base, branch=""):
@@ -8506,6 +8525,23 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
+        if wf == "Review" and next_stage == "Verify" and branch:
+            rid_p = detail["task"].get("repository_id") or ""
+            try:
+                pinned, pin_error = pin_reviewed_delivery(
+                    base, repo_identity_by_id.get(rid_p, ""), branch, result)
+            except Exception as e:
+                retry_terminal_task(conf, state, tid)
+                log("review_delivery_pin_error", repr(e))
+                continue
+            if not pinned:
+                route_question(
+                    conf, tid, "Review", "Review", base, rid_p,
+                    pin_error,
+                    "Повторить Review для текущего снимка ветки?",
+                    ["Повтори Review", "Останови работу"],
+                    pin_error, attempts_so_far=0, branch=branch)
+                continue
         branch, implementation_head = selected_delivery(base, branch)
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
