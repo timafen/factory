@@ -3007,7 +3007,7 @@ def stage_names(conf):
 def work_status_write(mem):
     """Пишем словами, почему работа стоит: экран не должен врать."""
     out = load(f"{HOME}/pilot/work_status.json", {}) or {}
-    transient = {"stopped_owner", "stuck", "nudged", "idle"}
+    transient = {"stopped_owner", "stuck", "nudged", "queued", "idle"}
     out = {base: rec for base, rec in out.items()
            if rec.get("state") not in transient or base in (mem or {})}
     for base, rec in (mem or {}).items():
@@ -3029,6 +3029,9 @@ def work_status_write(mem):
         elif why == "nudged":
             out[base] = {"state": "nudged",
                          "text": "конвейер встал, я запустил следующий этап сам"}
+        elif why == "handoff_pending":
+            out[base] = {"state": "queued",
+                         "text": "этап завершён; Factory ещё обрабатывает результат"}
         elif why == "closed":
             out[base] = {"state": "archived",
                          "text": rec.get("reason") or "работа закрыта"}
@@ -3038,10 +3041,11 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
-def pipeline_watch(conf, tasks, workflows, workers):
+def pipeline_watch(conf, tasks, workflows, workers, processed=None):
     stages = stage_names(conf)
     if not stages:
         return
+    processed_ids = None if processed is None else set(processed)
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     active_tasks = conf.get("_active_work_tasks")
@@ -3127,6 +3131,24 @@ def pipeline_watch(conf, tasks, workflows, workers):
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
         mem[work_key] = rec
+        stage_sources = [t for st, t in lst
+                         if st == stages[far] and t.get("state") == "succeeded"]
+        src = max(stage_sources,
+                  key=lambda task: (task.get("created_at") or "",
+                                    task.get("id") or ""),
+                  default=None)
+        # The normal terminal handoff owns a fresh successful result.  It can
+        # legitimately wait behind other results because those decisions are
+        # processed in bounded batches.  The watchdog must not mistake that
+        # queue for a lost transition, create duplicate stages twice, and then
+        # tell the owner that Factory gave up.  Once the result is recorded as
+        # processed, the ordinary stall timer protects the real crash gap.
+        if (processed_ids is not None
+                and any(task.get("id") not in processed_ids
+                        for task in stage_sources if task.get("id"))):
+            rec.update({"since": now, "nudges": 0,
+                        "why": "handoff_pending", "stage": current_stage})
+            continue
         if now - int(rec["since"]) < STALL_WAIT:
             continue
         if int(rec["nudges"]) >= STALL_NUDGES:
@@ -3147,7 +3169,6 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
-        src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         wname = stage_worker(
             conf, nxt, "medium", workers, repository_id=rid)
@@ -5455,11 +5476,12 @@ def handle_answers(conf, workflows, workers, tasks):
 
 
 def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
-    """Give unfinished continuations every newly opened slot before Plan.
+    """Give unfinished continuations first claim, then fill idle slots from Plan.
 
-    A terminal handoff backlog means an already-started work is waiting for
-    its next stage.  Keep newly opened capacity reserved for that backlog
-    instead of admitting another root task which can starve the continuation.
+    Terminal handoffs are attempted before this refill and answered
+    continuations are attempted inside it before Plan.  Leaving a slot idle
+    after both attempts cannot help a load- or area-deferred continuation; it
+    only wastes an executor which can run an independent early stage.
     """
     tasks = api("/tasks?limit=100").get("tasks") or []
     # All admissions in this pass share the same authoritative snapshot.
@@ -7358,64 +7380,49 @@ def recent_done_block(tasks, n=5):
         parsed = pipeline_title(task)
         if not parsed or task.get("state") not in ("succeeded", "failed", "cancelled"):
             continue
+        # The server is the only authority for automation classification. An
+        # old response without this field is deliberately not owner work.
+        if task.get("work_class") != "product":
+            continue
         if task.get("state") == "succeeded" and task.get("id") not in delivered:
             continue
         title, stage = parsed
-        if not title or is_service_work(title):
+        if not title:
             continue
         at = task.get("finished_at") or task.get("updated_at") or task.get("created_at") or ""
         old = latest.get(title)
         if old is None or at >= old[0]:
             latest[title] = (at, task, stage)
 
-    out = []
+    merged, failed = [], []
     for title, (at, task, stage) in sorted(latest.items(), key=lambda item: item[1][0], reverse=True):
         state = task.get("state")
         if task.get("id") in delivered:
-            status, detail = "delivered", "Выпуск принят и проверен."
-        elif state == "succeeded":
-            status, detail = "passed", "Проверка прошла; слияние не подтверждено."
+            status, detail = "merged", "Выпуск принят и проверен."
         else:
-            status, detail = "failed", f"Этап «{stage}» не прошёл; в main не влито."
-        try:
-            attempts = api(f"/tasks/{task['id']}").get("attempts") or []
-            proof = proof_of((attempts[-1].get("result") if attempts else "") or "")
-            if proof:
-                detail += " Проверено: " + proof
-        except Exception:
-            pass
-        out.append({"title": title[:120], "detail": detail[:180], "at": at,
-                    "status": status})
-        if len(out) >= n:
-            return out
-
-    if out:
-        return out
-
-    # Before structured task history exists, show old real notifications but
-    # never revive the service noise that prompted this view's redesign.
-    try:
-        with io.open(NOTIFY_LOG_PATH, encoding="utf-8") as stream:
-            lines = stream.readlines()[-400:]
-        for line in reversed(lines):
+            status = "failed"
+            detail = f"Этап: {stage}"
+        item = {"title": title[:120], "detail": detail, "at": at,
+                "status": status, "_task_id": task.get("id")}
+        (merged if status == "merged" else failed).append(item)
+    for group in (merged, failed):
+        for item in group[:n]:
             try:
-                r = json.loads(line)
+                attempts = api(f"/tasks/{item['_task_id']}").get("attempts") or []
+                last = attempts[-1] if attempts else {}
+                if item["status"] == "failed":
+                    reason = (last.get("error") or proof_of(last.get("result") or "") or "").strip()
+                    item["detail"] += " · Причина: " + (reason[:140] if reason else "причина не указана")
+                else:
+                    proof = proof_of(last.get("result") or "")
+                    if proof:
+                        item["detail"] += " Проверено: " + proof
             except Exception:
-                continue
-            if r.get("title") != "Задача выполнена":
-                continue
-            body = (r.get("message") or "").split(chr(10))
-            title = body[0].strip()
-            if not title or is_service_work(title) or title in latest:
-                continue
-            out.append({"title": title[:120],
-                        "detail": " ".join(x for x in body[1:] if x)[:180],
-                        "at": r.get("at") or "", "status": "legacy"})
-            if len(out) >= n:
-                break
-    except Exception:
-        pass
-    return out
+                if item["status"] == "failed":
+                    item["detail"] += " · Причина: причина не указана"
+            item["detail"] = item["detail"][:180]
+            item.pop("_task_id", None)
+    return {"merged": merged[:n], "failed": failed[:n]}
 
 
 def limits_view():
@@ -8626,6 +8633,22 @@ def cycle(conf, state):
     except Exception as e:
         log("host_load_error", repr(e))
 
+    # A release restarts Pilot while the previous workers may finish their
+    # tasks.  Do one fast startup refill before diagnostics and the watchdog
+    # walk the historical backlog.  Answered continuations still get first
+    # claim inside refill_open_work_slots(); Plan receives only capacity that
+    # remains.  Ordinary cycles keep the normal terminal-first ordering below.
+    if conf.pop("_startup_refill", False):
+        try:
+            answered = refill_open_work_slots(conf, workflows, workers)
+            activity["answer_applied"] = (
+                activity["answer_applied"]
+                or answered is True
+                or (type(answered) is int and answered > 0)
+            )
+        except Exception as e:
+            log("startup_work_slot_refill_error", repr(e))
+
     # A merge conflict is pipeline work, not a reason to hammer GitHub or ask
     # the owner. Return the same branch to Implement, then require Review and
     # Verify again before another immutable merge intent is created.
@@ -8690,7 +8713,8 @@ def cycle(conf, state):
     # Сторож использует тот же снимок цикла после ответов владельца: так
     # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
     try:
-        pipeline_watch(conf, lifecycle_tasks, workflows, workers)
+        pipeline_watch(conf, lifecycle_tasks, workflows, workers,
+                       state.get("processed"))
     except Exception as e:
         log("pipeline_watch_error", repr(e))
 
@@ -9315,13 +9339,12 @@ def cycle(conf, state):
     # active delivery mechanism.  Legacy retry flags are audit-only.
 
     # A terminal handoff may free a slot after the first answer pass. Retry
-    # answered continuations before admitting Plan so a full Plan cannot
-    # starve an unfinished correction forever.
+    # answered continuations first, then let Plan use capacity that remains.
+    # A continuation deferred by load or an overlapping area does not benefit
+    # from an idle global slot, while a PC worker can still run an independent
+    # Triage or Specification task.
     try:
-        answered = refill_open_work_slots(
-            conf, workflows, workers,
-            admit_new_plan=not activity["terminal_backlog"],
-        )
+        answered = refill_open_work_slots(conf, workflows, workers)
         activity["answer_applied"] = (
             activity["answer_applied"]
             or answered is True
@@ -9386,6 +9409,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
     completed = 0
     recovery_ids = None
     recovery_watermark = None
+    startup_refill_pending = True
     while max_cycles is None or completed < max_cycles:
         conf = load(CONF_PATH, None)
         state = normalize_pilot_state(load(STATE_PATH, {"processed": []}))
@@ -9406,6 +9430,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 recovery_watermark = ""
                 conf.pop("_restart_recovery_ids", None)
                 conf.pop("_restart_recovery_watermark", None)
+            conf["_startup_refill"] = startup_refill_pending
             if recovery_ids:
                 conf["_restart_recovery_ids"] = recovery_ids
                 conf["_restart_recovery_watermark"] = recovery_watermark
@@ -9416,6 +9441,7 @@ def run_loop(max_cycles=None, sleep_fn=None, clock_fn=None):
                 hint = cycle(conf, state) or next_poll_hint(conf, [])
                 cycle_now = clock_fn()
                 failures = 0
+                startup_refill_pending = False
                 if not conf.get("_restart_recovery_retry"):
                     state["terminal_handoff_watermark"] = (
                         datetime.datetime.fromtimestamp(
