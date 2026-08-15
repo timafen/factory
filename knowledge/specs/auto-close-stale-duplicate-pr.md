@@ -45,9 +45,9 @@
   ветвление recovery до создания repair task.
 - `pilot/test_pilot.py` — изолированные regression tests
   `MergeConflictRecoveryTests` с mocked GitHub.
-- `pilot/config.example.json` — если source-of-truth workflow prompt содержит
-  инструкцию создавать PR, закрепить обязательный Pilot marker и запретить его
-  ручное изменение; иначе файл не менять.
+
+`pilot/config.example.json` не меняется: PR создаётся непосредственно в
+`gh_merge()` с фиксированным body, а не из workflow prompt конфигурации.
 
 ## Последовательный план
 
@@ -89,7 +89,10 @@
 - GitHub list/get/close error: fail closed и PR не меняется;
 - marker создаётся с exact `task.work_id` и не берётся из legacy title.
 
-Обязательная проверка: `python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests`.
+Основной новый сценарий назвать
+`test_second_conflict_closes_stale_pr_when_matching_work_was_merged`, чтобы
+обязательная команда проверяла именно суть задачи, а не весь существующий
+класс косвенно.
 
 ## Риски и решения
 
@@ -109,5 +112,4 @@
 
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
-ГОТОВО-КОГДА: файл pilot/config.example.json
-ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests
+ГОТОВО-КОГДА: команда python3 -m unittest -q pilot.test_pilot.MergeConflictRecoveryTests.test_second_conflict_closes_stale_pr_when_matching_work_was_merged
