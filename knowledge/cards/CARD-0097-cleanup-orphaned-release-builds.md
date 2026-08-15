@@ -1,22 +1,28 @@
 # CARD-0097 — Осиротевшие папки release-сборок освобождают место безопасно
 
-Implementation commit: 747815f7a5969233791b8134e5adad6954f8f782 — выпуск безопасно удаляет осиротевшие каталоги build-* до новой сборки.
+Implementation commit: 0851ce6b0a9687ac475c067518f77ecae6775836 — signal-fixture запускает обязательный UI/Go gate до позднего HUP.
 
 ## HEAD
 
-- Status: BLOCKED: поздний сценарий signal-HUP повторно не завершился; до PASS слияние запрещено.
-- Branch: `factory/168c83fc-282-77192af6-0c2`.
+- Status: BLOCKED: signal-HUP исправлен, но полный fixture остановился на независимом rollback владельца; до PASS слияние запрещено.
+- Branch: `factory/52d60353-42d-a48a3a2f-87b`.
 - Specification: `knowledge/specs/cleanup-orphaned-release-builds.md`.
-- What changed: после release lock выпуск удаляет только реальные верхнеуровневые
-  `build-*`; symlink, внешний target и остальные имена сохраняются.
+- What changed: асинхронный signal-fixture теперь передаёт `FACTORY_RELEASE_DEEP_GATE=1`,
+  поэтому UI и Go gate действительно запущены и синхронизированы до HUP.
 - Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` — PASS;
-  повтор `FACTORY_RELEASE_TEST_TIMEOUT=120 bash ops/test-fx-factory-release.sh`
-  — FAIL: `timed out waiting for .../signal-HUP-1/ui-running`.
-  Внешний лимит 12 минут не сработал; диагностический вывод сохранён в
-  `/tmp/card-0097-release-fixture-retry.log` текущей среды.
-- One next action: доработать запуск позднего signal-HUP fixture и получить полный PASS.
+  полный fixture с лимитом 120 секунд прошёл все HUP/TERM сценарии и позже остановился
+  на rollback владельца: отсутствует fresh healthy-регистрация `worker-release-test`.
+- One next action: повторить полный fixture в свободной среде и устранить rollback владельца, если сбой повторится.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Найдена гонка в самом signal-fixture: его фоновый launcher не передавал
+`FACTORY_RELEASE_DEEP_GATE=1`, поэтому быстрый путь обходил UI/Go gate и
+ожидание `ui-running` закономерно истекало. Режим передан без увеличения
+таймаутов; полный fixture прошёл HUP/TERM-сценарии, но позднее остановился на
+отдельной проверке rollback владельца без healthy-регистрации воркера.
 
 ### 2026-08-15 — Implement
 
