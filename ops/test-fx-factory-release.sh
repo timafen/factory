@@ -1670,14 +1670,14 @@ FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked
 status=$?
 set -e
 [ "$status" -eq 8 ] || fail "concurrent release returned $status instead of lock error 8"
-[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = failed ] \
-  || fail "concurrent release did not durably record failed status"
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = locked ] \
+  || fail "concurrent release did not durably record locked status"
 [ ! -s "$locked/gates" ] || fail "concurrent release passed build gates"
 [ ! -s "$locked/events" ] || fail "concurrent release touched services"
 flock -u 8
-FACTORY_DELIVERY_ID=locked-retry-next run_release "$locked" locked \
+FACTORY_DELIVERY_ID=locked-retry run_release "$locked" locked \
   || { cat "$locked/output" >&2; fail "release after lock failure did not run"; }
-[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry-next.status")" = succeeded ] \
+[ "$(tr -d '\r\n' <"$locked/delivery-state/locked-retry.status")" = succeeded ] \
   || fail "release after lock failure did not finish successfully"
 [ "$(grep -Fxc 'restart factory-server.service' "$locked/events")" -eq 1 ] \
   || fail "release after lock failure did not perform exactly one release"

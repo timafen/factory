@@ -160,10 +160,25 @@ except OSError as error:
 PY
 }
 
+delivery_terminal_status=failed
+on_delivery_exit() {
+  local status=${1:-$?}
+  trap - EXIT
+  if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
+  delivery_status "$delivery_terminal_status" \
+    || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
+  exit "$status"
+}
+
 if [ -n "$DELIVERY_ID" ]; then
   case "$DELIVERY_ID" in *[!a-z0-9-]*|''|-) echo "!! некорректный delivery id" >&2; exit 4 ;; esac
   mkdir -p "$DELIVERY_DIR" || { echo "!! cannot prepare delivery status" >&2; exit 4; }
   DELIVERY_FILE="$DELIVERY_DIR/$DELIVERY_ID.status"
+
+  # Arm the handler before any durable transition.  A signal or an early
+  # failure after `launching` must not leave the operation in that state.
+  trap on_delivery_exit EXIT
+
   if [ -f "$DELIVERY_FILE" ]; then
     case "$(tr -d '\r\n' <"$DELIVERY_FILE")" in
       succeeded) exit 0 ;;
@@ -177,20 +192,6 @@ if [ -n "$DELIVERY_ID" ]; then
   fi
   delivery_status launching || { echo "!! cannot start delivery without durable status" >&2; exit 4; }
 fi
-
-# Once `launching` is durable, even failures before the release lock or the
-# full cleanup handler is ready need a terminal outcome.  The later cleanup
-# trap replaces this minimal handler after its resources have been created.
-delivery_terminal_status=failed
-on_delivery_exit() {
-  local status=${1:-$?}
-  trap - EXIT
-  if [ "$status" -eq 0 ]; then delivery_terminal_status=succeeded; fi
-  delivery_status "$delivery_terminal_status" \
-    || { fail "не смог надёжно записать конечный статус выпуска"; exit 4; }
-  exit "$status"
-}
-trap on_delivery_exit EXIT
 
 step() { echo "== $*"; }
 fail() { echo "!! $*" >&2; }
@@ -627,6 +628,7 @@ exec 9>"$LOCK" || { fail "cannot open the Factory release lock"; exit 4; }
 flock -n 9 || {
   if [ -n "$DELIVERY_ID" ]; then
     delivery_status locked || { fail "cannot durably record locked delivery"; exit 4; }
+    delivery_terminal_status=locked
   fi
   fail "another Factory release is already running"
   exit 8
