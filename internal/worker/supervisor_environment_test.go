@@ -50,6 +50,7 @@ func TestRuntimeEnvironmentGitHubRepositoryPolicy(t *testing.T) {
 		want     string
 	}{
 		{name: "github", identity: "GitHub.com/Example/Cattle", want: "example/cattle"},
+		{name: "assigned factory repository", identity: "github.com/timafen/factory", want: "timafen/factory"},
 		{name: "empty"},
 		{name: "too few segments", identity: "github.com/example"},
 		{name: "too many segments", identity: "github.com/example/cattle/extra"},
