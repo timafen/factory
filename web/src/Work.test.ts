@@ -212,4 +212,18 @@ describe("build", () => {
     expect(sectionOf(triage)).not.toBe("done");
     expect(sectionOf(specification)).not.toBe("done");
   });
+
+  it("shows a prepared merge-conflict repair instead of the stale delivery wait", () => {
+    const repairing = build([
+      task("verify", "Verify", "succeeded", 1),
+      task("implement-repair", "Implement + Test", "succeeded", 2),
+    ], {}, [])[0];
+
+    expect(repairing.status).toMatchObject({
+      kind: "queued",
+      label: "Factory готовит повторную проверку",
+    });
+    expect(repairing.status.label).not.toBe("Ожидает слияния и выпуска");
+    expect(sectionOf(repairing)).not.toBe("done");
+  });
 });

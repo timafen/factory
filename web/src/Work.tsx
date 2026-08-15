@@ -187,11 +187,15 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
     // historical work keeps its existing archived completion semantics.
     const completed = latestItem?.task.state === "succeeded"
       && (!latestItem.stage || Boolean(g.meta?.closed));
-    const awaitingDelivery = g.items.some((i) => i.stage === "Verify"
+    const unconfirmedVerify = (i: Group["items"][number]) => i.stage === "Verify"
       && i.task.state === "succeeded" && i.verdict?.final_pass !== true
-      && i.verdict?.final_pass !== false);
+      && i.verdict?.final_pass !== false;
+    const awaitingDelivery = latestItem ? unconfirmedVerify(latestItem) : false;
+    const deliveryRepairPending = latestItem?.task.state === "succeeded"
+      && latestItem.stage !== "Verify" && g.items.slice(0, -1).some(unconfirmedVerify);
     const awaitingNextStage = latestItem?.task.state === "succeeded"
-      && Boolean(latestItem.stage) && !passed && !g.meta?.closed && !awaitingDelivery;
+      && Boolean(latestItem.stage) && !passed && !g.meta?.closed
+      && !awaitingDelivery && !deliveryRepairPending;
 
     if (waiting) {
       g.status = {
@@ -265,6 +269,13 @@ export function build(tasks: Task[], verdicts: Record<string, Verdict>, question
       g.status = {
         kind: "archive", label: "сбой в истории", tone: "muted",
         happened: "Последняя попытка завершилась сбоем.", next: "Новый активный шаг в API не найден.",
+        owner: "Участие владельца не требуется.",
+      };
+    } else if (deliveryRepairPending) {
+      g.status = {
+        kind: "queued", label: "Factory готовит повторную проверку", tone: "warn",
+        happened: "После попытки слияния Factory подготовила исправление.",
+        next: "Следующий шаг — повторные ревью и проверка, затем новая попытка выпуска.",
         owner: "Участие владельца не требуется.",
       };
     } else if (awaitingDelivery) {
