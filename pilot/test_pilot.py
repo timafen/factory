@@ -5931,6 +5931,12 @@ class OrchestratorWaitActionTests(unittest.TestCase):
 
 
 class AdaptivePollingTests(unittest.TestCase):
+    def test_terminal_handoff_batch_fills_every_supported_work_slot(self):
+        self.assertEqual(
+            pilot.MAX_TERMINAL_TASKS_PER_CYCLE,
+            pilot.MAX_PARALLEL_WORKS,
+        )
+
     def _restart_handoff_fixture(self, create_effects, cycles,
                                  area_busy_effect="", restart_after_first=False,
                                  shared_task_store=None, stale_snapshot=False,

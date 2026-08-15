@@ -57,7 +57,7 @@ MAX_PARALLEL_WORKS = 4
 # A busy four-slot Factory must be able to refill all slots from completed
 # handoffs in one bounded pass.  The history window below still prevents the
 # old failure mode where every archival task was replayed in one cycle.
-MAX_TERMINAL_TASKS_PER_CYCLE = 4
+MAX_TERMINAL_TASKS_PER_CYCLE = MAX_PARALLEL_WORKS
 TERMINAL_HANDOFF_HISTORY_LIMIT = 200
 MERGE_CONFLICT_RE = re.compile(
     r"merge conflict|has merge conflicts|not mergeable|cannot be cleanly created",
