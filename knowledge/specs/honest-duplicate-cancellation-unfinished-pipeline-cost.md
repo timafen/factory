@@ -118,8 +118,13 @@ Claude/Codex, timestamp которых попал в полуоткрытое о
 
 `knowledge/cards/CARD-0177-honest-duplicate-cancellation-unfinished-pipeline-cost.md`
 
+Ниже перечислены все файлы продуктовой реализации этой работы и единственная
+обязательная целевая проверка. Команда намеренно ссылается на новый
+`DashboardWasteMetricsTests`: после реализации она обязана завершаться с кодом
+0 и доказывать сам расчёт, а не только отрисовку карточки.
+
 ГОТОВО-КОГДА: файл pilot/pilot.py
 ГОТОВО-КОГДА: файл pilot/test_pilot.py
 ГОТОВО-КОГДА: файл web/src/Overview.tsx
 ГОТОВО-КОГДА: файл web/src/Overview.test.ts
-ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.DashboardWasteMetricsTests && cd web && npm test -- --run src/Overview.test.ts
+ГОТОВО-КОГДА: команда python3 -m unittest pilot.test_pilot.DashboardWasteMetricsTests && (cd web && npm test -- --run src/Overview.test.ts)
