@@ -53,9 +53,16 @@ type PIDDeliveryExecutor interface {
 	ExecuteDeliveryWithPID(context.Context, string, string, string, func(int) bool) string
 }
 
+// DeliveryStatusExecutor reads the durable terminal marker owned by the
+// wrapper. A broker PID is not evidence that the child release stopped.
+type DeliveryStatusExecutor interface {
+	DeliveryStatus(string) string
+}
+
 type FXExecutor struct {
 	Executable               string
 	FactoryReleaseExecutable string
+	DeliveryStateDir         string
 }
 
 func (e FXExecutor) Execute(ctx context.Context, adapter, sha string) string {
@@ -76,6 +83,7 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 		"LANG=C.UTF-8", "LC_ALL=C.UTF-8",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"FACTORY_DELIVERY_ID=" + operationID,
+		"FACTORY_DELIVERY_STATE_DIR=" + e.deliveryStateDir(),
 	}
 	if err := command.Start(); err != nil {
 		return "rollback_failed"
@@ -97,6 +105,25 @@ func (e FXExecutor) ExecuteDeliveryWithPID(ctx context.Context, adapter, sha, op
 		return "release_failed_rolled_back"
 	}
 	return "rollback_failed"
+}
+
+func (e FXExecutor) deliveryStateDir() string {
+	if e.DeliveryStateDir != "" {
+		return e.DeliveryStateDir
+	}
+	return "/var/lib/factory/release-deliveries"
+}
+
+func (e FXExecutor) DeliveryStatus(operationID string) string {
+	data, err := os.ReadFile(filepath.Join(e.deliveryStateDir(), operationID+".status"))
+	if err != nil {
+		return ""
+	}
+	switch status := strings.TrimSpace(string(data)); status {
+	case "succeeded", "locked", "release_failed_rolled_back", "rollback_failed", "failed":
+		return status
+	}
+	return ""
 }
 
 func (e FXExecutor) invocation(adapter, sha string) (string, []string, bool) {
@@ -252,18 +279,11 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 			// malformed durable record as if the operation never existed.
 			return nil, fmt.Errorf("invalid operation state %q", entry.Name())
 		}
-		// A broker restart cannot prove an old in-process executor still exists.
-		// Fail closed instead of launching it again.
+		// Do not re-run a wrapper which may have survived the broker process.
+		// Its durable terminal marker is observed by GET below.
 		if item.Status == "launching" || item.Status == "running" {
-			updated := item
-			updated.Status = "failed"
-			if err := b.persist(&updated); err != nil {
-				// Do not publish a terminal recovery result which the next
-				// restart cannot observe.  Refusing to start also prevents any
-				// caller from mistaking an in-memory result for durable proof.
-				return nil, err
-			}
-			item = updated
+			item.Status = "running"
+			b.refresh(&item)
 		}
 		if item.FormatVersion == 1 && isTerminal(item.Status) && markers[item.Request.OperationID] != "committed" {
 			// A terminal record without a separately fsynced commit marker may
@@ -274,6 +294,17 @@ func NewAt(stateDir string, executor Executor) (*Broker, error) {
 		b.items[item.Request.OperationID] = &item
 	}
 	return b, nil
+}
+
+func (b *Broker) refresh(item *operation) {
+	observer, ok := b.executor.(DeliveryStatusExecutor)
+	if !ok {
+		return
+	}
+	if status := observer.DeliveryStatus(item.Request.OperationID); status != "" {
+		item.Status = status
+		_ = b.persist(item)
+	}
 }
 
 func validPersistedStatus(status string) bool {
@@ -592,6 +623,7 @@ func (b *Broker) status(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "operation not found", http.StatusNotFound)
 		return
 	}
+	b.refresh(item)
 	status := item.Status
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, Response{Status: status})

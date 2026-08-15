@@ -403,14 +403,13 @@ func TestDiskBrokerKeepsImmutableOperationAcrossRestart(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "delivery-1.json")); err != nil {
 		t.Fatal(err)
 	}
-	// A restart cannot safely infer whether an old runner is still alive.  It
-	// records failure rather than executing the release a second time.
+	// A restart preserves the uncertain wrapper as observable running work.
 	restarted, err := NewAt(dir, &recordingExecutor{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	item, ok := operationSnapshot(restarted, "delivery-1")
-	if !ok || item.Status != "failed" {
+	if !ok || item.Status != "running" {
 		t.Fatalf("recovered item=%+v", item)
 	}
 	close(blocked)
@@ -715,8 +714,8 @@ func TestTerminalWriteFailureNeverPublishesSuccessOrRepeatsExecutorAfterRestart(
 	}
 	restartedServer := httptest.NewServer(restarted.Handler())
 	defer restartedServer.Close()
-	if got := operationStatus(t, restartedServer, "delivery-write-failure").Status; got != "failed" {
-		t.Fatalf("fresh restart status=%q, want failed", got)
+	if got := operationStatus(t, restartedServer, "delivery-write-failure").Status; got != "running" {
+		t.Fatalf("fresh restart status=%q, want running", got)
 	}
 	if got := postStatus(t, restartedServer, body); got != http.StatusOK {
 		t.Fatalf("duplicate POST status=%d", got)
