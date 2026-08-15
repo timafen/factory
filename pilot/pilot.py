@@ -8321,29 +8321,6 @@ def cycle(conf, state):
         # A transient read or Plan write failure must not mark the run as
         # processed. The next cycle retries it through the durable cursor.
         log("automation_findings_error", repr(e))
-    # The first API page is intentionally small and can push the linked root
-    # or final stage of an older Plan card out of view.  Reuse the complete
-    # history already required by the dashboard and terminal handoffs for all
-    # lifecycle reconciliation in this cycle.  Otherwise old cards remain
-    # labelled ``in_work`` forever and leave automatic planning with a false
-    # picture of its queue.
-    complete_tasks = None
-    try:
-        complete_tasks = all_tasks()
-    except Exception as e:
-        log("task_history_error", repr(e))
-    lifecycle_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
-
-    # Сначала убрать выполненное из открытого Плана. Автоподбор (когда он
-    # включён) ниже по циклу уже не увидит эту карточку как planned.
-    try:
-        cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
-    except Exception as e:
-        log("plan_cleanup_error", repr(e))
-    try:
-        reconcile_stale_plan_cards(lifecycle_tasks)
-    except Exception as e:
-        log("plan_reconcile_error", repr(e))
     workers = best_workers(api("/workers")["workers"])
     repo_identity_by_id = {r["id"]: r["remote_identity"]
                            for r in (api("/repositories").get("repositories") or [])}
@@ -8362,35 +8339,6 @@ def cycle(conf, state):
     day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
     week_start = time.time() - 7 * 86400
     codex_snapshot = codex_usage_snapshot(day_start, week_start)
-
-    # Снимок для главного экрана. Никогда не должен ломать цикл.
-    # The same complete snapshot feeds terminal handoffs below. Looking only
-    # at /tasks?limit=100 there loses a completed stage once service traffic
-    # pushes it off the first page.
-    try:
-        write_dashboard(conf, lifecycle_tasks, {w["id"]: w for w in api("/workers")["workers"]},
-                        codex_snapshot, (day_start, week_start))
-    except Exception as e:
-        log("dashboard_error", repr(e))
-    # Настоящие проценты подписок — в файл и в уведомления на 80/95.
-    try:
-        provider_limits_tick(conf)
-    except Exception as e:
-        log("provider_limits_error", repr(e))
-
-    # Лимиты подписок: понять, свободны ли провайдеры, прежде чем раздавать работу.
-    try:
-        detect_limits(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]})
-    except Exception as e:
-        log("limits_error", repr(e))
-
-    # Потолок расхода на задачу — до всего остального, чтобы зациклившийся
-    # агент не жёг деньги ещё цикл.
-    # Кто поставил работу — записываем до всего остального, пока задача свежая.
-    try:
-        record_new_works(conf, tasks)
-    except Exception as e:
-        log("record_works_error", repr(e))
 
     try:
         budget_guard(conf, tasks, workers)
@@ -8445,6 +8393,43 @@ def cycle(conf, state):
             )
         except Exception as e:
             log("startup_work_slot_refill_error", repr(e))
+
+    # The full task history, dashboard, and diagnostics are maintenance work.
+    # On startup they must not delay restoring useful capacity: admission,
+    # budgets, host load, and the one-shot refill above have already run.
+    complete_tasks = None
+    try:
+        complete_tasks = all_tasks()
+    except Exception as e:
+        log("task_history_error", repr(e))
+    lifecycle_tasks = complete_tasks if isinstance(complete_tasks, list) else tasks
+
+    try:
+        cleanup_completed_plan_cards(lifecycle_tasks, len(stages))
+    except Exception as e:
+        log("plan_cleanup_error", repr(e))
+    try:
+        reconcile_stale_plan_cards(lifecycle_tasks)
+    except Exception as e:
+        log("plan_reconcile_error", repr(e))
+
+    try:
+        write_dashboard(conf, lifecycle_tasks, {w["id"]: w for w in api("/workers")["workers"]},
+                        codex_snapshot, (day_start, week_start))
+    except Exception as e:
+        log("dashboard_error", repr(e))
+    try:
+        provider_limits_tick(conf)
+    except Exception as e:
+        log("provider_limits_error", repr(e))
+    try:
+        detect_limits(conf, tasks, {w["id"]: w for w in api("/workers")["workers"]})
+    except Exception as e:
+        log("limits_error", repr(e))
+    try:
+        record_new_works(conf, tasks)
+    except Exception as e:
+        log("record_works_error", repr(e))
 
     # A merge conflict is pipeline work, not a reason to hammer GitHub or ask
     # the owner. Return the same branch to Implement, then require Review and

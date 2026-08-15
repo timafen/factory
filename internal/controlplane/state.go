@@ -66,6 +66,17 @@ func (s *Store) Claim(ctx context.Context, workerID string, input protocol.Claim
 			if !equalDigest(attemptDigest, digest) || !isActive(state) || expiry <= nowMillis {
 				return nil, conflict("lease_not_owner", "the claim no longer owns an active lease")
 			}
+			// A committed claim response may be lost in transit. The worker then
+			// repeats the same request ID and token, but cannot heartbeat until it
+			// receives the claim body. Keep that exact idempotent handoff alive;
+			// otherwise repeated 10-second transport timeouts can consume the
+			// original 30-second lease before the response finally arrives.
+			renewedExpiry := now.Add(protocol.LeaseDuration).UnixMilli()
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE attempts SET lease_expires_at = ? WHERE id = ?
+			`, renewedExpiry, storedAttempt.String); err != nil {
+				return nil, unavailable(err)
+			}
 			if err := tx.Commit(); err != nil {
 				return nil, unavailable(err)
 			}
