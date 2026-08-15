@@ -1,17 +1,18 @@
 # CARD-0170 — Безопасное удержание каталогов release-сборки
 
-Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
+Implementation commit: e038a555a390a8ef6710bd504e65e879da3c22a7 — очистка безопасно пропускает отсутствующий каталог перед первым выпуском.
 
 ## HEAD
 
 Status: IMPLEMENTED
-Branch: factory/a83fc90f-150-892fa826-5a4
-Implementation commit: 5c3434fdfd6fe4647bc6e9f4d412d6f47e6dd65b — безопасная очистка старых верхнеуровневых `build-*` до новой сборки.
+Branch: factory/a964d1b1-95e-3ba7a535-eba
+Implementation commit: e038a555a390a8ef6710bd504e65e879da3c22a7 — очистка безопасно пропускает отсутствующий каталог перед первым выпуском.
 What changed: release под lock удаляет лишь реальные `build-*` старше 24 часов;
-`--cleanup-dry-run` журналирует решения, не создавая выпуск.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS;
-`bash ops/test-fx-factory-release.sh` → PASS.
-Next action: провести review изменений перед слиянием.
+`--cleanup-dry-run` журналирует решения, не создавая выпуск, а отсутствующий
+корень первого выпуска считается пустым списком кандидатов.
+Evidence: `FACTORY_TEST_ONLY=cleanup-first-release bash ops/test-fx-factory-release.sh` → PASS;
+`npx tsc -p tsconfig.app.json --noEmit` и `npm run build` в `web/` → PASS.
+Next action: провести review исправления первого выпуска перед слиянием.
 
 ## LOG
 
@@ -55,3 +56,11 @@ SPECIFIED
 Следующая стадия реализует спецификацию из
 `knowledge/specs/release-build-directory-retention.md`; production-каталоги
 вручную не очищать.
+
+### 2026-08-15 — Implement
+
+Исправлен первый выпуск без каталога релизов: dry-run оставляет файловую
+систему неизменной, обычный выпуск затем создаёт историю и публикует `current`.
+Целевой fixture, `bash -n`, TypeScript-проверка и production-сборка прошли.
+Полный release-fixture дважды остановился раньше этого сценария на таймауте
+существующей проверки `signal-HUP-1` (`ui-running` не появился за 5 секунд).
