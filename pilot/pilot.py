@@ -1043,13 +1043,18 @@ def work_lifecycle_block(base, task=None, tasks=None):
                 if (str(idea.get("work_id") or "").strip() == work_id
                     if work_id else
                     (not idea.get("work_id") and _same_work(idea.get("title"), base)))]
+    # Legacy Plan cards have no durable provenance: use their title only as a
+    # migration bridge, while cards that do have work_id remain exact-only.
+    if work_id:
+        matching.extend(idea for idea in ideas_all()
+                        if not idea.get("work_id") and _same_work(idea.get("title"), base))
     active = [idea for idea in matching if idea.get("state") in ("planned", "in_work")]
     if active:
         current = active[-1]
         linked_id = current.get("task_id") or ""
         if not linked_id:
             return "новое поколение запланировано, но ещё не начато"
-        if task and task.get("id") == linked_id:
+        if task and (task.get("id") == linked_id or work_id == linked_id):
             return ""
         # Every continuation created by the control plane carries the durable
         # root work identity.  The linked Plan root can legitimately fall
