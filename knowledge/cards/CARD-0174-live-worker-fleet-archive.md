@@ -1,22 +1,29 @@
-Implementation commit: 189cba3dd6309115f71dc7739d2b245b7a08a5c5 — экран исполнителей показывает живой парк и архив старых регистраций
+Implementation commit: 88883f6a630d28703573d6bde851376ed94fafc5 — экран исполнителей показывает живой парк и архив старых регистраций
 
 # CARD-0174: Живой парк исполнителей и архив регистраций
 
 ## HEAD
 
 Status: Implemented — ready for Review and Verify
-Branch: factory/589204d9-c3e-cc171337-a96
+Branch: factory/c0a0c8cd-895-47f61d98-589
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-Implementation commit: 189cba3dd6309115f71dc7739d2b245b7a08a5c5 — экран
+Implementation commit: 88883f6a630d28703573d6bde851376ed94fafc5 — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
-What changed: lint проходит без исключений; встроенный `web/dist` собран из
-исходников; браузерный путь открывает карточку архивного исполнителя.
-Evidence: `just ui-check`, `just test-browser-critical`, `just build`, `just
-format-check`, `just vet`, `just boundary`, `just test`, `python3 -m unittest
-pilot.test_pilot` — успешно.
-One next action: Review и Verify повторно принимают поставку.
+What changed: текущие и архивные регистрации разделены на экране по границе
+семи суток; встроенный `web/dist` пересобран после перебазирования.
+Evidence: `npx tsc -p tsconfig.app.json --noEmit`, `vitest run
+Workers.test.tsx`, `eslint`, `vite build` — успешно.
+One next action: Review и Verify принимают поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Работа перенесена на свежий `origin/main`; production-ассеты пересобраны и
+реальный кодовый коммит указан в HEAD. TypeScript, три целевые проверки
+`Workers.test.tsx`, lint и build прошли. Критический браузерный сценарий
+заблокирован до запуска приложения: sandbox отклоняет путь временной SQLite БД
+из-за владельца предка каталога; это ограничение окружения, не ошибка сценария.
 
 ### 2026-08-15 — Implement
 
