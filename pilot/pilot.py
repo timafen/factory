@@ -5863,6 +5863,17 @@ def codex_usage_snapshot(*since_epochs):
     """Один снимок журналов Codex сразу для всех запрошенных периодов."""
     paths = set(glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"))
     paths.update(glob.glob(f"{HOME}/.codex-*/sessions/*/*/*/rollout-*.jsonl"))
+    # A release restarts Pilot and clears the in-memory tail cache.  Reading
+    # every historical rollout before admitting work made startup walk more
+    # than a gigabyte of logs.  A file older than the oldest requested window
+    # cannot contribute unless it was appended in that window; mtime keeps
+    # resumed old sessions included.
+    if since_epochs:
+        oldest = min(since_epochs)
+        paths = {
+            path for path in paths
+            if os.path.getmtime(path) >= oldest
+        }
     events = [event for path in paths for event in _codex_usage_events(path)]
     result = {}
     for since_epoch in since_epochs:
@@ -8330,7 +8341,10 @@ def cycle(conf, state):
     today = time.strftime("%Y-%m-%d", time.gmtime())
     day_start = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
     week_start = time.time() - 7 * 86400
-    codex_snapshot = codex_usage_snapshot(day_start, week_start)
+    # The daily cap is release-blocking, so compute only its exact window
+    # before the startup refill.  The weekly dashboard scan is much larger and
+    # is finished after useful slots have been filled.
+    codex_day_snapshot = codex_usage_snapshot(day_start, day_start)
 
     try:
         budget_guard(conf, tasks, workers)
@@ -8339,7 +8353,7 @@ def cycle(conf, state):
 
     # Дневной потолок: начатое доигрывается, новое не берётся.
     try:
-        if day_budget_blocks(conf, tasks, codex_snapshot[day_start]):
+        if day_budget_blocks(conf, tasks, codex_day_snapshot[day_start]):
             if recovery_ids:
                 conf["_restart_recovery_retry"] = True
             conf.pop("_restart_recovery_ids", None)
@@ -8386,6 +8400,8 @@ def cycle(conf, state):
             )
         except Exception as e:
             log("startup_work_slot_refill_error", repr(e))
+
+    codex_snapshot = codex_usage_snapshot(day_start, week_start)
 
     # Restart recovery may need authoritative detail reads for terminal tasks
     # which already fell out of the current page.  Useful slots must be filled
