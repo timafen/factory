@@ -5379,12 +5379,15 @@ def record_implementation_artifact(base, task_id, task_title, result, context,
         }
         previous = meta.get("implementation_artifact") or {}
         meta["implementation_artifact"] = artifact
-        # Re-reading the same completed Implement task happens after a
-        # watcher restart.  It must keep review_gate's rebuilt delivery
-        # branch.  Only a genuinely different implementation can invalidate
-        # that selected branch for this generation.
-        identity = ("branch", "head", "task_id", "generation")
-        if any(previous.get(key) != artifact[key] for key in identity):
+        # Re-reading the same completed Implement task happens after
+        # review_gate has refreshed its branch onto a newer main.  The remote
+        # head then legitimately differs from the original Implement report,
+        # but the gate-selected delivery head is still the authority for
+        # Review, Verify, and merge.  Only a genuinely different Implement
+        # task/branch/generation may invalidate that selection.
+        implementation_identity = ("branch", "task_id", "generation")
+        if any(previous.get(key) != artifact[key]
+               for key in implementation_identity):
             meta.pop("delivery_artifact", None)
         save(WORKS_PATH, works)
         return artifact
