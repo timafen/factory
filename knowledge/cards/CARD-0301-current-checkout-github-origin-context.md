@@ -4,16 +4,16 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 
 ## HEAD
 
-Status: Specification ready
-Branch: `factory/0032df65-c5e-5ab9477e-95c`
-Specification: `knowledge/specs/current-checkout-github-origin-context.md`
-What changed: зафиксирован контракт для checkout с `origin=timafen/factory` и
-`upstream=owainlewis/factory`: runtime получает `GH_REPO=timafen/factory` из
-доверенной identity задачи и не позволяет `gh` выбрать upstream.
-Evidence: кодовый коммит существует в свежем `origin/main`; сквозной тест
-claim → supervisor → fake Codex прошёл за 1.964s.
-One next action: на Verify повторить обязательную целевую команду спецификации
-для свежего candidate snapshot.
+Status: Implemented
+Branch: `factory/da6b071b-0ef-bf198f95-741`
+Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker передаёт
+доверенный GitHub-репозиторий задачи в runtime вместо выбора upstream.
+What changed: контракт закреплён для checkout с `origin=timafen/factory` и
+`upstream=owainlewis/factory`; runtime получает `GH_REPO=timafen/factory`.
+Evidence: `go test -count=1 ./internal/worker -run
+'^TestWorkerRuntimeUsesClaimGitHubRepositoryContext$'` → PASS (1.780s);
+`git diff --check origin/main...HEAD` → PASS.
+One next action: Verify проверяет опубликованный candidate snapshot.
 
 ## LOG
 
@@ -32,3 +32,10 @@ GitHub.com-репозиторий задачи добавляется единс
 `CARD-0300` оказался занят опубликованной параллельной работой. Для текущей
 работы выбран отдельный `CARD-0301`, отсутствовавший в свежем `origin/main` и
 опубликованных ветках на момент проверки; чужие карточки не изменялись.
+
+### 2026-08-15 — Implement
+
+Реализация `fee29b0c65cc12058cc8c08d6ad87855367bdec8` уже стала предком
+свежего `origin/main`; эта ветка публикует проверяемый контракт и карточку.
+Сквозной тест `TestWorkerRuntimeUsesClaimGitHubRepositoryContext` прошёл за
+1.780s, а `git diff --check origin/main...HEAD` не нашёл ошибок пробелов.
