@@ -917,7 +917,8 @@ start_release() {
   case_dir=$1 mode=$2
   configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
-    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
+    TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
+    TEST_BROKER_EVENTS="$case_dir/broker-events" \
     TEST_SERVER_BIN="$case_dir/install/factory-server" \
     TEST_INTERRUPT_MARK="$case_dir/interrupted" PATH="$case_dir/bin:$PATH" \
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
@@ -945,6 +946,7 @@ start_release() {
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
     FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE=1 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
