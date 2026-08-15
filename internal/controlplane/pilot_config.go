@@ -189,6 +189,9 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 			return nil, invalid("invalid_pilot_settings", field.name+" must be positive")
 		}
 	}
+	if math.IsNaN(settings.ReleaseBatchSeconds) || math.IsInf(settings.ReleaseBatchSeconds, 0) || settings.ReleaseBatchSeconds < 0 {
+		return nil, invalid("invalid_pilot_settings", "release_batch_seconds must be zero or positive")
+	}
 	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 || settings.MaxParallelWorks <= 0 || settings.MaxTerminalTasksPerCycle <= 0 {
 		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
 	}

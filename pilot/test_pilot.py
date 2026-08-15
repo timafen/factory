@@ -8684,6 +8684,32 @@ pilot.save(pilot.STATE_PATH, state)
             pilot.poll_delivery_state({}, state)
         self.assertEqual(len(target["generations"]), 2)
 
+    def test_reserved_generation_batches_nearby_merges_before_one_release(self):
+        state = {}
+        conf = {"release_batch_seconds": 120}
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path):
+            first = pilot.deploy_after_merge(
+                conf, "github.com/timafen/factory", state, self.sha,
+                self.wait("a"), now=100)
+            joined = pilot.deploy_after_merge(
+                conf, "github.com/timafen/factory", state, "b" * 40,
+                self.wait("b"), now=110)
+
+        self.assertEqual(first["id"], joined["id"])
+        self.assertEqual(first["launch_not_before"], 220)
+        self.assertEqual(first["commit_sha"], "b" * 40)
+        self.assertEqual(set(first["waits"]), {"a", "b"})
+
+        with mock.patch.object(pilot, "broker_operation",
+                               return_value={"status": "launching"}) as broker:
+            pilot.poll_delivery_state(conf, state, now=219)
+            broker.assert_not_called()
+            pilot.poll_delivery_state(conf, state, now=220)
+
+        broker.assert_called_once()
+        payload = broker.call_args.args[3]
+        self.assertEqual(payload["commit_sha"], "b" * 40)
+
     def test_locked_retry_uses_same_real_broker_operation_after_second_merge(self):
         paths = self._process_paths(self._start_process_broker(locked=True))
         self._pilot_process("seed", paths, sha=self.sha)

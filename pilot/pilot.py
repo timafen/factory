@@ -7744,11 +7744,14 @@ def _delivery_target(repo_identity):
     return "", ""
 
 
-def _delivery_generation(state, repo_identity, commit_sha, wait, now=None):
+def _delivery_generation(state, repo_identity, commit_sha, wait, now=None,
+                         batch_seconds=0):
     durable = _delivery_state(state)
     target_key, adapter = _delivery_target(repo_identity)
     if not target_key or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha or ""):
         return None
+    current_time = time.time() if now is None else float(now)
+    batch_seconds = max(0, float(batch_seconds or 0))
     target = durable["targets"].setdefault(target_key, {"id": target_key, "last_generation": 0,
         "current_generation": None, "next_requested": False, "generations": {}})
     current = target.get("current_generation")
@@ -7774,8 +7777,9 @@ def _delivery_generation(state, repo_identity, commit_sha, wait, now=None):
     generation = {"id": gid, "sequence": sequence, "phase": "reserved",
         "adapter": adapter, "commit_sha": commit_sha, "waits": {wait["task_id"]: wait},
         "merge_receipts": [wait["merge_receipt"]],
+        "launch_not_before": current_time + batch_seconds if batch_seconds else 0,
         "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(
-            time.time() if now is None else now))}
+            current_time))}
     if adapter == "external-merge":
         # The merge receipt is the terminal delivery proof for a repository
         # whose deployment is not operated by Factory.
@@ -7926,7 +7930,9 @@ def poll_delivery_state(conf, state, now=None):
                 # local transaction without a new broker call.
                 _complete_generation(conf, state, generation)
                 response = None
-            elif generation["phase"] == "reserved" and current_time >= generation.get("next_retry_at", 0):
+            elif (generation["phase"] == "reserved"
+                  and current_time >= max(generation.get("next_retry_at", 0),
+                                          generation.get("launch_not_before", 0))):
                 response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST", generation["id"],
                     {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
             elif generation["phase"] in ("launching", "running"):
@@ -8010,6 +8016,9 @@ def poll_delivery_state(conf, state, now=None):
                 "adapter": source.get("adapter", active["adapter"]),
                 "commit_sha": source.get("commit_sha", active["commit_sha"]), "waits": pending,
                 "merge_receipts": [w["merge_receipt"] for w in pending.values()],
+                "launch_not_before": (current_time + max(
+                    0, float(conf.get("release_batch_seconds", 0) or 0))
+                    if conf.get("release_batch_seconds") else 0),
                 "reserved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))}
             target["current_generation"] = gid
         # This also makes a just-created N+1 survive before its first POST.
@@ -8021,7 +8030,9 @@ def deploy_after_merge(conf, repo_identity, state=None, commit_sha="", wait=None
     """Create/join a generation; it never launches raw release commands."""
     state = state if state is not None else {}
     wait = wait or {"task_id": "manual-" + uuid.uuid4().hex, "base": "", "merge_receipt": {}}
-    generation = _delivery_generation(state, repo_identity, commit_sha, wait, now)
+    generation = _delivery_generation(
+        state, repo_identity, commit_sha, wait, now,
+        batch_seconds=conf.get("release_batch_seconds", 0))
     if generation:
         save(STATE_PATH, state)
         if generation["phase"] == "completed":
