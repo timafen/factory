@@ -1,19 +1,19 @@
-Implementation commit: 455578a90a4762848c8929f79488babd55af8684 — штатный релиз публикует постоянное browser-поколение и сохраняет ежедневный PDF после удаления checkout.
+Implementation commit: 70dcf6dcbe8ec22519cf10974409f501dc2a6873 — служебный пользователь получает доступ к постоянному Chromium runtime, а сбой до journal возвращает live-state.
 
 # CARD-0166: ежедневный PDF после чистого штатного релиза
 
 ## HEAD
 
 Status: Implemented — awaiting Review
-Branch: `factory/4b9a661a-bef-7825bbe2-aec`
-Implementation commit: `455578a90a4762848c8929f79488babd55af8684`
-What changed: релиз готовит Playwright/Chromium и PDF smoke до остановки служб,
-хранит runtime в поколении и атомарно выбирает его через `browser-current`.
-Renderer/capture больше не читают checkout; поздний rollback возвращает browser state.
-Evidence: `bash ops/test-fx-factory-release.sh` → PASS; clean fixture после удаления
-checkout получила `%PDF-`, а installer failure не публиковала runtime и не трогала службы.
-Evidence: installer → PASS; Node 5/5; Go target → PASS; web tests 180/180; build → PASS.
-One next action: провести Review коммита реализации и release/rollback-контракта.
+Branch: `factory/77de079d-588-9c3552f3-2ed`
+Implementation commit: `70dcf6dcbe8ec22519cf10974409f501dc2a6873`
+What changed: generation parents и Chromium payload доступны группе служебного
+пользователя без права записи; installer проверен отдельной service identity.
+Cleanup возвращает browser live-state после любого сбоя между installer и prepared journal.
+Evidence: `bash ops/test-install-server-browser.sh` → PASS; отдельная service identity
+загружает Playwright из постоянного payload. `bash ops/test-fx-factory-release.sh` → PASS;
+сбой после browser smoke восстанавливает live-state, не создаёт journal и не трогает службы.
+One next action: провести Review доступа service user и раннего rollback-контракта.
 
 ## LOG
 
@@ -41,3 +41,12 @@ release generation, а сохранённый live-state возвращает la
 откате. Production renderer/capture используют только `FACTORY_BROWSER_PAYLOAD`.
 Проверки: release fixture — PASS; installer — PASS; Node — 5/5; Go target — PASS;
 web — 180/180 и production build PASS.
+
+### 2026-08-14 — Implement
+
+Исправлены замечания Review: runtime Chromium и все его родители открыты группе
+служебного пользователя только на чтение/проход, а отдельная service identity
+загружает Playwright из опубликованного поколения. Cleanup вооружён сразу после
+installer и возвращает browser live-state при сбое до `prepared` journal.
+Проверки: `bash ops/test-install-server-browser.sh` — PASS;
+`bash ops/test-fx-factory-release.sh` — PASS, включая сбой после browser smoke.
