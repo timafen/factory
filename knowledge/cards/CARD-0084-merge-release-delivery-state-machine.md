@@ -2,15 +2,24 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented — ready for review.
+- Branch: `factory/b19a4f67-b53-291e995a-db6`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+Implementation commit: 146a53e04b81ea54fe6505e34b4b86dbfec66a98 — broker восстанавливает terminal-статус release wrapper после реального restart PID.
+- What changed: после restart незавершённый delivery остаётся running и не запускает driver повторно; GET читает устойчивый terminal marker wrapper.
+- What changed: process-тест останавливает PID broker во время blocking wrapper, поднимает новый PID с тем же state dir и подтверждает один physical release.
+- Evidence: `go test ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS.
+- Next action: Review process-restart recovery before merge.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Broker теперь берёт terminal-истину из устойчивого status marker release wrapper,
+а не объявляет `launching`/`running` выпуск failed при новом PID. Добавлен
+process-интеграционный сценарий: broker убит во время wrapper, новый broker
+завершает ту же delivery без второго physical запуска. Целевые Go и 11 Pilot
+process-сценариев прошли.
 
 ### 2026-08-12 — Verify
 
