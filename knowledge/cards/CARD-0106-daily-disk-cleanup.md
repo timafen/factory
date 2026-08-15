@@ -1,12 +1,12 @@
 # CARD-0106 — Безопасная ежедневная уборка диска Factory
 
-Implementation commit: 5984acbd488fbc9cf91220af9564ae19ae8e3628 — активные прогоны защищены путём из worker TOML, а janitor получил необходимые ограниченные права.
+Implementation commit: 3d72756daa540086846e98a650f7fa76d06a2b96 — активные прогоны защищены путём из worker TOML, а janitor получил необходимые ограниченные права.
 
 ## HEAD
 
 - Status: Implemented
 - Branch: `factory/3f8960f6-1e1-b0b3b189-af9`
-- Implementation commit: `5984acbd488fbc9cf91220af9564ae19ae8e3628`
+- Implementation commit: `3d72756daa540086846e98a650f7fa76d06a2b96`
 - What changed: активная рабочая область определяется по `data_directory` из worker TOML; при неизвестном пути ежедневная очистка безопасно останавливается. Service запускает janitor с root и ограниченной записью в нужные каталоги.
 - Evidence: `bash -n ops/factory-janitor.sh ops/test-factory-janitor.sh && bash ops/test-factory-janitor.sh` → 8 сценариев PASS; `just build && just ui-build 0` → PASS.
 - Next action: установить и включить `factory-janitor.timer` на целевом хосте после проверки оператором.
