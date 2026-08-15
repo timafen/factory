@@ -1,19 +1,19 @@
 # CARD-0099 — Журнал вливания хранит круги и участие владельца
 
-Implementation commit: 77c5e0bb3d4e6a0d50d31cee8f65927a47f0b781 — журнал фиксирует круги и источник вливания до внешнего эффекта.
+Implementation commit: 70d07db9901fec4bdcf63851bfc30d1e181ec9ae — журнал считает заменённые попытки текущего поколения и исключает завершённые поколения.
 
 ## HEAD
 
-- Status: Implement + Test complete — ready for Review.
-- Branch: `factory/e30931f9-b61-ba3728c8-081`.
-- Implementation commit: `77c5e0bb3d4e6a0d50d31cee8f65927a47f0b781`.
+- Status: Implement + Test complete after Review correction — ready for Review.
+- Branch: `factory/24b53552-ddd-674ca24f-de5`.
+- Implementation commit: `70d07db9901fec4bdcf63851bfc30d1e181ec9ae`.
 - What changed: новые merge receipts сохраняют `rounds`, `actor` и nullable
   `actor_id`; crash-recovery не меняет заранее зафиксированные значения.
-- What changed: efficiency использует сохранённые круги, а legacy-строки
-  продолжают рассчитываться по доступной истории без перезаписи журнала.
-- Evidence: 4 целевых Python-теста и целевой Go-тест — OK; 313 Python-тестов,
-  `go test -timeout 5m ./...` и сборка трёх бинарников — OK.
-- Next action: провести Review реализации и контракта обратной совместимости.
+- What changed: `rounds` включает заменённые попытки текущего `work_id`, но не
+  одноимённые задачи завершённых поколений; retry limit остался без изменений.
+- Evidence: 4 целевых Python-теста — OK, включая заполненный
+  `archived_attempts` и изоляцию предыдущего поколения.
+- Next action: повторно провести Review исправленного подсчёта кругов.
 
 ## LOG
 
@@ -39,3 +39,10 @@ head. Выбран контракт, утверждённый владельце
 участника в merge journal; отдельная регрессия подтверждает перенос этих полей
 в durable delivery receipt. Четыре целевых Python-сценария и целевой Go-тест
 прошли; общий набор из 313 Python-тестов, весь Go-набор и сборка также успешны.
+
+### 2026-08-15 — Implement
+
+Коммит `70d07db9901fec4bdcf63851bfc30d1e181ec9ae` отделяет фактические круги
+вливания от лимита повторов: заменённые попытки текущего `work_id` учитываются,
+а одноимённые задачи предыдущего поколения не учитываются. Регрессионный тест
+с заполненным `archived_attempts` и три смежных целевых теста прошли.
