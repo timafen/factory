@@ -5405,6 +5405,16 @@ def choose_delivery_title(result, repo_identity, implementation_commit,
     return validate_delivery_title(message.splitlines()[0])
 
 
+def delivery_title_for_work(merge_intents, work_id):
+    """Reuse a result title only for the same explicitly identified work."""
+    if not work_id:
+        return ""
+    return next((intent.get("delivery_title", "")
+                 for intent in (merge_intents or {}).values()
+                 if intent.get("delivery_title")
+                 and intent.get("work_id") == work_id), "")
+
+
 def implementation_artifact(base):
     """Return the durable, generation-scoped implementation branch and head."""
     works = load(WORKS_PATH, {}) or {}
@@ -8495,12 +8505,9 @@ def cycle(conf, state):
                             attempts_so_far=0, branch=branch)
                         continue
                     implementation = implementation_artifact(base_title(title))
-                    work_id = task_work_id(t)
-                    inherited_title = next((old.get("delivery_title", "")
-                        for old in state.get("merge_intents", {}).values()
-                        if old.get("delivery_title")
-                        and ((work_id and old.get("work_id") == work_id)
-                             or old.get("base") == base_title(title))), "")
+                    work_id = t.get("work_id") or ""
+                    inherited_title = delivery_title_for_work(
+                        state.get("merge_intents", {}), work_id)
                     delivery_title, title_error = choose_delivery_title(
                         result, repo_identity, implementation.get("approved_commit", ""),
                         inherited_title)
