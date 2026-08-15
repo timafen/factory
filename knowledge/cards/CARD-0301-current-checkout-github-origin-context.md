@@ -5,14 +5,14 @@ Implementation commit: fee29b0c65cc12058cc8c08d6ad87855367bdec8 — worker пе�
 ## HEAD
 
 Status: Implemented and tested
-Branch: `factory/ece50a12-217-9a78997e-626`
+Branch: `factory/9565bb32-52f-2addc33a-56c`
 Specification: `knowledge/specs/current-checkout-github-origin-context.md`
 What changed: зафиксирован контракт для checkout с `origin=timafen/factory` и
 `upstream=owainlewis/factory`; существующая реализация передаёт в runtime
 `GH_REPO=timafen/factory` из доверенной identity и отсекает чужое значение.
-Evidence: `go test -count=1 ./internal/worker` → PASS; `web: npx tsc -p
-tsconfig.app.json --noEmit` → PASS.
-One next action: на Verify выполнить полный пакет `go test -count=1 ./internal/worker`.
+Evidence: `go test -count=1 ./internal/worker` → PASS; `go build ./...` → PASS;
+`web: npm run typecheck` → PASS.
+One next action: на Verify подтвердить свежую базу, список файлов и доставку ветки.
 
 ## LOG
 
@@ -44,3 +44,10 @@ GitHub.com-репозиторий задачи добавляется единс
 Поставка перенесена на свежий `origin/main` в ветку `factory/ece50a12-217-9a78997e-626`.
 Полный пакет `go test -count=1 ./internal/worker` и обязательная проверка TypeScript
 `npx tsc -p tsconfig.app.json --noEmit` завершились успешно.
+
+### 2026-08-15 — Implement
+
+Работа восстановлена на назначенной ветке `factory/9565bb32-52f-2addc33a-56c` от
+свежего `origin/main`; продуктовый коммит с политикой `GH_REPO` уже является её
+предком, поэтому код повторно не дублировался. Целевые проверки, полный пакет
+worker, `go build ./...` и `web: npm run typecheck` завершились успешно.
