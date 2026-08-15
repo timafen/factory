@@ -2,20 +2,20 @@
 
 ## HEAD
 
-Status: In progress — фильтр решений владельца и русский detail-экран готовы; десять release-прогонов не начаты.
+Status: In progress — интерфейсная часть готова; реальные десять последовательных выпусков ожидают готовых работ и не имитируются.
 
-Branch: `factory/769ab244-93c-5d82e3e6-29d`
+Branch: `factory/bb24d1a8-e4b-b6826709-9e2`
 
-Implementation commit: a7981373f2e907736d4ebec9f101d79f267daacd — production-сборка содержит фильтр решений владельца и русский detail-экран.
+Implementation commit: 59452cade0561b9db3752699bb54663ac5ebf5ce — production-сборка содержит фильтр решений владельца и русский detail-экран.
 
 What changed:
 
 - Фильтр «Нужно решение владельца» использует тот же итог работы, что и секции: только открытые вопросы и тупики.
 - Detail-задачи, действия удаления и browser-контракт используют русские подписи, включая «Завершено».
 
-Evidence: `web/src/WorkView.test.tsx` 8/8; TypeScript, lint и production web build → успешно.
+Evidence: `format.test.ts`, `WorkView.test.tsx`, `App.test.tsx` → 90/90; TypeScript, lint и production web build → успешно.
 
-Next action: реализовать хронологию/lead time и безопасное копирование диагностики, затем выполнить десять последовательных merge/release-прогонов.
+Next action: дождаться готовой следующей работы, провести её штатно через merge и `fx factory release`, затем записать первый из десяти подтверждённых прогонов.
 
 ## LOG
 
@@ -81,3 +81,12 @@ TypeScript, lint, production build и `go build ./...` прошли успешн
 Русифицированы detail-задачи и destructive-действия; release-blocking browser
 ожидание переведено с `Succeeded` на «Завершено». Проверены `WorkView.test.tsx`
 (8/8), TypeScript, lint и production web build.
+
+### 2026-08-15 — Implement
+
+Владелец подтвердил: приёмку нельзя завершать частичными исправлениями или
+фикстурами. На момент проверки в очереди нет десяти готовых работ для реальных
+последовательных merge/release-прогонов, поэтому карточка остаётся открытой и
+будет накапливать только подтверждённые штатные выпуски. После перебазирования
+на актуальный `main` повторены целевые UI-тесты (90/90), TypeScript, lint и
+production web build.
