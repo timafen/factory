@@ -8296,6 +8296,7 @@ pilot.save(pilot.STATE_PATH, state)
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         self.assertTrue(target["next_requested"])
         with mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}), \
                 mock.patch.object(pilot, "mark_final"), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox):
@@ -8407,7 +8408,8 @@ pilot.save(pilot.STATE_PATH, state)
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
                 mock.patch.object(pilot, "mark_final"), \
-                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}):
             pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, wait)
             pilot.poll_delivery_state({}, state)
             restored = pilot.load(self.state_path, {})
