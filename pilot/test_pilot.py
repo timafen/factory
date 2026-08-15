@@ -3852,6 +3852,78 @@ class MergeConflictRecoveryTests(unittest.TestCase):
         self.assertEqual(state["merge_intents"]["verify-1"]["phase"], "conflict")
         self.assertIn("merge conflicts", state["merge_intents"]["verify-1"]["merge_error"])
 
+    def test_second_conflict_closes_current_pr_when_same_work_was_merged(self):
+        """A second conflict must not leave a duplicate PR after equivalent delivery."""
+        state = {"merge_intents": {"verify-1": dict(
+            self.intent, work_id="work-1", base_branch="main", conflict_count=1)}}
+        current = {"number": 11, "state": "open", "body": "<!-- factory-work-id:work-1 -->",
+                   "head": {"ref": "factory/topic"}, "base": {"ref": "main"}}
+        merged = {"number": 12, "merged_at": "2026-08-15T12:00:00Z",
+                  "body": "<!-- factory-work-id:work-1 -->", "html_url": "https://example/pr/12",
+                  "base": {"ref": "main"}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "state=open&head=" in args[-1]:
+                return [current]
+            if "state=all&per_page=100" in args[-1]:
+                return [current, merged]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=False), \
+                mock.patch.object(pilot, "gh_merge", return_value=(False, "merge conflicts")), \
+                mock.patch.object(pilot, "gh_close_pr", return_value=(True, "closed")) as close:
+            pilot.recover_merge_intents({}, state)
+            pilot.recover_merge_intents({}, state)
+
+        intent = state["merge_intents"]["verify-1"]
+        close.assert_called_once_with("acme/repo", 11, 12)
+        self.assertEqual(intent["phase"], "superseded")
+        self.assertEqual(intent["superseded_by"], 12)
+        self.assertIn("same work already merged", intent["supersede_reason"])
+
+    def test_failed_stale_pr_close_remains_recoverable(self):
+        """A GitHub close failure must leave the conflict eligible for repair."""
+        state = {"merge_intents": {"verify-1": dict(
+            self.intent, work_id="work-1", base_branch="main", conflict_count=1)}}
+        current = {"number": 11, "state": "open", "body": "<!-- factory-work-id:work-1 -->",
+                   "head": {"ref": "factory/topic"}, "base": {"ref": "main"}}
+        merged = {"number": 12, "merged_at": "2026-08-15T12:00:00Z",
+                  "body": "<!-- factory-work-id:work-1 -->", "html_url": "https://example/pr/12",
+                  "base": {"ref": "main"}}
+
+        def github(args):
+            if "/branches/" in args[-1]:
+                return {"commit": {"sha": "a" * 40}}
+            if "state=open&head=" in args[-1]:
+                return [current]
+            if "state=all&per_page=100" in args[-1]:
+                return [current, merged]
+            raise AssertionError(args)
+
+        with mock.patch.object(pilot, "STATE_PATH", self.state_path), \
+                mock.patch.object(pilot, "gh_json", side_effect=github), \
+                mock.patch.object(pilot, "_verified_merge_result", return_value=False), \
+                mock.patch.object(pilot, "gh_merge", return_value=(False, "merge conflicts")), \
+                mock.patch.object(pilot, "gh_close_pr", return_value=(False, "GitHub unavailable")), \
+                mock.patch.object(pilot, "stage_worker", return_value="worker"), \
+                mock.patch.object(
+                    pilot, "create_child_task",
+                    return_value={"task": {"id": "repair-after-close-failure"}}) as create:
+            pilot.recover_merge_intents({}, state)
+            intent = state["merge_intents"]["verify-1"]
+            self.assertEqual(intent["phase"], "conflict")
+            self.assertNotIn("superseded_by", intent)
+            self.assertEqual(pilot.resume_merge_conflicts(
+                self.conf, state, [self.parent], self.workflows, self.workers), 1)
+
+        create.assert_called_once()
+        self.assertEqual(intent["phase"], "repairing")
+        self.assertEqual(intent["repair_task_id"], "repair-after-close-failure")
+
     def test_force_push_before_recovery_blocks_merge_and_delivery(self):
         state = {"merge_intents": {"verify-1": dict(self.intent)}}
 
