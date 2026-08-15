@@ -1,18 +1,26 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07 — PDF ждёт готовности обязательных снимков и автоматически собирается после рестарта
+Implementation commit: a16ed9f2a152f014a62307550b3e628b3dfdf99c — штатный релиз поставляет постоянный browser runtime для ежедневного PDF
 
 ## HEAD
 
-- Status: IMPLEMENTED / VERIFY PASS
-- Branch: `factory/e8d83036-21a-49f5b4f9-956`
-- Implementation commit: `7bebf0ec418cb50bb65ecd7c2d69a0b63a556d07`
-- What changed: отчёт не переходит в `ready`, пока обязательные снимки «до» и «после» не готовы и не прошли проверку файла; claim возвращается в повторяемый `pending`.
-- What changed: интеграционный тест воспроизводит запуск report-worker до capture-worker и рестарт сервиса, затем проверяет один итоговый PDF с обеими PNG-вставками.
-- Evidence: целевая гонка 10/10; Go `./...`; UI 179/179; Node PDF 4/4; installer, lint, typecheck, web/Go build → PASS.
-- One next action: повторить Review поставки.
+- Status: Implemented
+- Branch: `factory/ed2c5b8a-438-5fbe8993-4f1`
+- Implementation commit: `a16ed9f2a152f014a62307550b3e628b3dfdf99c` — штатный релиз создаёт постоянное поколение browser runtime и передаёт его renderer-у.
+- What changed: PDF renderer и capture используют изолированный launcher и постоянный Playwright payload, поэтому удалённый checkout и отсутствие ручного `npm install` в `/opt/factory` не влияют на ежедневный отчёт.
+- What changed: release перед заменой служб ставит и проверяет Chromium из HOME пользователя Factory, публикует runtime атомарно и возвращает его при откате.
+- Evidence: `go test ./internal/controlplane`, `cd web && node --test report/report.test.mjs`, `bash -n ops/fx-factory-release`, `bash ops/test-fx-factory-release.sh` → PASS.
+- One next action: выполнить Review поставки на ветке.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Штатный релиз теперь сам готовит постоянное поколение Playwright/Chromium до
+перезапуска служб; renderer получает только этот payload и sandbox launcher,
+поэтому ежедневный PDF не зависит от checkout или ручной установки зависимостей
+в `/opt/factory`. `go test ./internal/controlplane`, Node PDF-тест, shell syntax
+и `bash ops/test-fx-factory-release.sh` завершились PASS.
 
 ### 2026-08-13 — Implement
 
