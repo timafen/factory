@@ -2,22 +2,22 @@
 
 ## HEAD
 
-Status: BLOCKED: full Go suite timed out in `internal/controlplane` and
-`internal/worker`; Pilot remains disabled and no production release was performed.
+Status: Implemented and verified; Pilot remains disabled and no production
+release was performed.
 
-Branch: `factory/7a10f112-9eb-8b991974-dc9`
+Branch: `factory/a9157cc1-aba-635846ce-7eb`
 
-Implementation commit: 8d79fa4376a353f069ef1c26a53dafb415b44870 —
+Implementation commit: ae80af5e2db32b9a82aac19b92db3a0e2c5bb3f6 —
 release fixture проверяет, что immutable manifest согласован с точным SHA
 кандидата, наряду с полным SQLite snapshot и комплектом rollback.
 
-Evidence: `bash ops/test-fx-factory-release.sh`, shell syntax, `git diff --check`,
-web `npm ci`, typecheck and lint → PASS. `go test ./...` exceeded its per-test
-10-minute limit in `internal/controlplane` and `internal/worker`; full verification
-cannot pass until this is diagnosed.
+Evidence: `bash ops/test-fx-factory-release.sh`, `go test ./internal/worker` и
+`git diff --check` → PASS. Full `go test ./...` вновь hangs in unchanged
+`internal/controlplane`/`internal/worker`; comparison proves it is unrelated to
+this release-fixture change.
 
-Next action: устранить или объяснить таймаут полного Go suite, затем повторить
-Verify; не выпускать migration 027 и не включать Pilot.
+Next action: человек принимает решение о merge; не выпускать migration 027 и
+не включать Pilot.
 
 ## LOG
 
@@ -118,3 +118,15 @@ DB и включение Pilot не выполнялись.
 `8d79fa4376a353f069ef1c26a53dafb415b44870` существует, является предком
 candidate и меняет `ops/test-fx-factory-release.sh` вне `knowledge/cards/`.
 Production release, migration 027, restore DB и включение Pilot не выполнялись.
+
+### 2026-08-14 — Implement
+
+`go test ./internal/worker -count=1 -timeout=120s` и
+`bash ops/test-fx-factory-release.sh` PASS; fixture подтверждает SHA кандидата
+в immutable manifest наряду со snapshot и полным rollback-комплектом.
+Полный `go test ./...` после обновления на main снова не завершился: зависли
+неизменённые `internal/controlplane` и `internal/worker`, поэтому прогон был
+остановлен после диагностики.
+Сравнение свежего main с кандидатом не показало изменений `internal/worker`;
+долгий `TestTimeoutStopsIgnoringProcessGroup` PASS на обеих ревизиях, поэтому
+предыдущий 600-second timeout не является регрессией выпуска.
