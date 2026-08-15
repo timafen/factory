@@ -61,6 +61,12 @@
   после нормализации `origin`.
 - В тесте проверить URL `origin`, выбранные `BaseBranch` и `BaseCommit`, а также
   успешное завершение направленной работы.
+- Регрессия изменяет уже существующий fake `gh` в
+  `TestZeroRepositoryWorkerAcquiresCentrallyManagedGitHubRepository`: после
+  clone он оставляет рабочий `upstream`, но задаёт `origin` чужим URL. Новый
+  тест должен быть красным до нормализации и пройти только если cache получает
+  `https://github.com/example/cattle.git`; подмена URL через `insteadOf` не
+  считается доказательством выбора `origin`.
 - Отдельно покрыть ошибку `git remote add/set-url`, если изменение вынесено в
   helper.
 - Обязательная команда: `go test ./internal/worker -run '^TestZeroRepositoryWorkerAcquiresCentrallyManagedGitHubRepository$'`.
