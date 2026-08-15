@@ -6317,26 +6317,39 @@ class AdaptivePollingTests(unittest.TestCase):
 
     def test_deferred_terminal_handoff_does_not_starve_next_terminal(self):
         conf = {
-            "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
+            "stages": [
+                {"workflow": "Triage"},
+                {"workflow": "Specification"},
+                {"workflow": "Implement + Test"},
+            ],
             "poll_seconds": 30,
         }
         state = {"processed": []}
-        tasks = [{
-            "id": f"done-{number}",
-            "title": f"[auto] [1/2 Triage] Work {number}",
-            "state": "succeeded", "created_at": f"2026-08-10T10:0{number}:00Z",
-            "repository_id": "repo-id",
-        } for number in range(2)]
+        tasks = [
+            {
+                "id": "triage-done",
+                "title": "[auto] [1/3 Triage] Earlier stage",
+                "state": "succeeded", "created_at": "2026-08-10T10:01:00Z",
+                "repository_id": "repo-id",
+            },
+            {
+                "id": "spec-done",
+                "title": "[auto] [2/3 Specification] Later stage",
+                "state": "succeeded", "created_at": "2026-08-10T10:00:00Z",
+                "repository_id": "repo-id",
+            },
+        ]
         details_read = []
 
         def fake_api(path, body=None):
             if path == "/tasks?limit=100":
                 return {"tasks": list(tasks)}
-            if path.startswith("/tasks/done-"):
+            if path in ("/tasks/triage-done", "/tasks/spec-done"):
                 details_read.append(path)
+                stage = "Specification" if path.endswith("spec-done") else "Triage"
                 return {
                     "task": {"repository_id": "repo-id"},
-                    "workflow": {"title": "Triage"},
+                    "workflow": {"title": stage},
                     "context": "",
                     "attempts": [{"result": "READY"}],
                 }
@@ -6350,10 +6363,20 @@ class AdaptivePollingTests(unittest.TestCase):
                     "id": "repo-id", "remote_identity": "github.com/acme/repo",
                 }]}
             if path == "/workflows":
-                return {"workflows": [{
-                    "id": "spec", "enabled": True,
-                    "current_revision": {"id": "rev-spec", "title": "Specification"},
-                }]}
+                return {"workflows": [
+                    {
+                        "id": "spec", "enabled": True,
+                        "current_revision": {
+                            "id": "rev-spec", "title": "Specification",
+                        },
+                    },
+                    {
+                        "id": "implement", "enabled": True,
+                        "current_revision": {
+                            "id": "rev-implement", "title": "Implement + Test",
+                        },
+                    },
+                ]}
             raise AssertionError(path)
 
         noops = (
@@ -6391,8 +6414,8 @@ class AdaptivePollingTests(unittest.TestCase):
             pilot.cycle(conf, state)
             pilot.cycle(conf, state)
 
-        self.assertEqual(details_read, ["/tasks/done-0", "/tasks/done-1"])
-        self.assertEqual(state["terminal_cursor"], "done-1")
+        self.assertEqual(details_read, ["/tasks/spec-done", "/tasks/triage-done"])
+        self.assertEqual(state["terminal_cursor"], "triage-done")
 
 
 class BudgetGuardTests(unittest.TestCase):
