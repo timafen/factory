@@ -115,6 +115,31 @@ PY
   /usr/bin/git -C "$FIXTURE_TREE" archive --format=tar HEAD | /bin/tar -x -C "$case_dir/repo"
   /bin/cp "$RELEASE" "$case_dir/repo/ops/fx-factory-release"
   /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
+  cat >"$case_dir/repo/ops/install-server-browser.sh" <<'BROWSER'
+#!/bin/bash
+echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
+[ "$TEST_MODE" != browser-install-fail ] || exit 1
+runtime=${FACTORY_BROWSER_RUNTIME:?missing browser runtime target}
+mkdir -p "$runtime/web/node_modules/playwright" "$runtime/internal/controlplane/report_scripts" "$runtime/ops"
+printf '{"name":"factory-release-browser-fixture"}\n' >"$runtime/web/package.json"
+printf '{"lockfileVersion":3}\n' >"$runtime/web/package-lock.json"
+printf '{"name":"playwright","main":"index.cjs"}\n' >"$runtime/web/node_modules/playwright/package.json"
+cat >"$runtime/web/node_modules/playwright/index.cjs" <<'JS'
+const fs = require("node:fs");
+exports.chromium = { launch: async options => {
+  if (!options.chromiumSandbox || !options.executablePath.startsWith("/")) throw new Error("unsafe fixture launch");
+  return { newPage: async () => ({ route: async () => {}, setContent: async () => {}, pdf: async ({path}) => fs.writeFileSync(path, "%PDF-release-fixture") }), close: async () => {} };
+} };
+JS
+/bin/cp "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/render.mjs" \
+  "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/capture.mjs" \
+  "$runtime/internal/controlplane/report_scripts/"
+/bin/cp "$TEST_RELEASE_SOURCE/ops/install-server-browser.sh" "$runtime/ops/"
+chmod 755 "$runtime/ops/install-server-browser.sh"
+printf '{"passed_at":"2026-08-14T00:00:00Z","browser_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' \
+  >"$runtime/browser-readiness.json"
+BROWSER
+  chmod +x "$case_dir/repo/ops/install-server-browser.sh"
   if [ "$mode" = trusted-gate-real-race ]; then
     /bin/cp "$SCRIPT_DIR/test-fx-factory-release.sh" "$case_dir/repo/ops/test-fx-factory-release.sh"
   else
@@ -450,7 +475,28 @@ if [[ "${1:-}" = */ops/install-factory-control.sh ]]; then
 fi
 if [[ "${1:-}" = */ops/install-server-browser.sh ]]; then
   echo "bash ops/install-server-browser.sh" >>"$TEST_GATES"
-  [ "$TEST_MODE" != browser-install-fail ]
+  [ "$TEST_MODE" != browser-install-fail ] || exit 1
+  runtime=${FACTORY_BROWSER_RUNTIME:?missing browser runtime target}
+  mkdir -p "$runtime/web/node_modules/playwright" \
+    "$runtime/internal/controlplane/report_scripts" "$runtime/ops"
+  printf '{"name":"factory-release-browser-fixture"}\n' >"$runtime/web/package.json"
+  printf '{"lockfileVersion":3}\n' >"$runtime/web/package-lock.json"
+  printf '{"name":"playwright","main":"index.cjs"}\n' \
+    >"$runtime/web/node_modules/playwright/package.json"
+  cat >"$runtime/web/node_modules/playwright/index.cjs" <<'JS'
+const fs = require("node:fs");
+exports.chromium = { launch: async options => {
+  if (!options.chromiumSandbox || !options.executablePath.startsWith("/")) throw new Error("unsafe fixture launch");
+  return { newPage: async () => ({ route: async () => {}, setContent: async () => {}, pdf: async ({path}) => fs.writeFileSync(path, "%PDF-release-fixture") }), close: async () => {} };
+} };
+JS
+  /bin/cp "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/render.mjs" \
+    "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/capture.mjs" \
+    "$runtime/internal/controlplane/report_scripts/"
+  /bin/cp "$TEST_RELEASE_SOURCE/ops/install-server-browser.sh" "$runtime/ops/"
+  chmod 755 "$runtime/ops/install-server-browser.sh"
+  printf '{"passed_at":"2026-08-14T00:00:00Z","browser_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' \
+    >"$runtime/browser-readiness.json"
   exit
 fi
 if [[ "${1:-}" = */ops/provision-codex-auth.sh ]]; then
@@ -955,6 +1001,20 @@ assert_file "$success/install/factory-release-broker" '#!/bin/bash'
 assert_file "$success/install/factory-release-broker" '# candidate-broker'
 current_generation=$(readlink -f "$success/releases/current")
 previous_generation=$(readlink -f "$success/releases/previous")
+[ "$(readlink -f "$success/releases/browser-current")" = "$current_generation/browser" ] \
+  || fail "release не опубликовал browser runtime своего поколения"
+[ -f "$current_generation/browser/browser-readiness.json" ] \
+  || fail "опубликованный browser runtime не содержит readiness"
+clean_runtime_cwd="$success/checkout-removed"
+mkdir "$clean_runtime_cwd"
+clean_pdf="$success/daily.pdf"
+printf '<h1>Ежедневный отчёт</h1>' | (
+  cd "$clean_runtime_cwd" && FACTORY_BROWSER_PAYLOAD="$success/releases/browser-current" \
+    FACTORY_BROWSER_LAUNCHER="$success/absolute-browser-launcher" \
+    /usr/bin/node "$success/releases/browser-current/internal/controlplane/report_scripts/render.mjs" "$clean_pdf"
+) || fail "renderer зависит от удалённого build checkout"
+[ "$(head -c 5 "$clean_pdf")" = '%PDF-' ] \
+  || fail "постоянный browser runtime не создал ежедневный PDF"
 [ -f "$current_generation/manifest.json" ] && [ -f "$current_generation/manifest.sha256" ] \
   || fail "committed generation has no immutable manifest"
 [ -f "$current_generation/database.sqlite3" ] && [ -d "$previous_generation" ] \
@@ -966,6 +1026,9 @@ assert hashlib.sha256(raw).hexdigest()==open(r+'/manifest.sha256').read().strip(
 names={x['source'] for x in d['artifacts']}
 assert {'payload/factory-server','payload/factory-worker','payload/factory-release-broker','payload/fx','payload/fx-factory-release','payload/pilot.py','payload/context.md','payload/intake-app.py','payload/intake-plan.py','release-info.json'} <= names
 assert d['database']['sha256']==hashlib.sha256(open(r+'/database.sqlite3','rb').read()).hexdigest()
+assert d['browser']['payload']=='browser'
+assert d['browser']['lock_sha256']==hashlib.sha256(open(r+'/browser/web/package-lock.json','rb').read()).hexdigest()
+assert d['browser']['readiness_sha256']==hashlib.sha256(open(r+'/browser/browser-readiness.json','rb').read()).hexdigest()
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
 ! grep -Fx 'stop factory-release-broker.service' "$success/events" >/dev/null \
@@ -980,6 +1043,18 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+browser_failed="$temporary/browser-install-failure"
+make_fixture "$browser_failed" browser-install-fail
+status=0
+run_release "$browser_failed" browser-install-fail || status=$?
+[ "$status" -eq 4 ] || fail "browser installer failure returned $status instead of 4"
+[ ! -e "$browser_failed/releases/browser-current" ] \
+  || fail "browser installer failure published an unready runtime"
+! grep -E '^(stop|start) factory-(server|worker)' "$browser_failed/events" >/dev/null \
+  || fail "browser installer failure stopped or started running services"
+grep -F 'browser runtime не готов — работающий выпуск не изменён' "$browser_failed/output" >/dev/null \
+  || fail "browser installer failure did not explain the safe abort"
 
 fresh_snapshot="$temporary/installed-server-no-backup"
 make_fixture "$fresh_snapshot" installed-server-no-backup

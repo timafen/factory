@@ -19,7 +19,9 @@ resolve_path() {
 
 SCRIPT=$(resolve_path "${BASH_SOURCE[0]}")
 ROOT=$(cd "$(dirname "$SCRIPT")/.." && pwd -P)
-PAYLOAD=${FACTORY_BROWSER_SHARE:-$ROOT}
+SOURCE=${FACTORY_BROWSER_SHARE:-$ROOT}
+RUNTIME=${FACTORY_BROWSER_RUNTIME:-$SOURCE}
+PAYLOAD=$RUNTIME
 LIBEXEC=${FACTORY_BROWSER_LIBEXEC:-/usr/local/libexec/factory}
 FACTORY_USER=${FACTORY_USER:-factory}
 LAUNCHER=$LIBEXEC/factory-browser-sandbox
@@ -30,8 +32,11 @@ SUDOERS=${FACTORY_BROWSER_SUDOERS:-/etc/sudoers.d/factory-browser}
 APPARMOR=${FACTORY_BROWSER_APPARMOR:-/etc/apparmor.d/factory-browser}
 DATA_HOME=${FACTORY_DATA_HOME:-/opt/factory-data}
 READINESS_MARKER=${FACTORY_BROWSER_READINESS_MARKER:-$DATA_HOME/pilot/browser-readiness.json}
+PERSISTENT_BACKUP=${FACTORY_BROWSER_BACKUP_DIR:-}
+persistent_backup_created=0
 backup=
 marker_tmp=
+runtime_build=
 changed=0
 
 sha256() { sha256sum "$1" | awk '{print $1}'; }
@@ -48,7 +53,7 @@ rollback() {
     # The replacement profile may already be active when the live smoke fails.
     # Remove it before restoring the previous on-disk profile.
     apparmor_parser -R "$APPARMOR" >/dev/null 2>&1 || true
-    for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$SUDOERS" "$APPARMOR"; do
+    for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR" "$READINESS_MARKER"; do
       name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
       rm -f -- "$target"
       rm -f -- "$target.new"
@@ -61,6 +66,8 @@ rollback() {
   fi
   [ -z "$marker_tmp" ] || rm -f -- "$marker_tmp"
   [ -z "$backup" ] || rm -rf -- "$backup"
+  [ -z "$runtime_build" ] || rm -rf -- "$runtime_build"
+  [ "$persistent_backup_created" = 0 ] || rm -rf -- "$PERSISTENT_BACKUP"
   exit "$status"
 }
 trap rollback ERR
@@ -69,22 +76,57 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "run this installer as root" >&2
   exit 1
 fi
+
+if [ "${1:-}" = --restore-live-state ]; then
+  restore_dir=${2:-}
+  [ -n "$restore_dir" ] && [ -f "$restore_dir/backup.ready" ] \
+    || { echo "verified browser live-state backup is required" >&2; exit 1; }
+  for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR" "$READINESS_MARKER"; do
+    name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
+    rm -f -- "$target" "$target.new"
+    [ ! -e "$restore_dir/$name" ] && [ ! -L "$restore_dir/$name" ] \
+      || { mkdir -p "$(dirname "$target")" && cp -a -- "$restore_dir/$name" "$target"; }
+  done
+  [ ! -f "$APPARMOR" ] || apparmor_parser -r "$APPARMOR" >/dev/null
+  echo "Factory browser live state restored"
+  exit 0
+fi
 id "$FACTORY_USER" >/dev/null
 [[ "$FACTORY_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] \
   || { echo "unsafe Factory account name" >&2; exit 1; }
 FACTORY_HOME=$(getent passwd "$FACTORY_USER" | cut -d: -f6)
 [ -n "$FACTORY_HOME" ]
 
-[ -f "$PAYLOAD/web/package.json" ]
-[ -f "$PAYLOAD/web/package-lock.json" ]
-[ -f "$PAYLOAD/web/report/capture.mjs" ]
-[ -f "$PAYLOAD/web/report/render.mjs" ]
-[ -x "$PAYLOAD/ops/factory-browser-sandbox" ]
-[ -x "$PAYLOAD/ops/factory-browser-isolated" ]
-[ -x "$PAYLOAD/ops/test-browser-sandbox.sh" ]
-[ -x "$PAYLOAD/ops/test-systemd-browser-firewall.sh" ]
+[ -f "$SOURCE/web/package.json" ]
+[ -f "$SOURCE/web/package-lock.json" ]
+[ -f "$SOURCE/internal/controlplane/report_scripts/capture.mjs" ]
+[ -f "$SOURCE/internal/controlplane/report_scripts/render.mjs" ]
+[ -f "$SOURCE/ops/install-server-browser.sh" ]
+[ -x "$SOURCE/ops/factory-browser-sandbox" ]
+[ -x "$SOURCE/ops/factory-browser-isolated" ]
+[ -x "$SOURCE/ops/test-browser-sandbox.sh" ]
+[ -x "$SOURCE/ops/test-systemd-browser-firewall.sh" ]
 command -v apparmor_parser >/dev/null \
   || { echo "apparmor_parser is required for the Chromium user namespace sandbox" >&2; exit 1; }
+
+if [ "$RUNTIME" != "$SOURCE" ]; then
+  [ ! -e "$RUNTIME" ] && [ ! -L "$RUNTIME" ] \
+    || { echo "browser runtime target already exists" >&2; exit 1; }
+  install -d -m 700 "$(dirname "$RUNTIME")"
+  runtime_build=$(mktemp -d "$(dirname "$RUNTIME")/.browser-runtime.XXXXXX")
+  install -d -m 700 "$runtime_build/web" "$runtime_build/ops" \
+    "$runtime_build/internal/controlplane/report_scripts"
+  cp -f -- "$SOURCE/web/package.json" "$SOURCE/web/package-lock.json" "$runtime_build/web/"
+  cp -f -- "$SOURCE/internal/controlplane/report_scripts/capture.mjs" \
+    "$SOURCE/internal/controlplane/report_scripts/render.mjs" \
+    "$runtime_build/internal/controlplane/report_scripts/"
+  for browser_helper in install-server-browser.sh factory-browser-sandbox factory-browser-isolated \
+    test-browser-sandbox.sh test-systemd-browser-firewall.sh; do
+    cp -f -- "$SOURCE/ops/$browser_helper" "$runtime_build/ops/$browser_helper"
+    chmod 755 "$runtime_build/ops/$browser_helper"
+  done
+  PAYLOAD=$runtime_build
+fi
 
 # Do not install a launcher unless the live kernel demonstrably enforces the
 # same deny-by-default primitive used for every browser process.
@@ -142,12 +184,21 @@ install -d -o root -g root -m 755 "$LIBEXEC"
 install -d -o root -g root -m 755 "$(dirname "$SUDOERS")"
 install -d -o root -g root -m 755 "$(dirname "$APPARMOR")"
 backup=$(mktemp -d "$LIBEXEC/.factory-browser-backup.XXXXXX")
-for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR"; do
+for target in "$LAUNCHER" "$HELPER" "$CONFIG" "$STATE" "$SUDOERS" "$APPARMOR" "$READINESS_MARKER"; do
   if [ -e "$target" ] || [ -L "$target" ]; then
     name=$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)
     cp -a -- "$target" "$backup/$name"
   fi
 done
+if [ -n "$PERSISTENT_BACKUP" ]; then
+  [ ! -e "$PERSISTENT_BACKUP" ] && [ ! -L "$PERSISTENT_BACKUP" ] \
+    || { echo "browser backup target already exists" >&2; exit 1; }
+  mkdir -m 700 "$PERSISTENT_BACKUP"
+  persistent_backup_created=1
+  cp -a -- "$backup/." "$PERSISTENT_BACKUP/"
+  : >"$PERSISTENT_BACKUP/backup.ready"
+  chmod 600 "$PERSISTENT_BACKUP/backup.ready"
+fi
 changed=1
 
 install -o root -g root -m 755 "$PAYLOAD/ops/factory-browser-sandbox" "$LAUNCHER.new"
@@ -199,6 +250,26 @@ if [ "${FACTORY_BROWSER_BASIC_AUTH_USERNAME+x}" = x ] \
   || [ "${FACTORY_BROWSER_BASIC_AUTH_PASSWORD+x}" = x ]; then
   smoke_preserve_environment=(--preserve-env=FACTORY_BROWSER_BASIC_AUTH_USERNAME,FACTORY_BROWSER_BASIC_AUTH_PASSWORD)
 fi
+
+step "создаю проверочный PDF постоянным renderer"
+pdf_smoke=$backup/browser-smoke.pdf
+pdf_smoke_output=$backup/browser-pdf-smoke.log
+if ! printf '<!doctype html><meta charset="utf-8"><h1>Factory browser ready</h1>' \
+  | sudo -H -u "$FACTORY_USER" env \
+      "FACTORY_BROWSER_PAYLOAD=$PAYLOAD" "FACTORY_BROWSER_LAUNCHER=$LAUNCHER" \
+      node "$PAYLOAD/internal/controlplane/report_scripts/render.mjs" "$pdf_smoke" \
+      >"$pdf_smoke_output" 2>&1
+then
+  if grep -Fq -- 'No usable sandbox' "$pdf_smoke_output"; then
+    echo "Chromium sandbox smoke failed: No usable sandbox" >&2
+  else
+    echo "Factory browser PDF smoke failed" >&2
+  fi
+  false
+fi
+[ "$(head -c 5 "$pdf_smoke")" = '%PDF-' ] \
+  || { echo "Factory browser PDF smoke failed" >&2; false; }
+rm -f -- "$pdf_smoke_output"
 if sudo -H -u "$FACTORY_USER" "${smoke_preserve_environment[@]}" env \
     "${smoke_environment[@]}" \
     "$PAYLOAD/ops/test-browser-sandbox.sh" >"$smoke_output" 2>&1
@@ -245,6 +316,12 @@ chown "$FACTORY_USER:$(id -gn "$FACTORY_USER")" "$marker_tmp"
 chmod 644 "$marker_tmp"
 mv -f -- "$marker_tmp" "$READINESS_MARKER"
 marker_tmp=
+if [ -n "$runtime_build" ]; then
+  cp -f -- "$READINESS_MARKER" "$PAYLOAD/browser-readiness.json"
+  chmod 644 "$PAYLOAD/browser-readiness.json"
+  mv -- "$runtime_build" "$RUNTIME"
+  runtime_build=
+fi
 changed=0
 rm -rf -- "$backup"
 backup=
