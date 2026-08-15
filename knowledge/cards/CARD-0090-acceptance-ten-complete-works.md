@@ -6,7 +6,7 @@ Status: In progress — реализован общий русский слой 
 
 Branch: `factory/487b9529-eb7-49361f09-b58`
 
-Implementation commit: c69ba972aa25efb46fbd33de58c9f5e43366b93e — статусы, длительности и ошибки Factory переведены на русский.
+Implementation commit: 5f2ed57c36b916bf81e1115684091f4c31a98ff6 — статусы, длительности и ошибки Factory переведены на русский.
 
 What changed:
 
