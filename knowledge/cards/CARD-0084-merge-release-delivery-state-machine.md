@@ -1,13 +1,13 @@
 # CARD-0084 — Единая машина состояний слияния и выпуска
 
-Implementation commit: 06e2f41813bcd9e7c1665cc5deca6dd279622e23 — broker восстанавливает terminal status из durable marker реального release driver после restart.
+Implementation commit: 06e2f4180ab35d6c94a25eb36cf08d65ed776c08 — broker восстанавливает terminal status из durable marker реального release driver после restart.
 
 ## HEAD
 
 - Status: Implemented + tested — ready for Review.
 - Branch: `factory/f46d9200-57d-d6a3806d-f98`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-- Implementation commit: 06e2f41813bcd9e7c1665cc5deca6dd279622e23 — broker восстанавливает terminal status из durable marker реального release driver после restart.
+- Implementation commit: 06e2f4180ab35d6c94a25eb36cf08d65ed776c08 — broker восстанавливает terminal status из durable marker реального release driver после restart.
 - What changed: FX driver атомарно сохраняет terminal marker; broker читает его при старте и публикует terminal receipt без повторного executor.
 - What changed: добавлен процессный Unix broker→FX→Pilot тест: restart во время FX, затем receipt и Verify completion.
 - Evidence: `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 11 PASS; shell fixtures — PASS.
