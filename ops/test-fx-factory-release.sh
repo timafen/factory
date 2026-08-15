@@ -183,7 +183,8 @@ JS
 /bin/cp "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/render.mjs" \
   "$TEST_RELEASE_SOURCE/internal/controlplane/report_scripts/capture.mjs" \
   "$runtime/internal/controlplane/report_scripts/"
-/bin/cp "$0" "$runtime/ops/install-server-browser.sh"
+[ "$0" = "$runtime/ops/install-server-browser.sh" ] \
+  || /bin/cp "$0" "$runtime/ops/install-server-browser.sh"
 chmod 755 "$runtime/ops/install-server-browser.sh"
 printf '{"passed_at":"2026-08-14T00:00:00Z","browser_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' \
   >"$runtime/browser-readiness.json"
@@ -800,15 +801,11 @@ case "$*" in
       printf '{"id":"worker-release-test","health":"unhealthy","online":false,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     elif [ "$TEST_MODE" = stale-healthy-worker ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
-    elif [ "$TEST_MODE" = heartbeat-during-stop ] \
-      && grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
-      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
-    elif grep -F 'start factory-worker.service' "$TEST_EVENTS" >/dev/null; then
-      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:02Z"}'
-    elif grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
-      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
     else
-      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
+      stops=$(grep -Fxc 'stop factory-worker.service' "$TEST_EVENTS" || true)
+      starts=$(grep -Fxc 'start factory-worker.service' "$TEST_EVENTS" || true)
+      printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:%02dZ"}' \
+        "$((stops + starts))"
     fi ;;
 esac
 EOF

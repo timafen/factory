@@ -326,11 +326,12 @@ PY
 }
 
 rollback_to_generation() { # target generation, owner-facing reason, incoming generation
-  local target=$1 reason=$2 incoming=${3:-} live_ledger generation_ledger
+  local target=$1 reason=$2 incoming=${3:-} live_ledger generation_ledger browser_backup
   fail "$reason — возвращаю полный прежний комплект"
   stop_factory_units || true
   if [ -n "$incoming" ] && [ -f "$incoming/browser-rollback/backup.ready" ]; then
-    /bin/bash "$incoming/browser/ops/install-server-browser.sh" \
+    FACTORY_BROWSER_BACKUP_DIR="$incoming/browser-rollback" \
+      /bin/bash "$incoming/browser/ops/install-server-browser.sh" \
       --restore-live-state "$incoming/browser-rollback" \
       || { fail "привилегированная browser-среда не восстановлена"; return 1; }
   fi
@@ -349,8 +350,13 @@ rollback_to_generation() { # target generation, owner-facing reason, incoming ge
   fi
   restore_service_state "$target/services.tsv" || return
   if [ -d "$target/browser" ]; then
+    browser_backup=$(mktemp -d "$REL/browser-rollback.XXXXXX") || return
+    rmdir "$browser_backup" || return
     FACTORY_BROWSER_SHARE="$target/browser" FACTORY_BROWSER_RUNTIME="$target/browser" \
-      /bin/bash "$target/browser/ops/install-server-browser.sh" || return
+      FACTORY_BROWSER_BACKUP_DIR="$browser_backup" \
+      /bin/bash "$target/browser/ops/install-server-browser.sh" \
+      || { rm -rf -- "$browser_backup"; return; }
+    rm -rf -- "$browser_backup"
   fi
   verify_generation_runtime "$target" || { fail "проверка полного отката не завершена; journal оставлен"; return 1; }
   ln -sfn "$target" "$CURRENT.new" && mv -Tf "$CURRENT.new" "$CURRENT"
@@ -637,7 +643,8 @@ bootstrap=''
 cleanup() {
   if [ "$browser_restore_armed" = 1 ] && [ -n "$stage" ] \
     && [ -f "$stage/browser-rollback/backup.ready" ]; then
-    /bin/bash "$stage/browser/ops/install-server-browser.sh" \
+    FACTORY_BROWSER_BACKUP_DIR="$stage/browser-rollback" \
+      /bin/bash "$stage/browser/ops/install-server-browser.sh" \
       --restore-live-state "$stage/browser-rollback" \
       || fail "привилегированная browser-среда не восстановлена"
     browser_restore_armed=0
