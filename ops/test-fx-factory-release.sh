@@ -660,6 +660,9 @@ case "$*" in
   'show '*) exit 1 ;;
 esac
 echo "$1 $2" >>"$TEST_EVENTS"
+if [ "$1" = stop ] && [[ "${2:-}" = factory-pilot-restart-*.timer ]]; then
+  rm -f -- "$TEST_DEFERRED_PENDING"
+fi
 exit 0
 EOF
   cat >"$case_dir/bin/readlink" <<'EOF'
@@ -693,6 +696,7 @@ EOF
 echo 'release-info ready' >>"$TEST_EVENTS"
 echo "systemd-run $*" >>"$TEST_EVENTS"
 [ "$TEST_MODE" != systemd-run-fail ] || exit 1
+: >"$TEST_DEFERRED_PENDING"
 capture=0
 for arg in "$@"; do
   [ "$arg" != /usr/bin/flock ] || capture=1
@@ -708,6 +712,10 @@ if [ "$TEST_MODE" = interrupt-between-install ] \
   && [ "$target" = "$TEST_SERVER_BIN" ] && [ ! -e "$TEST_INTERRUPT_MARK" ]; then
   : >"$TEST_INTERRUPT_MARK"
   kill -TERM "$PPID"
+fi
+if [ "$TEST_MODE" = finalization-fail-after-systemd-run ] \
+  && [ "$target" = "$TEST_RELEASE_DIR/current" ]; then
+  exit 1
 fi
 EOF
   cat >"$case_dir/bin/sleep" <<'EOF'
@@ -811,6 +819,7 @@ run_release() {
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
+    TEST_DEFERRED_PENDING="$case_dir/deferred-pilot-restart.pending" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
     TEST_SPOOF_EVENTS="$case_dir/spoof-events" TEST_SPOOF_LOCK="$case_dir/spoof-lock" \
@@ -1230,7 +1239,7 @@ run_release "$identity_retry" identity-transient \
   || { cat "$identity_retry/output" >&2; fail "transient identity lock was not retried"; }
 [ -e "$identity_retry/identity-retried" ] || fail "identity retry scenario did not exercise the transient failure"
 
-for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install systemd-run-fail; do
+for mode in server-fail worker-fail stale-healthy-worker worker-install-fail interrupt-between-install systemd-run-fail finalization-fail-after-systemd-run; do
   failed="$temporary/$mode"
   make_fixture "$failed" "$mode"
   set +e
@@ -1249,6 +1258,14 @@ for mode in server-fail worker-fail stale-healthy-worker worker-install-fail int
   fi
   assert_no_fixture_processes "$failed"
 done
+
+rollback_after_scheduled_restart="$temporary/finalization-fail-after-systemd-run"
+[ ! -e "$rollback_after_scheduled_restart/deferred-pilot-restart.pending" ] \
+  || fail "rollback left a scheduled Pilot restart after finalization failed"
+grep -E '^stop factory-pilot-restart-.*\.timer$' "$rollback_after_scheduled_restart/events" >/dev/null \
+  || fail "rollback did not cancel the scheduled Pilot restart timer"
+! grep -Fx 'restart factory-pilot.service' "$rollback_after_scheduled_restart/events" >/dev/null \
+  || fail "Pilot restarted after the release rolled back"
 
 unchanged_brain="$temporary/unchanged-brain"
 make_fixture "$unchanged_brain" parallel-success
