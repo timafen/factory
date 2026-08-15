@@ -6821,19 +6821,26 @@ class AdaptivePollingTests(unittest.TestCase):
                 pilot, "day_budget_blocks", return_value=False))
             stack.enter_context(mock.patch.object(
                 pilot, "host_block", return_value={"state": "ok"}))
-            for name in noops:
-                stack.enter_context(mock.patch.object(pilot, name))
+            noop_mocks = {
+                name: stack.enter_context(mock.patch.object(pilot, name))
+                for name in noops
+            }
 
             pilot.cycle(conf, state)
 
             self.assertTrue(refills)
             self.assertEqual(startup_events[:2], ["refill", "recovery"])
             self.assertEqual(history_calls, [])
+            noop_mocks["reconcile_diag_repairs"].assert_not_called()
+            noop_mocks["diag_sweep"].assert_not_called()
 
             state["full_history_maintenance_at"] = (
                 time.time() - pilot.FULL_HISTORY_MAINTENANCE_SECONDS - 1
             )
             pilot.cycle(conf, state)
+            noop_mocks["reconcile_diag_repairs"].assert_called_once_with(
+                conf, [])
+            noop_mocks["diag_sweep"].assert_called_once_with(conf, [])
 
         self.assertEqual(history_calls, [True])
 

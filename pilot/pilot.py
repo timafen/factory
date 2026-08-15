@@ -8466,19 +8466,19 @@ def cycle(conf, state):
     except Exception as e:
         log("epic_error", repr(e))
 
-    # Finish durable repairs even after their original run disappeared from
-    # the normal live-task scan.
-    try:
-        reconcile_diag_repairs(conf, tasks)
-    except Exception as e:
-        log("diag_repair_reconcile_error", repr(e))
-
-    # Работа, которая крутится дольше порога, разбирается старшей моделью —
-    # независимо от того, задавал ли конвейер вопрос.
-    try:
-        diag_sweep(conf, tasks)
-    except Exception as e:
-        log("diag_sweep_outer_error", repr(e))
+    # Diagnostics may call a senior model for every old failed run. They are
+    # maintenance, not stage scheduling: running them on every 2-10 second
+    # poll used to leave freshly freed executors idle for minutes. Reconcile
+    # them together with the periodic full-history pass instead.
+    if isinstance(complete_tasks, list):
+        try:
+            reconcile_diag_repairs(conf, lifecycle_tasks)
+        except Exception as e:
+            log("diag_repair_reconcile_error", repr(e))
+        try:
+            diag_sweep(conf, lifecycle_tasks)
+        except Exception as e:
+            log("diag_sweep_outer_error", repr(e))
 
     # Очередь, доставшаяся заболевшему исполнителю, сама не рассосётся.
     try:
