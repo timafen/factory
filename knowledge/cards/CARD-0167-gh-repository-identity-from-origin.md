@@ -5,7 +5,7 @@ Implementation commit: отсутствует — этап Specification не м
 ## HEAD
 
 Status: Specified.
-Branch: `factory/514239ad-f8d-977c5f70-40f`.
+Branch: `factory/07c2b18e-7d5-3a2022f0-57c`.
 What changed: определён безопасный переход от неявного контекста `gh` к
 явному репозиторию, полученному из `origin` рабочей копии.
 Evidence: на свежем `origin/main` воспроизведён bare-ответ
