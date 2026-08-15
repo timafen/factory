@@ -105,6 +105,10 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["max_parallel_works"] {
 		settings.MaxParallelWorks = 4
 	}
+	// Compatibility default matches pilot.py for older configuration files.
+	if !present["max_terminal_tasks_per_cycle"] {
+		settings.MaxTerminalTasksPerCycle = 4
+	}
 	return settings, body, nil
 }
 
@@ -185,7 +189,7 @@ func validatePilotSettings(settings protocol.PilotSettings) ([]string, error) {
 			return nil, invalid("invalid_pilot_settings", field.name+" must be positive")
 		}
 	}
-	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 || settings.MaxParallelWorks <= 0 {
+	if settings.MaxStageAttempts <= 0 || settings.MaxParallelSubtasks <= 0 || settings.MaxParallelWorks <= 0 || settings.MaxTerminalTasksPerCycle <= 0 {
 		return nil, invalid("invalid_pilot_settings", "attempt and parallelism limits must be positive")
 	}
 	if len(settings.Stages) != len(pilotStages) || len(settings.StageBaseUSD) != len(pilotStages) {
