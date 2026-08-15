@@ -663,6 +663,13 @@ if [ "$TEST_MODE" = deleted-inode ]; then
       [ "${FACTORY_TEST_ONLY:-}" != deleted-inode ] && { echo 4242; exit 0; } ;;
   esac
 fi
+if [ "$TEST_MODE" = drain-timeout ]; then
+  case "$*" in
+    '-q is-active factory-pilot.service') exit 0 ;;
+    'show -p MainPID --value factory-pilot.service') echo 4343; exit 0 ;;
+    'show -p ExecStart --value factory-pilot.service') echo '/usr/bin/python3 pilot.py'; exit 0 ;;
+  esac
+fi
 case "$*" in
   '-q is-active '*|'-q is-enabled '*) exit 1 ;;
   'show '*) exit 1 ;;
@@ -678,6 +685,10 @@ if [ "$TEST_MODE" = deleted-inode ] && [ "${1:-}" = /proc/4242/exe ]; then
   else
     printf '%s (deleted)\n' "$TEST_SERVER_BIN"
   fi
+  exit 0
+fi
+if [ "$TEST_MODE" = drain-timeout ] && [ "${1:-}" = /proc/4343/exe ]; then
+  echo /usr/bin/python3
   exit 0
 fi
 exec /usr/bin/readlink "$@"
@@ -743,6 +754,15 @@ EOF
   cat >"$case_dir/bin/curl" <<'EOF'
 #!/bin/bash
 case "$*" in
+  *'/api/v1/workers')
+    if [ "$TEST_MODE" = drain-timeout ]; then
+      printf '[{"online":true,"active_count":2}]'
+    elif [ "$TEST_MODE" = busy-drain ] && [ ! -e "$TEST_DRAIN_MARK" ]; then
+      : >"$TEST_DRAIN_MARK"
+      printf '[{"online":true,"active_count":2}]'
+    else
+      printf '[]'
+    fi ;;
   *'/api/v1/dashboard'*)
     if [ "$TEST_MODE" = server-fail ]; then printf 503; else printf 200; fi ;;
   *'/api/v1/workers/worker-release-test'*)
@@ -818,6 +838,7 @@ run_release() {
     TEST_UI_STARTED="$case_dir/ui-started" TEST_GO_STARTED="$case_dir/go-started" \
     TEST_GO_RUNNING="$case_dir/go-running" TEST_UI_RUNNING="$case_dir/ui-running" \
     TEST_IDENTITY_MARK="$case_dir/identity-retried" \
+    TEST_DRAIN_MARK="$case_dir/drain-polled" \
     TEST_DEFERRED_COMMAND="$case_dir/deferred-pilot-restart" \
     TEST_GATE_CHILDREN="$case_dir/gate-children" \
     TEST_HANDSHAKE_EVENTS="$case_dir/handshake-events" \
@@ -853,6 +874,7 @@ run_release() {
     FACTORY_WORKER_CONFIG="$case_dir/worker.toml" \
     FACTORY_WORKER_UNIT_DIR="$case_dir/units" \
     FACTORY_API_URL=http://test FACTORY_REGISTER_ATTEMPTS=2 FACTORY_REGISTER_DELAY=0 \
+    FACTORY_RELEASE_DRAIN_ATTEMPTS=2 FACTORY_RELEASE_DRAIN_DELAY=0 \
     /usr/bin/timeout --signal=TERM --kill-after=2s "${FACTORY_RELEASE_TEST_TIMEOUT:-30}" \
     /bin/bash "$case_dir/fx-factory-release-under-test" main >"$case_dir/output" 2>&1
 }
@@ -1074,6 +1096,7 @@ assert bootstrap["processes"]==candidate["processes"]
 assert bootstrap["services"]==candidate["services"]
 PY
 assert_before "$success/events" 'stop factory-worker.service' 'stop factory-server.service'
+assert_before "$success/events" 'stop factory-pilot.service' 'stop factory-worker.service'
 grep -F 'stop factory-worker-2.service' "$success/events" >/dev/null \
   || fail "release did not stop a discovered model worker"
 grep -F 'stop factory-claude-fable.service' "$success/events" >/dev/null \
@@ -1092,6 +1115,28 @@ grep -F 'Проверочный релиз' "$success/output" >/dev/null \
   || fail "release exposed GitHub merge plumbing instead of a human title"
 ! grep -F '#123' "$success/output" >/dev/null \
   || fail "release exposed a pull request number in owner-facing output"
+
+busy_drain="$temporary/busy-drain"
+make_fixture "$busy_drain" busy-drain
+run_release "$busy_drain" busy-drain 0 \
+  || { cat "$busy_drain/output" >&2; fail "release did not wait for an active stage"; }
+grep -F 'жду завершения уже запущенных этапов: осталось 2' "$busy_drain/output" >/dev/null \
+  || fail "release did not report worker draining"
+assert_before "$busy_drain/events" 'stop factory-pilot.service' 'stop factory-worker.service'
+
+drain_timeout="$temporary/drain-timeout"
+make_fixture "$drain_timeout" drain-timeout
+if run_release "$drain_timeout" drain-timeout 0; then
+  fail "release interrupted work after drain timeout"
+else
+  [ "$?" = 8 ] || fail "drain timeout was not reported as a retryable release"
+fi
+grep -F 'выпуск безопасно отложен: работающие этапы не прерывались' "$drain_timeout/output" >/dev/null \
+  || fail "drain timeout did not explain the safe deferral"
+grep -Fx 'start factory-pilot.service' "$drain_timeout/events" >/dev/null \
+  || fail "drain timeout did not restore Pilot"
+! grep -F 'stop factory-worker.service' "$drain_timeout/events" >/dev/null \
+  || fail "drain timeout stopped a worker with an active stage"
 
 # Historical generations are not rollback targets. A fresh, even corrupted,
 # unreferenced copy must neither block the next release nor survive it. The

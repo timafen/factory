@@ -5801,6 +5801,9 @@ class CertainDecisionTests(unittest.TestCase):
     def test_exact_positive_verdicts_do_not_call_the_model_again(self):
         cases = (
             ("Triage", "READY TO SPECIFY\nProblem: reproduced", "advance"),
+            ("Specification", "READY TO IMPLEMENT\nCard and promises saved.", "advance"),
+            ("Implement + Test", "READY TO REVIEW\nTargeted tests passed.", "advance"),
+            ("Implement + Test", "PASS\nLegacy in-flight result.", "advance"),
             ("Review", "# APPROVE\nNo blocking findings.", "advance"),
             ("Verify", "PASS.\nAll release checks are green.", "stop"),
         )
@@ -5828,6 +5831,12 @@ class CertainDecisionTests(unittest.TestCase):
                     {}, "Review", "Verify", "Work", result, "repo")
             self.assertEqual(decision["action"], "stop")
             brain.assert_called_once()
+
+    def test_stage_rules_require_exact_fast_handoff_verdicts(self):
+        self.assertIn("READY TO IMPLEMENT", pilot.agent_rules(stage="Specification"))
+        self.assertIn("READY TO REVIEW", pilot.agent_rules(stage="Implement + Test"))
+        self.assertIn("REQUEST CHANGES", pilot.agent_rules(stage="Review"))
+        self.assertIn("PASS", pilot.agent_rules(stage="Verify"))
 
 
 class TerminalHandoffPriorityTests(unittest.TestCase):
