@@ -5,15 +5,15 @@ Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран �
 ## HEAD
 
 Status: Implemented — browser verified
-Branch: factory/0361812a-75d-baade529-efb
+Branch: factory/0624f95c-27d-b4474d54-baf
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
 Implementation commit: 259c724fa7164cf846e8684637a0360bee1b10bf — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: сводка учитывает только heartbeat младше 7 суток; архив
 раскрывается отдельно и сохраняет переход в карточку исполнителя.
-Evidence: `cd web && npm exec playwright test e2e/control-plane.spec.ts --grep
-'@critical shows parallel worker capacity and current work'` — 23 проверки
-пройдены на актуальной production-сборке.
+Evidence: `cd web && npx tsc -p tsconfig.app.json --noEmit`, `npm test --
+--run`, `npm run build`, `npm run lint` — TypeScript, 184 теста, сборка и lint
+успешны.
 One next action: Review проверяет изменения и принимает поставку.
 
 ## LOG
@@ -23,6 +23,13 @@ One next action: Review проверяет изменения и принима�
 После перебазирования на свежий `main` карточка теперь ссылается на реальный
 коммит реализации этой ветки. Он содержит изменения экрана и тестов, а не
 только документацию; SHA обновлён после rebase.
+
+### 2026-08-15 — Implement verification
+
+Ветка проверена от свежего remote `main` (`7654b331ccb4fa88d79557719f8d96d306d08b11`).
+Требуемая проверка TypeScript завершилась успешно; полный набор UI-тестов прошёл
+17 файлов и 184 теста, production-сборка и lint также успешны. Сравнение с
+`origin/main` содержит только спецификацию, карточку, экран исполнителей и его тесты.
 
 ### 2026-08-15 — Implement
 
