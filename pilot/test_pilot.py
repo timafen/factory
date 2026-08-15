@@ -5743,6 +5743,32 @@ class AdaptivePollingTests(unittest.TestCase):
                 "epic_starts_processed", "poll_terminal_seen"):
             self.assertEqual(state[key], ids)
 
+    def test_loop_restores_missing_required_cursors_without_losing_state(self):
+        conf = {"enabled": True, "poll_seconds": 30}
+        state = {"delivery_state_v2": {"targets": {"factory": {}}}}
+        observed = []
+
+        def fake_load(path, default):
+            return conf if path == pilot.CONF_PATH else state
+
+        def fake_cycle(_conf, cycle_state):
+            observed.append(cycle_state)
+            return {"seconds": 30, "reason": "idle"}
+
+        with mock.patch.object(pilot, "load", side_effect=fake_load), \
+                mock.patch.object(pilot, "save"), \
+                mock.patch.object(pilot, "write_automation_status"), \
+                mock.patch.object(pilot, "cycle", side_effect=fake_cycle):
+            pilot.run_loop(max_cycles=1, sleep_fn=lambda _seconds: None,
+                           clock_fn=lambda: 100.0)
+
+        self.assertIs(observed[0], state)
+        self.assertEqual(state["delivery_state_v2"], {"targets": {"factory": {}}})
+        for key in (
+                "processed", "automation_results_processed", "epics_processed",
+                "epic_starts_processed", "poll_terminal_seen"):
+            self.assertEqual(state[key], [])
+
     def test_fully_idle_pipeline_keeps_thirty_second_interval(self):
         self.assertEqual(pilot.next_poll_hint({"poll_seconds": 30}, []), {
             "seconds": 30, "reason": "idle",
