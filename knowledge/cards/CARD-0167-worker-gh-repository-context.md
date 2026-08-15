@@ -1,4 +1,4 @@
-Implementation commit: c5efb35e1d849a0d38093b8160de3ae1803b4495 — runtime закрепляет GH_REPO за назначенным репозиторием
+Implementation commit: c0dbe1c2d89be440b48aa3f9b2019613b33b28d4 — runtime закрепляет GH_REPO за назначенным репозиторием
 
 # CARD-0167: Worker закрепляет GitHub CLI за репозиторием задачи
 
@@ -17,7 +17,7 @@ One next action: передать на review.
 
 ### 2026-08-15 — Implement
 
-Исправлена карточка: implementation commit теперь указывает на существующий
+Исправлена карточка: implementation commit теперь указывает на предковый
 кодовый коммит, закрепляющий `GH_REPO=timafen/factory` для `gh repo view`.
 Целевые тесты, полный набор тестов и сборка прошли успешно.
 
