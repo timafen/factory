@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/owainlewis/factory/internal/protocol"
 )
 
 func TestRuntimeEnvironmentIsolatesAgentBuildsFromLiveFactory(t *testing.T) {
@@ -78,5 +80,28 @@ func TestRuntimeEnvironmentGitHubRepositoryPolicy(t *testing.T) {
 	}
 	if os.Getenv("GH_REPO") != "owainlewis/factory" {
 		t.Fatal("test unexpectedly changed the service environment")
+	}
+}
+
+func TestRuntimeCommandUsesGitHubRepositoryPolicyForEveryRuntime(t *testing.T) {
+	t.Setenv("GH_REPO", "owainlewis/factory")
+	for _, runtime := range []string{protocol.RuntimeCodex, protocol.RuntimeClaudeCode} {
+		t.Run(runtime, func(t *testing.T) {
+			command := runtimeCommand(supervisorInit{
+				Runtime:           runtime,
+				RuntimeExecutable: "agent",
+				RemoteIdentity:    "github.com/Example/Cattle",
+				Worktree:          t.TempDir(),
+			}, nil)
+			var repositories []string
+			for _, entry := range command.Env {
+				if strings.HasPrefix(entry, "GH_REPO=") {
+					repositories = append(repositories, strings.TrimPrefix(entry, "GH_REPO="))
+				}
+			}
+			if len(repositories) != 1 || repositories[0] != "example/cattle" {
+				t.Fatalf("GH_REPO values = %q; want [example/cattle]", repositories)
+			}
+		})
 	}
 }

@@ -44,6 +44,7 @@ EOF
 chmod +x "$temporary/broker"
 
 FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
+FACTORY_LIVE_ACCEPTANCE_BIN="$temporary/out/factory-live-acceptance" \
 FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
 FACTORY_RELEASE_BROKER_PILOT_DROPIN="$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf" \
 FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \
@@ -83,6 +84,7 @@ chmod +x "$temporary/broker"
 : >"$temporary/systemctl.log"
 
 FACTORY_RELEASE_BROKER_BIN="$temporary/out/factory-release-broker" \
+FACTORY_LIVE_ACCEPTANCE_BIN="$temporary/out/factory-live-acceptance" \
 FACTORY_RELEASE_BROKER_UNIT="$temporary/systemd/factory-release-broker.service" \
 FACTORY_RELEASE_BROKER_PILOT_DROPIN="$temporary/systemd/factory-pilot.service.d/50-project-release-broker.conf" \
 FACTORY_RELEASE_BROKER_LEGACY_SERVER_DROPIN="$temporary/systemd/factory-server.service.d/50-project-release-broker.conf" \

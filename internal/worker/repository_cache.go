@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -114,6 +115,11 @@ func (manager *Manager) acquireManagedRepository(
 		return Repository{}, errors.New("managed repository cache entry must be a real directory")
 	}
 
+	if err := configureManagedRepositoryGitHubDefault(
+		acquisitionContext, manager.options.GitExecutable, target,
+	); err != nil {
+		return Repository{}, fmt.Errorf("configure managed repository GitHub default: %w", err)
+	}
 	repository, err := resolveRepository(claimRepository.Key, target, manager.options.GitExecutable)
 	if err != nil {
 		return Repository{}, fmt.Errorf("validate managed repository cache: %w", err)
@@ -241,6 +247,9 @@ func (manager *Manager) cloneManagedRepository(
 	if !strings.EqualFold(repository.RemoteIdentity, expectedIdentity) {
 		return false, errors.New("cloned managed repository origin does not match the assigned repository")
 	}
+	if err := configureManagedRepositoryGitHubDefault(ctx, manager.options.GitExecutable, clonePath); err != nil {
+		return false, fmt.Errorf("configure cloned managed repository GitHub default: %w", err)
+	}
 	if err := os.Rename(clonePath, target); err != nil {
 		return false, fmt.Errorf("install managed repository cache entry: %w", err)
 	}
@@ -250,4 +259,21 @@ func (manager *Manager) cloneManagedRepository(
 	}
 	temporaryRoot = ""
 	return true, nil
+}
+
+func configureManagedRepositoryGitHubDefault(ctx context.Context, gitExecutable, repository string) error {
+	stdout, stderr, err := runGitCommand(ctx, gitExecutable, repository, 64<<10,
+		"config", "--unset-all", "remote.upstream.gh-resolved")
+	if err != nil {
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || exitError.ExitCode() != 5 {
+			return commandFailure("remove upstream GitHub default", stdout, stderr, err)
+		}
+	}
+	stdout, stderr, err = runGitCommand(ctx, gitExecutable, repository, 64<<10,
+		"config", "--replace-all", "remote.origin.gh-resolved", "base")
+	if err != nil {
+		return commandFailure("set origin GitHub default", stdout, stderr, err)
+	}
+	return nil
 }

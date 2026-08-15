@@ -336,6 +336,7 @@ class ReleaseTrainDashboardTests(unittest.TestCase):
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", os.path.join(temporary.name, "receipts")), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", os.path.join(temporary.name, "outbox")), \
                 mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}), \
                 mock.patch.object(pilot, "mark_final"), mock.patch.object(pilot, "notify"):
             generation = pilot.deploy_after_merge({}, "github.com/timafen/factory", state,
                 "a" * 40, {"task_id": "work", "merge_receipt": {}}, now=60)
@@ -2659,9 +2660,10 @@ class PipelineWatchTests(unittest.TestCase):
             "repository_id": repository_id,
         }
 
-    def watch(self, tasks=None):
+    def watch(self, tasks=None, processed=None):
         pilot.pipeline_watch(
-            self.conf, tasks or [self.task()], self.workflows, self.workers
+            self.conf, tasks or [self.task()], self.workflows, self.workers,
+            processed,
         )
 
     def test_waits_before_resuming_lost_transition(self):
@@ -2673,6 +2675,50 @@ class PipelineWatchTests(unittest.TestCase):
         self.now += pilot.STALL_WAIT - 1
         self.watch()
         self.assertEqual(self.created, [])
+
+    def test_fresh_terminal_handoff_waits_for_normal_processor(self):
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch(processed=[])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
+        self.assertEqual(
+            self.work_status["Встроенный патруль"]["state"], "queued")
+
+        self.now += pilot.STALL_WAIT
+        self.watch(processed=["source-task"])
+
+        self.assertEqual(len(self.created), 1)
+        self.assertIn("[2/3 Implement]", self.created[0]["title"])
+
+    def test_new_unprocessed_attempt_prevents_watchdog_duplicate(self):
+        old = self.task()
+        old.update({"id": "old-attempt", "created_at": "2026-08-15T10:00:00Z"})
+        new = self.task()
+        new.update({"id": "new-attempt", "created_at": "2026-08-15T10:05:00Z"})
+        self.memory = {
+            "Встроенный патруль": {
+                "since": self.now - pilot.STALL_WAIT,
+                "nudges": pilot.STALL_NUDGES,
+                "why": "give_up",
+                "stage": "Specification",
+            }
+        }
+
+        self.watch([old, new], processed=["old-attempt"])
+
+        self.assertEqual(self.created, [])
+        self.assertEqual(
+            self.memory["Встроенный патруль"]["why"], "handoff_pending")
 
     def test_resumes_once_after_wait_with_same_repository_and_revision(self):
         self.memory = {
@@ -5483,6 +5529,7 @@ class PlanAutostartTest(unittest.TestCase):
         self.assertEqual(watch.call_args.args[1], tasks)
         self.assertEqual(watch.call_args.args[2]["Triage"]["revision_id"], "wf-triage")
         self.assertIs(watch.call_args.args[3], self.workers)
+        self.assertIs(watch.call_args.args[4], state["processed"])
         self.assertGreaterEqual(ideas.call_count, 1)
 
     def test_successful_stage_preserves_files_declared_in_report(self):
@@ -5727,6 +5774,39 @@ class TriageCloseTests(unittest.TestCase):
 
         self.assertFalse(closed)
         close.assert_not_called()
+
+
+class CertainDecisionTests(unittest.TestCase):
+    def test_exact_positive_verdicts_do_not_call_the_model_again(self):
+        cases = (
+            ("Triage", "READY TO SPECIFY\nProblem: reproduced", "advance"),
+            ("Review", "# APPROVE\nNo blocking findings.", "advance"),
+            ("Verify", "PASS.\nAll release checks are green.", "stop"),
+        )
+        for stage, result, action in cases:
+            with self.subTest(stage=stage), \
+                    mock.patch.object(
+                        pilot, "brain",
+                        side_effect=AssertionError("model must not be called")):
+                decision = pilot.decide(
+                    {}, stage, "next", "Work", result, "repo")
+            self.assertEqual(decision["action"], action)
+            self.assertEqual(decision["next_complexity"], "medium")
+            self.assertTrue(decision["verdict_ru"])
+
+    def test_ambiguous_or_negative_verdict_still_uses_the_model(self):
+        answer = json.dumps({
+            "action": "stop", "reason": "needs context", "handoff": "",
+            "next_complexity": "medium", "verdict_ru": "Нужны подробности.",
+        })
+        for result in ("Result: APPROVE", "BLOCKED\nDNS is unavailable"):
+            with self.subTest(result=result), \
+                    mock.patch.object(
+                        pilot, "brain", return_value=(answer, "test")) as brain:
+                decision = pilot.decide(
+                    {}, "Review", "Verify", "Work", result, "repo")
+            self.assertEqual(decision["action"], "stop")
+            brain.assert_called_once()
 
 
 class TerminalHandoffPriorityTests(unittest.TestCase):
@@ -6051,6 +6131,11 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertNotIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
 
     def test_russian_dns_wait_is_also_an_infrastructure_retry(self):
+        self.conf["stages"] = [{"workflow": "Review", "worker": "worker"}]
+        self.workflows["Review"] = {
+            "enabled": True, "revision_id": "review-revision",
+        }
+        pilot.save(self.conf_path, dict(self.conf))
         verdict = {
             "decision": "wait",
             "reason": (
@@ -6073,6 +6158,14 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(question["machine_action"], "retry_infrastructure")
         self.assertEqual(question["resume_stage"], "Review")
         self.assertNotIn("Сетевая проверка", self.conf["stopped_pipelines"])
+
+        question["retry_not_before"] = "2000-01-01T00:00:00Z"
+        pilot.save(
+            os.path.join(self.question_dir, "russian-dns-question.json"), question)
+        created = self.apply_answers_twice()
+        self.assertEqual(len(created), 1)
+        self.assertIn("Branch: factory/network-check\n", created[0]["context"])
+        self.assertNotIn("Прошлая работа лежит в ветке", created[0]["context"])
 
     def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
         self.assertFalse(self.route({
@@ -7656,7 +7749,7 @@ class HostLoadAdmissionTests(unittest.TestCase):
 
             pilot.cycle(conf, state)
 
-        watch.assert_called_once_with(conf, [], {}, {})
+        watch.assert_called_once_with(conf, [], {}, {}, state["processed"])
         self.assertEqual(conf["_host_load_snapshot"], self.cpu_over)
 
     @mock.patch.object(pilot, "_age_min", return_value=10)
@@ -8062,6 +8155,7 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         pid = fx + ".pid"
         release_gate = fx + ".release"
         lock_once = fx + ".lock-once"
+        acceptance = fx + ".acceptance"
         with open(fx, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\nset -eu\n"
                          "printf '%s\\n' \"$FACTORY_DELIVERY_ID\" >> \"" + attempts + "\"\n"
@@ -8075,18 +8169,22 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
                          "  *) exit 7 ;;\n"
                          "esac\n")
         os.chmod(fx, 0o700)
+        with open(acceptance, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s\\n' '{\"status\":\"passed\"}'\n")
+        os.chmod(acceptance, 0o700)
         if locked:
             with open(lock_once, "w", encoding="utf-8") as stream:
                 stream.write("locked once\n")
         broker = subprocess.Popen([self.broker_executable, "-socket", socket_path,
-                                   "-state-dir", state_dir, "-factory-release-executable", fx],
+                                   "-state-dir", state_dir, "-factory-release-executable", fx,
+                                   "-live-acceptance-executable", acceptance],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[socket_path] = broker
         self.addCleanup(self._stop_process, broker)
         for _ in range(100):
             if os.path.exists(socket_path):
                 return {"socket": socket_path, "broker_state": state_dir,
-                        "fx": fx,
+                        "fx": fx, "acceptance": acceptance,
                         "attempts": attempts, "success": success, "fx_started": started,
                         "fx_pid": pid, "release_gate": release_gate}
             if broker.poll() is not None:
@@ -8098,7 +8196,8 @@ class MergeReleaseDeliveryStateMachineTests(unittest.TestCase):
         """Replace a stopped broker while retaining its durable state and FX."""
         process = subprocess.Popen([self.broker_executable, "-socket", paths["socket"],
                                     "-state-dir", paths["broker_state"],
-                                    "-factory-release-executable", paths["fx"]],
+                                    "-factory-release-executable", paths["fx"],
+                                    "-live-acceptance-executable", paths["acceptance"]],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.broker_processes[paths["socket"]] = process
         self.addCleanup(self._stop_process, process)
@@ -8402,6 +8501,7 @@ pilot.save(pilot.STATE_PATH, state)
         target = state[pilot.DELIVERY_STATE_KEY]["targets"]["factory"]
         self.assertTrue(target["next_requested"])
         with mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}), \
                 mock.patch.object(pilot, "mark_final"), \
                 mock.patch.object(pilot, "DELIVERY_RECEIPTS_PATH", self.receipts), \
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox):
@@ -8439,13 +8539,19 @@ pilot.save(pilot.STATE_PATH, state)
         executable = os.path.join(self.temporary.name, "factory-release-broker")
         fx = os.path.join(self.temporary.name, "fx")
         calls = os.path.join(self.temporary.name, "fx-calls")
+        acceptance = os.path.join(self.temporary.name, "acceptance")
         with open(fx, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\nprintf '%s %s\\n' \"$FACTORY_DELIVERY_ID\" \"$*\" >> \"" + calls + "\"\n")
         os.chmod(fx, 0o700)
+        with open(acceptance, "w", encoding="utf-8") as stream:
+            stream.write("#!/bin/sh\nprintf '%s\\n' '{\"status\":\"passed\"}'\n")
+        os.chmod(acceptance, 0o700)
         subprocess.run(["go", "build", "-o", executable, "./cmd/factory-release-broker"],
                        check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
         process = subprocess.Popen([executable, "-socket", socket_path, "-state-dir", state_dir,
-                                    "-factory-release-executable", fx], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    "-factory-release-executable", fx,
+                                    "-live-acceptance-executable", acceptance],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: (process.terminate() if process.poll() is None else None, process.wait(timeout=2) if process.poll() is None else None))
         for _ in range(100):
             if os.path.exists(socket_path):
@@ -8513,7 +8619,8 @@ pilot.save(pilot.STATE_PATH, state)
                 mock.patch.object(pilot, "DELIVERY_OUTBOX_PATH", self.outbox), \
                 mock.patch.object(pilot, "NOTIFY_LOG_PATH", notifications), \
                 mock.patch.object(pilot, "mark_final"), \
-                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}):
+                mock.patch.object(pilot, "broker_operation", return_value={"status": "succeeded"}), \
+                mock.patch.object(pilot, "broker_acceptance", return_value={"status": "passed"}):
             pilot.deploy_after_merge({}, "github.com/timafen/factory", state, self.sha, wait)
             pilot.poll_delivery_state({}, state)
             restored = pilot.load(self.state_path, {})

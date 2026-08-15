@@ -221,9 +221,7 @@ func superviseRuntime(
 		return finishSupervisorStartFailure(anchor, anchorIdentity, writer, errors.New("unsupported worker runtime"))
 	}
 	displayName := runtimeDisplayName(init.Runtime)
-	command := exec.Command(init.RuntimeExecutable, arguments...)
-	command.Dir = init.Worktree
-	command.Env = runtimeEnvironment(init.Worktree, init.RemoteIdentity)
+	command := runtimeCommand(init, arguments)
 	configureExistingProcessGroup(command, groupID)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -400,6 +398,13 @@ func superviseRuntime(
 		}
 	}
 	return writer.send(message)
+}
+
+func runtimeCommand(init supervisorInit, arguments []string) *exec.Cmd {
+	command := exec.Command(init.RuntimeExecutable, arguments...)
+	command.Dir = init.Worktree
+	command.Env = runtimeEnvironment(init.Worktree, init.RemoteIdentity)
+	return command
 }
 
 func runtimeEnvironment(worktree, remoteIdentity string) []string {

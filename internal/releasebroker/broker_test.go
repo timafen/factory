@@ -136,6 +136,144 @@ func waitForBrokerIdle(t *testing.T, broker *Broker) {
 	}
 }
 
+func acceptancePost(t *testing.T, server *httptest.Server, id, sha string) Response {
+	t.Helper()
+	response, err := http.Post(server.URL+"/v1/operations/"+id+"/acceptance", "application/json", strings.NewReader(`{"operation_id":"`+id+`","commit_sha":"`+sha+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("acceptance status=%d", response.StatusCode)
+	}
+	var result Response
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func releasedAcceptanceBroker(t *testing.T, stateDir string) *Broker {
+	t.Helper()
+	var broker *Broker
+	if stateDir == "" {
+		broker = New(&sequenceExecutor{})
+	} else {
+		var err error
+		broker, err = NewAt(stateDir, &sequenceExecutor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	broker.items["acceptance-1"] = &operation{Request: Request{OperationID: "acceptance-1", Adapter: "fx-factory-release", CommitSHA: testSHA}, Status: "succeeded", Posts: 1}
+	if stateDir != "" {
+		if err := broker.persist(broker.items["acceptance-1"]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return broker
+}
+
+func TestAcceptanceFailsClosedWithoutCheckerAndRejectsChangedIdentity(t *testing.T) {
+	broker := releasedAcceptanceBroker(t, "")
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	if result := acceptancePost(t, server, "acceptance-1", testSHA); result.Status != "failed" || result.Reason != "acceptance_not_configured" {
+		t.Fatalf("unconfigured acceptance=%+v", result)
+	}
+	response, err := http.Post(server.URL+"/v1/operations/acceptance-1/acceptance", "application/json", strings.NewReader(`{"operation_id":"acceptance-1","commit_sha":"`+strings.Repeat("a", 40)+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("changed identity status=%d", response.StatusCode)
+	}
+}
+
+func TestAcceptanceRunningIsSingleFlightAndRestartFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	broker := releasedAcceptanceBroker(t, dir)
+	script := filepath.Join(dir, "checker")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho run >> \"$CHECKER_LOG\"\nwhile [ ! -e \"$CHECKER_GO\" ]; do sleep 0.01; done\necho '{\"status\":\"passed\"}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHECKER_LOG", filepath.Join(dir, "runs"))
+	t.Setenv("CHECKER_GO", filepath.Join(dir, "go"))
+	if err := broker.ConfigureAcceptance(script); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(broker.Handler())
+	defer server.Close()
+	first := make(chan Response, 1)
+	go func() { first <- acceptancePost(t, server, "acceptance-1", testSHA) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		item, _ := operationSnapshot(broker, "acceptance-1")
+		if item.AcceptanceStatus == "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("checker did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if result := acceptancePost(t, server, "acceptance-1", testSHA); result.Status != "running" {
+		t.Fatalf("duplicate=%+v", result)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		body, err := os.ReadFile(filepath.Join(dir, "runs"))
+		if err == nil && strings.Count(string(body), "run") == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checker runs=%q err=%v", body, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-first; result.Status != "running" {
+		t.Fatalf("first=%+v", result)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		response, err := http.Get(server.URL + "/v1/operations/acceptance-1/acceptance")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result Response
+		err = json.NewDecoder(response.Body).Decode(&result)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status == "passed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checker result=%+v", result)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	interrupted := releasedAcceptanceBroker(t, filepath.Join(dir, "restart"))
+	interrupted.items["acceptance-1"].AcceptanceStatus = "running"
+	if err := interrupted.persist(interrupted.items["acceptance-1"]); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewAt(filepath.Join(dir, "restart"), &sequenceExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, _ := operationSnapshot(restarted, "acceptance-1")
+	if item.AcceptanceStatus != "failed" || item.AcceptanceReason != "acceptance_interrupted" {
+		t.Fatalf("restart=%+v", item)
+	}
+}
+
 func TestBrokerAcceptsOnlyFixedAdapterInputsAndIsIdempotent(t *testing.T) {
 	executor := &recordingExecutor{done: make(chan struct{})}
 	server := httptest.NewServer(New(executor).Handler())

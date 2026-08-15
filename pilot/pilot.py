@@ -1782,8 +1782,9 @@ def load_restart_recovery_tasks(conf, tasks):
 
 def retry_terminal_task(conf, state, task_id):
     """Requeue a terminal task without advancing a startup recovery cursor."""
-    if task_id in state["processed"]:
-        state["processed"].remove(task_id)
+    processed = state.setdefault("processed", [])
+    if task_id in processed:
+        processed.remove(task_id)
     retry_ids = state.setdefault("terminal_retry_ids", [])
     if task_id not in retry_ids:
         retry_ids.append(task_id)
@@ -2865,7 +2866,7 @@ def stage_names(conf):
 def work_status_write(mem):
     """Пишем словами, почему работа стоит: экран не должен врать."""
     out = load(f"{HOME}/pilot/work_status.json", {}) or {}
-    transient = {"stopped_owner", "stuck", "nudged", "idle"}
+    transient = {"stopped_owner", "stuck", "nudged", "queued", "idle"}
     out = {base: rec for base, rec in out.items()
            if rec.get("state") not in transient or base in (mem or {})}
     for base, rec in (mem or {}).items():
@@ -2887,6 +2888,9 @@ def work_status_write(mem):
         elif why == "nudged":
             out[base] = {"state": "nudged",
                          "text": "конвейер встал, я запустил следующий этап сам"}
+        elif why == "handoff_pending":
+            out[base] = {"state": "queued",
+                         "text": "этап завершён; Factory ещё обрабатывает результат"}
         elif why == "closed":
             out[base] = {"state": "archived",
                          "text": rec.get("reason") or "работа закрыта"}
@@ -2896,10 +2900,11 @@ def work_status_write(mem):
     save(f"{HOME}/pilot/work_status.json", out)
 
 
-def pipeline_watch(conf, tasks, workflows, workers):
+def pipeline_watch(conf, tasks, workflows, workers, processed=None):
     stages = stage_names(conf)
     if not stages:
         return
+    processed_ids = None if processed is None else set(processed)
     mem = load(STALL_PATH, {}) or {}
     now = int(time.time())
     active_tasks = conf.get("_active_work_tasks")
@@ -2986,6 +2991,24 @@ def pipeline_watch(conf, tasks, workflows, workers):
         rec.setdefault("since", now)
         rec.setdefault("nudges", 0)
         mem[work_key] = rec
+        stage_sources = [t for st, t in lst
+                         if st == stages[far] and t.get("state") == "succeeded"]
+        src = max(stage_sources,
+                  key=lambda task: (task.get("created_at") or "",
+                                    task.get("id") or ""),
+                  default=None)
+        # The normal terminal handoff owns a fresh successful result.  It can
+        # legitimately wait behind other results because those decisions are
+        # processed in bounded batches.  The watchdog must not mistake that
+        # queue for a lost transition, create duplicate stages twice, and then
+        # tell the owner that Factory gave up.  Once the result is recorded as
+        # processed, the ordinary stall timer protects the real crash gap.
+        if (processed_ids is not None
+                and any(task.get("id") not in processed_ids
+                        for task in stage_sources if task.get("id"))):
+            rec.update({"since": now, "nudges": 0,
+                        "why": "handoff_pending", "stage": current_stage})
+            continue
         if now - int(rec["since"]) < STALL_WAIT:
             continue
         if int(rec["nudges"]) >= STALL_NUDGES:
@@ -3006,7 +3029,6 @@ def pipeline_watch(conf, tasks, workflows, workers):
             continue
         nxt = stages[far + 1]
         nw = workflows.get(nxt)
-        src = next((t for st, t in lst if st == stages[far]), None)
         rid = (src or {}).get("repository_id") or ""
         wname = stage_worker(
             conf, nxt, "medium", workers, repository_id=rid)
@@ -5167,7 +5189,15 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base))
         br, implementation_head = selected_delivery(base, br)
-        branch_line = resume_branch_line(base, br, rounds)
+        if infrastructure_retry and stage in ("Review", "Verify") and br:
+            # Review and Verify inspect an immutable remote candidate in an
+            # isolated repository. Their workflow contract deliberately
+            # accepts only this canonical marker. A prose "previous branch"
+            # hint made the worker select its newly allocated empty task branch
+            # instead of the already reviewed delivery.
+            branch_line = f"Branch: {br}\n"
+        else:
+            branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
         if infrastructure_retry:
@@ -5290,8 +5320,40 @@ def refill_open_work_slots(conf, workflows, workers, admit_new_plan=True):
     return answered
 
 
+def certain_positive_decision(stage, result):
+    """Route only an exact positive workflow verdict without a second model."""
+    first = next((line.strip() for line in (result or "").splitlines()
+                  if line.strip()), "")
+    first = re.sub(r"^[#>*-]+\s*", "", first).rstrip(" .:").upper()
+    messages = {
+        ("Triage", "READY TO SPECIFY"): (
+            "advance",
+            "Разбор подтвердил, что работа актуальна и готова к спецификации."),
+        ("Review", "APPROVE"): (
+            "advance",
+            "Проверка изменений одобрила работу без замечаний."),
+        ("Verify", "PASS"): (
+            "stop",
+            "Финальная проверка пройдена; слияние и выпуск продолжатся автоматически."),
+    }
+    selected = messages.get((stage, first))
+    if not selected:
+        return None
+    action, summary = selected
+    return {
+        "action": action,
+        "reason": summary,
+        "handoff": "",
+        "next_complexity": "medium",
+        "verdict_ru": summary,
+    }
+
+
 def decide(conf, stage, next_stage, title, result, repo_id=""):
     """Ask the decision model what to do. Returns dict(action, reason, handoff)."""
+    certain = certain_positive_decision(stage, result)
+    if certain:
+        return certain
     guide = {
         "Triage": "Advance ONLY if the triage verdict is READY (ready to specify/implement). "
                   "If NEEDS INFORMATION, WAIT, or CLOSE/DUPLICATE - stop.",
@@ -7529,7 +7591,7 @@ DELIVERY_RECEIPTS_PATH = f"{HOME}/pilot/delivery-receipts.jsonl"
 DELIVERY_OUTBOX_PATH = f"{HOME}/pilot/delivery-outbox.jsonl"
 DELIVERY_BROKER_SOCKET = "/run/factory/project-release-broker.sock"
 DELIVERY_RETRY_DELAY = 60
-DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "completed", "failed"))
+DELIVERY_PHASES = frozenset(("reserved", "launching", "running", "released", "completed", "failed"))
 DELIVERY_TARGET_TITLES = {"factory": "Factory", "tarser-staging": "Tarser staging"}
 
 
@@ -7573,11 +7635,11 @@ def release_train_block(state, tasks, now):
         if current:
             phase = current["phase"]
             item["state"] = {"reserved": "waiting", "launching": "running", "running": "running",
-                             "completed": "succeeded", "failed": "failed"}[phase]
+                             "released": "running", "completed": "succeeded", "failed": "failed"}[phase]
             if isinstance(current.get("sequence"), int):
                 item["generation"] = current["sequence"]
             item["gate"] = {"reserved": "ожидает broker", "launching": "запускается",
-                            "running": "выполняется", "completed": "принят",
+                            "running": "выполняется", "released": "ожидает живую приёмку", "completed": "принят",
                             "failed": "не прошёл"}[phase]
             item["passengers"] = passengers(current.get("waits"))
             started = public_time(current.get("started_at") or current.get("reserved_at"))
@@ -7701,6 +7763,21 @@ def broker_operation(socket_path, method, operation_id, payload=None):
         return None
 
 
+def broker_acceptance(socket_path, method, operation_id, commit_sha=None):
+    """Ask the fixed broker acceptance operation; I/O is never a PASS."""
+    endpoint = "http://release-broker/v1/operations/" + operation_id + "/acceptance"
+    args = ["curl", "--silent", "--show-error", "--unix-socket", socket_path,
+            "--max-time", "10", "-X", method, endpoint]
+    if method == "POST":
+        args[args.index("-X"):args.index("-X")] = ["-H", "Content-Type: application/json",
+            "--data", json.dumps({"operation_id": operation_id, "commit_sha": commit_sha})]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def _delivery_record(path, record):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as stream:
@@ -7723,6 +7800,8 @@ def _delivery_record_once(path, record):
 
 
 def _complete_generation(conf, state, generation):
+    if generation.get("phase") != "completed":
+        return
     durable = _delivery_state(state)
     completed = generation.setdefault("completed_waits", {})
     for task_id, wait in generation["waits"].items():
@@ -7753,6 +7832,19 @@ def _fail_generation(state, target, generation, category, now):
         "target": DELIVERY_TARGET_TITLES.get(target.get("id"), "Проект"),
         "titles": titles, "category": category, "at": generation["finished_at"],
     })
+
+
+def _live_acceptance_failed(conf, state, target, generation, response, now):
+    """Fail closed and make each Verify wait eligible for an implementation lap."""
+    reason = response.get("reason") if isinstance(response, dict) else "acceptance_unknown"
+    generation["acceptance"] = {"status": "failed", "reason": reason}
+    _fail_generation(state, target, generation, "live-failed", now)
+    generation["failure_id"] = generation["id"] + ":live-failed"
+    returned = generation.setdefault("returned_waits", {})
+    for task_id in generation.get("waits", {}):
+        if task_id not in returned:
+            returned[task_id] = reason
+            retry_terminal_task(conf, state, task_id)
 
 
 def dispatch_delivery_outbox(conf, state):
@@ -7799,6 +7891,11 @@ def poll_delivery_state(conf, state, now=None):
                     {"operation_id": generation["id"], "adapter": generation["adapter"], "commit_sha": generation["commit_sha"]})
             elif generation["phase"] in ("launching", "running"):
                 response = broker_operation(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "GET", generation["id"])
+            elif generation["phase"] == "released":
+                acceptance = generation.setdefault("acceptance", {"status": "pending"})
+                method = "POST" if acceptance.get("status") == "pending" else "GET"
+                response = broker_acceptance(conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), method,
+                                             generation["id"], generation["commit_sha"])
             else:
                 response = None
             status = (response or {}).get("status")
@@ -7813,11 +7910,42 @@ def poll_delivery_state(conf, state, now=None):
                 # Terminal broker proof must survive before receipts/outbox.
                 # A restart from this exact point only finishes the local
                 # transaction and never POSTs a second physical release.
-                generation["phase"] = "completed"
-                generation["finished_at"] = time.strftime(
+                generation["phase"] = "released"
+                generation["released_at"] = time.strftime(
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                generation["acceptance"] = {"status": "pending"}
+                save(STATE_PATH, state)
+                # Start the separate operation only after the released
+                # boundary is durable.  A synchronous terminal answer is
+                # safe to consume here; a restart will otherwise poll it.
+                acceptance_response = broker_acceptance(
+                    conf.get("release_broker_socket", DELIVERY_BROKER_SOCKET), "POST",
+                    generation["id"], generation["commit_sha"])
+                if (acceptance_response or {}).get("status") == "passed":
+                    generation["acceptance"] = {"status": "passed"}
+                    generation["phase"] = "completed"
+                    generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
+                    save(STATE_PATH, state)
+                    _complete_generation(conf, state, generation)
+                elif (acceptance_response or {}).get("status") == "failed":
+                    _live_acceptance_failed(
+                        conf, state, target, generation,
+                        acceptance_response, current_time)
+                    save(STATE_PATH, state)
+            elif generation["phase"] == "released" and status in ("pending", "running"):
+                generation["acceptance"] = {"status": status}
+                save(STATE_PATH, state)
+            elif generation["phase"] == "released" and status == "passed":
+                generation["acceptance"] = {"status": "passed"}
+                generation["phase"] = "completed"
+                generation["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
                 save(STATE_PATH, state)
                 _complete_generation(conf, state, generation)
+            elif generation["phase"] == "released" and status == "failed":
+                _live_acceptance_failed(
+                    conf, state, target, generation,
+                    response or {}, current_time)
+                save(STATE_PATH, state)
             elif status == "locked":
                 generation["phase"] = "reserved"
                 generation["next_retry_at"] = current_time + DELIVERY_RETRY_DELAY
@@ -8380,7 +8508,8 @@ def cycle(conf, state):
     # Сторож использует тот же снимок цикла после ответов владельца: так
     # потерянный переход возобновляется, но снятая в этом цикле пауза не оживает.
     try:
-        pipeline_watch(conf, lifecycle_tasks, workflows, workers)
+        pipeline_watch(conf, lifecycle_tasks, workflows, workers,
+                       state.get("processed"))
     except Exception as e:
         log("pipeline_watch_error", repr(e))
 

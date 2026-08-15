@@ -11,7 +11,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=factory/release-broker
 StateDirectoryMode=0700
 UMask=0007
-ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker
+ExecStart=/opt/factory-data/bin/factory-release-broker --state-dir /var/lib/factory/release-broker --live-acceptance-executable /usr/local/lib/factory-live-acceptance
 Restart=on-failure
 RestartSec=2
 # NoNewPrivileges здесь НЕЛЬЗЯ: в сочетании с PrivateTmp/PrivateDevices/Protect*

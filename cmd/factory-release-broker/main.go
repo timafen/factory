@@ -29,6 +29,7 @@ func run() error {
 	stateDir := flag.String("state-dir", "/var/lib/factory/release-broker", "durable operation state directory")
 	fxExecutable := flag.String("fx-executable", "", "path to the fixed fx release driver")
 	factoryReleaseExecutable := flag.String("factory-release-executable", "", "path to the fixed Factory release driver")
+	liveAcceptanceExecutable := flag.String("live-acceptance-executable", "", "path to the fixed read-only live acceptance checker")
 	flag.Parse()
 	// The installed broker owns privileged paths and must remain root-only.
 	// An explicitly isolated socket and state directory are safe for the
@@ -58,6 +59,9 @@ func run() error {
 	})
 	if err != nil {
 		return fmt.Errorf("prepare durable state: %w", err)
+	}
+	if err := broker.ConfigureAcceptance(*liveAcceptanceExecutable); err != nil {
+		return fmt.Errorf("configure live acceptance: %w", err)
 	}
 	server := &http.Server{
 		Handler:           broker.Handler(),
