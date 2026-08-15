@@ -4961,6 +4961,66 @@ class TerminalHandoffPriorityTests(unittest.TestCase):
                          ["processed", "fresh"])
 
 
+class TaskSnapshotIsolationTests(unittest.TestCase):
+    def test_stage_attempts_only_counts_the_supplied_work_snapshot(self):
+        current = {
+            "id": "current-attempt", "work_id": "current-work",
+            "title": "[auto] [3/5 Implement + Test] Shared title",
+            "state": "running",
+        }
+        next_attempt = dict(current, id="next-attempt", state="succeeded")
+        foreign_attempt = dict(
+            current, id="foreign-attempt", work_id="foreign-work",
+            state="failed",
+        )
+        current_snapshot = [current]
+        other_snapshot = [next_attempt, foreign_attempt]
+        current_before = list(current_snapshot)
+        other_before = list(other_snapshot)
+
+        self.assertEqual(
+            pilot.stage_attempts(
+                current_snapshot, "Implement + Test", current),
+            1,
+        )
+        self.assertEqual(
+            pilot.stage_attempts([], "Implement + Test", current), 0)
+        self.assertEqual(current_snapshot, current_before)
+        self.assertEqual(other_snapshot, other_before)
+
+    def test_terminal_priority_neither_reads_nor_mutates_another_snapshot(self):
+        triage = {
+            "id": "current-triage", "work_id": "current-work",
+            "title": "[auto] [1/5 Triage] Current", "state": "succeeded",
+        }
+        recovered = {
+            "id": "current-review", "work_id": "current-work",
+            "title": "[auto] [4/5 Review] Current", "state": "failed",
+        }
+        foreign = {
+            "id": "foreign-verify", "work_id": "foreign-work",
+            "title": "[auto] [5/5 Verify] Foreign", "state": "succeeded",
+        }
+        current_snapshot = [triage, recovered]
+        other_snapshot = [foreign]
+        current_before = list(current_snapshot)
+        other_before = list(other_snapshot)
+
+        ordered = pilot.prioritize_terminal_handoffs(
+            current_snapshot, processed=["current-review"],
+            recovery_ids=["current-review"],
+        )
+
+        self.assertEqual(
+            [task["id"] for task in ordered],
+            ["current-review", "current-triage"],
+        )
+        self.assertEqual(pilot.prioritize_terminal_handoffs([], []), [])
+        self.assertNotIn(foreign, ordered)
+        self.assertEqual(current_snapshot, current_before)
+        self.assertEqual(other_snapshot, other_before)
+
+
 class AnswerEscalationTests(unittest.TestCase):
     @mock.patch.object(pilot, "load_limits", return_value={})
     def test_repeated_stage_really_uses_stronger_worker(self, _limits):
