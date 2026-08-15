@@ -1,20 +1,29 @@
-Implementation commit: e1e889bae49cadc7831cb61f03dba4a5f81724c7 — управляемый кэш назначает origin проектом по умолчанию для bare-команд gh.
+Implementation commit: 33bd5a6fd41210cd71000629d4c3ed2424816b1a — закреплено решение владельца: timafen/factory является основным репозиторием, а owainlewis/factory остаётся upstream.
 
 # CARD-0167 — Bare GitHub CLI выбирает origin рабочего проекта
 
 ## HEAD
 
 - Status: Implemented
-- Ветка: `factory/4a8f505a-2d9-a57320ce-e7d`.
-- Implementation commit: `e1e889bae49cadc7831cb61f03dba4a5f81724c7`.
+- Ветка: `factory/575fab6f-10f-d3e2c4a8-6bd`.
+- Implementation commit: `33bd5a6fd41210cd71000629d4c3ed2424816b1a`.
 - Что изменилось: кэш удаляет `remote.upstream.gh-resolved`, назначает
   `remote.origin.gh-resolved=base` для новых и существующих кэшей и закрывает
   выдачу репозитория при ошибке Git-конфигурации.
-- Evidence: целевой тест — PASS; `go test ./...` — PASS;
-  `go build ./...` — PASS.
-- Следующее действие: провести Review коммита реализации.
+- Evidence: целевой тест, `go test ./...` и `go build ./...` — PASS; bare
+  `gh repo view --json nameWithOwner` ожидает `timafen/factory`, тогда как
+  fixture сохраняет `owainlewis/factory` в роли upstream.
+- Следующее действие: повторить Verify с исправленным критерием приёмки.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+- По утверждённому решению владельца спецификация и тестовая формулировка
+  закрепляют `timafen/factory` как основной репозиторий, а
+  `owainlewis/factory` — только как upstream исходного форка.
+- `go test ./internal/worker -run '^TestManagedRepositoryCacheSetsGitHubDefaultRepository$' -count=1` — PASS.
+- `go test ./...` и `go build ./...` — PASS.
 
 ### 2026-08-15 — Implement
 
