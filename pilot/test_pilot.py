@@ -6052,6 +6052,11 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertNotIn("ОТВЕТ ВЛАДЕЛЬЦА", created[0]["context"])
 
     def test_russian_dns_wait_is_also_an_infrastructure_retry(self):
+        self.conf["stages"] = [{"workflow": "Review", "worker": "worker"}]
+        self.workflows["Review"] = {
+            "enabled": True, "revision_id": "review-revision",
+        }
+        pilot.save(self.conf_path, dict(self.conf))
         verdict = {
             "decision": "wait",
             "reason": (
@@ -6074,6 +6079,14 @@ class OrchestratorWaitActionTests(unittest.TestCase):
         self.assertEqual(question["machine_action"], "retry_infrastructure")
         self.assertEqual(question["resume_stage"], "Review")
         self.assertNotIn("Сетевая проверка", self.conf["stopped_pipelines"])
+
+        question["retry_not_before"] = "2000-01-01T00:00:00Z"
+        pilot.save(
+            os.path.join(self.question_dir, "russian-dns-question.json"), question)
+        created = self.apply_answers_twice()
+        self.assertEqual(len(created), 1)
+        self.assertIn("Branch: factory/network-check\n", created[0]["context"])
+        self.assertNotIn("Прошлая работа лежит в ветке", created[0]["context"])
 
     def test_continue_creates_exactly_one_task_across_repeated_cycles(self):
         self.assertFalse(self.route({

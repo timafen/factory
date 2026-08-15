@@ -5167,7 +5167,15 @@ def handle_answers(conf, workflows, workers, tasks):
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
               or branch_from_history(tasks, base))
         br, implementation_head = selected_delivery(base, br)
-        branch_line = resume_branch_line(base, br, rounds)
+        if infrastructure_retry and stage in ("Review", "Verify") and br:
+            # Review and Verify inspect an immutable remote candidate in an
+            # isolated repository. Their workflow contract deliberately
+            # accepts only this canonical marker. A prose "previous branch"
+            # hint made the worker select its newly allocated empty task branch
+            # instead of the already reviewed delivery.
+            branch_line = f"Branch: {br}\n"
+        else:
+            branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
         if infrastructure_retry:
