@@ -4,17 +4,27 @@ Implementation commit: ce1c7fb9ec44f19959167b50a9f12c99968d6ddd — опреде
 
 ## HEAD
 
-Status: Specified
-Branch: factory/93f9a816-385-f040f766-fe1
+Status: Implemented
+Branch: factory/98631b1d-507-e85b63cd-021
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
-What changes: экран отделяет регистрации с heartbeat младше 7 суток от
-архива, не меняя 30-секундный статус online и не удаляя серверные записи.
-Evidence required: `cd web && npm test -- Workers.test.tsx` проверяет точную
-семидневную границу и возврат исполнителя после нового heartbeat.
-One next action: Implement + Test реализует описанное web-представление и
-целевой компонентный тест.
+Implementation commit: eceb760379eb8b69d2059913bb65a543c5383af8 — экран
+исполнителей показывает текущий парк и закрытый архив старых регистраций.
+What changed: сводка учитывает только heartbeat младше 7 суток; архив
+раскрывается отдельно и сохраняет переход в карточку исполнителя.
+Evidence: `cd web && npm test -- Workers.test.tsx` — 3 теста пройдены;
+`npm run typecheck` и `npm run build` — успешно.
+One next action: Review проверяет web-изменение и целевой браузерный сценарий.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+`WorkersView` разделяет текущие и архивные регистрации по точной границе в
+семь суток, не изменяя данные API. Четыре показателя сводки теперь считают
+текущий парк и размер архива отдельно; добавлены состояния пустого текущего
+списка и раскрываемый архив. Компонентные тесты фиксируют границы, невалидный
+heartbeat и возврат той же регистрации после нового heartbeat; браузерный
+сценарий добавляет проверку архива и ширины 390 px.
 
 ### 2026-08-15 — Specification
 
