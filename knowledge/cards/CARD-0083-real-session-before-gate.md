@@ -1,18 +1,25 @@
 # Реальная session регистрируется до запуска gate
 
-Implementation commit: f45e17c1eae0c0c7aa59f52e8386b9932e930ea7 — Gate принимает только kernel status известного launcher.
+Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
 
 ## HEAD
 
-Status: Implemented
-Branch: factory/25936f6d-f1f-5cc59743-45a.
-Implementation commit: f45e17c1eae0c0c7aa59f52e8386b9932e930ea7 — Gate принимает только kernel status известного launcher.
+Status: Verified
+Branch: factory/fb5711ae-125-3c6494a9-967.
+Implementation commit: 3af5a78b7f1a946bde86c8e3b44a2e466e7a84d7 — Gate принимает только kernel status известного launcher.
 What changed: после `wait -n` выпуск принимает результат только от одного из зарегистрированных `setsid --fork --wait` launcher.
 What changed: неизвестный или пустой PID завершения останавливает Gate и не допускает установку.
-Evidence: `bash -n ops/fx-factory-release ops/test-fx-factory-release.sh` → PASS; `timeout 300 bash ops/test-fx-factory-release.sh` → PASS.
-One next action: проверить изменения перед слиянием.
+Evidence: `just ui-check`, `npx tsc -p tsconfig.app.json --noEmit`, `just ui-build 0` (чистый `web/dist`) и `just test-browser-critical` → PASS.
+One next action: влить проверенную поставку.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+По утверждённому ответу владельца UI-зависимости установлены исключительно через
+`web/npm ci` без изменения lock-файлов. `just ui-check` и отдельный `npx tsc -p
+tsconfig.app.json --noEmit` прошли; `just ui-build 0` не оставил изменений в
+`web/dist`. `just test-browser-critical` прошёл все 5 сценариев Playwright.
 
 ### 2026-08-15 — Implement
 
