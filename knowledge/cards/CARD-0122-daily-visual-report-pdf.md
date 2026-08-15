@@ -1,17 +1,24 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: f12da75c843c1c723acd39efa39fb1dbab9731ba — browser runtime поставляется штатным релизом вместе с ежедневным PDF
+Implementation commit: 77e285482ee0a008111b712fc60d275ae5daa469 — повторный релиз проверяет готовность browser runtime и полностью его откатывает
 
 ## HEAD
 
-- Status: IMPLEMENTED — browser runtime поставляется штатным релизом до остановки служб.
-- Branch: `factory/f054ab9c-bf6-c968f71c-945`
-- Implementation commit: `f12da75c843c1c723acd39efa39fb1dbab9731ba` — browser payload и renderer после удаления checkout
-- What changed: release создаёт постоянное поколение payload, запускает pinned installer и публикует `current`; renderer ищет playwright в стабильном runtime root.
-- Evidence: `node --test web/report/report.test.mjs` PASS (4/4); `go test ./internal/controlplane -run 'DailyReport|VisualReport'` PASS; installer fixture PASS до повторного зависания окружения.
-- One next action: завершить полный release fixture на чистом хосте и подтвердить живой PDF smoke.
+- Status: IMPLEMENTED — штатный релиз проверяет и атомарно откатывает browser runtime.
+- Branch: `factory/8ef44471-f9d-5d0d0c44-401`
+- Implementation commit: `77e285482ee0a008111b712fc60d275ae5daa469` — Chromium, launcher и readiness marker проверяются также при повторном выпуске
+- What changed: перед browser installer сохраняется внешний комплект; любой поздний сбой возвращает его и прежний `current`.
+- Evidence: `bash ops/test-fx-factory-release.sh` PASS; fixture покрывает чистый выпуск, повторную готовность и rollback после сбоев.
+- One next action: Verify запускает полный набор критериев 3–5 на чистом штатном хосте.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Повторный штатный выпуск больше не считает готовым один `node_modules`: он сверяет
+исполняемый Chromium, launcher, helper, конфигурацию, fingerprint state и readiness
+marker. Перед установкой сохраняются внешние browser-артефакты, поэтому сбой после
+публикации возвращает весь прежний комплект и `current`; release fixture PASS.
 
 ### 2026-08-14 — Implement
 
