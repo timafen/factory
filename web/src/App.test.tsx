@@ -157,9 +157,7 @@ describe("App", () => {
     await user.type(input, "example.com/not-github");
     await user.click(screen.getByRole("button", { name: "Add repository" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "remote_identity must use the canonical github.com/owner/repository form (invalid_repository)",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ошибка сервера (invalid_repository)");
     expect(input).toHaveAttribute("aria-invalid", "true");
   });
 
@@ -188,15 +186,11 @@ describe("App", () => {
     const input = await screen.findByLabelText("Canonical identity");
     await user.type(input, "github.com/example/over-limit");
     await user.click(screen.getByRole("button", { name: "Add repository" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "the managed repository limit has been reached (repository_limit_reached)",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ошибка сервера (repository_limit_reached)");
 
     await user.click(screen.getByText("github.com/example/disabled"));
     await user.click(await screen.findByRole("button", { name: "Enable repository" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "repository update could not be saved (storage_unavailable)",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ошибка сервера (storage_unavailable)");
   });
 
   it("shows server readiness even when the worker list fails", async () => {
@@ -578,7 +572,7 @@ describe("App", () => {
       return path.endsWith("/api/v1/automations/automation-created/pipeline-patrol") && init?.method === "POST";
     })).toBe(true);
     await user.click(await screen.findByRole("button", { name: "Run now" }));
-    expect(await screen.findByText(/connection lost after Run now commit/i)).toBeVisible();
+    expect(await screen.findByText(/Не удалось выполнить запрос/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Run now" }));
     expect(await screen.findByText("Run now", { selector: ".occurrence-identity strong" })).toBeVisible();
     expect(screen.getAllByText("Run now", { selector: ".occurrence-identity strong" })).toHaveLength(1);
@@ -1207,7 +1201,7 @@ describe("App", () => {
     await user.selectOptions(within(dialog).getByLabelText("Repository"), "repo-factory");
 
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
-    expect(await within(dialog).findByText(/connection lost after submit/i)).toBeVisible();
+    expect(await within(dialog).findByText(/Не удалось выполнить запрос/)).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: "Delegate task" }));
     expect(await screen.findByRole("heading", { name: validUnicodeTitle })).toBeVisible();
 
@@ -1242,8 +1236,8 @@ describe("App", () => {
     await client.refetchQueries({ queryKey: ["task", "task-running"] });
 
     expect(screen.getByRole("heading", { name: "running task" })).toBeVisible();
-    expect(await screen.findByText(/Showing the last available data/)).toBeVisible();
-    expect(screen.getByText(/temporary read failure/)).toBeVisible();
+    expect(await screen.findByText(/Показаны последние доступные данные/)).toBeVisible();
+    expect(screen.getByText(/Ошибка сервера \(storage_unavailable\)/)).toBeVisible();
   });
 
   it("keeps cached ordered progress visible after an events refresh fails", async () => {
@@ -1255,7 +1249,7 @@ describe("App", () => {
     await client.refetchQueries({ queryKey: ["events", "attempt-running"] });
 
     expect(screen.getByText("Cached ordered progress")).toBeVisible();
-    expect(await screen.findByText(/progress refresh failed/)).toBeVisible();
+    expect(await screen.findByText(/Ошибка сервера \(storage_unavailable\)/)).toBeVisible();
   });
 
   it("drains bounded event pages and later polls after the last cached sequence", async () => {
