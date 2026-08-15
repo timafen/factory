@@ -1,17 +1,24 @@
 # CARD-0122 — Ежедневный визуальный отчёт PDF
 
-Implementation commit: 22ee920eabfa3794999daba7df45bf1b2a4e7b82 — повторный релиз проверяет готовность browser runtime и полностью его откатывает
+Implementation commit: 65ade7b6888f214ca6dc3ebf3b9d281ed4f8642b — сервер передаёт постоянный browser runtime, а релиз проверяет PDF без checkout
 
 ## HEAD
 
-- Status: IMPLEMENTED — штатный релиз устанавливает, проверяет и атомарно откатывает browser runtime.
-- Branch: `factory/8451085f-138-5294ea00-11d`
-- Implementation commit: `22ee920eabfa3794999daba7df45bf1b2a4e7b82` — Chromium, launcher и readiness marker проверяются также при повторном выпуске.
-- What changed: browser payload переживает удаление checkout; поздний сбой возвращает внешний комплект и прежний `current`.
-- Evidence: release fixture PASS; 4/4 Node PDF-теста PASS; shell syntax PASS после rebase на `f3cd37a53fef36ff7540cc006df278727907732b`.
-- One next action: Verify проверяет чистый штатный выпуск на релизном хосте.
+- Status: IMPLEMENTED — штатный релиз передаёт renderer-у постоянные launcher и payload и проверяет PDF после удаления checkout.
+- Branch: `factory/aecdb361-5a3-0b0a69fb-e45`
+- Implementation commit: `65ade7b6888f214ca6dc3ebf3b9d281ed4f8642b` — сервер устанавливает обязательные browser variables, а fixture запускает поставленный renderer.
+- What changed: `render.mjs` получает `/usr/local/libexec/factory/factory-browser-sandbox` и постоянный browser payload без наследования окружения; stdin совместим с Node 20.
+- Evidence: `go test ./internal/controlplane -run 'TestCommandDailyReportRendererUsesReleaseBrowserRuntime|TestDailyReportServiceAutomaticallyRetriesWithoutDuplicates' -count=1` PASS; `bash ops/test-fx-factory-release.sh` PASS.
+- One next action: Review повторно проверяет штатный релиз и сценарий удаления checkout.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Серверный запуск `render.mjs` теперь принудительно получает путь sandbox launcher и
+постоянный browser payload, поэтому systemd-окружение и удалённый checkout не влияют
+на ежедневный PDF. Release fixture удаляет checkout, запускает поставленный renderer
+и проверяет сигнатуру `%PDF-`; проверка fixture и целевой Go-тест завершились PASS.
 
 ### 2026-08-15 — Implement
 
