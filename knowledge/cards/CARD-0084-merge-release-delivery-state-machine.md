@@ -2,15 +2,23 @@
 
 ## HEAD
 
-- Status: Verified PASS — awaiting human merge.
-- Branch: `factory/70ad65a2-c96-abdfff9e-17d`.
+- Status: Implemented — готово к повторному Review.
+- Branch: `factory/388b89b8-33c-013374f8-c71`.
 - Specification: `knowledge/specs/merge-release-delivery-state-machine.md`.
-Implementation commit: 2dd82f324f20ff78a22c06f7712a0a598fb1dd0f — versioned terminal marker применяется только к новым durable-записям, legacy-результаты сохраняются.
-- What changed: новые записи имеют format version и требуют committed marker; terminal-записи старого формата без marker восстанавливаются с исходным статусом без запуска executor.
-- Evidence: `just test` — PASS; `go test -count=1 ./internal/releasebroker` — PASS; `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` — 10 PASS.
-- Next action: Human merge after reviewing this verification evidence.
+Implementation commit: 111f15da131e4c653cf07b45b53b954f85b3d469 — ошибка финальной публикации выпуска возвращается как неуспех и запускает откат.
+- What changed: публикация `current`, `previous` и журнала `committed` проверяется одной fail-closed границей; отказ не становится успешным выпуском.
+- Evidence: shell release fixture — PASS; 3 целевых broker-теста — PASS; 10 Pilot process-тестов — PASS; `just check` и `just build` — PASS.
+- Next action: Повторить Review опубликованной ветки относительно свежего `origin/main`.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Финальные указатели выпуска и запись `committed` объединены в проверяемую
+цепочку: отказ `current` возвращает код 7, восстанавливает прежний комплект и
+не печатает успешный результат. Shell-fixture воспроизводит файловый отказ,
+broker переводит код в `rollback_failed`; Pilot process-suite, `just check` и
+`just build` прошли.
 
 ### 2026-08-12 — Verify
 
