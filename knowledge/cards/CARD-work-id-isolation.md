@@ -1,15 +1,19 @@
-Implementation commit: 243d6502fc4fb27493600340608ac10e090c0521 — Plan, epic, бюджеты и ветки истории изолированы по work_id
+Implementation commit: 27d16d8f3e52eb6a8e3491850329f6b104733028 — work_id проведён через реальные остановки, delivery и merge receipt
 
 ## HEAD
 
-Status: Verified PASS — awaiting human merge
-Branch: factory/d6262485-d88-f2b729ce-4fa
-Implementation commit: 243d6502fc4fb27493600340608ac10e090c0521
-What changed: одноимённые работы больше не делят состояние Plan, epic, бюджетов и history branch; fallback по title оставлен только для legacy-записей без provenance.
-Evidence summary: `python3 -m unittest -v pilot.test_pilot` → 224 OK, 13 skipped; четыре целевые проверки изоляции → OK; `go build ./...` → OK. `just check` остановился на таймаутах неизменённых `internal/controlplane` и `internal/worker`; browser-контур недоступен из-за запрета `sudo` в sandbox.
-One next action: подтвердить human merge с учётом двух независимых ограничений CI-окружения.
+Status: Implemented — Review required
+Branch: factory/78b5df3e-541-0f80a035-c06
+Implementation commit: 27d16d8f3e52eb6a8e3491850329f6b104733028 — work_id проведён через реальные остановки, delivery и merge receipt
+What changed: остановка бюджета, continuation delivery и merge receipt используют work_id текущей задачи; Plan и epic остаются изолированными для одинаковых title.
+Evidence: `python3 -m unittest -v pilot.test_pilot` → 307 OK, 13 skipped; 6 проверок SameTitlePlanEpicBudgetIsolationTests → OK.
+One next action: повторить независимый Review до перехода к Verify.
 
 ## LOG
+
+### 2026-08-14 — Implement
+
+Исправлены три блокирующих производственных пути: hard-stop бюджета, выбранная ветка delivery и запись merge receipt теперь сохраняют и используют work_id. Добавлены сквозные регрессии для двух одноимённых работ: stop одной не возобновляет вторую, а настоящий writer merge-журнала создаёт receipt только для своей работы. `python3 -m unittest -v pilot.test_pilot` завершился: 307 OK, 13 skipped.
 
 ### 2026-08-11 — Implement
 
