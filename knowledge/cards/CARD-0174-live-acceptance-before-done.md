@@ -1,12 +1,12 @@
 # CARD-0174 — Завершение только после живой приёмки
 
-Implementation commit: df6aceb5daf7eb3035f2e17b8f9068109d9d24c7 — broker публикует single-flight живую приёмку без ожидания checker, а завершённый выпуск получает finished_at после PASS.
+Implementation commit: df6aceb59d0f990e1fd7316bfac99e3047c905f2 — broker публикует single-flight живую приёмку без ожидания checker, а завершённый выпуск получает finished_at после PASS.
 
 ## HEAD
 
 - Status: Implemented — готово к выпуску и живой приёмке.
 - Branch: `factory/fa145a84-05f-669c58d2-270`.
-- Implementation commit: `df6aceb5daf7eb3035f2e17b8f9068109d9d24c7`.
+- Implementation commit: `df6aceb59d0f990e1fd7316bfac99e3047c905f2`.
 - What changed: POST живой приёмки durable сохраняет `running`, запускает
   checker в фоне и сразу открывает single-flight наблюдение; terminal результат
   публикуется только после записи. Успешный тестовый выпуск моделирует PASS
