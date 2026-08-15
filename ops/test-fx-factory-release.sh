@@ -34,6 +34,21 @@ wait_for_file() {
   done
   fail "timed out waiting for $file"
 }
+wait_for_signal_gate() {
+  local file=$1 release_pid=$2 output=$3 i
+  for ((i = 0; i < 1500; i++)); do
+    [ -e "$file" ] && return 0
+    if ! kill -0 "$release_pid" 2>/dev/null; then
+      wait "$release_pid" 2>/dev/null || true
+      [ ! -s "$output" ] || tail -n 40 "$output" >&2
+      fail "release process $release_pid exited before signal gate created $file"
+    fi
+    /bin/sleep 0.01
+  done
+  ps -o pid=,ppid=,pgid=,sid=,stat=,etime=,args= -p "$release_pid" >&2 || true
+  [ ! -s "$output" ] || tail -n 40 "$output" >&2
+  fail "timed out waiting for signal gate $file from release process $release_pid"
+}
 line_of() { grep -nF "$2" "$1" | head -n 1 | cut -d: -f1; }
 assert_before() {
   local first second
@@ -738,6 +753,7 @@ case "$*" in
   *'/api/v1/dashboard'*)
     if [ "$TEST_MODE" = server-fail ]; then printf 503; else printf 200; fi ;;
   *'/api/v1/workers/worker-release-test'*)
+    last_worker_event=$(grep -E '^(start|stop) factory-worker.service$' "$TEST_EVENTS" | tail -1)
     if [ "$TEST_MODE" = worker-fail ]; then
       printf '{"id":"worker-release-test","health":"unhealthy","online":false,"last_heartbeat":"2026-08-09T12:00:00Z"}'
     elif [ "$TEST_MODE" = stale-healthy-worker ]; then
@@ -745,9 +761,9 @@ case "$*" in
     elif [ "$TEST_MODE" = heartbeat-during-stop ] \
       && grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
-    elif grep -F 'start factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+    elif [ "$last_worker_event" = 'start factory-worker.service' ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:02Z"}'
-    elif grep -F 'stop factory-worker.service' "$TEST_EVENTS" >/dev/null; then
+    elif [ "$last_worker_event" = 'stop factory-worker.service' ]; then
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:01Z"}'
     else
       printf '{"id":"worker-release-test","health":"healthy","online":true,"last_heartbeat":"2026-08-09T12:00:00Z"}'
@@ -800,7 +816,7 @@ configure_release_mode() {
 }
 
 run_release() {
-  case_dir=$1 mode=$2 deep_gate=${3:-1} release_ref=${4:-main}
+  local case_dir=$1 mode=$2 deep_gate=${3:-1} release_ref=${4:-main}
   configure_release_mode "$case_dir" "$mode"
     TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_REAL_GATE="$SCRIPT_DIR/test-fx-factory-release.sh" \
@@ -867,7 +883,7 @@ run_driver() {
 }
 
 start_release() {
-  case_dir=$1 mode=$2
+  local case_dir=$1 mode=$2
   configure_release_mode "$case_dir" "$mode"
   TEST_EVENTS="$case_dir/events" TEST_GATES="$case_dir/gates" TEST_MODE="$mode" \
     TEST_RELEASE_SOURCE="$SCRIPT_DIR/.." TEST_BROKER_EVENTS="$case_dir/broker-events" \
@@ -898,6 +914,7 @@ start_release() {
     FACTORY_RELEASE_GATE_READY_ATTEMPTS="$fixture_gate_ready_attempts" \
     FACTORY_RELEASE_GATE_STOP_ATTEMPTS="$fixture_gate_stop_attempts" \
     FACTORY_RELEASE_GATE_POLL_DELAY=0.01 \
+    FACTORY_RELEASE_DEEP_GATE=1 \
     FACTORY_RELEASE_BROKER_BIN="$case_dir/install/factory-release-broker" \
     FACTORY_RELEASE_BROKER_UNIT="$case_dir/install/factory-release-broker.service" \
     FACTORY_RELEASE_BROKER_PILOT_DROPIN="$case_dir/install/factory-pilot.service.d/50-project-release-broker.conf" \
@@ -1297,8 +1314,8 @@ for signal in HUP TERM; do
     signaled="$temporary/signal-$signal-$attempt"
     make_fixture "$signaled" signal-gates
     start_release "$signaled" signal-gates
-    wait_for_file "$signaled/ui-running"
-    wait_for_file "$signaled/go-running"
+    wait_for_signal_gate "$signaled/ui-running" "$release_pid" "$signaled/output"
+    wait_for_signal_gate "$signaled/go-running" "$release_pid" "$signaled/output"
     kill -"$signal" "$release_pid"
     set +e
     wait "$release_pid"
@@ -1423,8 +1440,8 @@ for signal in HUP INT TERM; do
   signaled="$temporary/signal-forked-$signal"
   make_fixture "$signaled" signal-forked-gates
   start_release "$signaled" signal-forked-gates
-  wait_for_file "$signaled/ui-running"
-  wait_for_file "$signaled/go-running"
+  wait_for_signal_gate "$signaled/ui-running" "$release_pid" "$signaled/output"
+  wait_for_signal_gate "$signaled/go-running" "$release_pid" "$signaled/output"
   SECONDS=0
   kill -"$signal" "$release_pid"
   set +e
