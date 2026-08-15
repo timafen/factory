@@ -1,21 +1,27 @@
 # CARD-0174 — Завершение только после живой приёмки
 
-Implementation commit: de8e5d60934ee820a0bbfd59af0e2364d30c58f6 — исходная машина доставки восстанавливает точный Verify-снимок; реализация живой приёмки ещё не начата.
+Implementation commit: e0123dc69dc130b93e15da0ddce7c2a0a1efc691 — Pilot ждёт живую приёмку после выпуска, а broker сохраняет результат fixed read-only checker.
 
 ## HEAD
 
-- Status: Specified — ожидает Implement.
-- Specification: `knowledge/specs/live-acceptance-before-done.md`.
-- Scope: durable post-release live acceptance без UI и SQLite migration.
-- Owner result: «Задача выполнена» публикуется только после live PASS; live
-  FAIL с причиной возвращает Verify в `Implement + Test`.
-- Safe production fixture: read-only offline retained-worktree JSON проходит
-  тот же parser, что фактический `/api/v1/workers`, не создавая и не очищая
-  живые worktree.
-- Next action: реализовать перечисленные в спецификации файлы и сначала
-  запустить целевой Python-набор.
+- Status: Implemented — ожидает Verify.
+- Branch: `factory/3cc81421-187-9a740feb-827`.
+- Implementation commit: `e0123dc69dc130b93e15da0ddce7c2a0a1efc691`.
+- What changed: broker success становится durable `released`; PASS единственный
+  завершает waits. Fixed checker читает health/current release/workers и FAIL
+  возвращает Verify в `Implement + Test` без успешных артефактов.
+- Evidence: `python3 -m unittest pilot.test_pilot.MergeReleaseDeliveryStateMachineTests` → PASS; `go test ./internal/releasebroker` → PASS; installer shell test → PASS.
+- Next action: на Verify добавить/запустить полный набор регрессий Pilot и живого checker.
 
 ## LOG
+
+### 2026-08-15 — Implement
+
+Реализована отдельная post-release acceptance boundary: release сам по себе не
+публикует Done. Broker сохраняет immutable результат fixed executable, а Pilot
+создаёт receipt/outbox/final success только после PASS; FAIL записывает
+`live-failed` и дедуплицированно возвращает waits в Implement + Test. Проверены
+`go test ./internal/releasebroker` и `bash ops/test-install-project-release-broker.sh`.
 
 ### 2026-08-15 — Specification
 
