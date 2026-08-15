@@ -892,9 +892,13 @@ step "собираю изменение: $subject"
 step "ставлю зависимости интерфейса"
 as_user bash -c "cd '$work/src/web' && npm ci --no-audit --no-fund --silent" \
   || { fail "npm ci не прошёл"; cleanup; exit 4; }
-step "параллельно проверяю интерфейс, Go, пилота и сценарий выката"
-run_parallel_test_gates \
-  || { fail "одна из обязательных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+if [ "${FACTORY_RELEASE_DEEP_GATE:-0}" = 1 ]; then
+  step "вручную запускаю полный набор проверок выпуска"
+  run_parallel_test_gates \
+    || { fail "одна из полных проверок не прошла — релиз не поеду"; cleanup; exit 5; }
+else
+  step "быстрый выпуск: код уже проверен обязательным Linux-воротом GitHub"
+fi
 step "собираю интерфейс"
 as_user bash -c "cd '$work/src/web' && npx vite build" \
   || { fail "сборка интерфейса не прошла"; cleanup; exit 5; }
