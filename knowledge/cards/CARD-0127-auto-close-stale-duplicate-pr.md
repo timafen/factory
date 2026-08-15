@@ -1,17 +1,18 @@
-# CARD-0127: закрывать устаревший дубликат PR после AUTO-MERGE-конфликта
+Implementation commit: 7819a5be769be5caa4333a8656436f8aab373469 — определена проверяемая спецификация; продуктовый код на этом этапе не менялся.
 
-Implementation commit: отсутствует — это этап Specification; продуктовая реализация намеренно не создавалась.
+# CARD-0127: закрывать устаревший дубликат PR после AUTO-MERGE-конфликта
 
 ## HEAD
 
 Status: Specified — awaiting Implement + Test
-Branch: factory/5cb459d4-017-a87bb6b2-114
+Branch: factory/268ad1ea-659-88eae8d0-fb6
 What changed: определена безопасная автоматизация: Pilot закрывает только свой
 открытый PR после повторного AUTO-MERGE-конфликта и только когда другой PR с
 тем же машинным `work_id` уже влит в ту же base branch.
-Evidence: фактический путь `recover_merge_intents()` →
+Evidence: фактический путь `gh_merge()` → `recover_merge_intents()` →
 `resume_merge_conflicts()` и существующие `MergeConflictRecoveryTests`
-сверены со спецификацией; проверки продукта на этапе Specification не запускались.
+сверены со спецификацией; обязательная будущая проверка привязана к новому
+целевому тесту закрытия дубликата.
 One next action: реализовать marker, fail-closed GitHub lookup/close и
 регрессионные тесты из спецификации.
 
