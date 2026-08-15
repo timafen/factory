@@ -4,16 +4,17 @@ Implementation commit: ce1c7fb9ec44f19959167b50a9f12c99968d6ddd — опреде
 
 ## HEAD
 
-Status: Implemented
-Branch: factory/98631b1d-507-e85b63cd-021
+Status: Implemented — browser verified
+Branch: factory/b83d9faf-a60-47f1e5cf-912
 Specification: `knowledge/specs/live-worker-fleet-archive.md`
 Implementation commit: eceb760379eb8b69d2059913bb65a543c5383af8 — экран
 исполнителей показывает текущий парк и закрытый архив старых регистраций.
 What changed: сводка учитывает только heartbeat младше 7 суток; архив
 раскрывается отдельно и сохраняет переход в карточку исполнителя.
-Evidence: `cd web && npm test -- Workers.test.tsx` — 3 теста пройдены;
-`npm run typecheck` и `npm run build` — успешно.
-One next action: Review проверяет web-изменение и целевой браузерный сценарий.
+Evidence: `cd web && npm exec playwright test e2e/control-plane.spec.ts --grep
+'@critical shows parallel worker capacity and current work'` — 23 проверки
+пройдены на актуальной production-сборке.
+One next action: Review проверяет изменения и принимает поставку.
 
 ## LOG
 
@@ -45,3 +46,12 @@ heartbeat возвращает строку в основной парк при 
 Номер `CARD-0174` выбран после проверки свежего `origin/main` и 1272
 опубликованных remote refs: карточек `CARD-0174-*` и точного пути этой работы
 нет.
+
+### 2026-08-15 — Implement verification
+
+Повторный полный браузерный прогон после production-сборки подтвердил сценарий
+`/workers/`: старая регистрация скрыта из живого списка, раскрывается в архиве,
+сохраняет статус и переход в профиль, а узкая ширина не вызывает горизонтальную
+прокрутку. `npm exec playwright test e2e/control-plane.spec.ts --grep '@critical
+shows parallel worker capacity and current work'` завершился успешно: 23 проверки
+за 4,4 минуты.
