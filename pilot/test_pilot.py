@@ -8338,6 +8338,31 @@ class SameTitlePlanEpicBudgetIsolationTests(unittest.TestCase):
         self.assertEqual(question["work_id"], "work-a")
         self.assertEqual(question["branch"], "factory/a")
 
+    def test_hard_budget_stop_blocks_only_its_work_from_resuming(self):
+        title = "Одинаковая остановка"
+        conf = {"stopped_pipelines": []}
+        pilot.note_budget_stop(title, work_id="work-a")
+        pilot.stop_pipeline(conf, title, work_id="work-a")
+
+        self.assertTrue(pilot.budget_stopped(title, work_id="work-a"))
+        self.assertFalse(pilot.budget_stopped(title, work_id="work-b"))
+        self.assertTrue(pilot.is_stopped(conf, title, work_id="work-a"))
+        self.assertFalse(pilot.is_stopped(conf, title, work_id="work-b"))
+
+    def test_merge_writer_records_work_id_for_matching_epic_receipt(self):
+        title = "Одинаковый merge"
+        state_path = os.path.join(self.home, "state.json")
+        state = {"merge_intents": {"verify-a": {
+            "phase": "merged", "base": title, "branch": "factory/a",
+            "repository": "github.com/acme/repo", "commit_sha": "a" * 40,
+            "work_id": "work-a", "link": ""}}}
+        with mock.patch.object(pilot, "STATE_PATH", state_path), \
+                mock.patch.object(pilot, "deploy_after_merge", return_value=None):
+            pilot.recover_merge_intents({}, state)
+
+        self.assertIsNotNone(pilot.merge_receipt(title, work_id="work-a"))
+        self.assertIsNone(pilot.merge_receipt(title, work_id="work-b"))
+
 
 if __name__ == "__main__":
     unittest.main()

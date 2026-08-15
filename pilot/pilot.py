@@ -4789,8 +4789,8 @@ def handle_answers(conf, workflows, workers, tasks):
             continue
         base = base_title(q.get("title", ""))
         br = (q.get("branch") or extract_branch(q.get("prior_result", ""), "")
-              or branch_from_history(tasks, base))
-        br, implementation_head = selected_delivery(base, br)
+              or branch_from_history(tasks, base, work_id=q.get("work_id", "")))
+        br, implementation_head = selected_delivery(base, br, work_id=q.get("work_id", ""))
         branch_line = resume_branch_line(base, br, rounds)
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -4813,7 +4813,7 @@ def handle_answers(conf, workflows, workers, tasks):
         }
         # Защита от дублей: тот же ответ мог прийти по двум путям (вопрос от
         # Review и повтор отменённой стадии) — второй раз задачу не создаём.
-        if is_stopped(conf, q.get("title", "")):
+        if is_stopped(conf, q.get("title", ""), work_id=q.get("work_id", "")):
             q["status"] = "resolved"
             q["escalation_reason"] = "работа остановлена владельцем — конвейер не возобновляется"
             save(f"{QUESTION_DIR}/{q['id']}.json", q)
@@ -5153,9 +5153,6 @@ def delivery_artifact(base, work_id=""):
 
 
 def record_delivery_artifact(base, branch, head, work_id=""):
-    """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
-    head = (head or "").lower()
-    if not branch or not FULL_GIT_SHA.fullmatch(head):
     """Keep review_gate's pinned branch and head for Review, Verify, and merge."""
     head = (head or "").lower()
     if not branch or not FULL_GIT_SHA.fullmatch(head):
@@ -6833,12 +6830,16 @@ def limits_view():
     return out
 
 
-def is_stopped(conf, base):
+def is_stopped(conf, base, work_id=""):
     """Работа, которую владелец закрыл насовсем. Пилот её не двигает и не
     перезапускает, что бы ни отвечал оркестратор."""
+    work_id = str(work_id or "").strip().lower()
     b = (base or "").strip().lower()
     for s in conf.get("stopped_pipelines") or []:
-        if s.strip().lower() in b:
+        stop = str(s or "").strip().lower()
+        if work_id and stop == work_id:
+            return True
+        if not work_id and stop in b:
             return True
     return False
 
@@ -7589,6 +7590,7 @@ def recover_merge_intents(conf, state):
             save(STATE_PATH, state)
         if merged:
             receipt = {"task_id": task_id, "base": intent.get("base", ""),
+                       "work_id": intent.get("work_id", ""),
                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             # The physical journal is the boundary before a delivery wait.
             # A restart after this append recognizes it by task id and cannot
@@ -7598,6 +7600,7 @@ def recover_merge_intents(conf, state):
             intent["phase"] = "journaled"
             save(STATE_PATH, state)
             wait = {"task_id": task_id, "base": intent.get("base", ""),
+                    "work_id": intent.get("work_id", ""),
                     "link": intent.get("link", ""), "merge_receipt": receipt}
             # Поезду — коммит, который реально лёг в main после squash,
             # а не head ветки до вливания (его после merge уже не существует).
@@ -7964,6 +7967,7 @@ def cycle(conf, state):
         state["terminal_cursor"] = tid
 
         detail = recovery_detail or api(f"/tasks/{tid}")
+        work_id = task_durable_work_id(t, handoff_tasks)
         wf = (detail.get("workflow") or {}).get("title")
         if tid not in state["processed"]:
             state["processed"].append(tid)
@@ -7976,7 +7980,7 @@ def cycle(conf, state):
             rid = detail["task"].get("repository_id") or ""
             # Отменённая/упавшая задача, которую уже перекрыла другая по той же
             # работе, вопросов не порождает — иначе эпик встанет на пустом месте.
-            if is_stopped(conf, base):
+            if is_stopped(conf, base, work_id=work_id):
                 log(f"stage_ended state={tstate} task={tid} — работа остановлена владельцем, вопрос не создаю")
                 continue
             newer = live_or_done_at(
@@ -8058,7 +8062,7 @@ def cycle(conf, state):
                 record_implementation_artifact(
                     base_title(title), tid, title, result,
                     detail.get("context") or detail["task"].get("context") or "",
-                    repo_identity_by_id.get(rid_i, ""))
+                    repo_identity_by_id.get(rid_i, ""), work_id=work_id)
             except Exception as e:
                 # A transport failure must not erase the last proven artifact;
                 # the next cycle can safely retry this completed task.
@@ -8086,7 +8090,8 @@ def cycle(conf, state):
                     log(f"MERGE SKIP '{base_title(title)}': delivery wait already exists")
                     continue
                 branch, implementation_head = selected_delivery(
-                    base_title(title), extract_branch(result, detail.get("context", "")))
+                    base_title(title), extract_branch(result, detail.get("context", "")),
+                    work_id=work_id)
                 rid = detail["task"].get("repository_id") or detail.get("repository", {}).get("id", "")
                 repo_identity = repo_identity_by_id.get(rid, "")
                 if branch and repo_identity and re.fullmatch(r"[0-9a-f]{40,64}", implementation_head or ""):
@@ -8112,7 +8117,8 @@ def cycle(conf, state):
                         continue
                     state.setdefault("merge_intents", {})[tid] = {
                         "phase": "intent", "base": base_title(title), "branch": branch,
-                        "repository": repo_identity, "commit_sha": verified_head, "link": link or ""}
+                        "repository": repo_identity, "commit_sha": verified_head, "link": link or "",
+                        "work_id": work_id}
                     save(STATE_PATH, state)  # intent must precede external gh_merge
                     recover_merge_intents(conf, state)
                     poll_delivery_state(conf, state)
@@ -8138,7 +8144,8 @@ def cycle(conf, state):
                                                  "Покажи подробности", "Отмени эту задачу"],
                     squeeze(result), attempts_so_far=stage_attempts(handoff_tasks, back, t),
                     branch=selected_delivery(
-                        base, extract_branch(result, detail.get("context", "")))[0])
+                        base, extract_branch(result, detail.get("context", "")), work_id=work_id)[0],
+                    work_id=work_id)
                 attach_question_work_id(t)
                 if escalated:
                     notify(conf, "Проверка не прошла, нужен ты",
@@ -8160,7 +8167,8 @@ def cycle(conf, state):
                            verdict.get("options_ru") or [], result,
                            attempts_so_far=stage_attempts(handoff_tasks, back, t),
                            branch=selected_delivery(
-                               base, extract_branch(result, detail.get("context", "")))[0])
+                               base, extract_branch(result, detail.get("context", "")), work_id=work_id)[0],
+                           work_id=work_id)
             attach_question_work_id(t)
             continue
 
@@ -8197,7 +8205,7 @@ def cycle(conf, state):
         # Idempotency guard: if this work already has a task at the next stage
         # (or beyond) that is live or done, do NOT create another one. Without
         # this, any re-processing of an old task duplicates the whole tail.
-        if is_stopped(conf, base):
+        if is_stopped(conf, base, work_id=work_id):
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
         dup = live_or_done_at(
@@ -8218,7 +8226,7 @@ def cycle(conf, state):
                     branch = picked
             except Exception as e:
                 log("branch_pick_error", repr(e))
-        branch, implementation_head = selected_delivery(base, branch)
+        branch, implementation_head = selected_delivery(base, branch, work_id=work_id)
         branch_line = f"Branch: {branch}\n" if branch else ""
         head_line = (f"Implementation head: {implementation_head}\n"
                      if implementation_head else "")
@@ -8421,7 +8429,7 @@ def cycle(conf, state):
             elif g:
                 if g.get("branch"):
                     branch = g["branch"]
-                    record_delivery_artifact(base, branch, g.get("head", ""))
+                    record_delivery_artifact(base, branch, g.get("head", ""), work_id=work_id)
                     branch_line = f"Branch: {branch}\n"
                     head_line = (f"Implementation head: {g['head']}\n"
                                  if g.get("head") else "")
