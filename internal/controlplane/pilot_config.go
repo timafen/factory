@@ -105,6 +105,10 @@ func (s *PilotConfigStore) read() (protocol.PilotSettings, []byte, error) {
 	if !present["collect_report_ideas"] {
 		settings.CollectReportIdeas = true
 	}
+	// Compatibility default: Pilot historically admitted work from the Plan.
+	if !present["auto_plan"] {
+		settings.AutoPlan = true
+	}
 	// Compatibility default: Pilot historically kept this limit only in Python.
 	if !present["max_parallel_works"] {
 		settings.MaxParallelWorks = 4

@@ -313,6 +313,9 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	if !current.Settings.CollectReportIdeas {
 		t.Fatal("example collect_report_ideas was not decoded as true")
 	}
+	if !current.Settings.AutoPlan {
+		t.Fatal("example auto_plan was not decoded as true")
+	}
 	if current.Settings.MaxParallelWorks != 4 {
 		t.Fatalf("example max_parallel_works = %d, want 4", current.Settings.MaxParallelWorks)
 	}
@@ -341,6 +344,7 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 
 	delete(fields, "respect_host_load")
 	delete(fields, "collect_report_ideas")
+	delete(fields, "auto_plan")
 	delete(fields, "max_parallel_works")
 	delete(fields, "max_terminal_tasks_per_cycle")
 	legacy, err := json.Marshal(fields)
@@ -359,6 +363,9 @@ func TestPilotConfigExampleMatchesServerSchema(t *testing.T) {
 	}
 	if !legacySettings.Settings.CollectReportIdeas {
 		t.Fatal("legacy config did not receive collect_report_ideas=true")
+	}
+	if !legacySettings.Settings.AutoPlan {
+		t.Fatal("legacy config did not receive auto_plan=true")
 	}
 	if legacySettings.Settings.MaxParallelWorks != 4 {
 		t.Fatalf("legacy max_parallel_works = %d, want 4", legacySettings.Settings.MaxParallelWorks)
