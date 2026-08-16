@@ -6439,14 +6439,15 @@ class AdaptivePollingTests(unittest.TestCase):
     def _restart_handoff_fixture(self, create_effects, cycles,
                                  area_busy_effect="", restart_after_first=False,
                                  shared_task_store=None, stale_snapshot=False,
-                                 request_log=None):
+                                 request_log=None, initial_processed=True,
+                                 stage_worker_result="worker"):
         conf = {
             "stages": [{"workflow": "Triage"}, {"workflow": "Specification"}],
             "poll_seconds": 30,
             "_restart_recovery_ids": frozenset(("triage-done",)),
             "_restart_recovery_watermark": "2026-08-10T10:00:00Z",
         }
-        state = {"processed": ["triage-done"]}
+        state = {"processed": ["triage-done"] if initial_processed else []}
         tasks = [{
             "id": "triage-done",
             "title": "[auto] [1/2 Triage] Восстановить передачу",
@@ -6479,6 +6480,8 @@ class AdaptivePollingTests(unittest.TestCase):
                 effect = next(effects)
                 if isinstance(effect, Exception):
                     raise effect
+                if isinstance(effect, dict):
+                    return effect
                 child = {
                     "id": f"spec-{len(created)}", "title": body["title"],
                     "state": "created", "created_at": "2026-08-10T11:00:00Z",
@@ -6523,7 +6526,7 @@ class AdaptivePollingTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(
                 pilot, "host_block", return_value={"state": "ok"}))
             stack.enter_context(mock.patch.object(
-                pilot, "stage_worker", return_value="worker"))
+                pilot, "stage_worker", return_value=stage_worker_result))
             stack.enter_context(mock.patch.object(
                 pilot, "area_busy", side_effect=area_busy_effect
                 if callable(area_busy_effect) or isinstance(area_busy_effect, list)
@@ -6554,6 +6557,43 @@ class AdaptivePollingTests(unittest.TestCase):
                         "terminal_handoff_watermark"]
 
         return state, tasks, created, decide
+
+    def test_terminal_task_is_processed_only_after_valid_continuation(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [None], 1, initial_processed=False)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(state["processed"], ["triage-done"])
+        self.assertEqual(state.get("terminal_retry_ids"), [])
+
+    def test_invalid_continuation_response_retries_without_processing_source(self):
+        invalid = {"task": {"id": ""}}
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [invalid, None], 2, initial_processed=False)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(decide.call_count, 2)
+        self.assertEqual(state["processed"], ["triage-done"])
+        self.assertEqual(state.get("terminal_retry_ids"), [])
+
+    def test_missing_worker_leaves_terminal_task_unprocessed(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [], 1, initial_processed=False, stage_worker_result=None)
+
+        self.assertEqual(created, [])
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(state["processed"], [])
+        self.assertEqual(state["terminal_retry_ids"], ["triage-done"])
+
+    def test_area_wait_leaves_terminal_task_unprocessed(self):
+        state, _tasks, created, decide = self._restart_handoff_fixture(
+            [], 1, initial_processed=False, area_busy_effect="другая работа")
+
+        self.assertEqual(created, [])
+        self.assertEqual(decide.call_count, 1)
+        self.assertEqual(state["processed"], [])
+        self.assertEqual(state["terminal_retry_ids"], ["triage-done"])
 
     def test_restart_recovers_processed_success_with_missing_next_stage(self):
         state, tasks, created, decide = self._restart_handoff_fixture([None], 2)

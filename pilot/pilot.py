@@ -1823,6 +1823,28 @@ def retry_terminal_task(conf, state, task_id):
         conf["_restart_recovery_retry"] = True
 
 
+def confirm_terminal_handoff(state, task_id, created):
+    """Mark a source terminal task only after its child has a durable ID."""
+    task = created.get("task") if isinstance(created, dict) else None
+    child_id = task.get("id") if isinstance(task, dict) else None
+    if not isinstance(child_id, str) or not child_id.strip():
+        return False
+    processed = state.setdefault("processed", [])
+    if task_id not in processed:
+        processed.append(task_id)
+    retry_ids = state.setdefault("terminal_retry_ids", [])
+    if task_id in retry_ids:
+        retry_ids.remove(task_id)
+    return True
+
+
+def confirm_terminal_outcome(state, task_id):
+    """Record an explicit close or deduplicated continuation outcome."""
+    processed = state.setdefault("processed", [])
+    if task_id not in processed:
+        processed.append(task_id)
+
+
 def resume_stage_for(stages, wf, next_stage):
     """Куда возвращать работу после остановки конвейера.
     Ревью и финальная проверка означают доработку — значит назад в разработку,
@@ -8764,9 +8786,6 @@ def cycle(conf, state):
 
         detail = recovery_detail or api(f"/tasks/{tid}")
         wf = (detail.get("workflow") or {}).get("title")
-        if tid not in state["processed"]:
-            state["processed"].append(tid)
-
         if tstate != "succeeded":
             attempts = detail.get("attempts") or []
             err = next((a.get("error") for a in reversed(attempts) if a.get("error")), "") or ""
@@ -9039,11 +9058,13 @@ def cycle(conf, state):
         # (or beyond) that is live or done, do NOT create another one. Without
         # this, any re-processing of an old task duplicates the whole tail.
         if is_stopped(conf, base):
+            confirm_terminal_outcome(state, tid)
             log(f"skip: '{base}' остановлена владельцем — дальше не двигаю")
             continue
         dup = live_or_done_at(
             handoff_tasks, t, idx + 2, since=t.get("created_at"))
         if dup:
+            confirm_terminal_outcome(state, tid)
             log(f"skip: '{base}' уже имеет задачу на стадии {next_stage} или дальше "
                 f"({dup['id'][:8]} {dup.get('state')})")
             continue
@@ -9318,6 +9339,11 @@ def cycle(conf, state):
             # cycle tries again once a healthy worker is back.
             retry_terminal_task(conf, state, tid)
             log(f"cannot advance '{base}' {wf} -> {next_stage} (повторю позже): {e}")
+            continue
+        if not confirm_terminal_handoff(state, tid, created):
+            retry_terminal_task(conf, state, tid)
+            log(f"cannot advance '{base}' {wf} -> {next_stage}: "
+                "create returned no child task ID (повторю позже)")
             continue
         # The task snapshot was loaded before this cycle started.  Keep it
         # current so another completed attempt for this same work sees the
