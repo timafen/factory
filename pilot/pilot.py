@@ -5562,7 +5562,7 @@ TRY_ALIASES = (("staging.ops.tarser.net", "staging-automation.tarser.net"),)
 INFRA_SIGNS = re.compile(
     r"refresh_token_reused|Please try signing in again|401 Unauthorized|"
     r"could not be refreshed|Not logged in|Permission denied|"
-    r"connection reset|temporary failure in name resolution", re.I)
+    r"connection reset|temporary failure in name resolution|lease expired", re.I)
 
 TRY_NONE = ("none", "нет", "-", "n/a")
 PROOF_LINE = re.compile(r"^\s*ДОКАЗАТЕЛЬСТВО:\s*(.+?)\s*$", re.M)

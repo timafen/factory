@@ -2060,6 +2060,15 @@ class DiagnosisRepairTests(unittest.TestCase):
         self.assertEqual(self.repairs["Починить отчёт"]["status"], "resumed")
 
 
+class InfrastructureFailureClassificationTests(unittest.TestCase):
+    def test_expired_worker_lease_is_retryable_infrastructure(self):
+        self.assertRegex("lease expired", pilot.INFRA_SIGNS)
+        self.assertRegex("LEASE EXPIRED", pilot.INFRA_SIGNS)
+
+    def test_product_failure_is_not_misclassified_as_infrastructure(self):
+        self.assertNotRegex("unit tests failed: wrong total", pilot.INFRA_SIGNS)
+
+
 class CorrectionProvenanceStormTests(unittest.TestCase):
     _SUBPROCESS_DRIVER = r"""
 import contextlib
