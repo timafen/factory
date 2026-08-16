@@ -7,7 +7,7 @@ Implementation commit: будет указан этапом Implement после
 Status: Implemented
 Branch: `factory/9ef315c8-044-4b5eeab2-187`
 Specification: `knowledge/specs/stage-processed-after-successful-continuation.md`
-Implementation commit: 2a0cd84bf94fc689915c9f412f49f4711d778498 — terminal task
+Implementation commit: 6a4d32cc7f7db947d3d951ef7e1b9af78b82c2d0 — terminal task
 помечается обработанным только после валидного ID созданного продолжения.
 What changed: ранняя запись `processed` перенесена в подтверждённый handoff;
 некорректный ответ и ожидания остаются повторяемыми, а остановка и дедупликация
