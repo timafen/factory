@@ -3687,7 +3687,7 @@ class WorkOriginAttributionTests(unittest.TestCase):
             "title": f"[auto] [1/2 Triage] {base}",
             "state": "queued",
             "request_key": request_key,
-            "created_at": "2026-08-12T03:00:00Z",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
     def test_new_work_inherits_assistant_origin_from_plan(self):
