@@ -97,12 +97,12 @@ export function ProjectOnboardingPanel({ repositoryID, remoteIdentity, repositor
   const projectID = draft.projectID ?? card?.project_id ?? defaults.id;
   const name = draft.name ?? card?.name ?? defaults.name;
   const branch = draft.branch ?? card?.default_branch ?? defaults.branch;
-  const allowedPaths = draft.allowedPaths ?? card?.allowed_paths.join(", ") ?? "docs";
-  const instructions = draft.instructions ?? card?.required_instruction_files.join(", ") ?? "";
-  const workingDirectory = draft.workingDirectory ?? card?.commands.working_directory ?? "";
-  const install = draft.install ?? JSON.stringify(card?.commands.install.argv ?? []);
-  const test = draft.test ?? JSON.stringify(card?.commands.test.argv ?? ["git", "diff", "--check"]);
-  const build = draft.build ?? JSON.stringify(card?.commands.build.argv ?? []);
+  const allowedPaths = draft.allowedPaths ?? card?.allowed_paths?.join(", ") ?? "docs";
+  const instructions = draft.instructions ?? card?.required_instruction_files?.join(", ") ?? "";
+  const workingDirectory = draft.workingDirectory ?? card?.commands?.working_directory ?? "";
+  const install = draft.install ?? JSON.stringify(card?.commands?.install?.argv ?? []);
+  const test = draft.test ?? JSON.stringify(card?.commands?.test?.argv ?? ["git", "diff", "--check"]);
+  const build = draft.build ?? JSON.stringify(card?.commands?.build?.argv ?? []);
   const timeout = draft.timeout ?? card?.timeout_seconds ?? 120;
 
   const save = useMutation({
