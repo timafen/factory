@@ -96,6 +96,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 		bootstrapCredential = workerBootstrapCredential[0]
 	}
 	api := &API{store: store, logger: logger, automations: automations, pilotConfig: pilotConfig, dialogRunner: commandDialogRunner{}, sandboxKeys: commandSandboxKeysRunner{}, projectRunner: execProjectCommandRunner{}, projectHealth: defaultProjectHealthChecker(), workerBootstrapCredential: bootstrapCredential}
+	projectOnboarding := NewProjectOnboardingService(os.Getenv("FACTORY_PROJECT_ONBOARDING_ROOT"), store)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("PUT /api/v1/workers/{worker_id}", api.registerWorker)
@@ -110,6 +111,7 @@ func NewHandlerWithPilotConfig(store *Store, logger *slog.Logger, automations *A
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}", api.getManagedRepository)
 	mux.HandleFunc("GET /api/v1/repositories/{repository_id}/readiness", api.getManagedRepositoryReadiness)
 	mux.HandleFunc("PUT /api/v1/repositories/{repository_id}/enabled", api.setManagedRepositoryEnabled)
+	registerProjectOnboardingRoutes(mux, projectOnboarding)
 	mux.HandleFunc("GET /api/v1/projects", api.listProjects)
 	mux.HandleFunc("POST /api/v1/projects", api.createProject)
 	mux.HandleFunc("GET /api/v1/projects/{project_id}", api.getProject)

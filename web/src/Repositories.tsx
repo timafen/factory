@@ -12,6 +12,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "./api";
 import { timeAgo } from "./format";
 import { useVisibleInterval } from "./polling";
+import { ProjectOnboardingPanel } from "./ProjectOnboarding";
 import type { ManagedRepository } from "./types";
 import {
   EmptyState,
@@ -254,6 +255,12 @@ export function RepositoryDetail({
           </span>
         </div>
       </section>
+
+      <ProjectOnboardingPanel
+        repositoryID={data.id}
+        remoteIdentity={data.remote_identity}
+        repositoryEnabled={data.enabled}
+      />
 
       <div className="repository-detail-layout">
         <section className="panel">
